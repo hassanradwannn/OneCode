@@ -3,9 +3,9 @@
  *
  * This is the whole updater: one pass, run at startup and repeated on a slow timer, that asks
  * GitHub for the latest release, stages the artifact this installation can actually apply, and
- * hands that file to the platform's own installer on the way out. There is no renderer-side
- * download state and no `electron-updater`; the shipping pipeline already publishes exactly the
- * artifacts named below, so the smallest correct updater is the one that fetches them by name.
+ * hands that file to the platform's installer after an explicit, version-bound install request.
+ * Windows uses electron-updater's blockmap downloader; this owner still verifies the release
+ * SHA-256, selects the installed target, waits for canonical work and owns the final handoff.
  *
  * Three rules shape everything here:
  *
@@ -15,9 +15,8 @@
  *   promise, so a second call while a download is running joins it rather than starting a
  *   second download of the same file. That is what makes the repeat timer free: a pass that
  *   finds the release it already staged stops at the release call.
- * - **The user says when.** A staged update is applied during the ordinary quit sequence, and
- *   `installStagedUpdate` is the button that starts that quit on purpose. Nothing here quits or
- *   interrupts anything on its own.
+ * - **The user says when.** Only an explicit install request may start the existing quit
+ *   sequence after work finishes. Ordinary Quit never installs a downloaded update.
  * - **A staged artifact outlives the process that fetched it.** It is kept under the version it
  *   belongs to, so the next start recognises the file it already has and reverifies it rather
  *   than spending another hundred megabytes on the same installer.
@@ -48,9 +47,12 @@ import { app } from 'electron';
 import { logInfo, logWarn } from './logger.js';
 import { APP_VERSION } from './version.js';
 import { isNewer, type UpdateStatus } from '../shared/types.js';
+import { downloadWindowsUpdate } from './update-download.js';
+import { currentWindowsInstallTarget } from './update-registration.js';
+import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 
-// This separate distribution has no update publisher. Never query or install upstream releases.
-const UPDATES_ENABLED = false;
+// Explicitly authorized OneCode publisher only. Never use the original project's feed.
+const UPDATES_ENABLED = true;
 const REPO = 'hassanradwannn/OneCode';
 const LATEST_RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 
@@ -104,9 +106,9 @@ export function stagedArtifact(
 ): { name: string; kind: 'installer' | 'appimage'; target: string } | null {
   if (!packaged) return null;
   if (arch !== 'x64' && arch !== 'arm64') return null;
-  if (platform === 'win32') return { name: `Chat-On-Steroids-Setup-${arch}.exe`, kind: 'installer', target: '' };
+  if (platform === 'win32') return { name: `OneCode-Setup-${arch}.exe`, kind: 'installer', target: '' };
   if (platform === 'linux' && appImage) {
-    return { name: `Chat-On-Steroids-Linux-${arch}.AppImage`, kind: 'appimage', target: appImage };
+    return { name: `OneCode-Linux-${arch}.AppImage`, kind: 'appimage', target: appImage };
   }
   return null;
 }
@@ -126,8 +128,8 @@ export function manualDownloadName(
   packaged: boolean = app.isPackaged
 ): string | null {
   if (!packaged || (arch !== 'x64' && arch !== 'arm64')) return null;
-  if (platform === 'darwin') return `Chat-On-Steroids-macOS-${arch}.dmg`;
-  if (platform === 'linux' && !appImage) return `Chat-On-Steroids-Linux-${arch}.deb`;
+  if (platform === 'darwin') return `OneCode-macOS-${arch}.dmg`;
+  if (platform === 'linux' && !appImage) return `OneCode-Linux-${arch}.deb`;
   return null;
 }
 
@@ -149,8 +151,16 @@ const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle',
 let status: UpdateStatus = CLEAR;
 let staged: { version: string; file: string; kind: 'installer' | 'appimage'; target: string; digest: string } | null = null;
 let pass: Promise<void> | null = null;
-/** Set by `markInstallOnQuit`: the user pressed Install, so bring the app back afterwards. */
+/** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
+let requestedVersion: string | null = null;
+let installEpoch = 0;
+let installPoll: ReturnType<typeof setTimeout> | null = null;
+let installCheck: Promise<void> | null = null;
+let quitForUpdate: (() => void) | null = null;
+let busyProjection = updateBusyReasons;
+let installTarget = currentWindowsInstallTarget;
+let windowsDownload = downloadWindowsUpdate;
 const listeners = new Set<() => void>();
 /** Set by `startUpdateChecks`: only a scheduled app retries on its own. */
 let recheck: ReturnType<typeof setInterval> | null = null;
@@ -199,7 +209,7 @@ export async function restoreUpdateHandoff(): Promise<void> {
 }
 
 export function startUpdateChecks(): void {
-  if (!UPDATES_ENABLED) return;
+  if (!UPDATES_ENABLED || !app.isPackaged) return;
   void restoreUpdateHandoff();
   if (recheck) clearInterval(recheck);
   recheck = setInterval(() => void checkForUpdates(), RECHECK_MS);
@@ -249,6 +259,8 @@ export function checkForUpdates(): Promise<void> {
     .finally(() => {
       if (pass === run) pass = null;
       scheduleRetry();
+      if (requestedVersion && status.stage === 'ready') void checkInstallIntent();
+      else if (requestedVersion && status.stage !== 'checking') cancelUpdateInstall();
     });
   pass = run;
   return run;
@@ -261,7 +273,7 @@ async function runPass(): Promise<void> {
   // rest of this pass does with the answer.
   set({ checkedAt: Date.now() });
   // A newly published selection retires the previous executable authority before any file replacement.
-  if (staged?.version !== release.version || !isNewer(release.version, APP_VERSION)) staged = null;
+  if (staged?.version !== release.version || !isNewer(release.version, APP_VERSION)) { staged = null; cancelUpdateInstall(); }
   if (!isNewer(release.version, APP_VERSION)) {
     // Up to date, or ahead of the published release on a development build. Both mean nothing
     // to offer, and `latest` stays null so nothing in the UI claims otherwise.
@@ -270,6 +282,15 @@ async function runPass(): Promise<void> {
   }
   logInfo(`update: ${release.version} is available; this app is ${APP_VERSION}`);
   const artifact = stagedArtifact();
+  if (artifact?.kind === 'installer') {
+    const target = await installTarget();
+    if (!target) {
+      staged = null; cancelUpdateInstall();
+      set({ latest: release.version, stage: 'idle' });
+      return;
+    }
+    artifact.target = target;
+  }
   // `latest` and what is being done about it are set in one go. Published separately, the
   // renderer would paint one frame of "a new version exists, and this install updates by
   // hand" for every install, including the ones about to download it themselves.
@@ -293,10 +314,26 @@ async function runPass(): Promise<void> {
     logInfo(`update: ${release.version} was already downloaded and is ready to install`);
     return;
   }
-  set({ latest: release.version, stage: 'downloading' });
-  const file = await download(release.version, artifact.name, expected);
-  staged = { version: release.version, file, kind: artifact.kind, target: artifact.target, digest: expected };
-  set({ stage: 'ready' });
+  set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+  const file = artifact.kind === 'installer'
+    ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }))
+    : await download(release.version, artifact.name, expected);
+  if ((await fileDigest(file)) !== expected) throw new Error('The downloaded update does not match the OneCode release checksum');
+  if (artifact.kind === 'installer') {
+    // Keep our own versioned, verified stage. Never remove the engine's old-installer cache.
+    await mkdir(stagingDir(release.version), { recursive: true });
+    const destination = path.join(stagingDir(release.version), artifact.name);
+    await copyFile(file, `${destination}.part`);
+    if (await fileDigest(`${destination}.part`) !== expected) {
+      await rm(`${destination}.part`, { force: true });
+      throw new Error('The downloaded update does not match the OneCode release checksum');
+    }
+    await rename(`${destination}.part`, destination);
+    staged = { version: release.version, file: destination, kind: artifact.kind, target: artifact.target, digest: expected };
+  } else {
+    staged = { version: release.version, file, kind: artifact.kind, target: artifact.target, digest: expected };
+  }
+  set({ stage: 'ready', downloadPercent: 100 });
   logInfo(`update: ${release.version} is downloaded and ready to install`);
 }
 
@@ -321,9 +358,8 @@ async function fileDigest(file: string): Promise<string> {
  * safe to hand to an installer is that it still matches what the release publishes, and a staged
  * update can sit here for days before anyone quits.
  *
- * Reusing it is not an optimisation. This app lives in the tray and is closed to it, so an
- * update staged on Monday is applied whenever the user next really quits — and without this,
- * every start in between refetched the same hundred megabytes to arrive at the same file.
+ * Restarts reuse these bytes, but never restore installation intent. A later Install request
+ * still checks the selected version, digest and exact registered installation again.
  */
 async function adopt(version: string, name: string, expected: string): Promise<string | null> {
   const file = path.join(stagingDir(version), name);
@@ -366,12 +402,13 @@ async function latestVersionFromPage(): Promise<string> {
     method: 'HEAD',
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
     redirect: 'follow',
-    headers: { 'user-agent': `chat-on-steroids/${APP_VERSION}` }
+    headers: { 'user-agent': `onecode/${APP_VERSION}` }
   });
   if (!response.ok) throw new Error(`the release page answered ${response.status}`);
   let landed: URL | null = null;
   try { landed = new URL(response.url); } catch { landed = null; }
-  const tag = landed?.origin === 'https://github.com' ? /\/releases\/tag\/([^/]+)$/.exec(landed.pathname)?.[1] : undefined;
+  const tag = landed?.origin === 'https://github.com' && landed.pathname.startsWith(`/${REPO}/releases/tag/`)
+    ? /\/releases\/tag\/([^/]+)$/.exec(landed.pathname)?.[1] : undefined;
   const version = releaseVersion(tag ? decodeURIComponent(tag) : undefined);
   if (!version) throw new Error('the release page named no usable version tag');
   return version;
@@ -405,7 +442,7 @@ async function get(url: string, timeout: number | AbortSignal, headers: Record<s
   const response = await fetch(url, {
     signal: typeof timeout === 'number' ? AbortSignal.timeout(timeout) : timeout,
     redirect: 'follow',
-    headers: { 'user-agent': `chat-on-steroids/${APP_VERSION}`, ...headers }
+    headers: { 'user-agent': `onecode/${APP_VERSION}`, ...headers }
   });
   if (!response.ok) throw new Error(`${new URL(url).pathname.split('/').pop()} answered ${response.status}`);
   return response;
@@ -429,9 +466,7 @@ async function get(url: string, timeout: number | AbortSignal, headers: Record<s
  */
 async function download(version: string, name: string, expected: string): Promise<string> {
   const dir = stagingDir(version);
-  // One staged build at a time. Anything already here is either this same download starting
-  // over or an artifact for a release nobody is going to install now.
-  await rm(path.join(app.getPath('userData'), 'updates'), { recursive: true, force: true });
+  // Versioned staging never removes the download engine's current-installer/blockmap cache.
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
   // Stopped when the connection goes quiet, not when the file is simply large for the line.
@@ -460,24 +495,83 @@ async function download(version: string, name: string, expected: string): Promis
 }
 
 /**
-/**
  * Records that the user pressed Install, and says whether there was anything to install.
  *
  * It deliberately installs nothing itself. The handoff belongs at the end of the ordinary
  * shutdown sequence and nowhere else: that is what guarantees the bridge has drained, the child
  * processes are gone and every durable write has landed before an installer starts replacing
  * files underneath them. All this does is record that the user asked — which is also what makes
- * the difference between an update applied on the way out of a quit the user wanted for other
- * reasons, and one they are waiting to come back from.
+ * the difference between an explicitly requested update and an ordinary Quit, which installs nothing.
  *
- * The caller quits. This module still never does.
+ * Only checkInstallIntent calls this after its work and version fences pass.
  */
 export function markInstallOnQuit(expectedVersion?: string): boolean {
   if (!UPDATES_ENABLED) return false;
-  if (!staged || (expectedVersion !== undefined && staged.version !== expectedVersion)) return false;
+  if (!staged || requestedVersion !== staged.version || (expectedVersion !== undefined && staged.version !== expectedVersion)) return false;
   runAfterInstall = true;
   if (status.notInstalled) set({ notInstalled: null });
   return true;
+}
+
+/** Configured by the existing IPC/shutdown owner, never by the download engine. */
+export function configureUpdateInstall(quit: () => void): void { quitForUpdate = quit; }
+
+export function cancelUpdateInstall(): boolean {
+  const wasRequested = requestedVersion !== null;
+  requestedVersion = null;
+  installEpoch++;
+  runAfterInstall = false;
+  if (installPoll) clearTimeout(installPoll);
+  installPoll = null;
+  if (status.installRequested || status.busyReasons?.length) set({ installRequested: false, busyReasons: [] });
+  return wasRequested;
+}
+
+/** Version-bound intent does not survive restart or authorize an unrelated future release. */
+export async function requestUpdateInstall(expectedVersion: string): Promise<'waiting' | 'restarting'> {
+  if (!quitForUpdate || !staged || status.stage !== 'ready' || expectedVersion !== staged.version || status.latest !== expectedVersion)
+    throw new Error('This downloaded update is no longer current. Check for updates again.');
+  requestedVersion = expectedVersion;
+  installEpoch++;
+  set({ installRequested: true, busyReasons: [] });
+  if (installCheck) await installCheck;
+  await checkInstallIntent();
+  return runAfterInstall ? 'restarting' : 'waiting';
+}
+
+function checkInstallIntent(): Promise<void> {
+  if (installCheck) return installCheck;
+  const version = requestedVersion;
+  const epoch = installEpoch;
+  const ready = staged;
+  const current = () => installEpoch === epoch && requestedVersion === version && version !== null && staged === ready && ready?.version === status.latest && status.stage === 'ready';
+  const run = (async () => {
+    if (!current() || !ready) return;
+    let reasons: UpdateBusyReason[];
+    try { reasons = await busyProjection(); }
+    catch { reasons = ['unavailable']; }
+    if (!current()) return;
+    if (!reasons.length) {
+      try {
+        if (await fileDigest(ready.file) !== ready.digest) throw new Error('The staged update changed after verification');
+        if (ready.kind === 'installer' && await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+        // Re-read after filesystem/registry waits. No sampled timer or model status grants idleness.
+        reasons = await busyProjection();
+      } catch (error) {
+        if (!current()) return;
+        cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); return;
+      }
+    }
+    if (!current()) return;
+    set({ busyReasons: reasons });
+    if (reasons.length) {
+      installPoll = setTimeout(() => { installPoll = null; void checkInstallIntent(); }, 2000);
+      installPoll.unref(); return;
+    }
+    if (markInstallOnQuit(version!)) quitForUpdate!();
+  })().finally(() => { if (installCheck === run) installCheck = null; });
+  installCheck = run;
+  return run;
 }
 
 /**
@@ -546,6 +640,8 @@ function startElevated(file: string, args: string[]): Promise<boolean> {
 
 export async function applyStagedUpdate(): Promise<void> {
   if (!UPDATES_ENABLED) return;
+  // Downloading alone never grants execution, including ordinary Quit or OS shutdown.
+  if (!runAfterInstall || requestedVersion !== staged?.version) return;
   const ready = staged;
   const relaunch = runAfterInstall;
   staged = null;
@@ -556,9 +652,10 @@ export async function applyStagedUpdate(): Promise<void> {
     if (ready.kind === 'installer') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
-      // `--force-run` is added only when the user pressed Install and is waiting for the app to
-      // come back; an update applied on the way out of an ordinary quit must not reopen it.
-      const args = relaunch ? ['/S', '--updated', '--force-run'] : ['/S', '--updated'];
+      // This handoff exists only after the user requested installation; normal Quit cannot enter.
+      if (!ready.target || await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+      // NSIS /D must be the final, unquoted argument. It names only the verified current install.
+      const args = ['/S', '--updated', '--force-run', `/D=${ready.target}`];
       const elevate = process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
       await writeFile(handoffNote(), JSON.stringify({ version: ready.version, at: Date.now() })).catch(() => undefined);
       if (elevate) {
@@ -596,6 +693,9 @@ export async function applyStagedUpdate(): Promise<void> {
 
 /** Test seam: forgets the pass, the staged file and everything reported about them. */
 export function resetUpdateForTests(): void {
+  cancelUpdateInstall();
+  busyProjection = updateBusyReasons; installTarget = currentWindowsInstallTarget; windowsDownload = downloadWindowsUpdate;
+  quitForUpdate = null; installCheck = null;
   installFolderAccess = probeInstallFolder;
   status = CLEAR;
   staged = null;
@@ -605,4 +705,13 @@ export function resetUpdateForTests(): void {
   if (recheck) clearInterval(recheck);
   if (retry) clearTimeout(retry);
   recheck = null; retry = null; failures = 0;
+}
+
+/** Isolated tests supply existing-owner projections and a download engine without native actions. */
+export function configureUpdateForTests(options: {
+  busy?: typeof updateBusyReasons; target?: typeof currentWindowsInstallTarget; download?: typeof downloadWindowsUpdate;
+}): void {
+  if (options.busy) busyProjection = options.busy;
+  if (options.target) installTarget = options.target;
+  if (options.download) windowsDownload = options.download;
 }

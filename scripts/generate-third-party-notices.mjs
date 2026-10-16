@@ -56,6 +56,11 @@ for (const [relative, entry] of Object.entries(lock.packages).sort(([a], [b]) =>
     files.push(path.join(root, 'node_modules/koffi/LICENSE.txt'));
   }
   if (manifest.name === 'flora-colossus' && !files.length) files.push(path.join(root, 'docs/licenses/flora-colossus-LICENSE'));
+  if (manifest.name === 'lazy-val' && !files.length) {
+    if (manifest.version !== '1.0.5' || manifest.license !== 'MIT' || manifest.author !== 'Vladimir Krivosheev')
+      throw new Error('Review lazy-val license supplement for the changed package');
+    files.push(path.join(root, 'docs/licenses/lazy-val-LICENSE'));
+  }
   if (manifest.name.startsWith('@napi-rs/canvas-') && !files.length) {
     // Platform binary packages are published from the @napi-rs/canvas repository but omit the
     // repository's MIT LICENSE from the npm tarball. Preserve the upstream license explicitly.

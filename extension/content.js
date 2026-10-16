@@ -2736,6 +2736,9 @@
   let observedRoute = null;
   function observe() {
     if (CLF_DOM.provider === 'gemini') {
+      // Restore exact native control receipts before publishing any question
+      // from a reloaded page. Otherwise old Allow rows split a live task in two.
+      CLF_DOM.approvalReceiptsReady?.();
       void CLF_DOM.maybeAutoApprove?.();
       completeDesktopDecision();
     }
@@ -2845,6 +2848,7 @@
       observedRoute = id;
       if (id) for (const check of pageViewChecks) void check();
     }
+    if (CLF_DOM.provider === 'gemini' && CLF_DOM.approvalReceiptsReady?.() === false) return;
     // Route assignment and authored text can arrive in either order. This receipt is
     // evaluated on the existing observer, rather than only on the one route-change edge.
     if (id && pendingObjectiveSend?.accepted && pendingObjectiveSend.current()) {
@@ -9829,6 +9833,16 @@
    * ChatGPT's own marker or at an explicit cancel, never at a second Send.
    */
   async function maybeResumePendingCompaction(forId = conversationId, forEpoch = epoch) {
+    if (CLF_DOM.provider === 'gemini' && job?.stage === 'handoff-pending' &&
+        ['dispatched-unresolved', 'sent'].includes(job.sourceSend?.state) && !nativeBusy) {
+      const here = () => alive && conversationId === forId && epoch === forEpoch && CLF_DOM.conversationId() === forId;
+      const marked = markedContinuationTurns().filter(([, value]) => value.kind === 'HANDOFF' && value.token === job.token);
+      if (here() && marked.length === 1) {
+        observe(); await flush();
+        if (here()) await reconcileContinuationMarkers(marked);
+        return; // Reconcile the accepted native question; never send it a second time.
+      }
+    }
     if (job && job.stage === 'handoff-pending' && job.sourceSend?.state === 'dispatched-unresolved' &&
         !(await releaseUndeliveredHandoff(forId, forEpoch))) return;
     const source = job && job.stage === 'handoff-pending' ? job.sourceSend : null;
@@ -9965,7 +9979,22 @@
       'content_compact_chat_changed_before_start',
       'This chat changed before compaction could start.'
     );
-    if (automatic && CLF_DOM.generating()) {
+    if (automatic && CLF_DOM.generating() && CLF_DOM.provider === 'gemini') {
+      // Gemini exposes no Fiber tool-result receipt. The existing ticket already
+      // fences further work; drain local execution and native permission custody
+      // under this same question before requesting Stop. This is not a claim that
+      // Google acknowledged a result, nor permission to act on a different turn.
+      nativePhase = 'settling'; renderControl();
+      const ready = await waitUntil(async () => {
+        if (!current()) return true;
+        const count = await peekPendingTools(forId);
+        return !current() || count === 0 && !CLF_DOM.approvalWaiting() && CLF_DOM.approvalReceiptsReady?.() !== false;
+      }, AUTO_RECEIPT_SETTLE_MS);
+      if (!current()) return t('content_compact_chat_changed_waiting_results',
+        'This chat changed while compaction was waiting for tool results.');
+      if (!ready) return 'Local tools or native permission decisions have not settled. Nothing was compacted.';
+    }
+    if (automatic && CLF_DOM.generating() && CLF_DOM.provider !== 'gemini') {
       // A local result can file the ticket before ChatGPT receives that result. Stopping
       // here used to lose completed work from the brief. Require native receipt first;
       // pendingTools === 0 only proves that execution on this machine has drained.
@@ -10156,11 +10185,16 @@
     if (!token) return void (await abandonBeforeSend(
       t('content_compact_missing_token', 'The app did not send a compaction token, so nothing could be tracked.')
     ));
+    if (CLF_DOM.hasComposerAttachments()) return void (await abandonBeforeSend(
+      'Attachments are already in the message box. Their draft was preserved; the handoff request was not submitted.'
+    ));
 
     try {
       nativePhase = 'prompting';
       renderControl();
       const squeeze = (value) => String(value || '').replace(/\s+/g, '');
+      const authored = box => CLF_DOM.provider === 'gemini' && box === CLF_DOM.composer()
+        ? CLF_DOM.composerAuthoredText() : box?.textContent;
       const editable = () => {
         const box = CLF_DOM.composer();
         return box?.isConnected && CLF_DOM.composerVisible() && box.getAttribute('contenteditable') !== 'false' &&
@@ -10189,15 +10223,15 @@
       // was being composed; ChatGPT restores that draft on every load. It is this app's text, not
       // the person's, yet it refused every later attempt as "a draft is already in ChatGPT"
       // (measured 2026-10-10). Its marker is the proof, and attachments still protect a real draft.
-      if (handoffResidue(existing, prompt) && squeeze(existing.textContent) !== squeeze(prompt)) {
-        CLF_DOM.clearPromptExact(existing.textContent);
+      if (handoffResidue(existing, prompt) && squeeze(authored(existing)) !== squeeze(prompt)) {
+        CLF_DOM.clearPromptExact(authored(existing));
         existing = CLF_DOM.composer();
       }
       const occupiedByOtherDraft =
-        Boolean(existing && (existing.textContent || '').trim()) &&
-        squeeze(existing?.textContent) !== squeeze(prompt);
+        Boolean(existing && (authored(existing) || '').trim()) &&
+        squeeze(authored(existing)) !== squeeze(prompt);
       let insertionFailure = '';
-      if (squeeze(existing?.textContent) !== squeeze(prompt) && !CLF_DOM.insertPrompt(prompt, false, reason => { insertionFailure = reason; })) {
+      if (squeeze(authored(existing)) !== squeeze(prompt) && !CLF_DOM.insertPrompt(prompt, false, reason => { insertionFailure = reason; })) {
         return void (await abandonBeforeSend(
           occupiedByOtherDraft
             ? t(
@@ -10227,7 +10261,7 @@
         ));
       }
       const composer = CLF_DOM.composer();
-      if (!composer || squeeze(composer.textContent) !== squeeze(prompt)) {
+      if (!composer || squeeze(authored(composer)) !== squeeze(prompt)) {
         return void (await abandonBeforeSend(
           t(
             'content_compact_message_box_changed',
@@ -10256,7 +10290,7 @@
       // Reacquire the current editable composer and verify the exact frozen prompt: an
       // unchanged draft survives remounts, while changed or user-owned text still fails closed.
       const sendComposer = editable();
-      if (!sameSource() || !sendComposer || squeeze(sendComposer.textContent) !== squeeze(prompt)) {
+      if (!sameSource() || !sendComposer || squeeze(authored(sendComposer)) !== squeeze(prompt)) {
         CLF_DOM.clearPromptExact(prompt);
         return void (await abandonBeforeSend(
           t(
@@ -10267,8 +10301,9 @@
         ));
       }
       rememberUserSend();
+      let nativeSourceReceipt = null;
       const sent = await sendSubmittedText(current, true, async stillSending => {
-        if (!stillSending() || !current() || !sameSource()) return false;
+        if (!stillSending() || !current() || !sameSource() || CLF_DOM.hasComposerAttachments()) return false;
         // Native Send readiness precedes this irreversible checkpoint. A disabled
         // button timing out is still a provably unsent request. Once dispatched,
         // a missing reply retains custody rather than granting another click.
@@ -10284,8 +10319,16 @@
           );
           return false;
         }
-        return stillSending() && sameSource();
-      });
+        return stillSending() && sameSource() && !CLF_DOM.hasComposerAttachments();
+      }, CLF_DOM.provider === 'gemini' ? (user, acceptedConversation) => {
+        if (!current() || acceptedConversation !== forId ||
+            !new RegExp(`^gemini:${forId}:user:[a-f0-9]{16}$`).test(user?.id || '') ||
+            !matchesSubmittedBootstrap(user, prompt)) return false;
+        const last = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
+        if (last?.id !== user.id) return false;
+        nativeSourceReceipt = { messageId: user.id };
+        return true;
+      } : null, matchesSubmittedBootstrap);
       if (!current()) return;
       if (!sent) {
         CLF_DOM.clearPromptExact(prompt);
@@ -10304,6 +10347,16 @@
         );
         renderControl();
         return;
+      }
+      const ownsAcceptedQuestion = () => current() && nativeSourceReceipt &&
+        CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id === nativeSourceReceipt.messageId;
+      if (CLF_DOM.provider === 'gemini' && ownsAcceptedQuestion()) {
+        // Publish through the ordinary recorder before the WAL accepts this exact question.
+        // A lost HTTP answer is reconciled from this same native marker, never another Send.
+        observe();
+        await flush();
+        if (!ownsAcceptedQuestion()) return;
+        await ask({ type: 'compact', conversationId: forId, token, sourceMessageId: nativeSourceReceipt.messageId });
       }
       nativePhase = 'waiting';
       renderControl();
@@ -10350,11 +10403,13 @@
   const HANDOFF_MARKED = /^\s*\[\[CLF-HANDOFF:[A-Za-z0-9_-]{16,64}\]\]/;
   /** A composer holding a handoff request this app typed (any attempt's), and no attachment. */
   function handoffMarked(box) {
-    return Boolean(box && HANDOFF_MARKED.test(box.textContent || '') && !CLF_DOM.hasComposerAttachments());
+    const text = CLF_DOM.provider === 'gemini' && box === CLF_DOM.composer() ? CLF_DOM.composerAuthoredText() : box?.textContent;
+    return Boolean(box && HANDOFF_MARKED.test(text || '') && !CLF_DOM.hasComposerAttachments());
   }
   function handoffResidue(box, prompt) {
     const body = text => String(text || '').replace(HANDOFF_MARKED, '').replace(/\s+/g, '');
-    return handoffMarked(box) && !!body(box.textContent) && body(box.textContent) === body(prompt);
+    const text = CLF_DOM.provider === 'gemini' && box === CLF_DOM.composer() ? CLF_DOM.composerAuthoredText() : box?.textContent;
+    return handoffMarked(box) && !!body(text) && body(text) === body(prompt);
   }
   // Same grammar as src/shared/session.ts; letters and digits cannot carry Markdown escapes.
   // A prompt that mentions an app is stored as Markdown: its marker line ends in a hard break.
@@ -10403,6 +10458,17 @@
 
   /** Finds a unique ChatGPT-authored marked user message and the exact turn it opened. */
   function markedContinuationTurns(turns = [...fiberTurns.values()]) {
+    if (CLF_DOM.provider === 'gemini') {
+      const found = new Map();
+      for (const message of CLF_DOM.messages()) {
+        if (message.role !== 'user' || !new RegExp(`^gemini:${conversationId}:user:[a-f0-9]{16}$`).test(message.id || '')) continue;
+        const match = markedAs(message.text);
+        if (!match) continue;
+        const key = `${match[1]}:${match[2]}`;
+        found.set(key, found.has(key) ? null : { kind: match[1], token: match[2], messageId: message.id, answer: null });
+      }
+      return [...found.entries()].filter(([, marked]) => marked);
+    }
     const found = new Map();
     for (let index = 0; index < turns.length; index++) {
       const turn = turns[index];
@@ -10474,6 +10540,11 @@
       ) + (marked.answer?.calls || []).filter(call => call?.answered === true).length)
     });
     if (!bound || bound.ok !== true) return continuationRefused(bound) ? 'settled' : false;
+    if (CLF_DOM.provider === 'gemini') {
+      if (bound.data?.job) job = bound.data.job;
+      // Only save_handoff commits Gemini's Markdown. Native prose is never its file receipt.
+      return bound.data?.stored === true ? 'committed' : false;
+    }
     // The app captured the brief from its recorder's exact response to this anchor, which
     // outranks whatever answer shape is mounted now (#787).
     if (bound.data?.stored === true) {
@@ -11347,6 +11418,12 @@
     );
     return reply.error ? String(reply.error).slice(0, 160) : '';
   }
+
+  if (CLF_DOM.provider === 'gemini' && !CLF_DOM.localHelperReady?.()) CLF_DOM.setApprovalReceiptStore?.(async value => {
+    const reply = await ask({ type: 'gemini_approval_receipts', ...value });
+    if (reply?.ok !== true || !Array.isArray(reply.receipts)) throw new Error('Native approval receipts are not ready');
+    return reply.receipts;
+  }, () => { if (alive) observe(); });
 
   // The adapter asks the authenticated extension worker, never the page or remote host.
   if (CLF_DOM.provider === 'gemini') CLF_DOM.setBindingResolver(async (id, opening, command, input, goal) => {
@@ -12851,6 +12928,16 @@
   }
   /** Fresh exact terminal proof, shared by stuck-composer recovery and idle-tab retirement. */
   async function confirmedProviderTerminal(recordedFinal = false) {
+    if (CLF_DOM.provider === 'gemini') {
+      if (generating || pendingTools !== 0) return false;
+      const receipt = CLF_DOM.completedResponseReceipt?.(true), recorded = receipt && messagesReported.get(receipt.messageId);
+      // A footer beside a stale Stop is sufficient only when this exact answer
+      // was already recorded as final under the same accepted native question.
+      // A footer from history or an unfinished section cannot authorize Stop.
+      return Boolean(receipt && alive && receipt.conversationId === conversationId &&
+        CLF_DOM.conversationId() === conversationId && receipt.questionId === openedUserMessageId &&
+        recorded?.owner && recorded.signature?.startsWith('final\u0000') && recorded.text === receipt.text);
+    }
     const terminal = fiberTerminalMessageId || (recordedFinal ? fiberTurnFor(currentAssistantTurn())?.endMessageId : null);
     const pageTurn = currentAssistantTurn();
     const observedEpoch = epoch;
@@ -12879,6 +12966,17 @@
     const unsafe = () => { note('lease-lost'); return false; };
     const unreadable = () => { note(safe() ? 'page-unreadable' : 'lease-lost'); return false; };
     if (!safe()) return unsafe();
+    if (CLF_DOM.provider === 'gemini') {
+      if (CLF_DOM.approvalReceiptsReady?.() === false) return unreadable();
+      const completed = CLF_DOM.completedResponseReceipt?.();
+      if (completed) { note('page-final'); await flush(); return false; }
+      const latest = CLF_DOM.turns().at(-1);
+      if (!latest || !/^gemini:[0-9a-f]{16}:(?:user|assistant):[0-9a-f]{16}$/.test(latest.id)) return unreadable();
+      const flushed = await flush();
+      if (!flushed) note('journal-pending');
+      else if (!safe()) note('lease-lost');
+      return Boolean(flushed && safe());
+    }
     const latest = CLF_DOM.turns().at(-1);
     if (latest?.role === 'assistant') {
       if (!await refreshFiber({ pageTurnId: latest.id, pageTurn: latest.node || latest.nodes?.[0] }) || !safe()) return unreadable();
@@ -12918,6 +13016,8 @@
     // A handoff request this app typed does not hold the repair: the attempt it starts replaces it
     // only when it is exactly the instruction, and refuses visibly when the person edited it (#134).
     // Holding here instead left the chat's handoff waiting with nothing on screen (2026-10-10).
+    if (CLF_DOM.approvalReceiptsReady?.() === false || await CLF_DOM.flushApprovalReceipts?.() === false)
+      return { safe: false, why: 'journal-pending' };
     const draft = () => !handoffMarked(CLF_DOM.composer()) &&
       Boolean((CLF_DOM.composer()?.textContent || '').trim() || CLF_DOM.hasComposerAttachments());
     const verdict = (holds, extra) => {
@@ -13486,6 +13586,7 @@
    * chat of the signed-in account; nothing is deleted and nothing else is touched.
    */
   async function archiveWorkerChat(conversationId) {
+    if (CLF_DOM.provider === 'gemini' || location.origin !== 'https://chatgpt.com') return 'failed';
     const id = String(conversationId || '').toLowerCase();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return 'failed';
     const signedIn = await fetch(`${location.origin}/api/auth/session`, { credentials: 'include' });
@@ -13502,6 +13603,7 @@
   }
 
   async function createChatgptProject(request) {
+    if (CLF_DOM.provider === 'gemini' || location.origin !== 'https://chatgpt.com') return false;
     if (projectCreateBusy || !request || !/^[a-f0-9-]{36}$/i.test(String(request.id)) || typeof request.name !== 'string' || !request.name) return false;
     const marked = () => alive && onNativeAppHome() && new URL(location.href).searchParams.get('cos-project-create') === request.id;
     if (!marked()) return false;
@@ -14195,6 +14297,8 @@
       activityPullDelay,
       currentActivityPullDelay,
       recoverConversationLoad,
+      recoveryPageUnfinished,
+      confirmedProviderTerminal,
       notePresentation,
       presentationPending,
       runCommand,

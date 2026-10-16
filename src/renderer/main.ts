@@ -1,4 +1,5 @@
 import { initBrowserSetup } from './setup-browser.js';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
@@ -1202,10 +1203,11 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion)
       ? bridge.extensionVersion
       : null;
+  const repairExtension = bridge.extensionUpdateRequired === true;
   // A mismatched companion can fail the protocol gate before it becomes present.
   // Retain its last observed version until a matching companion actually reports in.
-  const missing = !stale && bridge.running && !bridge.present && isRunning(status.state) && browserExtensionRequired(config);
-  if (!stale && !missing && !update.latest && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
+  const missing = !stale && !repairExtension && bridge.running && !bridge.present && isRunning(status.state) && browserExtensionRequired(config);
+  if (!stale && !repairExtension && !missing && !update.latest && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
 
   const lines: string[] = [];
   let tone: UpdateTone = 'work';
@@ -1222,9 +1224,11 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
       update.stage === 'checking'
         ? t("Checking for the latest update…")
         : update.stage === 'ready'
-        ? t("OneCode {0} is downloaded and ready. Install it now, or it installs the next time you quit.", [update.latest])
+        ? update.installRequested
+          ? t("OneCode {0} will install when work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first. You can cancel this restart.", [update.latest])
+          : t("OneCode {0} is downloaded and ready. Choose Install when done to restart after your work finishes.", [update.latest])
         : update.stage === 'downloading'
-          ? t("OneCode {0} is downloading. Keep working; you can install it when it lands.", [update.latest])
+          ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [update.latest, String(update.downloadPercent ?? 0)])
           : update.stage === 'failed'
             ? t("OneCode {0} could not be downloaded: {1}.", [update.latest, update.error ? updateErrorText(update.error) : t("the download stopped")])
             : t("OneCode {0} is out. This installation has to be updated by hand.", [update.latest])
@@ -1235,20 +1239,20 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     tone = 'bad';
   } else if (update.stage === 'checking') {
     lines.push(t("Checking for a newer version…"));
-  } else if (!stale && !missing && !update.notInstalled) {
+  } else if (!stale && !repairExtension && !missing && !update.notInstalled) {
     const extension = bridge.present && bridge.extensionVersion ? t(" · extension {0}", [bridge.extensionVersion]) : '';
     lines.push(t("Up to date! OneCode {0}{1}", [update.current, extension]));
     tone = 'ok';
   }
-  if (stale) {
+  if (stale || repairExtension) {
     lines.push(
-      t("Update your browser extension: {0} → {1}. ", [stale, update.current]) +
+      (stale ? t("Update your browser extension: {0} → {1}. ", [stale, update.current]) : '') +
         t("Reload the extension from this app’s folder, then refresh Gemini.")
     );
     tone = 'bad';
   }
   if (missing) { lines.push(t("Browser extension not connected. Open Gemini and check the extension in Setup to load models and send messages.")); tone = 'bad'; }
-  return { text: lines.join(' '), tone, notice: Boolean(update.latest || stale || missing), extensionAction: stale ? t("Update extension") : missing ? t("Check extension") : null };
+  return { text: lines.join(' '), tone, notice: Boolean(update.latest || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t("Check extension") : null };
 }
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
@@ -1269,9 +1273,11 @@ function paintUpdate(next: AppState): void {
   $<HTMLButtonElement>('updateGet').hidden = !update.latest || update.stage === 'checking' || update.stage === 'downloading' || update.stage === 'ready';
   // `ready` is the only state with a verified artifact on disk, and therefore the only one in
   // which pressing Install can do anything. Both buttons ask the same question of the same fact.
-  const installable = update.stage === 'ready';
+  const installable = update.stage === 'ready' && !update.installRequested;
   $<HTMLButtonElement>('updateInstall').hidden = !installable;
   $<HTMLButtonElement>('installUpdate').hidden = !installable;
+  $('cancelUpdateInstall').hidden = !update.installRequested;
+  $('cancelUpdateInstallNotice').hidden = !update.installRequested;
   notice.hidden = !summary.notice;
   ui(line, 'textContent', () => updateSummary(next)?.text ?? '');
   line.className = `upline${summary.tone === 'ok' ? ' is-ok' : summary.tone === 'bad' ? ' is-bad' : ''}`;
@@ -1660,6 +1666,7 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('autoContinue'), config.ui.autoContinue !== false, previousState?.config.ui.autoContinue);
   applyChecked($<HTMLInputElement>('browserOnly'), config.ui.browserOnly === true, previousState?.config.ui.browserOnly);
   applyChecked($<HTMLInputElement>('autoRefreshPlugins'), config.ui.autoRefreshPlugins === true, previousState?.config.ui.autoRefreshPlugins);
+  $('autoRefreshPluginsRow').hidden = !chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh;
   applyChecked($<HTMLInputElement>('autoSelectSkills'), config.ui.autoSelectSkills === true, previousState?.config.ui.autoSelectSkills);
   $('startAtLoginRow').hidden = next.loginStartupAvailable !== true;
   $<HTMLInputElement>('startAtLogin').disabled = next.loginStartupAvailable !== true;
@@ -2585,6 +2592,7 @@ updateAllButton.addEventListener('click', async () => {
     const result = reply.data;
     if (result === 'manual') toast(t('Download link opened. Install the app to continue; your settings are kept.'));
     else if (result === 'restarting') toast(t('Installing the update. OneCode closes and starts again as the new version.'));
+    else if (result === 'waiting') toast(t('Installation requested. OneCode will restart when work finishes.'));
     else if (result === 'checking-connectors') toast(document.getElementById('updateReadinessCard') ? t('Plugin checks requested. Any remaining steps are shown in Update status.') : t('Checking…'));
     else if (result === 'cancelled') toast(t('Update postponed. You can keep working.'));
   } catch (error) {
@@ -2605,12 +2613,15 @@ updateAllButton.addEventListener('click', async () => {
  * click looking like a crash. Both buttons are the same action; either can be the one pressed.
  */
 function installUpdate(): void {
-  toast(t("Installing the update. OneCode closes and starts again as the new version."));
-  void run(api.installUpdate());
+  if (!state?.update.latest) return;
+  toast(t('Installation requested. OneCode will restart when work finishes.'));
+  void run(api.installUpdate(state.update.latest));
 }
 
 $('updateInstall').addEventListener('click', installUpdate);
 $('installUpdate').addEventListener('click', installUpdate);
+$('cancelUpdateInstall').addEventListener('click', () => void run(api.cancelUpdateInstall()));
+$('cancelUpdateInstallNotice').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('connectionPopoverToggle').addEventListener('click', () => void toggleConnection());
 $('wizConnect').addEventListener('click', () => void toggleConnection());
 $('readyStart').addEventListener('click', () => showTab('chat'));
@@ -2752,6 +2763,7 @@ document.addEventListener('keydown', (event) => {
 
 $('bridgeDownload').addEventListener('click', () => void run(api.downloadExtension()));
 $('updateExtension').addEventListener('click', () => {
+  browserSetup.reviewExtension();
   step('browser').hidden = false;
   openSetupStep('browser');
 });

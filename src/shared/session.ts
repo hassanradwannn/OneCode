@@ -6,6 +6,7 @@
  * agree on exactly.
  */
 import { workerOwnTask } from './worker-brief.js';
+import type { ContinuationSourceReceipt } from './continuation-receipt.js';
 
 /** Where an event came from. The extension is untrusted UI observation; mcp is ours. */
 export type EventSource = 'extension' | 'mcp' | 'app';
@@ -808,12 +809,16 @@ export interface SessionChange {
 }
 
 export interface HandoffProvenance {
+  /** Absent only on legacy handoffs; never eligible for a new provider-scoped save. */
+  sourceReceipt?: ContinuationSourceReceipt;
   /** ChatGPT frontend that authored the brief. */
   sourceConversationId: string | null;
   /** One-based position of that frontend in the durable session lineage, when known. */
   sourceGeneration: number | null;
   /** Exact source turn pinned by the continuation transaction, when one existed. */
   sourceTurnId: string | null;
+  /** Exact accepted native handoff question, when the source supplies a receipt. */
+  sourceMessageId?: string | null;
   /**
    * Non-authority fingerprint of the continuation transaction.
    *
@@ -824,13 +829,14 @@ export interface HandoffProvenance {
 }
 
 export interface Handoff {
-  /** New writes are v1. Absent means a legacy handoff written before provenance existed. */
-  version?: 1;
+  /** v2 stores its canonical body in the hashed Markdown file. */
+  version?: 1 | 2;
   id: string;
   sessionId: string;
   createdAt: number;
   /** The continuation brief itself. */
   text: string;
+  markdown?: { name: string; sha256: string; bytes: number };
   /** How the raw session looked when this was made, for honest staleness reporting. */
   sourceEvents: number;
   sourceTokens: number;

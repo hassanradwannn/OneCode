@@ -2417,5 +2417,8 @@
   "Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.": "能使用该插件的人，都能在你选择的权限范围内使用这台电脑。如果工作区允许，请让管理员把插件设为仅你可用。",
   "Playful asides in automatic Continue": "自动继续中的趣味题外话",
   "Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.": "在每次自动继续时附上一条随机趣闻或梗笑话，并标注让模型忽略。",
-  "The workspace's Codex credits are used up": "工作区的 Codex 额度已用完"
+  "The workspace's Codex credits are used up": "工作区的 Codex 额度已用完",
+  "Install when done": "工作结束后安装",
+  "OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.": "工作结束后 OneCode 将重新启动。请暂停 Goal 或 Loop，关闭终端，并完成或取消排队中的消息。",
+  "The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.": "已注册的 OneCode 安装信息已更改。请先将 OneCode 重新安装到当前文件夹，然后重试。"
 }

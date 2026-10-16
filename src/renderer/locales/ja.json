@@ -2417,5 +2417,8 @@
   "Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.": "プラグインを使える人は、あなたが選んだ権限の範囲でこのコンピューターを使えます。ワークスペースで可能な場合は、プラグインをあなただけが使えるようにしてもらうよう管理者に依頼してください。",
   "Playful asides in automatic Continue": "自動続行に遊び心のある余談",
   "Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.": "自動続行のたびに、ランダムな豆知識やミームのジョークを添えます。モデルが無視するよう印を付けます。",
-  "The workspace's Codex credits are used up": "ワークスペースの Codex クレジットを使い切りました"
+  "The workspace's Codex credits are used up": "ワークスペースの Codex クレジットを使い切りました",
+  "Install when done": "作業終了後にインストール",
+  "OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.": "作業が終わると OneCode が再起動します。Goal または Loop を一時停止し、ターミナルを閉じ、待機中のメッセージを完了またはキャンセルしてください。",
+  "The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.": "登録された OneCode のインストール先が変わりました。現在のフォルダーに OneCode を再インストールしてから、もう一度お試しください。"
 }

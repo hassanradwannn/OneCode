@@ -1,5 +1,5 @@
 /** One explicit command over the existing updater, connection and refresh owners. */
-import { checkForUpdates, manualDownloadUrl, markInstallOnQuit, updateStatus } from './update.js';
+import { checkForUpdates, configureUpdateInstall, manualDownloadUrl, requestUpdateInstall, updateStatus } from './update.js';
 import { consumeRequestedPluginRefreshStartup, requestPluginRefreshes } from './plugin-refresh.js';
 import { startBridge } from './bridge.js';
 import { connect, getStatus } from './connection.js';
@@ -37,9 +37,8 @@ export function updateAll(quit: () => void, openDownload: (url: string) => Promi
       throw new Error(update.error ?? 'Update check failed');
     }
     if (update.stage === 'ready') {
-      if (!markInstallOnQuit(update.latest!)) throw new Error('There is no downloaded update to install yet');
-      quit();
-      return 'restarting';
+      configureUpdateInstall(quit);
+      return requestUpdateInstall(update.latest!);
     }
     if (update.latest) {
       await openDownload(manualDownloadUrl(update.latest));

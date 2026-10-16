@@ -23,10 +23,14 @@ export async function workspaceTerminalsExited(timeoutMs = 3_000): Promise<void>
   ]).finally(() => clearTimeout(timer));
 }
 /** Human-operated shells belong to one renderer lifetime, never an MCP caller or its output queue. */
+/** Closing shells remain work until the native terminal owner reports exit. */
+export function workspaceTerminalExitCount(): number { return owedExits.size; }
 export class WorkspaceTerminals {
   private entries = new Map<string, Entry>();
   private pending = new Map<string, symbol>();
   constructor(private readonly emit: (event: WorkspaceTerminalEvent) => void, private readonly homeCwd: string) {}
+  /** An open shell can own human work; do not guess command idleness from its text. */
+  activeCount(): number { return this.entries.size + this.pending.size; }
 
   private allowed(): void {
     if (!effectiveCapabilities(getConfig()).command) throw new Error('Command execution is disabled in Settings');

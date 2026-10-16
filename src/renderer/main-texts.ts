@@ -9,6 +9,9 @@ import type { MainText } from '../shared/main-texts.js';
  */
 export function mainTexts(): Record<MainText, string> {
   return {
+    'Install when done': t('Install when done'),
+    'OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.':
+      t('OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.'),
     'Open': t('Open'),
     'Show browser': t('Show browser'),
     'Hide browser': t('Hide browser'),

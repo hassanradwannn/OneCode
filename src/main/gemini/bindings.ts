@@ -25,6 +25,7 @@ export const GEMINI_INPUT_TURN_WAIT_MS = 12_000;
 export interface GeminiBindingCommand { id: string; owner: string; lease: string }
 export interface GeminiBindingInput { id: string; owner: string; browser: string; offeredAt: number }
 export interface GeminiBindingGoal { id: string; token: string; client: string; browser: string; tabId: number; documentId: string }
+export interface GeminiBindingHandoff { provider: 'gemini'; accountPath: string; id: string; browser: string; tabId: number; documentId: string }
 export interface GeminiInputTurn { inputId: string; messageId: string; historySeq: number; turnId: string }
 
 interface BindingRow {
@@ -40,6 +41,7 @@ interface BindingRow {
   /** Retained after activation: a previous input must never borrow a later receipt/turn. */
   input?: GeminiBindingInput;
   goal?: GeminiBindingGoal;
+  handoff?: GeminiBindingHandoff;
   inputTurn?: GeminiInputTurn;
 }
 interface BindingLedger { version: 1; bindings: BindingRow[] }
@@ -56,6 +58,8 @@ export interface GeminiBindingEvidence {
   attribution: 'gemini_session_capability';
   /** Canonical local input/turn custody, not a Google request identifier. */
   inputTurn?: GeminiInputTurn;
+  /** Save-only continuation custody; never ordinary workspace or input authority. */
+  handoff?: GeminiBindingHandoff;
 }
 
 export class GeminiBindingError extends Error {
@@ -89,15 +93,19 @@ function validRow(value: unknown): value is BindingRow {
       typeof row.pendingCommand.owner === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(row.pendingCommand.owner) &&
       typeof row.pendingCommand.lease === 'string' && /^[a-f0-9]{16}$/.test(row.pendingCommand.lease))) &&
     (row.input === undefined || (typeof row.input === 'object' && row.input !== null && !row.pendingCommand && !row.goal &&
-      typeof row.input.id === 'string' && /^[a-f0-9-]{36}$/i.test(row.input.id) &&
+      !row.handoff && typeof row.input.id === 'string' && /^[a-f0-9-]{36}$/i.test(row.input.id) &&
       typeof row.input.owner === 'string' && row.input.owner.length > 0 && row.input.owner.length <= 160 &&
       typeof row.input.browser === 'string' && /^[a-z0-9]{16,64}$/.test(row.input.browser) &&
       Number.isFinite(row.input.offeredAt) && row.input.offeredAt > 0)) &&
     (row.goal === undefined || (typeof row.goal === 'object' && row.goal !== null && !row.input && !row.pendingCommand &&
-      typeof row.goal.id === 'string' && /^[a-f0-9-]{36}$/i.test(row.goal.id) && typeof row.goal.token === 'string' && /^goal-[a-z0-9-]{1,80}$/.test(row.goal.token) &&
+      !row.handoff && typeof row.goal.id === 'string' && /^[a-f0-9-]{36}$/i.test(row.goal.id) && typeof row.goal.token === 'string' && /^goal-[a-z0-9-]{1,80}$/.test(row.goal.token) &&
       typeof row.goal.client === 'string' && row.goal.client === String(row.goal.tabId) && Number.isSafeInteger(row.goal.tabId) && row.goal.tabId >= 0 &&
       typeof row.goal.browser === 'string' && /^[a-z0-9]{16,64}$/.test(row.goal.browser) &&
       typeof row.goal.documentId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(row.goal.documentId))) &&
+    (row.handoff === undefined || (typeof row.handoff === 'object' && row.handoff !== null && !row.input && !row.goal && !row.pendingCommand &&
+      row.handoff.provider === 'gemini' && (row.handoff.accountPath === '' || /^\/u\/[0-9]+$/.test(row.handoff.accountPath)) &&
+      /^[A-Za-z0-9_-]{43}$/.test(row.handoff.id) && /^[a-z0-9]{16,64}$/.test(row.handoff.browser) &&
+      Number.isSafeInteger(row.handoff.tabId) && row.handoff.tabId >= 0 && /^[A-Za-z0-9_-]{1,64}$/.test(row.handoff.documentId))) &&
     (row.inputTurn === undefined || ((row.input !== undefined || row.goal !== undefined) && row.inputTurn?.inputId === (row.input ?? row.goal)!.id &&
       typeof row.inputTurn.messageId === 'string' && row.inputTurn.messageId.length > 0 && row.inputTurn.messageId.length <= 256 &&
       Number.isSafeInteger(row.inputTurn.historySeq) && row.inputTurn.historySeq > 0 &&
@@ -170,7 +178,7 @@ async function sessionFor(conversationId: string, requested?: string): Promise<s
 }
 
 async function issue(conversationId: string, requested: string | undefined, rotate: boolean,
-  pendingCommand?: GeminiBindingCommand, input?: GeminiBindingInput, goal?: GeminiBindingGoal): Promise<GeminiBindingCredential> {
+  pendingCommand?: GeminiBindingCommand, input?: GeminiBindingInput, goal?: GeminiBindingGoal, handoff?: GeminiBindingHandoff): Promise<GeminiBindingCredential> {
   return serialized(async () => {
     if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
     let sessionId: string;
@@ -184,8 +192,10 @@ async function issue(conversationId: string, requested: string | undefined, rota
     const cached = issuedKeys.get(conversationId);
     // Approval policy refreshes do not carry input custody. They may reuse the
     // same key, but can never downgrade an exact input grant to a chat-only one.
-    if (!rotate && !input && !goal && !pendingCommand && (previous?.input || previous?.goal)) {
-      if (previous.revoked || previous.sessionId !== sessionId || !cached || previous.expiresAt <= Date.now()) fail(previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
+    if (!rotate && !input && !goal && !pendingCommand && !handoff && (previous?.input || previous?.goal || previous?.handoff)) {
+      if (previous.handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(previous.handoff, conversationId, sessionId) === 'invalid')
+        fail('GEMINI_HANDOFF_NOT_OWNED');
+      if (previous.revoked || previous.sessionId !== sessionId || !cached || previous.expiresAt <= Date.now()) fail(previous.handoff ? 'GEMINI_HANDOFF_BINDING_REQUIRED' : previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
       return { conversation_id: conversationId, session_key: cached, session_id: sessionId };
     }
     if (input) {
@@ -193,6 +203,7 @@ async function issue(conversationId: string, requested: string | undefined, rota
       if ((await geminiInputBindingStatus(input, conversationId, sessionId)).state === 'invalid') fail('GEMINI_INPUT_NOT_OWNED');
     }
     if (goal && (await (await import('../goal.js')).geminiGoalBindingStatus(goal, conversationId, sessionId)).state === 'invalid') fail('GEMINI_GOAL_NOT_OWNED');
+    if (handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(handoff, conversationId, sessionId) === 'invalid') fail('GEMINI_HANDOFF_NOT_OWNED');
     if (!rotate && previous && !previous.revoked && previous.sessionId === sessionId && cached &&
         previous.pendingCommand?.id === pendingCommand?.id && previous.pendingCommand?.owner === pendingCommand?.owner &&
         previous.pendingCommand?.lease === pendingCommand?.lease &&
@@ -200,6 +211,7 @@ async function issue(conversationId: string, requested: string | undefined, rota
         previous.input?.browser === input?.browser && previous.input?.offeredAt === input?.offeredAt &&
         previous.goal?.id === goal?.id && previous.goal?.token === goal?.token && previous.goal?.client === goal?.client &&
         previous.goal?.browser === goal?.browser && previous.goal?.tabId === goal?.tabId && previous.goal?.documentId === goal?.documentId &&
+        JSON.stringify(previous.handoff) === JSON.stringify(handoff) &&
         previous.expiresAt > Date.now() + RENEW_WITHIN_MS) {
       return { conversation_id: conversationId, session_key: cached, session_id: sessionId };
     }
@@ -207,7 +219,7 @@ async function issue(conversationId: string, requested: string | undefined, rota
     const key = `sk-gemini-session-${randomBytes(32).toString('base64url')}`;
     const now = Date.now();
     const row: BindingRow = { id: randomUUID(), conversationId, sessionId, keyHash: hash(key).toString('hex'),
-      issuedAt: now, expiresAt: now + LIFETIME_MS, revoked: false, ...(pendingCommand ? { pendingCommand } : {}), ...(input ? { input } : {}), ...(goal ? { goal } : {}) };
+      issuedAt: now, expiresAt: now + LIFETIME_MS, revoked: false, ...(pendingCommand ? { pendingCommand } : {}), ...(input ? { input } : {}), ...(goal ? { goal } : {}), ...(handoff ? { handoff } : {}) };
     const next = new Map(rows); next.set(conversationId, row);
     await persist(next);
     issuedKeys.set(conversationId, key);
@@ -236,6 +248,9 @@ export function prepareGeminiGoalBinding(conversationId: string, sessionId: stri
   goal: GeminiBindingGoal): Promise<GeminiBindingCredential> {
   return issue(conversationId, sessionId, false, undefined, undefined, goal);
 }
+export function prepareGeminiHandoffBinding(conversationId: string, sessionId: string, handoff: GeminiBindingHandoff): Promise<GeminiBindingCredential> {
+  return issue(conversationId, sessionId, false, undefined, undefined, undefined, handoff);
+}
 export async function revokeGeminiBinding(conversationId: string): Promise<void> {
   await serialized(async () => {
     if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
@@ -251,6 +266,7 @@ function currentRow(evidence: GeminiBindingEvidence): BindingRow | null {
   const row = ready ? rows.get(evidence.conversationId) : null;
   return row && row.id === evidence.bindingId && row.sessionId === evidence.sessionId &&
     !row.pendingCommand && (!(row.input || row.goal) || !!row.inputTurn) && sameInputTurn(row.inputTurn, evidence.inputTurn) &&
+    JSON.stringify(row.handoff) === JSON.stringify(evidence.handoff) &&
     !row.revoked && row.expiresAt > Date.now() ? row : null;
 }
 const sameInputTurn = (left?: GeminiInputTurn, right?: GeminiInputTurn) =>
@@ -341,6 +357,8 @@ export async function validateGeminiBindingEvidence(evidence: GeminiBindingEvide
     const status = await (await import('../goal.js')).geminiGoalBindingStatus(scoped.goal, scoped.conversationId, scoped.sessionId);
     if (status.state !== 'ready' || !sameInputTurn(status.turn, evidence.inputTurn)) fail('GEMINI_GOAL_NOT_OWNED');
   }
+  if (scoped?.handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(scoped.handoff, scoped.conversationId, scoped.sessionId) !== 'ready')
+    fail('GEMINI_HANDOFF_NOT_OWNED');
   if (!currentRow(evidence)) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
 }
 
@@ -359,9 +377,21 @@ export async function authenticateGeminiBinding(args: unknown): Promise<GeminiBi
   if (!row || !matches) fail('GEMINI_SESSION_NOT_AUTHORIZED');
   await activateCommandBinding(row);
   await activateInputBinding(row);
+  if (row.handoff) {
+    const deadline = performance.now() + GEMINI_INPUT_TURN_WAIT_MS;
+    for (;;) {
+      const current = rows.get(conversationId);
+      if (current?.id !== row.id || current.revoked || current.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+      const status = await (await import('../session/continuation.js')).geminiHandoffBindingStatus(row.handoff, row.conversationId, row.sessionId);
+      if (status === 'ready') break;
+      if (status === 'invalid') fail('GEMINI_HANDOFF_NOT_OWNED');
+      if (performance.now() >= deadline) fail('GEMINI_HANDOFF_ACK_PENDING');
+      await new Promise<void>(resolve => { const timer = setTimeout(resolve, 50); timer.unref?.(); });
+    }
+  }
   const active = rows.get(conversationId);
   const evidence: GeminiBindingEvidence = { bindingId: row.id, conversationId, sessionId: row.sessionId,
-    attribution: 'gemini_session_capability', ...(active?.inputTurn ? { inputTurn: { ...active.inputTurn } } : {}) };
+    attribution: 'gemini_session_capability', ...(active?.inputTurn ? { inputTurn: { ...active.inputTurn } } : {}), ...(active?.handoff ? { handoff: { ...active.handoff } } : {}) };
   await validateGeminiBindingEvidence(evidence);
   return evidence;
 }

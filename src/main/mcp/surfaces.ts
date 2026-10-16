@@ -1,3 +1,4 @@
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 /**
  * The model-facing surfaces this app publishes, and what each one is for.
  *
@@ -103,12 +104,13 @@ const CORE: SurfaceDefinition = {
     'Read and edit code and text files on this computer, and run commands in a real terminal. ' +
     'Use for: opening and reading files, searching a repository, applying patches, creating, renaming and deleting files, ' +
     'running builds, tests, linters, git, npm and shell commands, continuing long-running or interactive terminal sessions, ' +
-    'and saving images and files Gemini generates onto this computer. ' +
+    'and writing files onto this computer. ' +
     'Also discovers and calls enabled external MCP integrations through the plugins tool, displays task plans and — when the user has ' +
     'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several Gemini conversations.',
   cardSummary: 'Files, patches and terminal.',
   required: true,
-  tools: ['plugins', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'agents', 'session_finish', 'usage', 'exec']
+  tools: ['plugins', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'save_handoff', 'agents', 'session_finish', 'usage', 'exec']
+    .filter(name => name !== 'save_image' || chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport)
 };
 
 /**

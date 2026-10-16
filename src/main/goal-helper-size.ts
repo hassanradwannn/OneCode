@@ -1,16 +1,8 @@
-/**
- * How long a Goal helper prompt this Gemini account takes (#1471).
- *
- * The helper prompt is bounded by `MAX_CHATGPT_MESSAGE_CHARS`, which a paid plan accepts. A Free
- * plan does not: Gemini took a 96,000-character helper prompt, showed "the message you submitted
- * was too long" with Retry instead of an answer, and every Goal round waited out its three minutes
- * and failed the same way (2026-10-13). The refusal is a translated card the page cannot name, so
- * the size is learned from the outcome instead: a prompt Gemini took and never answered before
- * the draft timed out makes the next one smaller. A prompt that was never sent proves nothing.
- *
- * The learned size is forgotten after a week, so a plan upgrade gets the full reference back.
+/** Adaptive helper transport budget, learned from unanswered sends.
+ * This is an application delivery limit, not a provider context-window claim.
+ * Never-sent prompts provide no evidence; learned reductions expire after a week.
  */
-import { MAX_CHATGPT_MESSAGE_CHARS } from '../shared/user-prompt.js';
+import { MAX_BROWSER_MESSAGE_CHARS } from '../shared/user-prompt.js';
 import { writeDurableSoon } from './durable.js';
 import { logInfo } from './logger.js';
 
@@ -26,8 +18,8 @@ let learned: GoalHelperSizeSnapshot | null = null;
 
 /** The longest helper prompt to send now. */
 export function goalHelperPromptLimit(now = Date.now()): number {
-  if (!learned || now - learned.learnedAt >= FORGET_AFTER_MS) return MAX_CHATGPT_MESSAGE_CHARS;
-  return Math.min(MAX_CHATGPT_MESSAGE_CHARS, learned.limit);
+  if (!learned || now - learned.learnedAt >= FORGET_AFTER_MS) return MAX_BROWSER_MESSAGE_CHARS;
+  return Math.min(MAX_BROWSER_MESSAGE_CHARS, learned.limit);
 }
 
 /** A prompt of this length was taken by Gemini and timed out without an answer. */
@@ -43,7 +35,7 @@ export function noteGoalHelperUnanswered(promptChars: number, now = Date.now()):
 export function restoreGoalHelperSize(saved: unknown): void {
   const value = saved as Partial<GoalHelperSizeSnapshot> | null;
   learned = value?.version === 1 && Number.isFinite(value.limit) && Number.isFinite(value.learnedAt) &&
-    value.limit! >= GOAL_HELPER_SIZE_FLOOR && value.limit! <= MAX_CHATGPT_MESSAGE_CHARS
+    value.limit! >= GOAL_HELPER_SIZE_FLOOR && value.limit! <= MAX_BROWSER_MESSAGE_CHARS
     ? { version: 1, limit: Math.floor(value.limit!), learnedAt: value.learnedAt! } : null;
 }
 

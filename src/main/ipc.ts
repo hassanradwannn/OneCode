@@ -1,4 +1,5 @@
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
 import { approvalCardView, requestApprovalAnswer } from './approval-wait.js';
@@ -159,7 +160,7 @@ import { loadCosBrowser, syncCosBrowser } from './cos-browser/selection.js';
 import { onConnectorProofChange } from './connector-proof.js';
 import { opensInCosBrowser } from '../shared/cos-browser-sites.js';
 import { openInPreferredBrowser } from './browser.js';
-import { checkForUpdatesIfStale, manualDownloadUrl, markInstallOnQuit, onUpdateChange, updateStatus } from './update.js';
+import { cancelUpdateInstall, checkForUpdatesIfStale, configureUpdateInstall, manualDownloadUrl, onUpdateChange, requestUpdateInstall, updateStatus } from './update.js';
 import { updateAll } from './update-all.js';
 import {
   getMacOSDesktopAccess,
@@ -573,8 +574,9 @@ async function buildState(): Promise<AppState> {
     connectorSchemas: Object.fromEntries(
       pluginRefreshPublications().map(({ surface, schemaId }) => [surface, schemaId])
     ),
-    connectorRefresh: await pluginRefreshStatuses(),
-    confirmedConnectorSchemas: confirmedPluginSchemas(),
+    connectorRefresh: Object.fromEntries(Object.entries(await pluginRefreshStatuses()).map(([surface, status]) =>
+      [surface, chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? status : { ...status, state: 'manual' as const }])),
+    confirmedConnectorSchemas: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? confirmedPluginSchemas() : {},
     pluginRefreshUnreadable: await pluginRefreshUnreadable(),
     recordingStorageFull: recordingStorageFull(),
     platform: hostPlatformInfo(),
@@ -633,6 +635,7 @@ export async function openSessionChat(id: string): Promise<void> {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
+  configureUpdateInstall(quitToInstall);
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
   // A session row remains visible until its delete IPC resolves. Fence Trust while deletion is
@@ -857,6 +860,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // it saved as off). Either answer is kept, so the offer never comes back.
   handle('pluginRefresh:offer', async (payload) => {
     const { turnOn } = z.object({ turnOn: z.boolean() }).strict().parse(payload);
+    if (turnOn && !chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh)
+      throw new Error('This provider requires updating its connector tools in the provider settings.');
     await updateConfig(config => ({ ...config, ui: { ...config.ui, autoRefreshPluginsAsked: true, ...(turnOn ? { autoRefreshPlugins: true } : {}) } }));
     if (turnOn) wakeBrowserWork();
     return buildState();
@@ -983,6 +988,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return project;
   });
   handle('projects:chatgpt-retry', async payload => {
+    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects) throw new Error('Native projects are unavailable for this provider. Local project folders remain available.');
     const { id } = z.object({ id: z.string().uuid() }).strict().parse(payload);
     const project = await retryProjectCreate(id);
     if (project) wakeBrowserWork();
@@ -1265,7 +1271,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
 
   // The Install button. The renderer decides nothing about what is installed - it cannot
-  // name a file, a version or a path - it only says "now", and only a staged, digest-checked
+  // name a file or a path - its displayed version only rejects a stale click. A staged, checked
   // artifact makes that mean anything. The quit is what applies it, at the end of the same
   // shutdown sequence every other quit runs; refusing here is how a press with nothing staged
   // avoids closing the app for no reason.
@@ -1275,18 +1281,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { response } = await dialog.showMessageBox(window, {
       type: 'question', title: 'OneCode',
       message: mainText('Restart to install the update?'),
-      detail: `${version}\n${mainText('OneCode will close and restart. Running chats, agents and commands may be interrupted.')}`,
-      buttons: [mainText('Keep working'), mainText('Restart and install')],
+      detail: `${version}\n${mainText('OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.')}`,
+      buttons: [mainText('Keep working'), mainText('Install when done')],
       defaultId: 0, cancelId: 0, noLink: true
     });
     return response === 1 && getWindow() === window && !window.isDestroyed();
   }));
-  handle('update:install', async () => {
-    if (!markInstallOnQuit()) throw new Error('There is no downloaded update to install yet');
-    logInfo('update: install requested; quitting to hand the update over');
-    quitToInstall();
-    return true;
+  handle('update:install', async payload => {
+    const { version } = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/) }).parse(payload);
+    return requestUpdateInstall(version);
   });
+  handle('update:cancel-install', async () => cancelUpdateInstall());
 
   // "Get update" for an installation that cannot update itself: the exact published file for
   // this machine and the announced version, opened in the user's browser. The renderer names

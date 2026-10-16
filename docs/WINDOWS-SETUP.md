@@ -36,7 +36,19 @@ Tailscale is the default only for **new installations**. Upgrades keep their cho
 
 The Cloudflare quick tunnel gets a **new public hostname after restarting the connection**. Replace/reconnect Gemini's custom Core app with the new URL shown in Setup. Keeping secret URL paths does not preserve that hostname. Closing the app window normally keeps it running in the tray, while **Quit** stops it.
 
-Automatic updates to the original Chat On Steroids project are disabled. Obtain the next OneCode installer from the same distributor, quit the running app deliberately, install it, then check/reload the bundled companion. The installer retains local app data on uninstall; remove it separately only if you intend to erase your settings, plugins and history.
+OneCode checks this project's GitHub Releases and downloads new versions in the background. When ready, choose **Update and restart**. If a reply, tool, queued message, terminal, worker or automation is active, it waits until that work is finished; **Cancel restart** lets you keep working. Pause Goal/Loop and close terminals when you want to restart. A normal Quit does not install a staged update. Windows uses differential downloads when the previous installer cache is available and a full download otherwise. Updates keep the current installation folder and Windows profile. After an update, reload the unpacked Companion in your browser if OneCode reports a different build.
+
+**Upgrading from 0.2.6 or earlier:** download and install the new OneCode installer once to enable the updater. Those older versions cannot turn it on themselves. The installer retains local app data on uninstall; remove it separately only if you intend to erase your settings, plugins and history.
+
+The update includes the Companion. OneCode maintains its stable extension folder and asks the Companion to reload after active browser work finishes. If it cannot reload automatically, a visible **Update extension** notice opens the extension instructions, including **Open extension folder**. Reload OneCode Companion on your browser's Extensions page, then refresh idle Gemini tabs. If it still shows the old build, load the folder opened by OneCode; a different source/development folder cannot be updated by the installed app. A protocol or build mismatch can require this even when the displayed version numbers match.
+
+### Compact & Resume
+
+Choose **Compact & Resume** when a task needs a fresh conversation. Gemini writes the handoff as Markdown using the current Core `save_handoff` tool. OneCode saves and verifies the file before opening the next chat, which receives that exact handoff. It does not need write access to your project just to save a handoff. If Core was connected before this tool was added, refresh its tool list in Gemini once.
+
+Keep OneCode, its connection and the paired browser running. Recovery waits while a local tool is running or your browser composer contains an unsent draft. It verifies the current native question before refreshing, and does not resend a message whose delivery is uncertain. Previously verified native permission replies stay attached to their original task across refreshes. A handoff already stuck under an older version may need cancelling and starting again; a finished prose reply from that older attempt is not proof that a Markdown file was saved.
+
+The context counter estimates locally recorded conversation size against your configured compaction threshold. It does not measure Google's actual model context, rate limit or remaining usage.
 
 ### Keep a stable HTTPS address with your own tunnel
 

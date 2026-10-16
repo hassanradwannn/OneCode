@@ -18,12 +18,13 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
   const { update, bridge, status } = next;
   const appReady = update.stage === 'idle' && !update.latest && update.checkedAt != null;
   const appDetail = update.stage === 'failed' ? t('Update check failed')
+    : update.installRequested ? t('Restart requested; waiting for active work to finish')
     : update.stage === 'checking' ? t('Checking for a newer version…')
     : update.stage === 'downloading' ? t('Downloading {0}', [update.latest])
     : update.latest ? (update.stage === 'ready' ? t('Ready to install {0}', [update.latest]) : t('Install {0} manually', [update.latest]))
     : appReady ? t('Up to date') : t('Not checked yet');
-  const extensionReady = bridge.running && bridge.paired && bridge.present && bridge.extensionVersion === update.current;
-  const extensionOlder = !!bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion);
+  const extensionReady = bridge.running && bridge.paired && bridge.present && bridge.extensionVersion === update.current && !bridge.extensionUpdateRequired;
+  const extensionOlder = bridge.extensionUpdateRequired === true || !!bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion);
   const appOlder = !!bridge.extensionVersion && isNewer(bridge.extensionVersion, update.current);
   const connectionFailed = ['offline', 'auth-failed', 'tunnel-unavailable'].includes(status.state);
   const rows: ReadinessRow[] = [

@@ -8,6 +8,8 @@
  * text without a published translation is shown as written.
  */
 export const MAIN_TEXTS = [
+  'OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.',
+  'Install when done',
   'Open',
   'Show browser',
   'Hide browser',

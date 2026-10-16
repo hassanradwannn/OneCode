@@ -22,6 +22,7 @@
  */
 
 import { modelFacingText } from '../../shared/content-reference.js';
+import { continuationReceipt } from '../../shared/continuation-receipt.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isProModel } from '../../shared/chat-models.js';
 import { constants as fsConstants, promises as fs } from 'node:fs';
@@ -4200,11 +4201,25 @@ export async function readOverflowText(sessionId: string, assetId: string): Prom
 
 export async function saveHandoff(handoff: Handoff): Promise<void> {
   assertSessionId(handoff.sessionId);
+  if (!/^[0-9a-z-]{8,64}$/i.test(handoff.id)) throw new Error('Invalid handoff identity');
   const dir = path.join(sessionDir(handoff.sessionId), 'handoffs');
   await fs.mkdir(dir, { recursive: true });
   const target = path.join(dir, `${handoff.id}.json`);
   const tmp = `${target}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(handoff, null, 2), 'utf8');
+  let metadata: object = handoff;
+  if (handoff.version === 2) {
+    const markdown = handoff.markdown;
+    if (!markdown || markdown.name !== `${handoff.id}.md` || markdown.bytes !== Buffer.byteLength(handoff.text, 'utf8') ||
+        markdown.sha256 !== createHash('sha256').update(handoff.text, 'utf8').digest('hex')) throw new Error('Invalid handoff Markdown receipt');
+    const markdownPath = path.join(dir, markdown.name), staged = `${markdownPath}.${randomUUID()}.tmp`;
+    try { await writeFileDurably(staged, handoff.text); await fs.rename(staged, markdownPath); }
+    finally { await fs.rm(staged, { force: true }).catch(() => undefined); }
+    // The file is canonical. Metadata carries its digest and provenance, never
+    // a second independently readable body.
+    const { text: _text, ...receipt } = handoff;
+    metadata = receipt;
+  }
+  await writeFileDurably(tmp, JSON.stringify(metadata, null, 2));
   await fs.rename(tmp, target);
 }
 
@@ -4214,14 +4229,23 @@ export async function readHandoff(sessionId: string, handoffId: string): Promise
   try {
     const raw = await fs.readFile(path.join(sessionDir(sessionId), 'handoffs', `${handoffId}.json`), 'utf8');
     const parsed = JSON.parse(raw) as Handoff;
-    if (typeof parsed?.text !== 'string') return null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (parsed.version === 2) {
+      const markdown = parsed.markdown;
+      if (!markdown || markdown.name !== `${handoffId}.md` || !/^[a-f0-9]{64}$/.test(markdown.sha256) ||
+          !Number.isSafeInteger(markdown.bytes) || markdown.bytes <= 0 || markdown.bytes > 1024 * 1024) return null;
+      const bytes = await fs.readFile(path.join(sessionDir(sessionId), 'handoffs', markdown.name));
+      if (bytes.length !== markdown.bytes || createHash('sha256').update(bytes).digest('hex') !== markdown.sha256) return null;
+      parsed.text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    }
+    if (typeof parsed.text !== 'string') return null;
     // Legacy files had no version/provenance and remain readable. New files fail closed if
     // identity metadata is malformed; recovery must never repair a transaction from guessed
     // provenance.
     if (parsed.version !== undefined || parsed.provenance !== undefined) {
       const provenance = parsed.provenance;
       if (
-        parsed.version !== 1 ||
+        (parsed.version !== 1 && parsed.version !== 2) ||
         parsed.id !== handoffId ||
         parsed.sessionId !== sessionId ||
         !provenance ||
@@ -4233,6 +4257,11 @@ export async function readHandoff(sessionId: string, handoffId: string): Promise
           (!Number.isSafeInteger(provenance.sourceGeneration) || provenance.sourceGeneration < 1)) ||
         (provenance.sourceTurnId !== null &&
           (typeof provenance.sourceTurnId !== 'string' || provenance.sourceTurnId.length > 256)) ||
+        (provenance.sourceMessageId !== undefined && provenance.sourceMessageId !== null &&
+          (typeof provenance.sourceMessageId !== 'string' || provenance.sourceMessageId.length > 256)) ||
+        (provenance.sourceReceipt !== undefined && (!continuationReceipt(provenance.sourceReceipt) ||
+          provenance.sourceReceipt.conversationId !== provenance.sourceConversationId ||
+          provenance.sourceReceipt.messageId !== provenance.sourceMessageId)) ||
         (provenance.continuationId !== null &&
           (typeof provenance.continuationId !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(provenance.continuationId)))
       ) return null;

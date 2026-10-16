@@ -6,6 +6,10 @@ export class TaskRequestError extends Error {
 }
 type Request = { fingerprint: string; controller: AbortController; promise: Promise<unknown>; settled: boolean };
 const requests = new Map<string, Request>();
+/** Includes preparation before its canonical browser outbox entry exists. */
+export function activeTaskRequests(): number {
+  return [...requests.values()].filter(request => !request.settled).length;
+}
 export function cancelTaskRequest(id: string): boolean {
   const request = requests.get(id);
   if (!request || request.settled) return false;

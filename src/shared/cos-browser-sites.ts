@@ -1,5 +1,6 @@
 /** Production is Gemini only. The legacy policy is explicit for retained ChatGPT host tests. */
-export type CosBrowserProvider = 'gemini' | 'chatgpt';
+import { chatProviderCapabilities, type ChatProvider } from './chat-provider.js';
+export type CosBrowserProvider = ChatProvider;
 const GEMINI_HOSTS = new Set(['gemini.google.com', 'accounts.google.com']);
 const CHATGPT_HOSTS = new Set([
   'chatgpt.com', 'platform.openai.com', 'auth.openai.com', 'auth0.openai.com', 'accounts.google.com',
@@ -14,10 +15,17 @@ function webUrl(url: string): URL | null {
 }
 
 export function cosBrowserPolicy(provider: CosBrowserProvider = 'gemini') {
+  if (provider !== 'gemini' && provider !== 'chatgpt') throw new Error('Unsupported chat provider');
   const legacy = provider === 'chatgpt';
   const homeUrl = legacy ? 'https://chatgpt.com/' : 'https://gemini.google.com/app';
   return {
-    provider, homeUrl,
+    provider, homeUrl, capabilities: chatProviderCapabilities(provider),
+    conversationLink(id: string, accountPath = ''): string | null {
+      if (legacy) return accountPath === '' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)
+        ? `https://chatgpt.com/c/${id}` : null;
+      return /^[a-f0-9]{16}$/.test(id) && (accountPath === '' || /^\/u\/\d+$/.test(accountPath))
+        ? `https://gemini.google.com${accountPath}/app/${id}` : null;
+    },
     loginUrl: legacy ? 'https://chatgpt.com/auth/login' : homeUrl,
     sessionTransfer: legacy,
     opens(url: string): boolean {

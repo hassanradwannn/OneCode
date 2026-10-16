@@ -29,7 +29,22 @@ var CLF_DOM = (() => {
     return clean(node ? read(node) : '');
   };
   const compact = value => clean(value).replace(/\s+/g, ' ');
-  const stripControl = value => clean(String(value || '').replace(CONTROL, ''));
+  const unescapeReadback = value => String(value || '').replace(/\\\r?\n/g, '\n')
+    .replace(/\\([!-/:-@[-`{-~])/g, '$1').replace(/(^|\n)&#x20;/g, '$1 ');
+  const escapedMarker = value => value.replace(/[!-/:-@[-`{-~]/g, '\\$&');
+  const escapedControlOpen = escapedMarker('[[GEMINI_LOCAL_SESSION]]');
+  const escapedControlClose = escapedMarker('[[/GEMINI_LOCAL_SESSION]]');
+  const stripControl = value => {
+    const original = String(value || '');
+    if (CONTROL.test(original)) return clean(original.replace(CONTROL, ''));
+    // Native user readback can escape the app frame too. Remove only its exact
+    // trailing frame; do not unescape authored file paths or arbitrary user text.
+    const start = original.lastIndexOf(escapedControlOpen);
+    return start >= 0 && original.trimEnd().endsWith(escapedControlClose)
+      ? clean(original.slice(0, start).replace(/\\\r?\n$/, '')) : clean(original);
+  };
+  const matchesOwnedReadback = (actual, expected) => compact(actual) === compact(expected) ||
+    compact(unescapeReadback(actual)) === compact(expected);
   const promptContinuation = value => /^\[\[CLF-(?:HANDOFF|RESUME):[A-Za-z0-9_-]{16,64}\]\]\n\n/.exec(value)?.[0] || '';
   function readPromptFrame(value) {
     const identity = promptContinuation(value);
@@ -133,7 +148,7 @@ var CLF_DOM = (() => {
       if (target) {
         const candidate = copy.cloneNode(true);
         all('strong', candidate)[index]?.remove();
-        if (own || compact(stripControl(blockText(candidate))) === compact(sent.expected)) {
+        if (own || matchesOwnedReadback(stripControl(blockText(candidate)), sent.expected)) {
           target.remove();
           if (userId && sent) { if (sent === outgoingMention) sent.acceptedId = userId;
             acceptedMentions.set(userId, { name: sent.name, expected: sent.expected });
@@ -143,7 +158,7 @@ var CLF_DOM = (() => {
     }
     for (const chip of copy.querySelectorAll(MENTION)) chip.remove();
     const result = stripControl(blockText(copy));
-    if (sent && result.startsWith(`@${sent.name}`) && compact(result.slice(sent.name.length + 1)) === compact(sent.expected)) {
+    if (sent && result.startsWith(`@${sent.name}`) && matchesOwnedReadback(result.slice(sent.name.length + 1), sent.expected)) {
       if (sent === outgoingMention) sent.acceptedId = userId;
       acceptedMentions.set(userId, { name: sent.name, expected: sent.expected });
       return stripControl(result.slice(sent.name.length + 1));
@@ -177,6 +192,61 @@ var CLF_DOM = (() => {
   // an exact decision click and its adjacent completed-card exchange prove
   // that a subsequent "Allow"/"Deny" was a control rather than authored text.
   const approvalReplyIds = new Set(), provisionalApprovalReplyIds = new Set(), pendingApprovalReplies = [], approvalAudit = [];
+  // These are receipts of this extension's observed native clicks, never a text
+  // heuristic. The worker retains them across page/browser restarts so an old
+  // control reply cannot become a new authored question after a refresh.
+  let approvalReceiptStore = null, approvalReceiptRoute = null, approvalReceiptLoading = null, approvalReceiptsRestored = null;
+  let approvalReceiptWriting = null;
+  const durableApprovalReplies = new Map(), unsavedApprovalReplies = new Map();
+  const approvalScope = () => {
+    const route = /^(\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(location.pathname);
+    return route ? `${route[1] || ''}/app/${route[2].toLowerCase()}` : null;
+  };
+  const validApprovalReceipt = row => row && /^[0-9a-f]{16}$/.test(row.sourceId) &&
+    /^[0-9a-f]{16}$/.test(row.replyId) && row.replyId !== row.sourceId && /^(Allow|Deny)$/.test(row.decision);
+  function approvalReceiptsReady() {
+    if (!approvalReceiptStore) return true;
+    const route = approvalScope();
+    if (!route) return true;
+    if (approvalReceiptRoute === route) return true;
+    if (!approvalReceiptLoading) {
+      approvalReceiptLoading = Promise.resolve().then(() => approvalReceiptStore({ conversationId: conversationId() }))
+        .then(rows => {
+          if (approvalScope() !== route || !Array.isArray(rows)) return;
+          durableApprovalReplies.clear();
+          for (const row of rows.slice(-2000)) if (validApprovalReceipt(row)) durableApprovalReplies.set(row.replyId, row);
+          approvalReceiptRoute = route;
+        }).catch(() => undefined).finally(() => {
+          approvalReceiptLoading = null;
+          if (approvalReceiptRoute === approvalScope()) approvalReceiptsRestored?.();
+        });
+    }
+    return false;
+  }
+  async function flushApprovalReceipts() {
+    if (!approvalReceiptStore || !unsavedApprovalReplies.size) return true;
+    if (approvalReceiptWriting) return approvalReceiptWriting;
+    const route = approvalScope(), receipts = [...unsavedApprovalReplies.values()].filter(row => row.scope === route).map(row => row.receipt);
+    if (!receipts.length) return true;
+    approvalReceiptWriting = Promise.resolve().then(() => approvalReceiptStore({ conversationId: conversationId(), receipts }))
+      .then(rows => {
+        if (approvalScope() !== route || !Array.isArray(rows)) return false;
+        for (const row of receipts) unsavedApprovalReplies.delete(`${route}:${row.replyId}`);
+        return true;
+      }).catch(() => false).finally(() => { approvalReceiptWriting = null; });
+    return approvalReceiptWriting;
+  }
+  function restoreApprovalReplyIds() {
+    if (approvalReceiptRoute !== approvalScope()) return;
+    for (const row of durableApprovalReplies.values()) {
+      const source = document.getElementById(row.sourceId), reply = document.getElementById(row.replyId);
+      const user = reply?.matches('.conversation-container') ? reply.querySelector('user-query') : null;
+      if (!source?.matches('.conversation-container') || !user ||
+          !(source.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING) ||
+          authored(user.querySelector('.query-text') || user) !== row.decision) continue;
+      approvalReplyIds.add(nativeId(user, 'user'));
+    }
+  }
   let approvalReplyTimer = null;
   function auditApprovalReply(proof, stage, reason, user = null) {
     const id = node => node?.id?.length === 16 && /^[0-9a-f]{16}$/i.test(node.id) ? node.id.toLowerCase() : null;
@@ -222,6 +292,7 @@ var CLF_DOM = (() => {
     }
   }
   function observeApprovalReplies() {
+    restoreApprovalReplyIds();
     provisionalApprovalReplyIds.clear();
     const ended = button => button?.disabled === true || button?.getAttribute('aria-disabled') === 'true' || Boolean(button?.closest('[inert]'));
     for (const proof of [...pendingApprovalReplies]) {
@@ -263,6 +334,15 @@ var CLF_DOM = (() => {
       }
       auditApprovalReply(proof, 'matched', 'completed-control', user);
       approvalReplyIds.add(key);
+      const replyId = user.closest('.conversation-container')?.id?.toLowerCase();
+      const receipt = { sourceId: proof.sourceId, replyId, decision: proof.decision };
+      if (validApprovalReceipt(receipt)) {
+        durableApprovalReplies.set(replyId, receipt);
+        unsavedApprovalReplies.set(`${approvalScope()}:${replyId}`, { scope: approvalScope(), receipt });
+        if (durableApprovalReplies.size > 2000) durableApprovalReplies.delete(durableApprovalReplies.keys().next().value);
+        if (unsavedApprovalReplies.size > 2000) unsavedApprovalReplies.delete(unsavedApprovalReplies.keys().next().value);
+        void flushApprovalReceipts();
+      }
       if (approvalReplyIds.size > 2000) approvalReplyIds.delete(approvalReplyIds.values().next().value);
       pendingApprovalReplies.splice(pendingApprovalReplies.indexOf(proof), 1);
     }
@@ -794,6 +874,7 @@ var CLF_DOM = (() => {
   const approvalObservations = [];
   async function maybeAutoApprove() {
     if (localHelper) return false;
+    if (!approvalReceiptsReady()) return false;
     if (approvalFlight) return approvalFlight;
     const cards = approvalCards(), id = conversationId();
     if (!id || !cards.some(card => card.allow && !approvalClicks.has(card.node))) return false;
@@ -822,6 +903,16 @@ var CLF_DOM = (() => {
   const approvalWaiting = () => pendingApprovalIn(document);
   const messageComplete = message => Boolean(message?.node?.querySelector('.response-footer.complete')) &&
     !pendingApprovalIn(message.node) && !generating();
+  function completedResponseReceipt(allowStaleStop = false) {
+    if (!approvalReceiptsReady()) return null;
+    const rows = messages(), question = rows.findLast(row => row.role === 'user'), answer = rows.at(-1);
+    if (!question || answer?.role !== 'assistant' || !answer.node.isConnected ||
+        !new RegExp(`^gemini:${conversationId()}:assistant:[0-9a-f]{16}$`).test(answer.id) ||
+        !answer.node.querySelector('.response-footer.complete') || approvalWaiting() ||
+        all('model-response [aria-busy="true"]').some(shown) || (!allowStaleStop && generating()) ||
+        errors().some(error => error.blocking)) return null;
+    return { provider: 'gemini', conversationId: conversationId(), questionId: question.id, messageId: answer.id, text: answer.text };
+  }
   const generating = () => stopButton() !== null || approvalWaiting() || all('model-response [aria-busy="true"]').some(shown);
   const stopGeneration = current => { const stop = stopButton(); if (!current() || !enabled(stop)) return false; stop.click(); return true; };
   const attachmentRows = () => composerBox() ? all('uploader-file-preview', composerBox()).filter(shown) : [];
@@ -1022,7 +1113,7 @@ var CLF_DOM = (() => {
   const toolBlocks = turn => all('tool-call,[data-tool-call-id]', turn?.node || document);
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
-    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete,
+    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,
     composerStack: () => { const box = composerBox(); return box?.parentElement ? { host: box.parentElement, before: box } : null; },
@@ -1031,6 +1122,8 @@ var CLF_DOM = (() => {
     insertPrompt, clearPromptExact, captureComposerDraft, send, sendButton, stopButton, stopGeneration, generating,
     setConnectorNames, connectorNames, setConnectorApps, connectorApps, setBindingResolver, setOpeningClaim, setInputClaim, setCommandClaim, setGoalClaim, preparedConversation, selectConnector, confirmedMention,
     approvalCard, answerApprovalCard, approvalWaiting, maybeAutoApprove, approvalObservations: () => [...approvalObservations],
+    setApprovalReceiptStore: (store, restored) => { approvalReceiptStore = store; approvalReceiptsRestored = restored; approvalReceiptRoute = null; },
+    approvalReceiptsReady, flushApprovalReceipts,
     approvalAudit: () => approvalAudit.map(row => ({ ...row })),
     hasComposerAttachments, composerAttachmentNames, uploadImages, visibleModelSelection, inspectModelSettings, selectModelSettings,
     newChatControl, prepareChatModelSurface: async current => current() && Boolean(composer()), modelPickerReadable: async () => Boolean(pickerButton()),

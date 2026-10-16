@@ -2417,5 +2417,8 @@
   "Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.": "Любой, кто может пользоваться плагином, может пользоваться этим компьютером в пределах выбранных вами разрешений. Если рабочее пространство это позволяет, попросите администратора сделать плагин доступным только вам.",
   "Playful asides in automatic Continue": "Шутливые отступления в автоматическом Continue",
   "Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.": "Добавляет к каждому автоматическому Continue случайный забавный факт или мем-шутку с пометкой, чтобы модель их игнорировала.",
-  "The workspace's Codex credits are used up": "Кредиты Codex рабочего пространства израсходованы"
+  "The workspace's Codex credits are used up": "Кредиты Codex рабочего пространства израсходованы",
+  "Install when done": "Установить после работы",
+  "OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.": "OneCode перезапустится после работы. Приостановите Goal или Loop, закройте терминалы и завершите или отмените сообщения в очереди.",
+  "The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.": "Зарегистрированная установка OneCode изменилась. Переустановите OneCode в текущую папку перед повторной попыткой."
 }

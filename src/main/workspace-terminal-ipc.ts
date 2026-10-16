@@ -1,10 +1,14 @@
 import { app, ipcMain, type BrowserWindow, type WebContents } from 'electron';
 import { z } from 'zod';
-import { WorkspaceTerminals } from './workspace-terminal.js';
+import { WorkspaceTerminals, workspaceTerminalExitCount } from './workspace-terminal.js';
+let terminalActivity = (): number => 0;
+/** Reads the existing renderer-owned service, without retaining another terminal registry. */
+export function activeWorkspaceTerminals(): number { return terminalActivity() + workspaceTerminalExitCount(); }
 
 export function registerWorkspaceTerminalIpc(getWindow: () => BrowserWindow | null): void {
   let owner: WebContents | null = null;
   let terminals: WorkspaceTerminals | null = null;
+  terminalActivity = () => terminals?.activeCount() ?? 0;
   const dispose = (): void => { terminals?.dispose(); terminals = null; owner = null; };
   app.on('before-quit', dispose);
   const request = z.discriminatedUnion('action', [

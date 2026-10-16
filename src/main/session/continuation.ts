@@ -73,11 +73,14 @@ import {
   ensureCommittedResumeHandoff,
   findSessionByConversation,
   getSession,
+  readLatestUserMessage,
   readEvents,
   readHandoff,
   refuseAutomaticCompactionNow,
   rebindSession
 } from './store.js';
+import { continuationMarkerOf } from '../../shared/session.js';
+import { continuationReceipt, type ContinuationSourceReceipt } from '../../shared/continuation-receipt.js';
 
 /**
  * How long a continuation may stay open.
@@ -160,6 +163,10 @@ export interface ContinuationSendCheckpoint {
    */
   before?: string | null;
   dispatchedAt?: number;
+  /** Paired source-document custody for a handoff-only Gemini capability. */
+  custody?: { provider: 'gemini'; accountPath: string; id: string; browser: string; tabId: number; documentId: string };
+  /** Provider-discriminated accepted question, separate from local grant custody. */
+  receipt?: ContinuationSourceReceipt;
 }
 
 /** How long after the armed click a document may prove that Gemini never received it. */
@@ -852,12 +859,15 @@ async function withCheckpointLock<T>(token: string, work: () => Promise<T>): Pro
  * hold the message, and the only honest ends are its own marker or an explicit cancel.
  */
 export async function beginContinuationSourceSendNow(
-  token: string, project?: string | null
+  token: string, project?: string | null, custody?: ContinuationSendCheckpoint['custody']
 ): Promise<{ allowed: boolean; checkpoint: ContinuationSendCheckpoint } | null> {
   return withCheckpointLock(token, async () => {
     const entry = byToken.get(token);
     if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary') return null;
     if (entry.sourceSend.state === 'attempted-unresolved') {
+      if (custody && JSON.stringify(entry.sourceSend.custody) !== JSON.stringify(custody)) {
+        await transitionNow(entry, current => ({ ...current, sourceSend: { ...current.sourceSend!, custody } }));
+      }
       return { allowed: true, checkpoint: { ...entry.sourceSend } };
     }
     if (entry.sourceSend.state !== 'not-attempted') {
@@ -866,7 +876,7 @@ export async function beginContinuationSourceSendNow(
     await transitionNow(entry, (current) => ({
       ...current,
       ...(project !== undefined ? { project: normalizeProjectId(project) } : {}),
-      sourceSend: { state: 'attempted-unresolved', messageId: null }
+      sourceSend: { state: 'attempted-unresolved', messageId: null, ...(custody ? { custody } : {}) }
     }));
     return { allowed: true, checkpoint: { ...entry.sourceSend } };
   });
@@ -886,6 +896,7 @@ export async function dispatchContinuationSourceSendNow(token: string, before?: 
     await transitionNow(entry, (current) => ({
       ...current,
       sourceSend: {
+        ...(current.sourceSend?.custody ? { custody: current.sourceSend.custody } : {}),
         state: 'dispatched-unresolved', messageId: null,
         before: typeof before === 'string' && before ? before.slice(0, 200) : null,
         dispatchedAt: Date.now()
@@ -950,13 +961,19 @@ export async function abortContinuationSourceBeforeSendNow(token: string, reason
 }
 
 /** Binds the marked source prompt to Gemini's stable user-message identity. */
-export async function bindContinuationSourceMessageNow(token: string, messageId: string, progress?: number): Promise<boolean> {
+export async function bindContinuationSourceMessageNow(token: string, messageId: string, progress?: number,
+  receipt?: ContinuationSourceReceipt): Promise<boolean> {
   if (!messageId || messageId.length > 200) return false;
   return withCheckpointLock(token, async () => {
     const entry = byToken.get(token);
     if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary') return false;
+    if (receipt && (!continuationReceipt(receipt) || receipt.messageId !== messageId || receipt.conversationId !== entry.from)) return false;
+    if (entry.sourceSend.custody && (!receipt || receipt.provider !== 'gemini' ||
+        receipt.tabId !== entry.sourceSend.custody.tabId || receipt.documentId !== entry.sourceSend.custody.documentId ||
+        receipt.accountPath !== entry.sourceSend.custody.accountPath)) return false;
     if (entry.sourceSend.state === 'sent') {
       if (entry.sourceSend.messageId !== messageId) return false;
+      if (receipt && JSON.stringify(entry.sourceSend.receipt) !== JSON.stringify(receipt)) return false;
       // Only growth of this exact marked response renews the manual waiting deadline.
       // Persist at most twice a minute; unchanged snapshots and a spinner alone buy no time.
       if (!entry.automatic && Number.isSafeInteger(progress) && progress! > entry.sourceProgress &&
@@ -969,9 +986,41 @@ export async function bindContinuationSourceMessageNow(token: string, messageId:
     await transitionNow(entry, (current) => ({
       ...current,
       sourceProgress: Number.isSafeInteger(progress) && progress! >= 0 && progress! <= 4_000_000 ? progress! : 0,
-      sourceSend: { state: 'sent', messageId }
+      sourceSend: { ...current.sourceSend!, state: 'sent', messageId, ...(receipt ? { receipt } : {}) }
     }));
     return true;
+  });
+}
+
+/** Existing continuation state is the only authority for the source's save-only grant. */
+export async function geminiHandoffBindingStatus(scope: NonNullable<ContinuationSendCheckpoint['custody']>, conversationId: string,
+  sessionId: string): Promise<'invalid' | 'pending' | 'ready'> {
+  sweep();
+  const entry = [...byToken.values()].find(value => handoffContinuationId(value.token) === scope.id);
+  if (!entry || !isOpen(entry) || entry.sessionId !== sessionId || entry.from !== conversationId ||
+      !['awaiting-summary', 'awaiting-chat', 'claimed'].includes(entry.state) ||
+      JSON.stringify(entry.sourceSend.custody) !== JSON.stringify(scope) ||
+      (await getSession(sessionId))?.conversationId !== conversationId) return 'invalid';
+  if (entry.sourceSend.state !== 'sent' || !entry.sourceSend.messageId) return 'pending';
+  const receipt = continuationReceipt(entry.sourceSend.receipt);
+  if (receipt?.provider !== 'gemini' || receipt.conversationId !== conversationId || receipt.messageId !== entry.sourceSend.messageId ||
+      receipt.tabId !== scope.tabId || receipt.documentId !== scope.documentId || receipt.accountPath !== scope.accountPath) return 'invalid';
+  const question = await readLatestUserMessage(sessionId);
+  if (!question) return 'pending';
+  if (question.messageId === entry.sourceSend.before) return 'pending';
+  const marked = continuationMarkerOf(question.message.text);
+  if (question.messageId !== entry.sourceSend.messageId || marked?.kind !== 'HANDOFF' || marked.token !== entry.token) return 'invalid';
+  return 'ready';
+}
+
+export async function revokeGeminiHandoffDocument(conversationId: string): Promise<void> {
+  const entries = [...byToken.values()].filter(entry => entry.from === conversationId && entry.sourceSend.custody && isOpen(entry));
+  for (const entry of entries) await withCheckpointLock(entry.token, async () => {
+    if (!entry.sourceSend.custody) return;
+    await transitionNow(entry, current => {
+      const { custody: _custody, ...send } = current.sourceSend!;
+      return { ...current, sourceSend: send };
+    });
   });
 }
 
@@ -1104,17 +1153,19 @@ export async function bindContinuationDestinationMessageNow(
  * the retry carries the identical text or a re-observed variant of it: there is one brief for
  * this compaction, and it is the one already stored.
  */
-export async function attachSummary(token: string, text: string): Promise<Handoff | null> {
-  const brief = text.trim();
-  if (!brief) return null;
+export async function attachSummary(token: string, text: string, authorize?: () => Promise<boolean>): Promise<Handoff | null> {
+  const brief = byToken.get(token)?.sourceSend.receipt?.provider === 'gemini' ? text : text.trim();
+  if (!brief.trim()) return null;
   return capture(token, brief, async (entry) =>
     prepareHandoff({
       sessionId: entry.sessionId,
       text: brief,
       continuationToken: entry.token,
       sourceConversationId: entry.from,
-      sourceTurnId: entry.sourceTurnId
-    })
+      sourceTurnId: entry.sourceTurnId,
+      sourceMessageId: entry.sourceSend.messageId,
+      ...(entry.sourceSend.receipt ? { sourceReceipt: entry.sourceSend.receipt } : {})
+    }), authorize
   );
 }
 
@@ -1175,7 +1226,8 @@ export async function reopenWithHandoffNow(sessionId: string, handoffId: string)
 async function capture(
   token: string,
   text: string,
-  produce: (entry: Continuation) => Promise<Handoff>
+  produce: (entry: Continuation) => Promise<Handoff>,
+  authorize?: () => Promise<boolean>
 ): Promise<Handoff | null> {
   sweep();
   const entry = byToken.get(token);
@@ -1210,7 +1262,7 @@ async function capture(
   entry.capture = (async () => {
     const handoff = await produce(entry);
     const accepted = await withCheckpointLock(token, async () => {
-      if (!isOpen(entry) || entry.state !== 'awaiting-summary') return false;
+      if (!isOpen(entry) || entry.state !== 'awaiting-summary' || (authorize && !await authorize())) return false;
       await transitionNow(entry, (current) => ({
         ...current,
         summary: handoff.text,
@@ -1293,6 +1345,13 @@ export async function claimContinuationNow(token: string, claimant: string): Pro
     if (!entry || !isOpen(entry)) return null;
     if (entry.state === 'awaiting-summary') return null;
     if (entry.claimedBy !== null && entry.claimedBy !== claimant) return null;
+    // New continuations carry the verified Markdown body, never a stale or
+    // independently altered JSON/WAL copy. Legacy handoffs retain their reader.
+    if (entry.handoff?.version === 2 && entry.handoffId) {
+      const saved = await readHandoff(entry.sessionId, entry.handoffId);
+      if (!saved || !handoffMatchesContinuation(saved, entry.token, entry.from, entry.sourceTurnId, entry.sourceSend.receipt) || saved.text !== entry.summary)
+        return null;
+    }
     if (entry.state === 'awaiting-chat') {
       await transitionNow(entry, (current) => ({ ...current, claimedBy: claimant, state: 'claimed' }));
     } else if (entry.state === 'claimed' && entry.claimedBy === null) {
@@ -1542,6 +1601,12 @@ async function commitContinuationUnlocked(
   if (!isOpen(entry) || (entry.state !== 'awaiting-chat' && entry.state !== 'claimed')) {
     return { status: 'rejected', reason: 'the continuation is not ready to commit' };
   }
+  if (entry.handoff?.version === 2 && entry.handoffId) {
+    const saved = await readHandoff(entry.sessionId, entry.handoffId);
+    if (!saved || saved.text !== entry.summary ||
+        !handoffMatchesContinuation(saved, entry.token, entry.from, entry.sourceTurnId, entry.sourceSend.receipt))
+      return { status: 'rejected', reason: 'the canonical Markdown handoff could not be verified before the session move' };
+  }
 
   try {
     await transitionNow(entry, (current) => ({
@@ -1717,7 +1782,14 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
               state: raw.sourceSend.state as ContinuationSendState,
               messageId:
                 typeof raw.sourceSend.messageId === 'string' ? raw.sourceSend.messageId.slice(0, 200) : null,
-              ...(raw.sourceSend.state === 'dispatched-unresolved' && typeof raw.sourceSend.before === 'string' &&
+              ...(continuationReceipt(raw.sourceSend.receipt) ? { receipt: continuationReceipt(raw.sourceSend.receipt)! } : {}),
+              ...(raw.sourceSend.custody && raw.sourceSend.custody.provider === 'gemini' &&
+                (raw.sourceSend.custody.accountPath === '' || /^\/u\/[0-9]+$/.test(raw.sourceSend.custody.accountPath)) &&
+                /^[A-Za-z0-9_-]{43}$/.test(raw.sourceSend.custody.id) &&
+                /^[a-z0-9]{16,64}$/.test(raw.sourceSend.custody.browser) && Number.isSafeInteger(raw.sourceSend.custody.tabId) &&
+                raw.sourceSend.custody.tabId >= 0 && /^[A-Za-z0-9_-]{1,64}$/.test(raw.sourceSend.custody.documentId)
+                ? { custody: { ...raw.sourceSend.custody } } : {}),
+              ...(['dispatched-unresolved', 'sent'].includes(raw.sourceSend.state) && typeof raw.sourceSend.before === 'string' &&
                 Number.isFinite(raw.sourceSend.dispatchedAt)
                 ? { before: raw.sourceSend.before.slice(0, 200), dispatchedAt: Number(raw.sourceSend.dispatchedAt) } : {})
             }
@@ -1754,7 +1826,7 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
     if (entry.handoffId) {
       try {
         entry.handoff = await readHandoff(entry.sessionId, entry.handoffId);
-        if (entry.handoff && !handoffMatchesContinuation(entry.handoff, entry.token, entry.from, entry.sourceTurnId)) {
+        if (entry.handoff && !handoffMatchesContinuation(entry.handoff, entry.token, entry.from, entry.sourceTurnId, entry.sourceSend.receipt)) {
           handoffProvenanceConflict = true;
           logWarn(
             `continuation ${entry.token.slice(0, 8)} refused handoff ${entry.handoff.id}: stored provenance belongs to another transaction`

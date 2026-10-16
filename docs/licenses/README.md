@@ -1,5 +1,12 @@
 # License supplements
 
+`lazy-val` 1.0.5 declares MIT and author Vladimir Krivosheev in its published
+manifest and upstream commit `b69ad4119f1b19bdab13c61ee2fcc88d46b89071`, but ships
+no standalone license file. `lazy-val-LICENSE` retains that declaration and
+attribution with the standard MIT permission/warranty text from SPDX. No missing
+copyright date is invented. Verified 2026-10-16; the generator rejects a changed
+version, author or license until this supplement is reviewed again.
+
 `flora-colossus` 2.0.0 declares MIT in its npm manifest but omits a license file from the
 distributed package. Its npm gitHead (`134ea667085bfd7f0a4c63420076eb97d41f1ad9`) also has
 no LICENSE at the repository root. `flora-colossus-LICENSE` preserves the explicit MIT grant

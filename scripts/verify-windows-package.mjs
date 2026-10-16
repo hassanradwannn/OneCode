@@ -2,6 +2,7 @@
 import { listPackage, extractFile, statFile } from '@electron/asar';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { load as loadYaml } from 'js-yaml';
 
 const normalize = value => value.replace(/\\/g, '/').replace(/^\/+/, '');
 const privatePath = /(?:^|\/)(?:\.env(?:\.[^/]*)?|secrets\.bin|[^/]*\.private\.(?:json|txt))$/i;
@@ -28,10 +29,17 @@ export function assertWindowsPackageIsolation(resources) {
       inspectText(extractFile(archive, file.split('/').join(path.sep)), file); ownedFiles++;
     }
   }
-  const allowed = new Set(['app.asar', 'app.asar.unpacked', 'extension', 'node', 'pets', 'rg', 'tunnel', 'skills',
+  const allowed = new Set(['app.asar', 'app.asar.unpacked', 'app-update.yml', 'extension', 'node', 'pets', 'rg', 'tunnel', 'skills',
     'LICENSE', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'THIRD-PARTY-NOTICES.txt', 'WINDOWS-SETUP.md']);
   for (const name of readdirSync(resources)) if (!allowed.has(name) && !/^THIRD-PARTY-NOTICES-sharp-win32-(?:x64|arm64)\.md$/.test(name))
     throw new Error(`Unapproved resource input: ${name}`);
+  if (readdirSync(resources).includes('app-update.yml')) {
+    const feed = loadYaml(readFileSync(path.join(resources, 'app-update.yml'), 'utf8'));
+    const expected = { owner: 'hassanradwannn', repo: 'OneCode', provider: 'github', updaterCacheDirName: 'onecode-updater' };
+    if (!feed || typeof feed !== 'object' || Object.keys(feed).length !== Object.keys(expected).length ||
+      Object.entries(expected).some(([key, value]) => feed[key] !== value))
+      throw new Error('Unapproved packaged updater feed');
+  }
   function visit(directory, relative = '') {
     for (const name of readdirSync(directory)) {
       const file = path.join(directory, name), label = relative ? `${relative}/${name}` : name;

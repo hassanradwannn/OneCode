@@ -622,6 +622,8 @@ export interface BridgeStatus {
    * this app process, which is why "no extension version" never means "outdated extension".
    */
   extensionVersion: string | null;
+  /** An observed older/equal-version Companion has a different shipped build or protocol. */
+  extensionUpdateRequired?: boolean;
   /**
    * The extension in the person's own Chrome, Edge or Brave, apart from the CoS browser's copy.
    * Null until one has spoken to this app process; Setup's first step waits for it.
@@ -757,7 +759,7 @@ export interface CompanionTabDiagnostics {
  * - `latest` set, `stage: 'idle'` — a new version exists that this installation cannot apply
  *   for itself (a Linux `.deb`, macOS, a development tree, an unsupported architecture). It is
  *   a manual download.
- * - `downloading` / `ready` — it is being fetched, or is fetched and installs on the next start.
+ * - `downloading` / `ready` — it is being fetched, or verified and waiting for explicit intent.
  * - `failed` — the check or the download stopped; `error` says why, and the next check
  *   tries again. Nothing about the running app is affected either way.
  *
@@ -773,13 +775,17 @@ export interface UpdateStatus {
   checkedAt: number | null;
   /** A version handed to its installer that this start is still older than: it did not install. */
   notInstalled?: string | null;
+  downloadPercent?: number;
+  /** Explicit, cancellable user intent for this exact staged version. Never restored at startup. */
+  installRequested?: boolean;
+  busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'preparation' | 'unavailable'>;
 }
 
 /** Receipt only; authoritative component state still establishes completion. */
-export type UpdateAllResult = 'restarting' | 'manual' | 'checking-connectors' | 'cancelled';
+export type UpdateAllResult = 'restarting' | 'waiting' | 'manual' | 'checking-connectors' | 'cancelled';
 
 /** Where an installation that cannot update itself gets the new version by hand. */
-export const RELEASES_PAGE = 'https://github.com/totec448-spec/chat-on-steroids/releases/latest';
+export const RELEASES_PAGE = 'https://github.com/hassanradwannn/OneCode/releases/latest';
 
 /**
  * Whether `candidate` is a later release than `current`, compared as three numbers.

@@ -1,5 +1,7 @@
 import { toolDeclaration } from './tool-declarations.js';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 import { registerPlanTool } from './plan-tool.js';
+import { registerHandoffTool } from './handoff-tool.js';
 import { registerPluginBridge } from './plugin-bridge-tool.js';
 import { readSkillCatalog, SKILL_CATALOG_PATH } from '../skill-library.js';
 import { goalWorkerChat, imageExportCapable } from '../bridge.js';
@@ -473,9 +475,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   // -------------------------------------------------------------- save_image
   //
-  // The original of an image ChatGPT generated in this chat, saved into an approved folder (#889).
-  // The chat's own page fetches it; see image-export.ts.
-  if (exposedCaps.create) {
+  // Only an adapter with native original-file evidence may advertise image export.
+  if (exposedCaps.create && chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport) {
     reg.register(
       'save_image',
       toolDeclaration('save_image', () => ({
@@ -1144,6 +1145,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   if (reg.sessionToolsExposed) {
     registerPlanTool(reg);
+    registerHandoffTool(reg);
   }
   if (reg.ctx.exposedFinishTool ?? getConfig().ui.finishTool === true) {
     reg.register('session_finish', toolDeclaration('session_finish', () => ({

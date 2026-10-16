@@ -6,7 +6,15 @@ export function updateErrorText(source: string): string {
     case 'GitHub could not be reached':
       return t('GitHub could not be reached. Check your connection');
     case 'There is no downloaded update to install yet':
+    case 'This downloaded update is no longer current. Check for updates again.':
+    case 'The OneCode update metadata does not match this release and architecture':
+    case 'OneCode did not download one complete installer':
       return t('The downloaded update could not be confirmed for installation.');
+    case 'The OneCode installation registration changed':
+      return t('The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.');
+    case 'OneCode update metadata is unavailable':
+    case 'Checking OneCode update metadata timed out':
+      return t('GitHub could not be reached. Check your connection');
     case 'Could not read plugin-refresh state':
       return t('The saved plugin update state could not be read.');
     case 'the latest release has no usable version tag':
@@ -14,6 +22,8 @@ export function updateErrorText(source: string): string {
       return t('The release information has no valid version number.');
     case 'it is not the published file':
     case 'the staged artifact changed after verification':
+    case 'The staged update changed after verification':
+    case 'The downloaded update does not match the OneCode release checksum':
       return t('The downloaded update did not match the published checksum.');
   }
   const http = /^(?:the release page|latest) answered (\d{3})$/.exec(source);

@@ -259,9 +259,10 @@ const api = {
   signOutChatGpt: () => call<boolean>('chatgpt:signOut'),
   openSetupBrowser: (browser: 'chrome' | 'edge' | 'brave' | 'firefox', page: 'extensions' | 'chatgpt') => call<boolean>('browser:setupOpen', { browser, page }),
   // Applies the update this app has already downloaded and verified: the app quits, the
-  // installer runs, and the app comes back as the new version. It takes no argument because
-  // there is nothing here to choose - the main process knows what is staged.
-  installUpdate: () => call<boolean>('update:install'),
+  // installer runs, and the app comes back as the new version. The displayed version fences
+  // stale clicks; only the main process selects verified bytes and the installed target.
+  installUpdate: (version: string) => call<'waiting' | 'restarting'>('update:install', { version }),
+  cancelUpdateInstall: () => call<boolean>('update:cancel-install'),
   /** Check/stage/apply supported updates and request one connector refresh round. May restart. */
   updateAll: () => call<import('../shared/types.js').UpdateAllResult>('update:all'),
   downloadUpdate: () => call<boolean>('update:download'),

@@ -5,7 +5,7 @@ import { currentCoreInstructions } from '../mcp/instructions.js';
 import { geminiBindingsEnabled } from '../gemini/bindings.js';
 import { getSessionProject, projectWorkspace } from '../projects.js';
 import { resolvePath } from '../sandbox.js';
-import { MAX_CHATGPT_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
+import { MAX_BROWSER_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
 import { selectedSkillInstructions, type SelectedSkill } from './skill-prompt.js';
 import { listSkillLibrary, SKILL_CATALOG_PATH } from '../skill-library.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
@@ -16,7 +16,7 @@ type PromptScope = { sessionId?: string | null; projectId?: string | null; autoS
 };
 export type PromptLimits = { maxChars: number; maxBytes: number };
 type ProjectInstructions = { directory: string; text: string; truncated: boolean };
-const limits: PromptLimits = { maxChars: MAX_CHATGPT_MESSAGE_CHARS, maxBytes: Infinity };
+const limits: PromptLimits = { maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: Infinity };
 const cutNotice = '\n\n[Cut off because of the message limit. Read AGENTS.md yourself for the remaining instructions.]';
 
 const promptFolder = (scope: PromptScope) => scope.sessionId ? getSessionProject(scope.sessionId)
@@ -47,7 +47,7 @@ async function projectInstructions(scope: PromptScope): Promise<ProjectInstructi
     const resolved = await resolvePath(getConfig().roots, filename, { allowMissing: true });
     // At most four UTF-8 bytes per available UTF-16 code unit, plus one byte to detect overflow.
     // Stream a bounded prefix so even a gigabyte AGENTS.md never becomes a gigabyte allocation.
-    const budget = MAX_CHATGPT_MESSAGE_CHARS * 4;
+    const budget = MAX_BROWSER_MESSAGE_CHARS * 4;
     const chunks: Buffer[] = [];
     let bytes = 0;
     for await (const chunk of readFileStream(resolved.real)) {
@@ -78,7 +78,7 @@ async function projectInstructions(scope: PromptScope): Promise<ProjectInstructi
 
 /** Preserve Core/task; reduce AGENTS to 5k before sharing remaining space across Skills. */
 export function fitSessionPrompt(text: string, core: string, agents: ProjectInstructions | null = null, budget = limits, skills: SelectedSkill[] = [], workingDirectory?: string, compactProject = false): string {
-  const fits = (value: string): boolean => value.length <= Math.min(MAX_CHATGPT_MESSAGE_CHARS, budget.maxChars) &&
+  const fits = (value: string): boolean => value.length <= Math.min(MAX_BROWSER_MESSAGE_CHARS, budget.maxChars) &&
     Buffer.byteLength(value, 'utf8') <= budget.maxBytes;
   const projectHeader = workingDirectory
     ? compactProject

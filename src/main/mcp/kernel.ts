@@ -973,6 +973,8 @@ async function dispatchTracked(
   // chat over to `superseded`, chat A gets no tool at all, and each refusal tells the model
   // the only thing it can usefully do is write the brief.
   const compacting = !conversationPolicyRefusal && compactingConversation(context.caller.conversationId) !== null;
+  const handoffOnly = !!context.caller.geminiBinding?.handoff;
+  const savingHandoff = handoffOnly && surface === 'core' && name === 'save_handoff' && !nested;
   const retiredLeaseAmbiguous =
     !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
   const dormantLeaseAmbiguous =
@@ -1027,7 +1029,9 @@ async function dispatchTracked(
   const result = await runInCallContext(context, () =>
       admissionRefusal
         ? Promise.resolve(fail(admissionRefusal))
-        : compacting
+        : handoffOnly && !savingHandoff
+        ? Promise.resolve(fail('HANDOFF_ONLY: this capability can only save its exact app-owned Markdown handoff. No other tool ran.'))
+        : compacting && !savingHandoff
         ? Promise.resolve(fail(COMPACTION_IN_PROGRESS_REFUSAL))
         : supersededConversation
         ? Promise.resolve(
@@ -1065,7 +1069,7 @@ async function dispatchTracked(
               'CALLER_IDENTITY_REQUIRED: this operation needs this chat’s exact workspace, but the connector could not prove which ChatGPT conversation made the call. Retry after the extension reconnects; no file or command was changed.'
             )
           )
-        : nested && surface !== 'plugins' && (name === 'exec' || name === 'session_finish' || isFinish)
+        : nested && surface !== 'plugins' && (name === 'exec' || name === 'session_finish' || name === 'save_handoff' || isFinish)
         ? Promise.resolve(fail('DIRECT_CALL_REQUIRED: call this lifecycle tool directly, outside exec. No action was taken.'))
         : invokeHandler()
   );

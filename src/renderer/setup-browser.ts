@@ -41,7 +41,7 @@ export function initBrowserSetup(actions: {
   choose(browser: ChatBrowser): void | Promise<void>;
   repaint(): void;
   open(browser: ExternalBrowser, page: 'extensions' | 'chatgpt'): Promise<unknown>;
-}): { render(state: AppState): { ready: boolean; choosingLocation: boolean } } {
+}): { render(state: AppState): { ready: boolean; choosingLocation: boolean }; reviewExtension(): void } {
   let current: AppState | null = null;
   let phase: 'extension' | 'location' = 'extension';
   /**
@@ -113,7 +113,7 @@ export function initBrowserSetup(actions: {
     const live = observation?.present === true;
     const shownVersion = live ? observation!.version : proof?.version ?? null;
     const knownVersion = !!shownVersion && /^\d+\.\d+\.\d+$/.test(shownVersion);
-    const outdated = knownVersion && isNewer(state.update.current, shownVersion!);
+    const outdated = state.bridge.extensionUpdateRequired === true || knownVersion && isNewer(state.update.current, shownVersion!);
     // The browser keeps the extension off Gemini (site access "On click", a revoked Firefox
     // permission): it can pair, but nothing could ever run on a Gemini page.
     const blocked = live && observation?.chatgptAccess === false;
@@ -225,5 +225,5 @@ export function initBrowserSetup(actions: {
   $('openFirefoxAddon').addEventListener('click', () => { void actions.open('firefox', 'extensions'); });
   $('openChatGptBrowser').addEventListener('click', () => { void actions.open(external, 'chatgpt'); });
   $('openSelectedChatGpt').addEventListener('click', () => void run(window.api.openChatGpt()));
-  return { render };
+  return { render, reviewExtension: () => changePhase('extension') };
 }

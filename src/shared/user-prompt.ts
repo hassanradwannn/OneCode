@@ -1,5 +1,8 @@
 /** Transport framing, not a second prompt source. Length keeps marker-like user text literal. */
-export const MAX_CHATGPT_MESSAGE_CHARS = 96_000;
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from './chat-provider.js';
+export const MAX_BROWSER_MESSAGE_CHARS = chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).maxMessageChars;
+/** @deprecated Legacy test/import compatibility. Runtime delivery uses the provider policy. */
+export const MAX_CHATGPT_MESSAGE_CHARS = MAX_BROWSER_MESSAGE_CHARS;
 const continuation = (text: string): string => /^\[\[CLF-(?:HANDOFF|RESUME):[A-Za-z0-9_-]{16,64}\]\]\n\n/.exec(text)?.[0] ?? '';
 /**
  * The same bytes as the composer hands them back.

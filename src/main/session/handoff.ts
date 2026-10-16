@@ -1,8 +1,9 @@
 /**
  * Preparing and publishing a handoff.
  *
- * One store, one writer: the Gemini conversation being compacted writes its own brief as
- * its final answer, and this is where that brief is saved. The id is minted here rather
+ * One store, one writer: the source conversation writes its own brief. Gemini delivers it
+ * through its exact scoped save_handoff tool; legacy ChatGPT capture remains readable.
+ * The id is minted here rather
  * than taken from the text — a model that invents its own handoff id can collide with a
  * real one, overwrite it, or hand the next chat an id that resolves to somebody else's
  * brief.
@@ -10,11 +11,13 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { Handoff } from '../../shared/session.js';
+import type { ContinuationSourceReceipt } from '../../shared/continuation-receipt.js';
 import { continuationMarkerOf, unescapeMarkdown } from '../../shared/session.js';
 import { logInfo } from '../logger.js';
 import { getSession, readSessionPlan, saveHandoff } from './store.js';
 import { destinationContinuationMarker } from './handoff-prompt.js';
-import { MAX_CHATGPT_MESSAGE_CHARS, userPromptText } from '../../shared/user-prompt.js';
+import { userPromptText } from '../../shared/user-prompt.js';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../../shared/chat-provider.js';
 import type { AgentPlan } from '../../shared/agent-plan.js';
 
 export interface PrepareHandoffInput {
@@ -30,6 +33,8 @@ export interface PrepareHandoffInput {
   /** Exact frontend/turn that authored this continuation brief. */
   sourceConversationId?: string | null;
   sourceTurnId?: string | null;
+  sourceMessageId?: string | null;
+  sourceReceipt?: ContinuationSourceReceipt;
 }
 
 /** A public, non-authority id for provenance. The raw continuation token is never persisted here. */
@@ -46,15 +51,18 @@ export function handoffMatchesContinuation(
   handoff: Handoff,
   token: string,
   sourceConversationId: string,
-  sourceTurnId: string | null
+  sourceTurnId: string | null,
+  sourceReceipt?: ContinuationSourceReceipt
 ): boolean {
   if (handoff.version === undefined && handoff.provenance === undefined) return true;
-  if (handoff.version !== 1 || !handoff.provenance) return false;
+  if ((handoff.version !== 1 && handoff.version !== 2) || !handoff.provenance) return false;
   const continuationId = handoffContinuationId(token);
   return !!continuationId &&
     handoff.provenance?.continuationId === continuationId &&
     handoff.provenance.sourceConversationId === sourceConversationId &&
-    handoff.provenance.sourceTurnId === sourceTurnId;
+    handoff.provenance.sourceTurnId === sourceTurnId &&
+    (!sourceReceipt || (handoff.provenance.sourceMessageId === sourceReceipt.messageId &&
+      JSON.stringify(handoff.provenance.sourceReceipt) === JSON.stringify(sourceReceipt)));
 }
 
 function handoffPlanNotice(plan: AgentPlan | null): string {
@@ -64,6 +72,12 @@ function handoffPlanNotice(plan: AgentPlan | null): string {
   return '\n\nSaved task plan at handoff (reported progress, not verification evidence):\n' +
     (plan.explanation ? `${plan.explanation}\n` : '') + steps +
     '\nContinue the unfinished work using this plan and the brief. Report progress with update_plan.';
+}
+
+/** Exact body budget of the already-supported native Resume message, including its framing. */
+export async function handoffMarkdownLimit(sessionId: string, token: string, provider: ChatProvider = ACTIVE_CHAT_PROVIDER): Promise<number> {
+  return chatProviderCapabilities(provider).maxMessageChars - resumeBootstrapText('', token).length -
+    handoffPlanNotice(await readSessionPlan(sessionId)).length;
 }
 
 /**
@@ -181,15 +195,19 @@ export function newHandoffId(now: Date = new Date()): string {
  * its semantic state is durable; restart recovery repairs the tiny opposite crash window.
  */
 export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handoff> {
-  let text = input.text.trim();
-  if (!text) throw new Error('A handoff cannot be empty');
+  const exactMarkdown = input.sourceReceipt?.provider === 'gemini';
+  let text = exactMarkdown ? input.text : input.text.trim();
+  if (!text.trim()) throw new Error('A handoff cannot be empty');
   const summary = await getSession(input.sessionId);
   if (!summary) throw new Error('That session no longer exists');
   // Freeze the actual saved plan with the brief. A pointer to the removed session
   // tool cannot supply it to the replacement model. Budget this same snapshot once.
   const planNotice = handoffPlanNotice(await readSessionPlan(input.sessionId));
   const overhead = resumeBootstrapText('', input.continuationToken).length + planNotice.length;
-  text = boundBrief(text, MAX_CHATGPT_MESSAGE_CHARS - overhead);
+  const limit = chatProviderCapabilities(input.sourceReceipt?.provider ?? ACTIVE_CHAT_PROVIDER).maxMessageChars - overhead;
+  if (exactMarkdown && (text.length > limit || Buffer.byteLength(text + planNotice, 'utf8') > 1024 * 1024))
+    throw new Error(`HANDOFF_TOO_LARGE: the complete Markdown must fit ${limit} characters. Nothing was saved or truncated.`);
+  if (!exactMarkdown) text = boundBrief(text, limit);
   // Checked again here, and not only at the bridge route that can word the refusal well,
   // because this is the one function that writes a handoff to disk. A stub that reaches the
   // store is indistinguishable from a real brief for the rest of its life.
@@ -199,12 +217,15 @@ export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handof
     ? summary.conversationId
     : input.sourceConversationId;
   const sourceIndex = sourceConversationId ? summary.chatIds.indexOf(sourceConversationId) : -1;
+  const id = newHandoffId();
+  const body = text + planNotice;
   const handoff: Handoff = {
-    version: 1,
-    id: newHandoffId(),
+    version: 2,
+    id,
     sessionId: input.sessionId,
     createdAt: Date.now(),
-    text: text + planNotice,
+    text: body,
+    markdown: { name: `${id}.md`, sha256: createHash('sha256').update(body, 'utf8').digest('hex'), bytes: Buffer.byteLength(body, 'utf8') },
     sourceEvents: input.sourceEvents ?? summary.events,
     sourceTokens: input.sourceTokens ?? summary.estimatedTokens,
     // The working folder is deliberately not here. It belongs to the durable local session
@@ -215,6 +236,8 @@ export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handof
       sourceConversationId,
       sourceGeneration: sourceIndex >= 0 ? sourceIndex + 1 : null,
       sourceTurnId: input.sourceTurnId ?? null,
+      sourceMessageId: input.sourceMessageId ?? null,
+      ...(input.sourceReceipt ? { sourceReceipt: input.sourceReceipt } : {}),
       continuationId: handoffContinuationId(input.continuationToken)
     }
   };

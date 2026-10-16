@@ -122,7 +122,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 15;
+const BRIDGE_PROTOCOL = 16;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -3330,7 +3330,7 @@ async function maintainOnce() {
   const chatgptAccess = typeof chrome.permissions?.contains === 'function'
     ? await chrome.permissions.contains({ origins: ['https://gemini.google.com/*'] }).catch(() => undefined) : undefined;
   if (intent !== connectionEpoch || !token || disconnected) return;
-  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: true,
+  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: false,
     chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
@@ -4008,7 +4008,57 @@ async function currentGeminiDocument(source, id) {
   return ownsDocument(source) && !latest?.pendingUrl && conversationFromUrl(latest?.url) === id;
 }
 
+// Display-only native control receipts. No body text, credentials, permission or
+// task ownership is retained here. Only the current isolated-world recorder may
+// submit its observed click receipt, under Chrome's document and account route.
+let geminiApprovalWrites = Promise.resolve();
+async function geminiApprovalScope(source, id) {
+  if (!ownsDocument(source)) return null;
+  const routeOf = value => {
+    try {
+      const url = new URL(value), route = /^(\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(url.pathname);
+      return url.origin === 'https://gemini.google.com' && route?.[2].toLowerCase() === id
+        ? `${route[1] || ''}/app/${id}` : null;
+    } catch { return null; }
+  };
+  const tab = await chrome.tabs.get(source.tab).catch(() => null), scope = routeOf(tab?.url);
+  if (!scope || tab.pendingUrl || !ownsDocument(source)) return null;
+  const frames = await chrome.scripting.executeScript({ target: { tabId: source.tab, documentIds: [source.documentId] },
+    func: () => location.href }).catch(() => []);
+  if (!ownsDocument(source) || frames.length !== 1 || frames[0].frameId !== 0 ||
+      frames[0].documentId !== source.documentId || routeOf(frames[0].result) !== scope) return null;
+  const latest = await chrome.tabs.get(source.tab).catch(() => null);
+  return ownsDocument(source) && !latest?.pendingUrl && routeOf(latest?.url) === scope ? scope : null;
+}
+async function geminiApprovalReceipts(message, _sender, source) {
+  const id = cleanConversationId(message.conversationId), scope = id && await geminiApprovalScope(source, id);
+  if (!scope) return { ok: false, error: 'conversation_changed' };
+  const valid = row => row?.provider === 'gemini' && typeof row.scope === 'string' &&
+    /^(?:\/u\/\d+)?\/app\/[0-9a-f]{16}$/.test(row.scope) && /^[0-9a-f]{16}$/.test(row.sourceId) &&
+    /^[0-9a-f]{16}$/.test(row.replyId) && row.sourceId !== row.replyId && /^(Allow|Deny)$/.test(row.decision);
+  if (message.receipts !== undefined && (!Array.isArray(message.receipts) || message.receipts.length > 2000 ||
+      message.receipts.some(row => !valid({ ...row, provider: 'gemini', scope })))) return { ok: false, error: 'invalid_receipt' };
+  const operation = geminiApprovalWrites.catch(() => undefined).then(async () => {
+    const stored = (await chrome.storage.local.get('geminiApprovalReceipts')).geminiApprovalReceipts;
+    let rows = Array.isArray(stored) ? stored.filter(valid).slice(-2000) : [];
+    if (await geminiApprovalScope(source, id) !== scope) return { ok: false, error: 'conversation_changed' };
+    if (message.receipts?.length) {
+      const byId = new Map(rows.map(row => [`${row.scope}:${row.replyId}`, row]));
+      for (const row of message.receipts) byId.set(`${scope}:${row.replyId}`,
+        { provider: 'gemini', scope, sourceId: row.sourceId, replyId: row.replyId, decision: row.decision });
+      rows = [...byId.values()].slice(-2000);
+      await chrome.storage.local.set({ geminiApprovalReceipts: rows });
+    }
+    if (await geminiApprovalScope(source, id) !== scope) return { ok: false, error: 'conversation_changed' };
+    return { ok: true, receipts: rows.filter(row => row.scope === scope)
+      .map(({ sourceId, replyId, decision }) => ({ sourceId, replyId, decision })) };
+  });
+  geminiApprovalWrites = operation;
+  return operation;
+}
+
 const HANDLERS = {
+  gemini_approval_receipts: geminiApprovalReceipts,
   /** Only Chrome's current Gemini document may request its scoped MCP credential. */
   async gemini_binding(message, sender, source) {
     const id = cleanConversationId(message.conversation_id);
@@ -4641,6 +4691,10 @@ const HANDLERS = {
         cancel: message.cancel === true,
         ticket: message.ticket === true,
         automatic: message.automatic === true,
+        // Native question custody comes from Chrome's validated sender, never model arguments.
+        ...((message.sourceAttempt === true || message.sourceDispatch === true || typeof message.sourceMessageId === 'string')
+          ? { sourceDocument: { provider: 'gemini', tabId: source.tab, documentId: source.documentId,
+            accountPath: new URL(sourceUrl).pathname.match(/^(\/u\/[0-9]+)\/app(?:\/|$)/)?.[1] || '' } } : {}),
         ...((message.destinationAttempt === true || message.destinationDispatch === true || message.destinationLost === true)
           ? { commandId: String(message.commandId || ''), client: String(message.client || '') } : {}),
         // The capture. `token` names the transaction the page was given when it marked the
@@ -4995,6 +5049,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   const owned = new Set([
+    'gemini_approval_receipts',
     'gemini_binding',
     'stop_redeem',
     'stop_ack',
@@ -5634,6 +5689,8 @@ async function restoreChatgptTab(id, current = () => true, documentId = null) {
     // Static manifest injection has the same ordering. Keeping recovery identical matters after
     // an extension reload, when the old isolated world (including its i18n helper) is invalidated.
     await chrome.scripting.executeScript({ target, files: ['i18n.js'] });
+    if (!current()) return false;
+    await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js'] });
     if (!current()) return false;
     // Rebuild the isolated-world DOM adapter before the recorder that consumes it.
     await chrome.scripting.executeScript({ target, files: ['gemini-dom.js'] });

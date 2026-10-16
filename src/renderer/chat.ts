@@ -11,6 +11,7 @@ import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
 import { decorateJsonCode } from './json-code.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
 import { safeExternalLink } from '../shared/external-link.js';
+import { cosBrowserPolicy } from '../shared/cos-browser-sites.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
 import { createFilePanel } from './file-panel.js';
 import { renderAgentPlan } from './agent-plan.js';
@@ -937,9 +938,11 @@ function sessionRow(summary: SessionSummary): HTMLElement {
     items.push(
       { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its title in Gemini stays the same."), run: () => startRename(summary) },
       { action: 'open', icon: 'i-out', label: () => t('Open in browser'), title: () => t("Open this chat in your browser"), run: () => void run(api.openSessionChat(summary.id)) },
-      // Gemini opens /c/<id> wherever the chat lives, a project included (#1107).
       { action: 'copy-link', icon: 'i-copy', label: () => t('Copy link'), title: () => t("Copy this chat's Gemini link"),
-        run: async () => { if (await run(api.writeClipboard(`https://chatgpt.com/c/${summary.conversationId}`))) toast(t('Link copied')); } }
+        run: async () => {
+          const link = summary.conversationId && cosBrowserPolicy('gemini').conversationLink(summary.conversationId);
+          if (link && await run(api.writeClipboard(link))) toast(t('Link copied'));
+        } }
     );
     // The stop this app can actually make. It does not touch the running Gemini turn — nothing
     // here can — it takes this chat's tools away, and a model whose every call is refused with

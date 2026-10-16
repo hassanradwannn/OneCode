@@ -3,25 +3,20 @@ import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, handoffPromptForLength,
 /**
  * What a handoff brief has to contain, in one place.
  *
- * One caller, now. These rules used to be shared with an external writer — a second model
- * that was handed a packed recording of the session and asked for the same document — and
- * keeping the two prompts from drifting was the reason this file exists. That path is gone:
- * the brief is written by the Gemini conversation that *is* the recording, and the answer it
- * writes is the brief. What survives is the specification of the document itself, which is
- * worth having in one named place whatever ends up reading it.
+ * The source conversation writes its own brief. The provider adapter determines delivery:
+ * Gemini calls the exact scoped save_handoff tool; legacy ChatGPT captures its bound final
+ * answer. Both use the same document requirements and continuation markers.
  */
 
 /**
- * The instruction typed into the Gemini conversation being compacted.
+ * The instruction typed into the provider conversation being compacted.
  *
  * The model is already the participant rather than a reader of a transcript, so there is no
  * recording to hand it and "the tool evidence" is its own call history.
  *
- * The brief leaves as the answer, deliberately. A tool call is a thing the model can retry,
- * skip, or make three different versions of, and every one of those was a way for a
- * compaction to end with the wrong brief or none. An answer cannot be retried: the page
- * watches this exact generation, and whatever it finally wrote is what gets carried across.
- * So there is nothing here to call, and nothing to get right except the writing.
+ * Gemini's file save is idempotent under the existing continuation WAL and exact source Send
+ * receipt. It never treats prose as proof that a file was saved. The legacy ChatGPT branch
+ * retains its generation-bound answer capture; unsupported providers need their own adapter.
  */
 const marker = (kind: 'HANDOFF' | 'RESUME', token: string): string =>
   token ? `[[CLF-${kind}:${token}]]` : '';
@@ -33,7 +28,8 @@ export function nativeHandoffPrompt(
   token = '',
   includeToolCalls = true,
   handoffPrompt = DEFAULT_HANDOFF_PROMPT,
-  length: HandoffLength = DEFAULT_HANDOFF_LENGTH
+  length: HandoffLength = DEFAULT_HANDOFF_LENGTH,
+  provider: 'chatgpt' | 'gemini' = 'chatgpt'
 ): string {
   const identity = sourceContinuationMarker(token);
   const briefInstructions = handoffPromptForLength(handoffPrompt.trim() || DEFAULT_HANDOFF_PROMPT, length);
@@ -48,7 +44,14 @@ export function nativeHandoffPrompt(
     'material. Write it so an agent who reads only your brief can carry on correctly.\n\n' +
     `${briefInstructions}\n\n` +
     (includeToolCalls ? '' : 'Tool-detail setting: preserve verified outcomes and distinguish them from claims, but omit raw tool-call arguments and result bodies from the brief. Do not copy tool transcripts. This setting controls the brief, not the history you already saw.\n\n') +
-    'Your reply to this message must be the brief itself and nothing else: no preamble, no closing remark, no ' +
-    'question back, and no tool calls. The app reads this reply, stores it, and opens the fresh chat with it.'
+    (provider === 'gemini'
+      ? `Save the complete brief as Markdown by directly calling the CURRENT OneCode Core save_handoff tool with token="${token}" and markdown containing the complete document. ` +
+        'The tool saves an app-owned .md file; do not supply a path, use workspace writes, or call any other tool. ' +
+        'Do not copy session credentials, control frames, or this continuation token into the document. ' +
+        'Use only the currently exposed tool schema, never a namespace copied from older turns. ' +
+        'The app opens the successor only after the file and its receipt are durable. A prose reply alone does not save it. ' +
+        'If the result is lost, retry the same token and document; the tool returns the existing stored receipt without rewriting it.'
+      : 'Your reply to this message must be the brief itself and nothing else: no preamble, no closing remark, no ' +
+        'question back, and no tool calls. The app reads this reply, stores it, and opens the fresh chat with it.')
   );
 }

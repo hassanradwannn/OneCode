@@ -2417,5 +2417,8 @@
   "Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.": "Quien pueda usar el plugin puede usar este equipo dentro de los permisos que elegiste. Si el espacio de trabajo lo permite, pide al administrador que deje el plugin disponible solo para ti.",
   "Playful asides in automatic Continue": "Apartes divertidos en la continuación automática",
   "Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.": "Añade un dato curioso o un chiste de memes al azar a cada continuación automática, marcado para que el modelo lo ignore.",
-  "The workspace's Codex credits are used up": "Los créditos de Codex del espacio de trabajo se han agotado"
+  "The workspace's Codex credits are used up": "Los créditos de Codex del espacio de trabajo se han agotado",
+  "Install when done": "Instalar al terminar",
+  "OneCode restarts after active work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first.": "OneCode se reiniciará al terminar el trabajo. Pausa Goal o Loop, cierra los terminales y termina o cancela los mensajes en cola.",
+  "The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.": "La instalación registrada de OneCode ha cambiado. Reinstala OneCode en su carpeta actual antes de reintentar."
 }

@@ -53,6 +53,11 @@ for (const arch of arches) {
   ];
   if (dirOnly) builderArgs.push('--dir');
   run(node, builderArgs, { ...process.env, COS_PACKAGE_ARCH: arch });
+  if (platform === 'win32' && !dirOnly) {
+    const { readFileSync } = await import('node:fs');
+    const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+    run(node, ['scripts/write-update-metadata.mjs', path.join(root, 'release'), arch, version]);
+  }
   // A successful electron-builder exit only proves that an artifact was assembled. Exercise the
   // unpacked artifact immediately so missing transitive runtime modules (for example when the
   // checkout's node_modules was linked to another tree) fail this same packaging command instead

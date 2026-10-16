@@ -10,6 +10,7 @@ import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, validateGeminiBindingReceiptEvidence, validateGeminiBindingEvidence, type GeminiBindingEvidence, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -24,7 +25,7 @@ import { automaticFinishEnabled, goalDrivingMode, consumeGoalReplyForInputNow } 
 import { finishInstruction } from '../../shared/finish.js';
 import { CONVERSATION_DELETED } from '../../shared/chat-error.js';
 import { attachmentSchema, validateInputAttachments, normalizeInputAttachments } from './input-attachments.js';
-import { MAX_CHATGPT_MESSAGE_CHARS } from '../../shared/user-prompt.js';
+import { MAX_BROWSER_MESSAGE_CHARS } from '../../shared/user-prompt.js';
 import type { PromptLimits } from './prompt.js';
 import { BROWSER_PICKUP_MAX_ATTEMPTS, recoveryMessage, recoveryBusyMs, rotationMessage } from '../../shared/recovery.js';
 import { invokedSkills } from '../../shared/skill-invocation.js';
@@ -47,7 +48,7 @@ export const inputArgs = z.object({
   attachmentDelivery: z.literal('tool').optional(),
   id: z.string().uuid(),
   sessionId: z.string().min(8).max(64).nullable(),
-  text: z.string().trim().min(1).max(MAX_CHATGPT_MESSAGE_CHARS),
+  text: z.string().trim().min(1).max(MAX_BROWSER_MESSAGE_CHARS),
   mode: z.enum(['auto', 'after-turn', 'finish']),
   afterTurn: z.boolean().optional(),
   dueAt: z.number().int().nonnegative(),
@@ -653,12 +654,12 @@ async function prepare(entry: InputEntry, suffix = ''): Promise<InputEntry> {
       : entry.text;
   const mandatoryOverhead = `${TOOL_INPUT_HEADER}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
   const deliveryText = entry.deliveryText ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
-    maxChars: MAX_CHATGPT_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
+    maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
   }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text) ?? text + suffix;
   // A single input must fit the tool envelope by itself. Aggregate batching below
   // may defer a second input, but cannot silently defer an individually impossible one.
   const envelope = `${TOOL_INPUT_HEADER}${deliveryText}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
-  if (!deliveryText || deliveryText.length > MAX_CHATGPT_MESSAGE_CHARS || Buffer.byteLength(envelope) > TOOL_INPUT_TEXT_BYTES)
+  if (!deliveryText || deliveryText.length > MAX_BROWSER_MESSAGE_CHARS || Buffer.byteLength(envelope) > TOOL_INPUT_TEXT_BYTES)
     throw new Error('Prepared message exceeds the delivery limit; shorten the request or plan');
   return { ...entry, deliveryText };
 }
@@ -1592,7 +1593,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
         const conversationId = await target(entry);
         // A new chat of a project with a native Gemini Project opens in that Project and nowhere
         // else: it waits while the Project is being created or could not be, never the root.
-        const chatgptProject = !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
+        const chatgptProject = chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
           ? (await getProject(entry.projectId))?.chatgpt : undefined;
         if (chatgptProject && chatgptProject.state !== 'linked') continue;
         const [end] = !entry.silenceBoundary && manualInput(entry) && entry.sessionId
@@ -2170,7 +2171,7 @@ export async function requestBrowserDecision(text: string, signal: AbortSignal, 
   /** Gemini took the prompt (exact receipt) and it ended without an answer. */
   onSentUnanswered?: () => void;
 } = {}): Promise<string> {
-  if (!text.trim() || text.length > MAX_CHATGPT_MESSAGE_CHARS) throw new Error('goal_context_too_large');
+  if (!text.trim() || text.length > MAX_BROWSER_MESSAGE_CHARS) throw new Error('goal_context_too_large');
   signal.throwIfAborted();
   const id = randomUUID();
   let resolveAnswer!: (text: string) => void;

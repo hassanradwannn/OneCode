@@ -1,4 +1,6 @@
-import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential } from './gemini/bindings.js';
+import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
+import { continuationReceipt } from '../shared/continuation-receipt.js';
+import { handoffContinuationId, handoffMarkdownLimit } from './session/handoff.js';
 import { nextWorkerArchive, settleWorkerArchive } from './worker-archive.js';
 import { considerTurnRotation, type RotationDeps } from './turn-rotation.js';
 import { conversationProgress } from './session/progress.js';
@@ -12,7 +14,7 @@ import { messageReaction } from '../shared/message-reaction.js';
 import { browserControl } from './browser-control.js';
 import type { BrowserResult } from '../shared/browser-control.js';
 import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
-import { MAX_CHATGPT_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
+import { MAX_BROWSER_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
 import { CONVERSATION_DELETED } from '../shared/chat-error.js';
 import { prepareSessionPrompt } from './session/prompt.js';
 import { pendingChatModelRequest, observeChatModels, requestChatModels } from './chat-models.js';
@@ -27,6 +29,7 @@ import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pending
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
+import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 import { browserWindowBounds, currentBrowserWorkArea } from './browser-window-layout.js';
@@ -69,6 +72,7 @@ import { effectiveCapabilities, getConfig, updateConfig } from './config.js';
 import { BROWSER_BRIDGE_AUTO_PORTS } from '../shared/browser-bridge.js';
 import { bridgePortSelection } from './bridge-ports.js';
 import type { Config } from '../shared/types.js';
+import { isNewer } from '../shared/types.js';
 import type { PluginSurface } from '../shared/plugin-refresh.js';
 import { getSecret, secureStorageStatus, setSecret } from './secrets.js';
 import {
@@ -139,6 +143,7 @@ import {
   listUsageSessions,
   readRecentEvents,
   readLatestUserMessage,
+  readHandoff,
   readRecoveryBoundary,
   readCompletedFinal,
   turnHasMcpCall,
@@ -231,6 +236,7 @@ import {
   repairPrimeFromResumeShadow,
   resetContinuationsForTests,
   sendUnattempted,
+  revokeGeminiHandoffDocument,
   type ContinuationSendState
 } from './session/continuation.js';
 import type { ContinuationView } from './session/continuation.js';
@@ -704,6 +710,8 @@ const commandRedeems = new Map<string, Promise<void>>();
 let requestWindow = { start: Date.now(), count: 0 };
 const listeners = new Set<() => void>();
 let extensionVersion: string | null = null;
+let extensionProtocolSeen: number | null = null;
+let extensionBuildSeen: string | null = null;
 /**
  * When each (version, build) pair was last announced. Two browsers with the extension installed
  * alternate requests, and a single "current" pair would turn every alternation into a fresh
@@ -811,6 +819,7 @@ const pendingReveals: Array<{ conversationId: string; settle: (shown: boolean) =
 /** Browsers whose extension can fetch a generated image's original for the image export (#889). */
 const imageExportBrowsers = new Map<string, number>();
 export function imageExportCapable(): boolean {
+  if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport) return false;
   const now = Date.now();
   return browserWakeConnected() && [...imageExportBrowsers.values()].some(at => now - at < OPENING_CUSTODY_MS);
 }
@@ -1107,6 +1116,9 @@ export async function bridgeStatus(): Promise<BridgeStatus> {
     present: browserPresent() || browserWakeConnected(),
     lastSeenAt,
     extensionVersion,
+    extensionUpdateRequired: !!extensionVersion && !isNewer(extensionVersion, APP_VERSION) &&
+      ((extensionProtocolSeen !== null && extensionProtocolSeen !== BRIDGE_PROTOCOL) ||
+        !!(extensionBuildSeen && shippedExtensionBuild() && extensionBuildSeen !== shippedExtensionBuild())),
     externalExtension: externalExtensionStatus(),
     cosExtension: { present: cosExtensionPresent() }
   };
@@ -1382,7 +1394,9 @@ function noteExtensionVersion(req: http.IncomingMessage): void {
   const externalChanged = req.headers['x-extension-host'] === 'browser' && externalExtension?.version !== version.slice(0, 32) && !keepsExternalRecord(req);
   if (externalChanged) externalExtension = { version: version.slice(0, 32), seenAt: null };
   extensionVersion = version.slice(0, 32);
-  const key = `${extensionVersion}\u0000${stamp ?? ''}`;
+  extensionProtocolSeen = protocol;
+  extensionBuildSeen = stamp;
+  const key = `${extensionVersion}\u0000${stamp ?? ''}\u0000${protocol ?? ''}`;
   const announcedAt = announcedExtensions.get(key);
   if (announcedAt === undefined || Date.now() - announcedAt >= EXTENSION_ANNOUNCE_MS) {
     announcedExtensions.delete(key);
@@ -2578,7 +2592,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         if (!claim || reservedSession && claim.sessionId !== reservedSession) return json(res, 409, { error: 'gemini_input_not_owned' }, origin);
         binding = await prepareGeminiInputBinding(body.conversation_id, claim.sessionId, claim.input);
       } else binding = await ensureGeminiBinding(body.conversation_id, reservedSession);
-      const surfaces = (await import('./connection.js')).getStatus().surfaces.filter(surface => surface.available);
+      const connection = await import('./connection.js');
+      const surfaces = connection.getStatus().surfaces.filter(surface => surface.available)
+        .map(surface => ({ ...surface, tools: connection.liveSurfaceToolNames(surface.id) }));
       const names = connectorNames(getConfig().connectorSuffix);
       const tools = surfaces.flatMap(surface => surface.tools);
       const titles: Record<string, string> = { plugins: 'External MCP plugins', read: 'Read files and folders', find: 'Find files or text', exec: 'Run JavaScript', agents: 'Multi-agent run', usage: 'Usage and limits' };
@@ -2672,6 +2688,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route === '/plugin-refresh' && req.method === 'POST') {
     const raw = await readBody(req);
     const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh)
+      return json(res, body.action === 'pending' ? 200 : 409, body.action === 'pending' ? { requests: [] } :
+        { ok: false, error: 'provider_refresh_requires_manual_action' }, origin);
     if (body.action === 'pending') return json(res, 200, { requests: await pendingPluginRefreshes(getConfig().ui.autoRefreshPlugins === true) }, origin);
     // Disabling automatic refresh revokes its claims; an explicit Update all round is separate.
     if (body.action === 'claim' && getConfig().ui.autoRefreshPlugins !== true && !await hasRequestedPluginRefresh()) return json(res, 409, { ok: false, error: 'automatic_refresh_disabled' }, origin);
@@ -2697,6 +2716,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route === '/project-create' && req.method === 'POST') {
     const raw = await readBody(req);
     const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects)
+      return json(res, body.action === 'pending' ? 200 : 409, body.action === 'pending' ? { requests: [] } :
+        { ok: false, error: 'provider_native_projects_unavailable' }, origin);
     if (body.action === 'pending') return json(res, 200, { requests: await pendingProjectCreates() }, origin);
     // A new chat's tab for a linked Project landed on Gemini's home: that Project is gone.
     if (body.action === 'gone') {
@@ -2829,9 +2851,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Apps proven to be this install's connectors, so a renamed connector is still recognized.
         connectorApps: Object.fromEntries(Object.entries(connectorApps()).map(([surface, apps]) =>
           [surface, apps.map(({ appId, linkId, name }) => ({ appId, linkId, name }))])),
-        pluginRefreshRequests: (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })),
+        pluginRefreshRequests: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })) : [],
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
-        projectCreateRequests: await pendingProjectCreates(),
+        projectCreateRequests: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects ? await pendingProjectCreates() : [],
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // A message for the running turn goes in while a call runs: Gemini keeps that call's result (#1231).
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
@@ -3020,7 +3042,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // own page, which the page names; the root or another Project is never its destination.
     if (!target) {
       const entry = (await listInputs()).find(row => row.id === body.id);
-      const link = entry?.projectId && entry.purpose !== 'decision' && !entry.lifetime ? (await getProject(entry.projectId))?.chatgpt : undefined;
+      const link = chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects && entry?.projectId && entry.purpose !== 'decision' && !entry.lifetime ? (await getProject(entry.projectId))?.chatgpt : undefined;
       if (link && (link.state !== 'linked' || body.project !== link.id)) return json(res, 200, { input: null }, origin);
     }
     const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req));
@@ -3281,6 +3303,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         awaitingReturn.delete(id);
         compactionWatch.delete(id);
       }
+      await revokeGeminiHandoffDocument(id);
       await closeConversation(id, manual);
       // A browser tab closing is not evidence that the server-side Gemini turn has stopped.
       // In particular, after a swarm ends the retired-worker lease is the only authority fence
@@ -3823,6 +3846,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const checkpointToken = typeof body['token'] === 'string' ? body['token'] : '';
     const checkpoint = continuationByToken(checkpointToken);
+    // The companion derives these fields from Chrome's exact document and current URL.
+    // They are not accepted on the public MCP tool arguments.
+    const sourceDocument = body['sourceDocument'] as Record<string, unknown> | undefined;
+    const sourceProof = sourceDocument ? continuationReceipt({ ...sourceDocument,
+      transport: sourceDocument.provider === 'gemini' ? 'native-question' : 'fiber-question',
+      conversationId: body['conversationId'],
+      messageId: typeof body['sourceMessageId'] === 'string' ? body['sourceMessageId']
+        : sourceDocument.provider === 'gemini' ? `gemini:${body['conversationId']}:user:0000000000000000` : 'pending'
+    }) : null;
+    if (sourceDocument && !sourceProof) return json(res, 400, { error: 'invalid_source_document' }, origin);
+    const sourceBrowser = browserOf(req);
+    const sourceCustody = sourceProof?.provider === 'gemini' && sourceBrowser ? {
+      provider: 'gemini' as const, accountPath: sourceProof.accountPath,
+      id: handoffContinuationId(checkpointToken)!, browser: sourceBrowser,
+      tabId: sourceProof.tabId, documentId: sourceProof.documentId
+    } : undefined;
+    const ownsSourceCustody = !checkpoint?.sourceSend.custody ||
+      !!sourceCustody && JSON.stringify(checkpoint.sourceSend.custody) === JSON.stringify(sourceCustody);
     if (checkpoint?.automatic &&
         (body['sourceAttempt'] === true || body['sourceDispatch'] === true || body['destinationAttempt'] === true || body['destinationDispatch'] === true) &&
         !automaticCompactionAllowed(await getSession(checkpoint.sessionId))) {
@@ -3924,6 +3965,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body['sourceDispatch'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
       const before = typeof body['before'] === 'string' ? body['before'] : null;
       const armed = await dispatchContinuationSourceSendNow(checkpointToken, before);
       return json(res, armed ? 200 : 409, armed ? { armed: true } : { error: 'source_send_reclaimed' }, origin);
@@ -3944,8 +3986,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body['sourceAttempt'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (sourceProof?.provider === 'gemini' && !sourceCustody) return json(res, 409, { error: 'source_browser_required' }, origin);
       const result = await beginContinuationSourceSendNow(checkpointToken,
-        Object.hasOwn(body, 'project') ? normalizeProjectId(body['project']) : undefined);
+        Object.hasOwn(body, 'project') ? normalizeProjectId(body['project']) : undefined, sourceCustody);
+      if (result?.allowed && sourceCustody) await prepareGeminiHandoffBinding(id, entry.sessionId, sourceCustody);
       return result
         ? json(
             res,
@@ -3958,9 +4002,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (typeof body['sourceMessageId'] === 'string') {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
       const anchor = body['sourceMessageId'].slice(0, 200);
+      if (entry.sourceSend.custody) {
+        const question = await readLatestUserMessage(entry.sessionId);
+        const marker = question && continuationMarkerOf(question.message.text);
+        if (question?.messageId !== anchor || marker?.kind !== 'HANDOFF' || marker.token !== checkpointToken)
+          return json(res, 503, { error: 'source_question_not_recorded', retryable: true }, origin);
+      }
       const bound = await bindContinuationSourceMessageNow(checkpointToken, anchor,
-        typeof body['sourceProgress'] === 'number' ? body['sourceProgress'] : undefined);
+        typeof body['sourceProgress'] === 'number' ? body['sourceProgress'] : undefined, sourceProof ?? undefined);
       if (!bound) return json(res, 409, { error: 'source_message_conflict' }, origin);
       // With the authored anchor durable, the recorder's bounded response to it is the capture
       // authority (#787): Gemini may remount a long answer under another assistant id, so the
@@ -4114,6 +4165,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const token = typeof body['token'] === 'string' ? body['token'] : '';
       const entry = continuationByToken(token);
       if (!entry || entry.sessionId !== sessionId) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (entry.sourceSend.custody || entry.sourceSend.receipt?.provider === 'gemini')
+        return json(res, 409, { error: 'native_handoff_tool_required' }, origin);
       const captured = await captureCompactionBrief(id, entry, body['summary'], known);
       return json(res, captured.status, captured.body, origin);
     }
@@ -4134,7 +4187,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
               already.token,
               getConfig().goal.includeToolCalls === true,
               getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
-              getConfig().compaction.handoffLength
+              getConfig().compaction.handoffLength, 'gemini'
             )
           : null;
       return json(
@@ -4178,7 +4231,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           opened.token,
           getConfig().goal.includeToolCalls === true,
           getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
-          getConfig().compaction.handoffLength
+          getConfig().compaction.handoffLength, 'gemini'
         ),
         job: resumeJobFor(sessionId)
       },
@@ -4878,7 +4931,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const liveResume = command.spec.type === 'resume' ? continuationByToken(command.spec.token) : null;
     if (command.spec.type === 'resume' && (!liveResume || !sendUnattempted(liveResume.destinationSend)))
       return json(res, 409, { error: 'command_already_sent', final: true }, origin);
-    if (described.text.length > MAX_CHATGPT_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large', message: 'The complete prompt and task exceed the browser message limit.' }, origin);
+    if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large', message: 'The complete prompt and task exceed the browser message limit.' }, origin);
     if (redeemingBrowser) {
       if (!previousCustody || previousCustody.owner !== client)
         geminiCommandCustody.set(command.id, { browser: redeemingBrowser, owner: client, lease: randomBytes(8).toString('hex') });
@@ -6783,6 +6836,31 @@ function commandHomeConversation(spec: CommandSpec): string | null {
  */
 let placementCollector: string | null = null;
 
+/** The only Gemini handoff writer. Identity and storage paths never come from model text. */
+export async function saveGeminiHandoff(token: string, markdown: string, evidence: GeminiBindingEvidence): Promise<Record<string, unknown>> {
+  const entry = continuationByToken(token);
+  if (!evidence.handoff || evidence.handoff.id !== handoffContinuationId(token) || !entry ||
+      entry.from !== evidence.conversationId || entry.sessionId !== evidence.sessionId)
+    throw new Error('HANDOFF_NOT_OWNED');
+  const authorize = async () => {
+    try { await validateGeminiBindingEvidence(evidence); return true; } catch { return false; }
+  };
+  if (!await authorize()) throw new Error('HANDOFF_NOT_OWNED');
+  if (!entry.handoffId) {
+    const limit = await handoffMarkdownLimit(entry.sessionId, token);
+    if (markdown.length > limit) throw new Error(`HANDOFF_TOO_LARGE: reduce the complete Markdown to at most ${limit} characters. Nothing was saved or truncated.`);
+    const shortfall = briefShortfall(markdown, (await getSession(entry.sessionId))?.estimatedTokens ?? 0);
+    if (shortfall) throw new Error(shortfall);
+  }
+  const captured = await captureCompactionBrief(entry.from, entry, markdown, null, authorize);
+  if (captured.status !== 200 || captured.body.stored !== true) throw new Error('HANDOFF_NOT_STORED');
+  const saved = await readHandoff(entry.sessionId, String(captured.body.handoffId));
+  if (saved?.version !== 2 || !saved.markdown || saved.provenance?.sourceReceipt?.provider !== 'gemini')
+    throw new Error('HANDOFF_FILE_NOT_VERIFIED');
+  return { stored: true, handoff_id: saved.id, markdown: saved.markdown,
+    source_message_id: saved.provenance.sourceMessageId, command_id: captured.body.commandId };
+}
+
 /**
  * Stores one exact brief for chat A's open continuation and opens chat B for it.
  *
@@ -6794,12 +6872,13 @@ async function captureCompactionBrief(
   conversationId: string,
   entry: ContinuationView,
   text: string,
-  known: SessionSummary | null
+  known: SessionSummary | null,
+  authorize?: () => Promise<boolean>
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const { sessionId, token } = entry;
   // The handoff owner freezes and budgets the brief with its saved plan and
   // exact replacement framing. No executor/project setup is added on resume.
-  const brief = text.trim();
+  const brief = entry.sourceSend.receipt?.provider === 'gemini' ? text : text.trim();
   // Refused here rather than deeper, because this is where the reason can still be said
   // in words the page will put on screen. A brief that cannot be a brief is a failed
   // compaction, and a failed compaction leaves the session exactly where it is — which
@@ -6844,7 +6923,7 @@ async function captureCompactionBrief(
       }
     };
   }
-  const handoff = await attachSummary(token, brief);
+  const handoff = await attachSummary(token, brief, authorize);
   if (!handoff) {
     // `attachSummary` deliberately turns a rejected continuation-WAL write back into an
     // `awaiting-summary` transaction so the exact token/brief can be retried. Report that
@@ -6905,6 +6984,8 @@ async function captureRecordedBrief(
   anchor: string
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const entry = continuationByToken(token);
+  // Gemini saves only through the exact source-scoped Core receipt, never answer scraping.
+  if (entry?.sourceSend.custody || entry?.sourceSend.receipt?.provider === 'gemini') return null;
   if (!entry || entry.from !== conversationId || entry.state !== 'awaiting-summary' ||
       entry.sourceSend.state !== 'sent' || entry.sourceSend.messageId !== anchor ||
       runningToolCalls(conversationId) > 0) return null;
@@ -11383,6 +11464,8 @@ export function resetBridgeForTests(): void {
   pendingFollow = null;
   openingCustody.clear();
   extensionVersion = null;
+  extensionProtocolSeen = null;
+  extensionBuildSeen = null;
   externalExtension = null;
   cosExtensionSeenAt = null;
   forgetCosBrowserSignIn();

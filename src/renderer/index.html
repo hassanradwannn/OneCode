@@ -144,7 +144,8 @@
         <i class="ico ph ph-lightning" aria-hidden="true"></i>
         <span id="updateText"></span>
         <button class="btn btn-quiet" id="updateGet" type="button" hidden>Get it</button>
-        <button class="btn btn-quiet" id="updateInstall" type="button" hidden>Install now</button>
+        <button class="btn btn-quiet" id="updateInstall" type="button" hidden>Install when done</button>
+        <button class="btn btn-quiet" id="cancelUpdateInstallNotice" type="button" hidden>Cancel restart</button>
         <button class="btn btn-quiet" id="updateExtension" type="button" hidden>Update extension</button>
       </div>
       <div class="notice offer-card" id="pluginRefreshOffer" role="region" aria-labelledby="pluginRefreshOfferTitle" hidden>
@@ -963,13 +964,12 @@
                 <span id="headerSub">Not set up yet</span>
               </span>
               <span class="state">
-                <!-- Only ever visible with a downloaded, digest-checked update waiting. This app
-                     lives in the tray and is closed to it, so "installs the next time you start it"
-                     can mean days. This is the press that means now. -->
+                <!-- A verified update still needs explicit, cancellable install intent. -->
                 <button class="btn btn-install" id="installUpdate" type="button" hidden>
                   <i class="ico ph ph-lightning" aria-hidden="true"></i>
-                  <span>Install update</span>
+                  <span>Install when done</span>
                 </button>
+                <button class="btn btn-quiet" id="cancelUpdateInstall" type="button" hidden>Cancel restart</button>
               </span>
             </header>
             <button id="chatSettingsBtn" type="button" hidden>Chat settings</button>
@@ -1164,7 +1164,7 @@
                   <label class="setting"><span class="setting-text"><b>Browser bridge port</b><em id="browserBridgePortHint">Auto uses the first available port. A fixed port must be available.</em></span><select id="browserBridgePort"><option value="auto">Auto</option><option value="8765">8765</option><option value="8766">8766</option><option value="8767">8767</option><option value="8768">8768</option><option value="8769">8769</option></select></label>
                   <label class="setting"><span class="setting-text"><b>Background chats</b><em>Keep app-created Gemini tabs in the background.</em></span><input id="backgroundChats" type="checkbox" /></label>
                   <label class="setting"><span class="setting-text"><b>Background tabs open in</b><em>The group stays collapsed in the window you used last. Chrome saves open tab groups automatically; the app's group closes with its last chat, so it is not kept. If you close that window while app chats are open, Chrome may keep the group in its saved groups, where you can delete it. Browsers without tab groups use a window.</em></span><select id="backgroundPlacement"><option value="window">Their own minimized window</option><option value="group">A tab group in your browser window</option></select></label>
-                  <label class="setting"><span class="setting-text"><b>Automatic plugin refresh</b><em>Let the browser extension refresh changed plugin tools in Gemini, so a permission change reaches it without a manual refresh.</em></span><input id="autoRefreshPlugins" type="checkbox" /></label>
+                  <label class="setting" id="autoRefreshPluginsRow"><span class="setting-text"><b>Automatic plugin refresh</b><em>Refresh changed tool definitions when the selected provider supports it.</em></span><input id="autoRefreshPlugins" type="checkbox" /></label>
                   <div id="pluginRefreshRecovery" class="setting" hidden>
                     <span class="setting-text"><b id="pluginRefreshRecoveryError" role="alert">Could not read plugin-refresh state</b><em>Reset backs up the unreadable state and lets automatic plugin refresh start again. Refreshing can affect existing Gemini chats.</em></span>
                     <button id="pluginRefreshReset" class="btn" type="button">Reset plugin refresh</button>

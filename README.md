@@ -23,6 +23,12 @@ Tailscale Funnel gives your PC a stable HTTPS address. Once connected, ordinary 
 
 Cloudflare quick tunnels remain available as an alternative. Their address changes when the tunnel restarts, so switching to one requires updating the URL in Gemini.
 
+## Updates and longer tasks
+
+OneCode downloads updates from this repository in the background. When an update is ready, choose **Update and restart** when convenient. If work is still running, OneCode waits; you can cancel the pending restart. Ordinary Quit leaves a downloaded update for later. Windows uses smaller differential downloads when a previous installer is cached, with a full download as the fallback. Versions 0.2.6 and earlier need one final manual installer download to enable this updater.
+
+Use **Compact & Resume** to continue a long task in a fresh chat. Gemini saves a Markdown handoff through OneCode Core; OneCode verifies the saved file before passing it to the next chat. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not Gemini's actual remaining quota.
+
 ## Before you start
 
 - This release supports **Gemini web on Windows x64**. Other chat providers are planned.

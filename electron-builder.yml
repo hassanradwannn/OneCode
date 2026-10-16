@@ -2,6 +2,14 @@ appId: io.onecode.desktop
 productName: OneCode
 copyright: MIT licensed
 
+# OneCode's download engine uses this cache/feed; installation remains owned by
+# OneCode's explicit Update and restart action.
+publish:
+  provider: github
+  owner: hassanradwannn
+  repo: OneCode
+  updaterCacheDirName: onecode-updater
+
 directories:
   output: release
   buildResources: build
@@ -113,7 +121,7 @@ nsis:
   include: scripts/windows-installer-acl.nsh
   oneClick: false
   perMachine: false
-  # Current-user installs and this fork's disabled updater need no elevation helper.
+  # Current-user updates use the verified existing installation without elevation.
   packElevateHelper: false
   allowElevation: false
   buildUniversalInstaller: false
