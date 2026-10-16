@@ -249,13 +249,19 @@ function geminiExchangeKey(entry: Chronological): string | undefined {
 
 interface GeminiExchange { user?: number; assistant?: number; blocked?: boolean }
 
-function collectGeminiExchange(exchanges: Map<string, GeminiExchange>, entry: Chronological): void {
+/** Native echoes can name their own question as a hint, without a local generation. */
+function geminiQuestionHint(entry: Chronological, recordedTurns: ReadonlySet<string>): boolean {
+  return entry.kind === 'user_message' && !!entry.turnId && entry.turnId === entry.messageId &&
+    geminiExchangeKey(entry) !== undefined && !recordedTurns.has(entry.turnId);
+}
+
+function collectGeminiExchange(exchanges: Map<string, GeminiExchange>, entry: Chronological, recordedTurns: ReadonlySet<string>): void {
   const key = geminiExchangeKey(entry);
   if (!key) return;
   const held = exchanges.get(key) ?? {};
   // An existing lifecycle owner takes precedence. Conflicting canonical positions
   // cannot be repaired by assuming that two rows are the same native message.
-  if (entry.turnId || Number.isFinite(entry.turnOrigin)) held.blocked = true;
+  if ((entry.turnId && !geminiQuestionHint(entry, recordedTurns)) || Number.isFinite(entry.turnOrigin)) held.blocked = true;
   const role = entry.kind === 'user_message' ? 'user' : 'assistant';
   const origin = positionOf(entry);
   if (held[role] !== undefined && held[role] !== origin) held.blocked = true;
@@ -281,8 +287,9 @@ export function projectTimeline<T extends Chronological>(
   // page. This neither coalesces sibling messages nor grants a lifecycle turnId.
   const responses = new Map<string, TimelineTurns[string] | null>();
   const exchanges = new Map<string, GeminiExchange>();
+  const recordedTurns = new Set(Object.keys(turns));
   for (const message of messages) {
-    collectGeminiExchange(exchanges, message);
+    collectGeminiExchange(exchanges, message, recordedTurns);
     if (!message.turnId) continue;
     const key = assistantResponseKey(message);
     if (!key) continue;
@@ -320,7 +327,8 @@ export function projectTimeline<T extends Chronological>(
     }
     const authoredAt = authoredTimeOf(entry);
     const exchange = geminiExchangeKey(entry);
-    const exchangeOrigin = !boundary && !entry.turnId && exchange ? lateGeminiExchangeOrigin(exchanges.get(exchange)) : undefined;
+    const exchangeOrigin = !boundary && (!entry.turnId || geminiQuestionHint(entry, recordedTurns)) && exchange
+      ? lateGeminiExchangeOrigin(exchanges.get(exchange)) : undefined;
     return { ...entry, turnOrigin: boundary?.origin ?? null, exchangeOrigin: exchangeOrigin ?? null,
       ...(authoredAt !== undefined ? { authoredAt } : {}) };
   });
@@ -392,7 +400,8 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
   const position = (entry: T): number => positionOf(entry);
   const bySeq = [...entries].sort((a, b) => position(a) - position(b) || a.seq - b.seq);
   const exchanges = new Map<string, GeminiExchange>();
-  for (const entry of bySeq) collectGeminiExchange(exchanges, entry);
+  const recordedTurns = new Set(bySeq.flatMap(entry => (entry.kind === 'turn_start' || entry.kind === 'turn_end') && entry.turnId ? [entry.turnId] : []));
+  for (const entry of bySeq) collectGeminiExchange(exchanges, entry, recordedTurns);
   // A page retains the durable start even when the start row is outside its window.
   // Old callers with no projection still use only boundaries they actually hold.
   const anchors = new Map<string, number>();
@@ -494,7 +503,8 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
     const native = exchange ? exchanges.get(exchange) : undefined;
     const projected = Number.isFinite(entry.exchangeOrigin) && entry.exchangeOrigin! <= entryPosition ? entry.exchangeOrigin! : undefined;
     const exchangeOrigin = native?.blocked ? undefined : lateGeminiExchangeOrigin(native) ?? projected;
-    if (exchange && exchangeOrigin !== undefined && !entry.turnId && !Number.isFinite(entry.turnOrigin) && inferredAnchor === undefined) {
+    if (exchange && exchangeOrigin !== undefined && (!entry.turnId || geminiQuestionHint(entry, recordedTurns)) &&
+        !Number.isFinite(entry.turnOrigin) && inferredAnchor === undefined) {
       const held = nativeGroups.get(exchange);
       if (held) held.entries.push(entry);
       else nativeGroups.set(exchange, { origin: exchangeOrigin, entries: [entry] });
