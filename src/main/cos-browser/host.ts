@@ -16,10 +16,10 @@ import { extensionDir } from '../extension-path.js';
 import { logInfo, logWarn } from '../logger.js';
 import { callChromeApi, type BrowserControl, type DebuggerTarget } from './chrome-api.js';
 import { ExtensionWorkerLink, type WorkerRegistry } from './extension-worker.js';
-import { CHATGPT_SESSION_COOKIE, cosBrowserSignedIn, setCosBrowserSignedIn, isGoogleSignIn } from './sign-in.js';
+import { CHATGPT_SESSION_COOKIE, beginCosBrowserSignInSession, endCosBrowserSignInSession, cosBrowserSignedIn, setCosBrowserSignedIn, isGoogleSignIn } from './sign-in.js';
 import { cosSignInTransfer, SignInTransferError, type SignInCookie } from './sign-in-transfer.js';
 import { EXTERNAL_BROWSER_LABELS, installedSignInBrowsers, openBrowserSignIn, type ExternalChatBrowser } from '../browser.js';
-import { opensInCosBrowser } from '../../shared/cos-browser-sites.js';
+import { cosBrowserPolicy, type CosBrowserProvider } from '../../shared/cos-browser-sites.js';
 import { TabModel, WINDOW_ID_NONE, type ModelEvent, type WindowState } from './tab-model.js';
 
 const PARTITION = 'persist:cos-browser';
@@ -30,8 +30,6 @@ const PARTITION = 'persist:cos-browser';
  */
 const UI_PARTITION = 'cos-browser-ui';
 const TOOLBAR_HEIGHT = 40;
-const HOME_URL = 'https://chatgpt.com/';
-const LOGIN_URL = 'https://chatgpt.com/auth/login';
 
 /**
  * What the extension may load into a tab: web pages and the empty page. Only our own extension
@@ -122,15 +120,6 @@ interface SignInPanel {
   expiry: ReturnType<typeof setTimeout> | null;
 }
 
-/** The conversation a Gemini tab shows, from its `/c/<id>` path. */
-function conversationOf(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname !== 'chatgpt.com' && parsed.hostname !== 'chat.openai.com') return null;
-    return /^\/(?:g\/[^/]+\/)?c\/([0-9a-z-]+)/i.exec(parsed.pathname)?.[1] ?? null;
-  } catch { return null; }
-}
-
 /** macOS draws its traffic lights at the left of a hidden title bar; Windows and Linux draw caption buttons at the right. */
 const WINDOW_CONTROLS = process.platform === 'darwin' ? { left: 78, right: 8 } : { left: 8, right: 138 };
 
@@ -179,6 +168,7 @@ export class CosBrowser {
   private signIn: SignInPanel | null = null;
   private browserEpoch = 0;
   private importingSignIn = false;
+  private readonly policy;
 
   constructor(private readonly assets: {
     preloadDir: string; rendererUrl: () => string | null; rendererDir: string;
@@ -186,7 +176,10 @@ export class CosBrowser {
     onUserHide?: () => void;
     /** Where a window the user minimizes goes: the taskbar or Dock (default), or the tray. */
     minimizeTo?: () => 'taskbar' | 'tray';
+    /** Explicit legacy fixture policy; the production caller always uses Gemini. */
+    provider?: CosBrowserProvider;
   }) {
+    this.policy = cosBrowserPolicy(assets.provider);
     cosSignInTransfer.onChange(change => this.signInEnded(change));
   }
 
@@ -245,6 +238,7 @@ export class CosBrowser {
     this.ses = ses;
     const extension = await ses.extensions.loadExtension(dir);
     this.extensionId = extension.id;
+    if (!this.policy.sessionTransfer) beginCosBrowserSignInSession();
     try { this.companionIcon = `data:image/png;base64,${readFileSync(path.join(dir, 'icons', 'icon32.png')).toString('base64')}`; }
     catch { this.companionIcon = null; }
     this.link = new ExtensionWorkerLink(ses.serviceWorkers as unknown as WorkerRegistry, `chrome-extension://${extension.id}/`,
@@ -257,17 +251,20 @@ export class CosBrowser {
     this.notify();
   }
 
-  /** Setup's first step is done once Gemini has a session in this browser. */
+  /** Only the explicit legacy policy reads ChatGPT cookies. Gemini uses its own companion. */
   private async readSignIn(ses: Session): Promise<void> {
+    // Gemini sign-in is observed by this browser's paired companion. Never inspect its
+    // cookies or let a ChatGPT-cookie watcher overwrite that native DOM observation.
+    if (!this.policy.sessionTransfer) return;
     if (this.importingSignIn) return;
     const epoch = this.browserEpoch;
     try {
-      const cookies = await ses.cookies.get({ url: HOME_URL });
+      const cookies = await ses.cookies.get({ url: this.policy.homeUrl });
       if (this.ses === ses && epoch === this.browserEpoch && !this.importingSignIn) {
         setCosBrowserSignedIn(cookies.some(cookie => CHATGPT_SESSION_COOKIE.test(cookie.name)));
       }
     } catch {
-      logWarn('cos browser: could not read the Gemini sign-in');
+      logWarn('cos browser: could not read the legacy ChatGPT sign-in');
     }
   }
 
@@ -279,9 +276,9 @@ export class CosBrowser {
     ses.setPermissionRequestHandler((_contents, permission, callback) => callback(ALLOWED_PERMISSIONS.has(permission)));
     ses.setPermissionCheckHandler((_contents, permission) => ALLOWED_PERMISSIONS.has(permission));
     ses.registerPreloadScript({ type: 'service-worker', filePath: path.join(this.assets.preloadDir, 'cos-browser-worker.js') });
-    // Signing in or out of Gemini, read again from the jar rather than from the one event: the
+    // Legacy ChatGPT only: read again from the jar rather than from the one event. Its
     // session cookie comes in numbered chunks, and replacing one removes it before setting it.
-    ses.cookies.on('changed', (_event, cookie) => {
+    if (this.policy.sessionTransfer) ses.cookies.on('changed', (_event, cookie) => {
       if (/(^|\.)chatgpt\.com$/.test(cookie.domain ?? '') && CHATGPT_SESSION_COOKIE.test(cookie.name)) void this.readSignIn(ses);
     });
     ses.serviceWorkers.on('running-status-changed', ({ versionId, runningStatus }) => {
@@ -324,6 +321,7 @@ export class CosBrowser {
     this.ses = null;
     this.startPromise = null;
     setCosBrowserSignedIn(null);
+    if (!this.policy.sessionTransfer) endCosBrowserSignInSession();
     logInfo('cos browser: stopped');
     this.notify();
   }
@@ -353,7 +351,7 @@ export class CosBrowser {
   async show(): Promise<void> {
     await this.start();
     const windowId = this.frames.has(this.model.lastFocusedWindow()) ? this.model.lastFocusedWindow() : [...this.frames.keys()].at(-1);
-    if (windowId === undefined) this.control.createWindow({ url: HOME_URL, focused: true, state: 'normal', type: 'normal' });
+    if (windowId === undefined) this.control.createWindow({ url: this.policy.homeUrl, focused: true, state: 'normal', type: 'normal' });
     else this.showWindow(windowId, true);
   }
 
@@ -364,9 +362,10 @@ export class CosBrowser {
   async showSignIn(): Promise<void> {
     await this.start();
     if (cosBrowserSignedIn() === true) return this.show();
-    const tab = this.model.query({}).find(candidate => /^https:\/\/(chatgpt\.com|auth\.openai\.com)\//.test(candidate.url || candidate.pendingUrl || ''));
-    if (!tab) { this.control.createWindow({ url: LOGIN_URL, focused: true, state: 'normal', type: 'normal' }); return; }
-    this.control.navigate(tab.id, LOGIN_URL);
+    const tab = this.model.query({}).find(candidate => this.policy.opens(candidate.url || candidate.pendingUrl || ''));
+    if (!tab) { this.control.createWindow({ url: this.policy.loginUrl, focused: true, state: 'normal', type: 'normal' }); return; }
+    const current = tab.url || tab.pendingUrl || '';
+    if (this.policy.sessionTransfer || !isGoogleSignIn(current)) this.control.navigate(tab.id, this.policy.loginFor(current));
     this.model.activate(tab.id);
     this.showWindow(tab.windowId, true);
   }
@@ -559,7 +558,7 @@ export class CosBrowser {
         id: tab.id, title: tab.title || tab.pendingUrl || tab.url || 'New tab', url: tab.url || tab.pendingUrl || '',
         favicon: this.favicons.get(tabId) ?? null, active: tab.active, loading: tab.status === 'loading',
         // Answering, or being sent to: the companion holds a tab's debugger while it sends.
-        working: this.generating.has(conversationOf(tab.url) ?? '') || this.views.get(tabId)?.webContents.debugger.isAttached() === true
+        working: this.generating.has(this.policy.conversation(tab.url) ?? '') || this.views.get(tabId)?.webContents.debugger.isAttached() === true
       };
     });
     const history = activeId === null ? null : this.views.get(activeId)?.webContents.navigationHistory;
@@ -622,7 +621,7 @@ export class CosBrowser {
   private wire(contents: WebContents): void {
     const id = contents.id;
     const externalSignIn = (event: Electron.Event & { isMainFrame?: boolean }, url: string) => {
-      if (event.isMainFrame === false || !isGoogleSignIn(url)) return;
+      if (!this.policy.sessionTransfer || event.isMainFrame === false || !isGoogleSignIn(url)) return;
       event.preventDefault();
       this.googleSignIn(contents);
     };
@@ -652,9 +651,9 @@ export class CosBrowser {
       if (!this.stopping) this.model.removeTab(id);
     });
     contents.setWindowOpenHandler(({ url }) => {
-      if (isGoogleSignIn(url)) this.googleSignIn(contents);
-      else if (opensInCosBrowser(url)) {
-        // Gemini, OpenAI and sign-in links open as tabs of this browser, beside their opener.
+      if (this.policy.sessionTransfer && isGoogleSignIn(url)) this.googleSignIn(contents);
+      else if (this.policy.opens(url)) {
+        // The chosen policy's exact provider/auth hosts open beside their own opener.
         const windowId = this.model.tab(id)?.windowId;
         if (windowId !== undefined) this.control.createTab(windowId, url, { active: true, openerTabId: id });
       } else if (/^https?:/i.test(url)) void shell.openExternal(url);
@@ -671,11 +670,12 @@ export class CosBrowser {
   }
 
   /**
-   * Google refuses embedded browsers, so its sign-in continues in the person's own browser. The
+   * Legacy ChatGPT handoff only: Google sign-in continues in the person's own browser. The
    * tab that went to Google gets a card over it; repeated redirects and popups of the same sign-in find
    * the one already open. Only one sign-in runs at a time: another tab's click shows that one.
    */
   private googleSignIn(contents: WebContents): void {
+    if (!this.policy.sessionTransfer) return;
     const tabId = contents.id;
     const windowId = this.model.tab(tabId)?.windowId;
     const frame = windowId === undefined ? undefined : this.frames.get(windowId);
@@ -708,7 +708,7 @@ export class CosBrowser {
     frame.base.contentView.addChildView(view);
     // A login that was leaving for Google has already torn its page down. Gemini's own login
     // goes back under the card, so it covers that page and cancelling lands on it.
-    void contents.loadURL(LOGIN_URL).catch(() => undefined);
+    void contents.loadURL(this.policy.loginUrl).catch(() => undefined);
     this.loadPage(view.webContents, 'cos-browser-sign-in.html');
     this.model.activate(tabId);
     this.layout(windowId);
@@ -760,10 +760,11 @@ export class CosBrowser {
   }
 
   /**
-   * Opens the chosen browser on a fresh Gemini login. The offer exists before the window does,
+   * Opens the chosen browser on a legacy ChatGPT login. The offer exists before the window does,
    * so a fast extension click finds it; opening again keeps the same offer for the same browser.
    */
   private async launchSignIn(panel: SignInPanel, browser: ExternalChatBrowser): Promise<void> {
+    if (!this.policy.sessionTransfer) return;
     const ses = this.ses;
     const epoch = this.browserEpoch;
     const contents = panel.contents;
@@ -854,6 +855,7 @@ export class CosBrowser {
   }
 
   private async importSignIn(ses: Session, contents: WebContents, cookies: SignInCookie[], current: () => boolean): Promise<void> {
+    if (!this.policy.sessionTransfer) throw new SignInTransferError('transfer_expired');
     const epoch = this.browserEpoch;
     const check = () => {
       if (!current()) throw new SignInTransferError('transfer_expired');
@@ -862,6 +864,7 @@ export class CosBrowser {
       }
     };
     check();
+    const HOME_URL = this.policy.homeUrl;
     const previous = (await ses.cookies.get({ url: HOME_URL })).filter(cookie => CHATGPT_SESSION_COOKIE.test(cookie.name));
     check();
     const set = (cookie: Electron.Cookie | SignInCookie) => ses.cookies.set({

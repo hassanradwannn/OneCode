@@ -19,15 +19,16 @@ import { createTailscaleRelay, type TailscaleRelay } from './tailscale-relay.js'
 class FunnelSetupError extends Error {}
 type Row = Record<string, unknown>;
 type NativeConfig = Row & { TCP?: Row; Web?: Row; AllowFunnel?: Row; Foreground?: Row };
-export interface FunnelCustody { version: 1; nodeId: string; dnsName: string; port: number; mount: string; proxy: string; previousProxy?: string }
+export interface FunnelCustody { version: 1; nodeId: string; dnsName: string; port: number; mount: string; proxy: string; previousProxy?: string; previousMetadataProxy?: string; metadata?: true }
 interface Dependencies {
   run(binary: string, args: string[]): Promise<string>;
   locate(hint: string): string | null;
   stateDir: string;
-  relay(origin: string, publicHost: string): Promise<TailscaleRelay>;
+  relay(origin: string, publicHost: string, publicMount: string): Promise<TailscaleRelay>;
   watchMs: number;
 }
 const PORTS = [443, 8443, 10000];
+export const FUNNEL_METADATA_PREFIX = '/.well-known/oauth-protected-resource';
 const row = (value: unknown): value is Row => value !== null && typeof value === 'object' && !Array.isArray(value);
 const object = (value: unknown): Row => row(value) ? value : {};
 const empty = (value: unknown): boolean => Object.keys(object(value)).length === 0;
@@ -59,18 +60,29 @@ function validCustody(value: unknown): value is FunnelCustody {
   return row(value) && value.version === 1 && typeof value.nodeId === 'string' && /^[\w-]{1,128}$/.test(value.nodeId) &&
     typeof value.dnsName === 'string' && /^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(value.dnsName) &&
     typeof value.port === 'number' && PORTS.includes(value.port) && typeof value.mount === 'string' && /^\/onecode-[0-9a-f]{32}$/.test(value.mount) &&
-    normalizeProxy(value.proxy) === value.proxy && (value.previousProxy === undefined || normalizeProxy(value.previousProxy) === value.previousProxy);
+    normalizeProxy(value.proxy) === value.proxy && (value.previousProxy === undefined || normalizeProxy(value.previousProxy) === value.previousProxy) &&
+    (value.previousMetadataProxy === undefined || normalizeProxy(value.previousMetadataProxy) === value.previousMetadataProxy) &&
+    (value.metadata === undefined || value.metadata === true);
 }
 function host(custody: FunnelCustody): string { return `${custody.dnsName}:${custody.port}`; }
 function handlers(value: NativeConfig, custody: FunnelCustody): Row { return object(object(value.Web?.[host(custody)]).Handlers); }
-function ownedHandler(value: NativeConfig, custody: FunnelCustody): boolean {
-  return same(handlers(value, custody)[custody.mount], { Proxy: custody.proxy });
+function ownedRoutes(custody: FunnelCustody): Array<{ mount: string; proxy: string }> {
+  return [{ mount: custody.mount, proxy: custody.proxy }, ...(custody.metadata ? [{ mount: FUNNEL_METADATA_PREFIX + custody.mount, proxy: custody.proxy + FUNNEL_METADATA_PREFIX }] : [])];
+}
+function ownedHandler(value: NativeConfig, custody: FunnelCustody, mount = custody.mount): boolean {
+  const route = ownedRoutes(custody).find(route => route.mount === mount);
+  return !!route && same(handlers(value, custody)[mount], { Proxy: route.proxy });
+}
+function knownHandler(value: NativeConfig, custody: FunnelCustody, mount: string): boolean {
+  if (ownedHandler(value, custody, mount)) return true;
+  const previous = mount === custody.mount ? custody.previousProxy : custody.metadata && mount === FUNNEL_METADATA_PREFIX + custody.mount ? custody.previousMetadataProxy : undefined;
+  return !!previous && same(handlers(value, custody)[mount], { Proxy: previous + (mount === custody.mount ? '' : FUNNEL_METADATA_PREFIX) });
 }
 function unrelatedRoutes(value: NativeConfig, custody: FunnelCustody): NativeConfig {
   const copy = JSON.parse(JSON.stringify(value)) as NativeConfig;
   const web = object(copy.Web?.[host(custody)]);
   const routes = object(web.Handlers);
-  delete routes[custody.mount];
+  for (const route of ownedRoutes(custody)) delete routes[route.mount];
   if (empty(routes)) {
     delete copy.Web?.[host(custody)];
     delete copy.TCP?.[String(custody.port)];
@@ -89,13 +101,17 @@ export function assertFunnelRouteSafe(value: NativeConfig, custody: FunnelCustod
     if (key.endsWith(`:${port}`) && key !== host(custody)) throw new FunnelSetupError('The reserved Funnel port belongs to another hostname. OneCode did not change it.');
   }
   const routes = handlers(value, custody);
-  const exact = routes[custody.mount];
-  if (exact !== undefined && (!previous || !ownedHandler(value, previous))) throw new FunnelSetupError('The OneCode Funnel path was changed outside this app. No route was overwritten.');
-  if (value.AllowFunnel?.[host(custody)] !== true && Object.keys(routes).some(mount => mount !== custody.mount)) {
+  const mounts = ownedRoutes(custody).map(route => route.mount);
+  for (const mount of mounts) {
+    if (routes[mount] !== undefined && (!previous || !knownHandler(value, previous, mount))) throw new FunnelSetupError('The OneCode Funnel path was changed outside this app. No route was overwritten.');
+  }
+  if (value.AllowFunnel?.[host(custody)] !== true && Object.keys(routes).some(mount => !mounts.includes(mount))) {
     throw new FunnelSetupError('This listener has private Serve routes. OneCode will not make them public.');
   }
   for (const mount of Object.keys(routes)) {
-    if (mount !== custody.mount && (mount.startsWith(`${custody.mount}/`) || custody.mount.startsWith(`${mount.replace(/\/$/, '')}/`))) {
+    // A public root catchall is a fallback, not a conflicting more-specific route.
+    // All other ancestor/descendant conflicts remain an explicit refusal.
+    if (!mounts.includes(mount) && mount !== '/' && mounts.some(owned => mount.startsWith(`${owned}/`) || owned.startsWith(`${mount.replace(/\/$/, '')}/`))) {
       throw new FunnelSetupError('An existing Serve path overlaps the OneCode mount. No route was changed.');
     }
   }
@@ -106,6 +122,23 @@ function freePort(value: NativeConfig): number {
     !Object.keys(value.AllowFunnel ?? {}).some(key => key.endsWith(`:${candidate}`)));
   if (!port) throw new FunnelSetupError('Tailscale ports 443, 8443 and 10000 already have routes. Free a port yourself; OneCode did not change them.');
   return port;
+}
+function choosePort(value: NativeConfig, custody: FunnelCustody, previous?: FunnelCustody): number {
+  if (previous?.port === 443) return 443;
+  const desired = { ...custody, port: 443 };
+  const tcp = value.TCP?.['443'];
+  const no443State = tcp === undefined && !Object.keys(value.Web ?? {}).some(key => key.endsWith(':443')) && !Object.keys(value.AllowFunnel ?? {}).some(key => key.endsWith(':443'));
+  let usable = no443State || (same(tcp, { HTTPS: true }) && value.AllowFunnel?.[host(desired)] === true);
+  if (usable) {
+    try { assertFunnelRouteSafe(value, desired); } catch { usable = false; }
+  }
+  if (usable) {
+    if (previous && ownedRoutes(previous).some(route => handlers(value, previous)[route.mount] !== undefined)) {
+      throw new FunnelSetupError('Disconnect the previous OneCode connection before moving its saved route to port 443. No existing mount was moved or removed.');
+    }
+    return 443;
+  }
+  return previous?.port ?? freePort(value);
 }
 function describeFailure(error: unknown): string {
   const raw = error instanceof Error ? error.message : '';
@@ -172,14 +205,16 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
   const removeOwned = async (): Promise<void> => {
     if (!custody || !nativeMutation) return;
     try {
-      const node = await readNode();
-      const current = await readConfig();
-      if (!matchesNode(node, custody) || !empty(current.Foreground) || !ownedHandler(current, custody)) {
-        logWarn('OneCode Funnel cleanup skipped: native route ownership changed.'); return;
+      for (const route of ownedRoutes(custody).reverse()) {
+        const node = await readNode();
+        const current = await readConfig();
+        if (!matchesNode(node, custody) || !empty(current.Foreground) || !knownHandler(current, custody, route.mount)) {
+          logWarn('OneCode Funnel cleanup skipped a path whose native custody changed.'); continue;
+        }
+        // Explicit path is essential: without it native off removes all handlers on a port.
+        await deps.run(binary, ['funnel', `--https=${custody.port}`, `--set-path=${route.mount}`, 'off']);
       }
-      // Explicit path is essential: without it native off removes all handlers on a port.
-      await deps.run(binary, ['funnel', `--https=${custody.port}`, `--set-path=${custody.mount}`, 'off']);
-      logInfo('OneCode Funnel: removed only the owned path.');
+      logInfo('OneCode Funnel: cleanup touched only custody-matched paths.');
     } catch { logWarn('OneCode Funnel cleanup could not verify/remove its route; no reset or retry was attempted.'); }
   };
   try {
@@ -193,27 +228,32 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       const stored: unknown = JSON.parse(await fs.readFile(custodyFile, 'utf8'));
       if (!validCustody(stored)) throw new FunnelSetupError('invalid-custody');
       previous = stored;
-      // An interrupted change may still leave its prior verified route. Both exact
-      // loopback targets were written before mutation; a third target is never adopted.
-      if (stored.previousProxy && same(handlers(before, stored)[stored.mount], { Proxy: stored.previousProxy })) {
-        previous = { ...stored, proxy: stored.previousProxy };
-        delete previous.previousProxy;
-      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new FunnelSetupError('OneCode Funnel custody is unreadable. No existing route was claimed or changed.');
     }
     if (previous && !matchesNode(node, previous)) throw new FunnelSetupError('The Tailscale device/name changed. OneCode did not move or delete the old route. Review the old Funnel route before resetting this app’s route custody.');
     const local = new URL(opts.localUrl);
     if (local.protocol !== 'http:' || local.hostname !== '127.0.0.1' || !local.port) throw new FunnelSetupError('OneCode Funnel requires its loopback MCP server.');
-    const reserved: FunnelCustody = previous ?? { version: 1, nodeId: node.id, dnsName: node.dnsName, port: freePort(before), mount: `/onecode-${randomBytes(16).toString('hex')}`, proxy: 'http://127.0.0.1:1' };
-    assertFunnelRouteSafe(before, reserved, previous);
-    relay = await deps.relay(local.origin, host(reserved));
-    custody = { ...reserved, proxy: relay.origin, ...(previous ? { previousProxy: previous.proxy } : {}) };
+    const base: FunnelCustody = { ...(previous ?? { version: 1, nodeId: node.id, dnsName: node.dnsName, port: 443, mount: `/onecode-${randomBytes(16).toString('hex')}`, proxy: 'http://127.0.0.1:1' }), metadata: true };
+    const reserved = { ...base, port: choosePort(before, base, previous) };
+    const samePortPrevious = previous?.port === reserved.port ? previous : undefined;
+    assertFunnelRouteSafe(before, reserved, samePortPrevious);
+    relay = await deps.relay(local.origin, host(reserved), reserved.mount);
+    custody = { ...reserved, proxy: relay.origin };
+    delete custody.previousProxy; delete custody.previousMetadataProxy;
+    if (samePortPrevious) {
+      // Each path may be at a different stage after a crash between the two updates.
+      // Retain only targets proved by the previous receipt AND actually observed now.
+      const main = object(handlers(before, samePortPrevious)[samePortPrevious.mount]).Proxy;
+      const metadata = object(handlers(before, samePortPrevious)[FUNNEL_METADATA_PREFIX + samePortPrevious.mount]).Proxy;
+      if (typeof main === 'string') custody.previousProxy = main;
+      if (typeof metadata === 'string') custody.previousMetadataProxy = metadata.slice(0, -FUNNEL_METADATA_PREFIX.length);
+    }
     if (normalizeProxy(custody.proxy) !== custody.proxy) throw new FunnelSetupError('OneCode Funnel relay address was invalid.');
     const finalNode = await readNode();
     const finalBefore = await readConfig();
     if (!matchesNode(finalNode, custody) || !same(before, finalBefore)) throw new FunnelSetupError('Tailscale routes changed during preparation. Nothing was overwritten; inspect the current routes before retrying.');
-    assertFunnelRouteSafe(finalBefore, custody, previous);
+    assertFunnelRouteSafe(finalBefore, custody, samePortPrevious);
     // Persist exact intent before the one native change. Crashes/ambiguous CLI exits
     // retain both known targets, so a failed update cannot erase the old route custody.
     await fs.mkdir(deps.stateDir, { recursive: true });
@@ -223,13 +263,29 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       await fs.rename(temporary, custodyFile);
     };
     await persist();
+    if (!matchesNode(await readNode(), custody)) throw new FunnelSetupError('The Tailscale device changed before route publication. No route was configured.');
     nativeMutation = true;
-    await deps.run(binary, ['funnel', '--bg', `--https=${custody.port}`, `--set-path=${custody.mount}`, '--yes', custody.proxy]);
+    const installed = new Set<string>();
+    for (const route of ownedRoutes(custody)) {
+      if (installed.size) {
+        const liveNode = await readNode();
+        const live = await readConfig();
+        if (!matchesNode(liveNode, custody) || !empty(live.Foreground) ||
+            !same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody)) ||
+            ownedRoutes(custody).some(expected => installed.has(expected.mount)
+              ? !ownedHandler(live, custody!, expected.mount)
+              : handlers(live, custody!)[expected.mount] !== undefined && (!samePortPrevious || !knownHandler(live, samePortPrevious, expected.mount)))) {
+          throw new FunnelSetupError('Tailscale routes changed between the owned path updates. No other route was overwritten.');
+        }
+      }
+      await deps.run(binary, ['funnel', '--bg', `--https=${custody.port}`, `--set-path=${route.mount}`, '--yes', route.proxy]);
+      installed.add(route.mount);
+    }
     const verify = async (publish = true): Promise<string | undefined> => {
       const liveNode = await readNode();
       const live = await readConfig();
       if (stopped) return;
-      if (!custody || !matchesNode(liveNode, custody) || !ownedHandler(live, custody) || live.AllowFunnel?.[host(custody)] !== true || !same(live.TCP?.[String(custody.port)], { HTTPS: true })) {
+      if (!custody || !matchesNode(liveNode, custody) || ownedRoutes(custody).some(route => !ownedHandler(live, custody!, route.mount)) || live.AllowFunnel?.[host(custody)] !== true || !same(live.TCP?.[String(custody.port)], { HTTPS: true })) {
         throw new FunnelSetupError('The owned Tailscale Funnel route is not public/current. Reconnect after checking Tailscale; OneCode will not recreate it automatically.');
       }
       if (!same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody))) {
@@ -243,6 +299,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     };
     const publicUrl = await verify(false);
     delete custody.previousProxy;
+    delete custody.previousMetadataProxy;
     await persist();
     report('connected', 'OneCode Funnel route verified. Use the HTTPS connector URL below; Gemini access is verified when a request arrives.', publicUrl);
     timer = setInterval(() => {

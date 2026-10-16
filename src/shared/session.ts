@@ -366,6 +366,8 @@ interface BaseEvent {
   authoredAt?: number;
   /** Read projection: owning start outside this page, or null for an unowned row. */
   turnOrigin?: number | null;
+  /** Read projection of an exact native question/answer pair, never lifecycle ownership. */
+  exchangeOrigin?: number | null;
   source: EventSource;
   /** Multi-agent attribution. Absent when no swarm is running. */
   agent?: string;

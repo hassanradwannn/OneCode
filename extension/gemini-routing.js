@@ -79,13 +79,16 @@ export function createGeminiRouting(chrome, ownedWindow) {
       if (!context) throw new Error('gemini_conversation_account_unknown');
     }
     if (!context) {
-      const managed = await ownedWindow().catch(() => null);
-      let selected = tabs.filter(tab => tab.active === true && tab.windowId === managed?.id && !tab.pendingUrl && !tab.incognito);
-      if (selected.length !== 1 || !selectedContext(selected[0].url)) {
-        const browserWindow = await chrome.windows.getLastFocused().catch(() => null);
-        selected = tabs.filter(tab => tab.active === true && tab.windowId === browserWindow?.id && !tab.pendingUrl && !tab.incognito);
+      // A person switching accounts in a native browser window chooses the account
+      // for New chat. An older background window must not override that choice.
+      const browserWindow = await chrome.windows.getLastFocused().catch(() => null);
+      let selected = tabs.filter(tab => tab.active === true && tab.windowId === browserWindow?.id && !tab.incognito);
+      if (!selected.length) {
+        const managed = await ownedWindow().catch(() => null);
+        selected = tabs.filter(tab => tab.active === true && tab.windowId === managed?.id && !tab.incognito);
       }
       if (selected.length !== 1) throw new Error('gemini_account_context_required');
+      if (selected[0].pendingUrl) throw new Error('gemini_selected_account_changed');
       const current = await chrome.tabs.get(selected[0].id).catch(() => null);
       if (!current || current.pendingUrl || current.url !== selected[0].url || current.windowId !== selected[0].windowId || current.active !== true || current.incognito)
         throw new Error('gemini_selected_account_changed');

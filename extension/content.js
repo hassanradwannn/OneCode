@@ -13314,6 +13314,11 @@
         ];
         if (CLF_DOM.provider === 'gemini' && !authorizing && !sendAttempted && !receipt &&
             geminiPreparationRefusals.includes(nativeSendRefusal)) {
+          if (nativeSendRefusal === 'connector-menu-unavailable') {
+            const required = CLF_DOM.connectorNames()[0];
+            const connector = required ? `the required connector "${required}"` : 'the required OneCode connector';
+            return fail(`Gemini's @ menu did not contain ${connector}. In OneCode Setup, connect the current Core URL using the same Google account, then retry. Nothing was submitted for this task.`);
+          }
           return fail(`Gemini could not prepare the task (${nativeSendRefusal}). Nothing was submitted for this task.`);
         }
         return false;

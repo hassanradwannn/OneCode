@@ -98,11 +98,11 @@
 .ph.ph-sparkle::before { content: '\e6a2'; }
 .ph.ph-star::before { content: '\e46a'; }
 .ph.ph-sign-in::before { content: '\e428'; }
-.ph.ph-sign-out::before { content: '\e42a'; }
 .ph.ph-sun::before { content: '\e472'; }
 .ph.ph-target::before { content: '\e47c'; }
 .ph.ph-terminal-window::before { content: '\eae8'; }
 .ph.ph-trash::before { content: '\e4a6'; }
+.ph.ph-user::before { content: '\e4c2'; }
 .ph.ph-warning::before { content: '\e4e0'; }
 .ph.ph-x::before { content: '\e4f6'; }
 

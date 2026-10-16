@@ -1,6 +1,6 @@
 {
   "name": "onecode",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "description": "Desktop workspace for Gemini with local MCP tools and durable chats.",
   "license": "MIT",
   "author": "OneCode contributors",

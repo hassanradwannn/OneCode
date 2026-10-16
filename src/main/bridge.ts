@@ -3,6 +3,7 @@ import { nextWorkerArchive, settleWorkerArchive } from './worker-archive.js';
 import { considerTurnRotation, type RotationDeps } from './turn-rotation.js';
 import { conversationProgress } from './session/progress.js';
 import { cosSignInTransfer, SignInTransferError } from './cos-browser/sign-in-transfer.js';
+import { forgetCosBrowserSignIn, noteCosBrowserPresence, noteCosBrowserLogin, cosBrowserSignInLease } from './cos-browser/sign-in.js';
 import { externalBrowserProof, noteExternalInstalled, noteExternalSignedIn, resetBrowserProofForTests } from './browser-proof.js';
 import { notePluginInstalled, notePluginMissing } from './connector-proof.js';
 import { connectorNames } from '../shared/connector-names.js';
@@ -1182,6 +1183,8 @@ function noteExternalExtension(req: http.IncomingMessage): boolean {
   if (req.headers['x-extension-host'] === 'cos') {
     const appeared = !cosExtensionPresent();
     cosExtensionSeenAt = Date.now();
+    const browserId = browserOf(req);
+    if (browserId) noteCosBrowserPresence(browserId);
     return appeared;
   }
   if (req.headers['x-extension-host'] !== 'browser') return false;
@@ -1248,6 +1251,7 @@ export async function unpair(): Promise<void> {
   // the extension's next poll and an app restart.
   ++browserCredentialEpoch;
   cosSignInTransfer.cancel();
+  forgetCosBrowserSignIn();
   await withBrowserCredentials(async () => {
     await setSecret('bridgeToken', BROWSER_DISCONNECTED);
     lastSeenAt = null;
@@ -2458,6 +2462,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return { token, reused };
     });
     if (!provisioned) return json(res, 409, { error: 'browser_disconnected' }, origin);
+    if (!provisioned.reused) forgetCosBrowserSignIn();
     const appeared = noteBrowserSeen(req);
     if (!provisioned.reused) {
       logInfo('bridge: browser extension connected and provisioned');
@@ -2469,6 +2474,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // A deliberate revocation is different from a stale credential. The extension repairs a
   // normal 401 by silently provisioning once, so naming this state on the first protected
   // request is what prevents that repair path from undoing the user's Disconnect click.
+  const cosLoginCredentialEpoch = browserCredentialEpoch;
+  const cosLoginServer = server;
   if (await browserDisconnected()) return json(res, 401, { error: 'browser_disconnected' }, origin);
   if (!(await authorised(req))) return json(res, 401, { error: 'unauthorised' }, origin);
   if (!protocolCompatible(req)) {
@@ -2487,6 +2494,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // consume the browser's shared budget before failing origin/authentication.
   if (rateLimited()) return json(res, 429, { error: 'rate_limited' }, origin);
   if (noteBrowserSeen(req)) changed();
+  const cosLoginBrowser = req.headers['x-extension-host'] === 'cos' ? browserOf(req) : null;
+  const cosLoginLease = cosLoginBrowser ? cosBrowserSignInLease(cosLoginBrowser) : null;
+  const publishCosLogin = (signedIn: boolean | null): void => {
+    if (cosLoginBrowser && cosLoginServer === server && server !== null && cosLoginCredentialEpoch === browserCredentialEpoch) {
+      noteCosBrowserLogin(cosLoginBrowser, signedIn, cosLoginLease);
+    }
+  };
 
   // Only an explicit login operation accepts a session. Never put cookies in diagnostics,
   // command journals, status snapshots, recorder events or HTTP error descriptions.
@@ -2586,6 +2600,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
         externalExtension.browserId === browserOf(req) && (typeof signedIn === 'boolean' || signedIn === null)) {
       noteExternalLogin(externalExtension.browserId, signedIn);
+    }
+    if (req.headers['x-extension-host'] === 'cos' && (typeof signedIn === 'boolean' || signedIn === null)) {
+      publishCosLogin(signedIn);
     }
     return json(res, 200, { ok: true }, origin);
   }
@@ -2755,6 +2772,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         const access = typeof body.chatgptAccess === 'boolean' ? body.chatgptAccess : undefined;
         if (externalExtension.chatgptAccess !== access) { externalExtension.chatgptAccess = access; changed(); }
         noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);
+      }
+      if (req.headers['x-extension-host'] === 'cos') {
+        publishCosLogin(typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);
       }
     }
     const openSet = new Set(openConversations);
@@ -5724,6 +5744,7 @@ export function publishBridgePortChange(next: Config, previous: Config, persist:
       lastSeenAt = null;
       if (externalExtension) externalExtension.seenAt = null;
       cosExtensionSeenAt = null;
+      forgetCosBrowserSignIn();
       clearCompanionDiagnostics();
       server = prepared.instance;
       port = prepared.actual;
@@ -5943,6 +5964,7 @@ export async function stopBridge(): Promise<void> {
     lastSeenAt = null;
     if (externalExtension) externalExtension.seenAt = null;
     cosExtensionSeenAt = null;
+    forgetCosBrowserSignIn();
     clearCompanionDiagnostics();
     for (const command of commands) {
       if (command.timer) clearTimeout(command.timer);
@@ -11363,6 +11385,7 @@ export function resetBridgeForTests(): void {
   extensionVersion = null;
   externalExtension = null;
   cosExtensionSeenAt = null;
+  forgetCosBrowserSignIn();
   resetBrowserProofForTests();
   announcedExtensions.clear();
   extensionBuildSeenAt.clear();

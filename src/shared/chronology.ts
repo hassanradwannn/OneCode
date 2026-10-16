@@ -18,8 +18,10 @@
  * So ordering is turn-local. A turn this log opened is a durable, bounded group — everything
  * in it carries the same generation id, which the extension mints per turn — and inside that
  * group the recorded times are all live observations of one run, directly comparable. Outside
- * it nothing moves: unowned messages and events retain their recorded position. Store reads
- * carry the owning start as presentation metadata even when it lies outside the loaded page.
+ * it unowned messages and events retain their recorded position, except an exact native Gemini
+ * exchange can place its late user receipt before its already observed answer. That relation
+ * proves display order only, never a lifecycle turn. Store reads carry these display anchors as
+ * presentation metadata even when the matching row lies outside the loaded page.
  *
  * Both consumers use this. The desktop transcript and the stream the extension injects back
  * into Gemini are the same record, and they must not be able to disagree about its order.
@@ -36,6 +38,8 @@ export interface Chronological {
   authoredAt?: number;
   /** Recorded owning start, supplied before pagination; null means no proven group. */
   turnOrigin?: number | null;
+  /** Exact native exchange display anchor; never execution or turn ownership. */
+  exchangeOrigin?: number | null;
   messageId?: string;
   inputId?: string;
   kind: string;
@@ -233,6 +237,37 @@ function assistantResponseKey(entry: Chronological): string | undefined {
   return `${entry.agent ?? ''}\u0000${working.toLowerCase()}:${exchange.toLowerCase()}`;
 }
 
+/** The native question and answer share an observed conversation-container id. */
+function geminiExchangeKey(entry: Chronological): string | undefined {
+  const role = entry.kind === 'user_message' && (entry.source === 'app' || entry.source === 'extension') ? 'user'
+    : entry.kind === 'assistant_message' && entry.source === 'extension' ? 'assistant' : undefined;
+  if (!role) return undefined;
+  const match = entry.messageId?.match(/^gemini:([a-f0-9]{16}):(user|assistant):([a-f0-9]{16})$/i);
+  if (!match || match[2]!.toLowerCase() !== role) return undefined;
+  return `${entry.agent ?? ''}\u0000${match[1]!.toLowerCase()}:${match[3]!.toLowerCase()}`;
+}
+
+interface GeminiExchange { user?: number; assistant?: number; blocked?: boolean }
+
+function collectGeminiExchange(exchanges: Map<string, GeminiExchange>, entry: Chronological): void {
+  const key = geminiExchangeKey(entry);
+  if (!key) return;
+  const held = exchanges.get(key) ?? {};
+  // An existing lifecycle owner takes precedence. Conflicting canonical positions
+  // cannot be repaired by assuming that two rows are the same native message.
+  if (entry.turnId || Number.isFinite(entry.turnOrigin)) held.blocked = true;
+  const role = entry.kind === 'user_message' ? 'user' : 'assistant';
+  const origin = positionOf(entry);
+  if (held[role] !== undefined && held[role] !== origin) held.blocked = true;
+  held[role] = origin;
+  exchanges.set(key, held);
+}
+
+function lateGeminiExchangeOrigin(exchange: GeminiExchange | undefined): number | undefined {
+  return exchange && !exchange.blocked && exchange.user !== undefined && exchange.assistant !== undefined &&
+    exchange.assistant < exchange.user ? exchange.assistant : undefined;
+}
+
 /** Attach the session's recorded boundaries before selecting/rendering a small page.
  * These fields affect presentation only; seq, origin, time and turnId stay untouched. */
 export function projectTimeline<T extends Chronological>(
@@ -245,7 +280,9 @@ export function projectTimeline<T extends Chronological>(
   // Resolve from all canonical messages, including anchors/conflicts outside this
   // page. This neither coalesces sibling messages nor grants a lifecycle turnId.
   const responses = new Map<string, TimelineTurns[string] | null>();
+  const exchanges = new Map<string, GeminiExchange>();
   for (const message of messages) {
+    collectGeminiExchange(exchanges, message);
     if (!message.turnId) continue;
     const key = assistantResponseKey(message);
     if (!key) continue;
@@ -282,7 +319,10 @@ export function projectTimeline<T extends Chronological>(
       if (candidate && (candidate.endTime === undefined || entry.time <= candidate.endTime)) boundary = candidate;
     }
     const authoredAt = authoredTimeOf(entry);
-    return { ...entry, turnOrigin: boundary?.origin ?? null, ...(authoredAt !== undefined ? { authoredAt } : {}) };
+    const exchange = geminiExchangeKey(entry);
+    const exchangeOrigin = !boundary && !entry.turnId && exchange ? lateGeminiExchangeOrigin(exchanges.get(exchange)) : undefined;
+    return { ...entry, turnOrigin: boundary?.origin ?? null, exchangeOrigin: exchangeOrigin ?? null,
+      ...(authoredAt !== undefined ? { authoredAt } : {}) };
   });
 }
 
@@ -351,6 +391,8 @@ function closing<T extends Chronological>(group: readonly T[]): T | null {
 export function chronological<T extends Chronological>(entries: readonly T[]): T[] {
   const position = (entry: T): number => positionOf(entry);
   const bySeq = [...entries].sort((a, b) => position(a) - position(b) || a.seq - b.seq);
+  const exchanges = new Map<string, GeminiExchange>();
+  for (const entry of bySeq) collectGeminiExchange(exchanges, entry);
   // A page retains the durable start even when the start row is outside its window.
   // Old callers with no projection still use only boundaries they actually hold.
   const anchors = new Map<string, number>();
@@ -426,6 +468,7 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
   };
 
   const groups = new Map<number, T[]>();
+  const nativeGroups = new Map<string, { origin: number; entries: T[] }>();
   // The previous implementation found the open turn for every untagged event by rescanning
   // `bySeq` from the beginning. A long session with many app-authored/untagged rows therefore
   // became O(n²) and could freeze Electron's main process for tens of seconds. `bySeq` is
@@ -447,6 +490,16 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
       const end = ends.get(activeAnchor);
       if (end === undefined || entry.time <= end) inferredAnchor = activeAnchor;
     }
+    const exchange = geminiExchangeKey(entry);
+    const native = exchange ? exchanges.get(exchange) : undefined;
+    const projected = Number.isFinite(entry.exchangeOrigin) && entry.exchangeOrigin! <= entryPosition ? entry.exchangeOrigin! : undefined;
+    const exchangeOrigin = native?.blocked ? undefined : lateGeminiExchangeOrigin(native) ?? projected;
+    if (exchange && exchangeOrigin !== undefined && !entry.turnId && !Number.isFinite(entry.turnOrigin) && inferredAnchor === undefined) {
+      const held = nativeGroups.get(exchange);
+      if (held) held.entries.push(entry);
+      else nativeGroups.set(exchange, { origin: exchangeOrigin, entries: [entry] });
+      continue;
+    }
     const anchor = (entry.turnId ? anchors.get(entry.turnId) : undefined) ?? entry.turnOrigin ?? inferredAnchor ?? entryPosition;
     const held = groups.get(anchor);
     if (held) held.push(entry);
@@ -455,8 +508,17 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
   }
 
   const out: T[] = [];
-  for (const anchor of [...groups.keys()].sort((a, b) => a - b)) {
-    const group = groups.get(anchor)!;
+  const ordered = [...groups].map(([origin, entries]) => ({ origin, entries, native: false }))
+    .concat([...nativeGroups.values()].map(group => ({ ...group, native: true })))
+    .sort((a, b) => a.origin - b.origin);
+  for (const { entries: group, native } of ordered) {
+    if (native) {
+      // Only the two roles of this exact exchange move, regardless of observation
+      // time. Other exchanges, agents and recorded turn groups remain separate.
+      group.sort((a, b) => Number(a.kind === 'assistant_message') - Number(b.kind === 'assistant_message') || position(a) - position(b) || a.seq - b.seq);
+      out.push(...group);
+      continue;
+    }
     const ends = closing(group);
     placeBefore(group);
     group.sort((a, b) => rank(a, ends) - rank(b, ends) || byTime(a, b));

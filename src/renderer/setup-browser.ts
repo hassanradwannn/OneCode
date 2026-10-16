@@ -1,5 +1,5 @@
 import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
-import { $, run } from './dom.js';
+import { $, run, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
 
@@ -16,21 +16,15 @@ const LABELS: Record<ExternalBrowser, string> = { chrome: 'Chrome', edge: 'Edge'
 type Login = { done: boolean; signedIn: boolean; text(): string };
 
 /**
- * Whether Gemini is signed in where it runs. Each path asks only its own browser: the built-in
- * browser's cookie jar and its own copy of the extension, or Gemini's answer in Chrome, Edge or
+ * Whether Gemini is signed in where it runs. Each path asks only its own browser: the embedded
+ * browser's native-page observation and companion, or Gemini's answer in Chrome, Edge or
  * Brave. Being signed in on the other one changes nothing. Yes, no and "not known" stay apart, so
  * the status never claims a sign-out it did not see.
  */
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   proof: { signedIn: boolean | null } | null): Login {
   if (where === 'cos') {
-    const signedIn = state.cosBrowserSignedIn ?? null;
-    // Any extension is not enough: Chrome's would answer for a CoS browser that is not connected.
-    const connected = state.bridge.cosExtension?.present === true;
-    if (signedIn === null) return { done: false, signedIn: false, text: () => t('Starting the built-in browser…') };
-    if (!signedIn) return { done: false, signedIn: false, text: () => t('Not signed in yet.') };
-    return connected ? { done: true, signedIn: true, text: () => t('Signed in. Gemini is connected.') }
-      : { done: false, signedIn: true, text: () => t('Signed in. Connecting to Gemini…') };
+    return { done: false, signedIn: false, text: () => t('Choose a full browser to continue. Embedded Google sign-in is not supported.') };
   }
   const label = LABELS[where];
   // Gemini's own answer while a tab is open there wins, so signing in or out shows at once. With
@@ -44,7 +38,7 @@ export function signInState(state: AppState, where: ChatBrowser, live: boolean,
 
 /** Presentation only. The bridge owns connection evidence; Settings owns where Gemini runs. */
 export function initBrowserSetup(actions: {
-  choose(browser: ChatBrowser): void;
+  choose(browser: ChatBrowser): void | Promise<void>;
   repaint(): void;
   open(browser: ExternalBrowser, page: 'extensions' | 'chatgpt'): Promise<unknown>;
 }): { render(state: AppState): { ready: boolean; choosingLocation: boolean } } {
@@ -112,28 +106,31 @@ export function initBrowserSetup(actions: {
       initialized = true;
       savedBrowser = browser;
     }
-    // Installed: the extension in the person's own browser, in a version this app expects. A live
-    // sighting wins; with that browser closed, the lasting proof stands in, because the built-in
-    // browser does not need Chrome open once signed in. A live old version always asks to update.
+    // Installed: a live sighting wins; with the browser closed, lasting installation
+    // proof stands in. A live old version always asks to update.
     const observation = state.bridge.externalExtension;
     const proof = observation?.proof ?? null;
     const live = observation?.present === true;
     const shownVersion = live ? observation!.version : proof?.version ?? null;
     const knownVersion = !!shownVersion && /^\d+\.\d+\.\d+$/.test(shownVersion);
     const outdated = knownVersion && isNewer(state.update.current, shownVersion!);
-    // The browser keeps the extension off chatgpt.com (site access "On click", a revoked Firefox
+    // The browser keeps the extension off Gemini (site access "On click", a revoked Firefox
     // permission): it can pair, but nothing could ever run on a Gemini page.
     const blocked = live && observation?.chatgptAccess === false;
     ready = state.bridge.running && state.bridge.paired && (live || proof !== null) && knownVersion && !outdated && !blocked;
-    if (!steered) phase = ready ? 'location' : 'extension';
     const cos = browser === 'cos';
+    // A legacy setting must expose its explicit replacement even without an external
+    // companion yet. Choosing a full browser resumes its ordinary installation guide.
+    if (cos) phase = 'location';
+    else if (!steered) phase = ready ? 'location' : 'extension';
     $('browserExtensionStage').hidden = phase !== 'extension';
     $('browserLocationStage').hidden = phase !== 'location';
     $('browserPhaseExtension').setAttribute('aria-current', phase === 'extension' ? 'step' : 'false');
     $('browserPhaseLocation').setAttribute('aria-current', phase === 'location' ? 'step' : 'false');
     $('browserPhaseExtension').classList.toggle('is-complete', ready);
     $<HTMLButtonElement>('browserContinue').disabled = !ready;
-    $('browserConnectionLost').hidden = ready;
+    $('browserConnectionLost').hidden = ready || cos;
+    $('browserBack').hidden = cos;
     for (const segment of document.querySelectorAll<HTMLButtonElement>('[data-external-browser]')) {
       const selected = segment.dataset.externalBrowser === external;
       segment.setAttribute('aria-checked', String(selected));
@@ -142,7 +139,7 @@ export function initBrowserSetup(actions: {
     for (const option of document.querySelectorAll<HTMLButtonElement>('[data-browser-choice]')) {
       const selected = option.dataset.browserChoice === (cos ? 'cos' : 'extension');
       option.setAttribute('aria-checked', String(selected));
-      option.tabIndex = selected ? 0 : -1;
+      option.tabIndex = selected || cos ? 0 : -1;
     }
     for (const variant of $('browserLocationStage').querySelectorAll<HTMLElement>('[data-browser-variant]')) {
       variant.hidden = variant.dataset.browserVariant !== (cos ? 'cos' : 'extension');
@@ -152,7 +149,9 @@ export function initBrowserSetup(actions: {
     $('setupExtensionAddress').textContent = address;
     const label = LABELS[external];
     paintInstallSteps(label);
-    ui($('setupExternalLabel'), 'textContent', () => t('Use {0} and your existing profile.', [label]));
+    ui($('setupExternalChoice'), 'textContent', () => t('Use {0}', [label]));
+    ui($('setupExternalLabel'), 'textContent', () => t('Your existing browser profile and companion.'));
+    ui($('embeddedBrowserHint'), 'textContent', () => t('Your saved embedded-browser setting is no longer supported for Google sign-in. Choose Use {0} above. The setting changes only when you choose a full browser.', [label]));
     ui($('extensionStatus'), 'textContent', () => ready ? (live ? t('Extension connected and up to date') : t('Extension installed and up to date'))
       : blocked ? t('The extension may not open Gemini')
       : outdated ? t('Update your extension')
@@ -162,7 +161,7 @@ export function initBrowserSetup(actions: {
     ui($('extensionSetupDetail'), 'textContent', () => ready ? ''
       : !state.secureStorage?.available && state.secureStorage ? t('Secure credential storage is unavailable, so the extension cannot pair safely.')
       : !state.bridge.running ? t('Browser bridge could not start: {0}', [state.bridge.error ?? t('Not connected yet')])
-      : blocked ? t('{0} keeps the extension off chatgpt.com. In the extension’s details, allow it on chatgpt.com (“Site access” in Chrome, Edge and Brave, “Permissions” in Firefox), then reload Gemini.', [label])
+      : blocked ? t('{0} keeps the extension off gemini.google.com. In the extension’s details, allow it on gemini.google.com (“Site access” in Chrome, Edge and Brave, “Permissions” in Firefox), then reload Gemini.', [label])
       : outdated || (live && !knownVersion) ? t('Load the extension from this app’s folder, then reload it in your browser.')
       : '');
     $('extensionSetupDetail').hidden = !$('extensionSetupDetail').textContent;
@@ -170,12 +169,13 @@ export function initBrowserSetup(actions: {
     const statusNode = $(cos ? 'cosBrowserState' : 'externalBrowserState');
     ui(statusNode, 'textContent', () => login.text());
     statusNode.dataset.tone = login.done ? 'ok' : 'wait';
-    // Surely signed in, the same button becomes the way out. An unknown answer keeps "Sign in",
-    // which also checks.
-    const button = $(cos ? 'showCosBrowser' : 'openSelectedChatGpt');
-    button.dataset.signedIn = String(login.signedIn);
-    button.querySelector('i')!.className = login.signedIn ? 'ico ph ph-sign-out' : 'ico ph ph-sign-in';
-    ui(button.querySelector('span')!, 'textContent', () => login.signedIn ? t('Sign out of Gemini') : t('Sign in to Gemini'));
+    // Account changes happen in Google's native menu; OneCode does not sign the user out.
+    if (!cos) {
+      const button = $('openSelectedChatGpt');
+      button.dataset.signedIn = String(login.signedIn);
+      button.querySelector('i')!.className = login.signedIn ? 'ico ph ph-user' : 'ico ph ph-sign-in';
+      ui(button.querySelector('span')!, 'textContent', () => login.signedIn ? t('Manage Gemini accounts') : t('Sign in to Gemini'));
+    }
     // Done is a fact about the person's setup, not about which part of the step is on screen.
     return { ready: ready && login.done, choosingLocation: phase === 'location' };
   };
@@ -189,8 +189,15 @@ export function initBrowserSetup(actions: {
   $('browserContinue').addEventListener('click', () => changePhase('location'));
   $('browserBack').addEventListener('click', () => changePhase('extension'));
   $('browserReviewExtension').addEventListener('click', () => changePhase('extension'));
-  $('useCosBrowser').addEventListener('click', () => actions.choose('cos'));
-  $('useExtensionBrowser').addEventListener('click', () => actions.choose(external));
+  const choiceFailed = (error: unknown): void => { toast(error instanceof Error ? error.message : t('The browser choice was not saved. Try again.')); };
+  $('useExtensionBrowser').addEventListener('click', () => { void (async () => {
+    const chosen = external;
+    const wasEmbedded = current?.config.ui.chatBrowser === 'cos';
+    try {
+      await actions.choose(chosen);
+      if (wasEmbedded) await actions.open(chosen, 'chatgpt');
+    } catch (error) { choiceFailed(error); }
+  })(); });
   for (const segment of document.querySelectorAll<HTMLButtonElement>('[data-external-browser]')) {
     segment.addEventListener('click', () => {
       external = segment.dataset.externalBrowser as ExternalBrowser;
@@ -217,7 +224,6 @@ export function initBrowserSetup(actions: {
   })());
   $('openFirefoxAddon').addEventListener('click', () => { void actions.open('firefox', 'extensions'); });
   $('openChatGptBrowser').addEventListener('click', () => { void actions.open(external, 'chatgpt'); });
-  $('openSelectedChatGpt').addEventListener('click', event => void run(
-    (event.currentTarget as HTMLElement).dataset.signedIn === 'true' ? window.api.signOutChatGpt() : window.api.openChatGpt()));
+  $('openSelectedChatGpt').addEventListener('click', () => void run(window.api.openChatGpt()));
   return { render };
 }

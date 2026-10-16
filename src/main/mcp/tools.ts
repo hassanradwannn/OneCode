@@ -36,7 +36,7 @@ export function buildServer(ctx: ToolContext, surface: SurfaceId, observe?: (con
   const definition = surfaceDefinition(surface);
   const instructions = serverInstructions(ctx, surface);
   const server = new McpServer(
-    { name: definition.serverName, version: APP_VERSION },
+    { name: definition.serverName, title: definition.connectorName, version: APP_VERSION },
     { capabilities: { tools: {} }, instructions }
   );
 

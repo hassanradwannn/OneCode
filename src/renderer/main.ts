@@ -110,7 +110,13 @@ const settingsSearch = initSettingsSearch({
 });
 initSetupGuide();
 const browserSetup = initBrowserSetup({
-  choose: chooseChatBrowser,
+  choose: async browser => {
+    chooseChatBrowser(browser);
+    await settingsSaveQueue;
+    // The existing queue catches rejected saves so later settings can proceed. Its
+    // completion alone is not proof that the requested browser became the live choice.
+    if ((state?.config.ui.chatBrowser ?? 'chrome') !== browser) throw new Error(t('The browser choice was not saved. Try again.'));
+  },
   repaint: () => { setupOpenStep = 'browser'; if (state) apply(state); },
   open: (browser, page) => run(api.openSetupBrowser(browser, page))
 });
@@ -1632,8 +1638,8 @@ function apply(next: AppState): void {
   applyValue($<HTMLInputElement>('binaryPath'), config.tunnel.binaryPath, previousState?.config.tunnel.binaryPath);
   applyValue($<HTMLSelectElement>('chatBrowser'), config.ui.chatBrowser ?? 'chrome', previousState?.config.ui.chatBrowser ?? 'chrome');
   applyValue($<HTMLSelectElement>('cosBrowserMinimize'), config.ui.cosBrowserMinimize ?? 'taskbar', previousState?.config.ui.cosBrowserMinimize ?? 'taskbar');
-  // Only the built-in browser has a window of the app's own to minimize.
-  $('cosBrowserMinimizeRow').hidden = (config.ui.chatBrowser ?? 'chrome') !== 'cos';
+  // Retain old values for data compatibility without offering unsupported embedded controls.
+  $('cosBrowserMinimizeRow').hidden = true;
   $<HTMLSelectElement>('planBackend').value = config.ui.planBackend ?? 'chatgpt';
   applyChecked($<HTMLInputElement>('finishTool'), config.ui.finishTool === true, previousState?.config.ui.finishTool);
   applyValue($<HTMLSelectElement>('finishLeadMinutes'), String(config.ui.finishLeadMinutes ?? 5), String(previousState?.config.ui.finishLeadMinutes ?? 5));
@@ -1709,6 +1715,10 @@ function apply(next: AppState): void {
   const cosBrowser = (config.ui.chatBrowser ?? 'chrome') === 'cos';
   const browserProgress = browserSetup.render(next);
   for (const other of externalSetupLinks) other.hidden = !cosBrowser;
+  // A saved legacy value must not offer a second route back into embedded Google login.
+  for (const button of document.querySelectorAll<HTMLButtonElement>('#wizard button[data-link]')) {
+    if (opensInCosBrowser(button.dataset.link!)) button.disabled = cosBrowser;
+  }
   // Only this method needs a tunnel per connector. Cloudflare and manual publish the
   // whole address, so both connectors already ride the one tunnel on their own paths.
   const desktopSurface = status.surfaces.find((surface) => surface.id === 'desktop');
@@ -2597,8 +2607,6 @@ $('installUpdate').addEventListener('click', installUpdate);
 $('connectionPopoverToggle').addEventListener('click', () => void toggleConnection());
 $('wizConnect').addEventListener('click', () => void toggleConnection());
 $('readyStart').addEventListener('click', () => showTab('chat'));
-$('showCosBrowser').addEventListener('click', event => void run(
-  (event.currentTarget as HTMLElement).dataset.signedIn === 'true' ? api.signOutChatGpt() : api.showCosBrowser()));
 /** Setup's browser choice is the same save as choosing it in Settings, so both share one rule. */
 function chooseChatBrowser(browser: ChatBrowser): void {
   const choice = $<HTMLSelectElement>('chatBrowser');
@@ -2757,7 +2765,7 @@ buildGroups();
 initSidebarResize();
 const viewMenu = initViewMenu({
   search: openChatSearch,
-  cosBrowser: () => state?.config.ui.chatBrowser === 'cos',
+  cosBrowser: () => false,
   showCosBrowser: () => void run(api.showCosBrowser()),
   pets: { toggle: () => pet.toggle(), visible: () => pet.isVisible() },
   zoom: { step: delta => zoom(zoomFactor + delta), reset: () => zoom(1), percent: () => zoomFactor * 100 }

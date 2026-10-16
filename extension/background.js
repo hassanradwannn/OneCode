@@ -3311,7 +3311,7 @@ async function maintainOnce() {
     typeof tab.id === 'number' && typeof tabDocuments[String(tab.id)] === 'string' && signInStage(tab.url) === 'done');
   const loginEpoch = loginTab ? tabEpochs[String(loginTab.id)] : undefined;
   const loginDocument = loginTab ? tabDocuments[String(loginTab.id)] : undefined;
-  const loginResult = !globalThis.__cosBrowserWorker && loginTab
+  const loginResult = loginTab
     ? await chatGptSignedIn(loginTab.id).catch(() => null) : null;
   const chatGptSignedInState = loginTab && loginDocument && tabDocuments[String(loginTab.id)] === loginDocument &&
     tabEpochs[String(loginTab.id)] === loginEpoch ? loginResult : null;
@@ -5848,12 +5848,16 @@ if (chrome.tabs?.onRemoved && typeof chrome.tabs.onRemoved.addListener === 'func
 }
 
 async function askChatGptSignedIn(tabId) {
-  const [frame] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
+  // Account presentation must not hold the single maintenance owner while an
+  // older native page is suspended. A missing read is unknown, never sign-in
+  // evidence; a late result cannot amend this bounded observation.
+  const frames = await browserReply(() => chrome.scripting.executeScript({ target: { tabId }, func: () => {
     // A visible writable Gemini composer is native account evidence. No private APIs.
     const box = document.querySelector('rich-textarea [contenteditable="true"][role="textbox"]');
     if (box && !box.closest('[hidden],[aria-hidden="true"]')) return true;
     return [...document.querySelectorAll('a,button')].some(node => /^Sign in$/i.test(node.textContent.trim())) ? false : null;
-  } });
+  } }));
+  const frame = frames?.[0];
   return typeof frame?.result === 'boolean' ? frame.result : null;
 }
 
