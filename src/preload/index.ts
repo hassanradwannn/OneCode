@@ -2,6 +2,7 @@ import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/wo
 import type { ApprovalCardView } from '../shared/approval-wait.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
+import type { GeminiSkillExportFormat, GeminiSkillExportResult } from '../shared/gemini-web-skill.js';
 import type { GoalModel } from '../shared/goal-reasoning.js';
 import type { TaskProgress } from '../shared/task-progress.js';
 import type { BrowserPreferences } from '../shared/browser-preferences.js';
@@ -246,6 +247,9 @@ const api = {
   getLogText: () => call<string>('log:text'),
   getLogJson: () => call<string>('log:json'),
   writeClipboard: (text: string) => call<boolean>('clipboard:write', { text }),
+  exportGeminiSkill: (format: GeminiSkillExportFormat) => call<GeminiSkillExportResult>('geminiSkill:export', { format }),
+  copyGeminiSkillInstructions: () => call<boolean>('geminiSkill:copy'),
+  openGeminiSkills: () => call<boolean>('geminiSkill:open'),
   exportMarkdown: (request: { id: string; scope: 'answer' | 'session'; turnId?: string; target: 'clipboard' | 'file' }) =>
     call<{ done: 'copied' } | { done: 'saved'; name: string } | { done: 'cancelled' }>('sessions:exportMarkdown', request),
   // `external`: the system's own browser even for a page the CoS browser would open.

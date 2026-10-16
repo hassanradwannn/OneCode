@@ -2,7 +2,12 @@ node_modules/
 out/
 release/
 build/
-resources/
+resources/*
+!resources/skills/
+resources/skills/*
+!resources/skills/gemini-code/
+resources/skills/gemini-code/*
+!resources/skills/gemini-code/SKILL.md
 *.log
 .env*
 *.private.*

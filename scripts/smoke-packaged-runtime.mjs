@@ -105,6 +105,10 @@ for (const relative of [
   `app.asar.unpacked/node_modules/tree-sitter-bash/prebuilds/${nativeDir}/tree-sitter-bash.node`
 ]) required(relative);
 
+const skillPath = 'skills/gemini-code/SKILL.md';
+if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository, 'resources', ...skillPath.split('/')))))
+  throw new Error('Packaged Gemini skill differs from the public source asset');
+
 if (targetPlatform === 'win32') {
   const isolation = assertWindowsPackageIsolation(resourcesDir);
   process.stdout.write(`Windows package isolation verified (${isolation.ownedFiles} app-owned text files).\n`);

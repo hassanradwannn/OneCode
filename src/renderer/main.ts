@@ -1,4 +1,5 @@
 import { initBrowserSetup } from './setup-browser.js';
+import { initGeminiSkillSetup } from './setup-gemini-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
 import { CONNECTOR_SUFFIX_MAX, CONNECTOR_SUFFIX_PATTERN } from '../shared/connector-names.js';
@@ -59,7 +60,7 @@ import { chatApply, chatSettingsPatch, chatVisible, initChat, openChatSearch, op
 import { publishStopNoticeTexts } from './stop-notices.js';
 import { publishMainTexts } from './main-texts.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
-import { tailscaleSetupView } from './tailscale-setup.js';
+import { tailscalePublicReady, tailscaleSetupView } from './tailscale-setup.js';
 
 declare global {
   interface Window {
@@ -109,6 +110,7 @@ const settingsSearch = initSettingsSearch({
   shown: () => document.querySelector<HTMLElement>('.app')!.dataset.screen === 'settings'
 });
 initSetupGuide();
+const geminiSkillSetup = initGeminiSkillSetup(api);
 const browserSetup = initBrowserSetup({
   choose: async browser => {
     chooseChatBrowser(browser);
@@ -1677,6 +1679,7 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('controlApiEnabled'), config.controlApi?.enabled === true, previousState?.config.controlApi?.enabled);
   applyChecked($<HTMLInputElement>('mcpPersistentUrls'), config.mcp?.persistentUrls === true, previousState?.config.mcp?.persistentUrls);
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
+  geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
   $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);
@@ -1772,6 +1775,7 @@ function apply(next: AppState): void {
     ui($('tailscaleCli'), 'textContent', () => t(tailscale.cli) + (tailscale.version ? ` (${tailscale.version})` : ''));
     ui($('tailscaleAccount'), 'textContent', () => t(tailscale.account));
     ui($('tailscaleFunnel'), 'textContent', () => t(tailscale.funnel));
+    ui($('tailscalePublicIngress'), 'textContent', () => t(tailscale.publicIngress));
     ui($('tailscalePublished'), 'textContent', () => tailscale.publicUrl || t('Not published'));
     $('tailscaleChecked').hidden = tailscale.checkedAt === null;
     ui($('tailscaleChecked'), 'textContent', () => tailscale.checkedAt === null ? ''
@@ -1835,7 +1839,7 @@ function apply(next: AppState): void {
   done.add('access');
   if (!openai || TUNNEL_ID_PATTERN.test(config.tunnel.tunnelId)) done.add('tunnel');
   if (!openai || next.hasApiKey) done.add('key');
-  if (connected) done.add('connect');
+  if (connected && tailscalePublicReady(next)) done.add('connect');
   // The only honest proof the Gemini step is finished: Gemini has actually called the connectors
   // this app cannot work without. Judged per surface, because a Core request says nothing
   // about whether the Desktop connector was ever created. An optional connector never
@@ -1898,6 +1902,7 @@ function apply(next: AppState): void {
       nav.hidden = !browserProgress.choosingLocation;
       nav.querySelector<HTMLButtonElement>('[data-step-nav="next"]')!.disabled = !browserProgress.ready;
     }
+    if (name === 'connect') nav.querySelector<HTMLButtonElement>('[data-step-nav="next"]')!.disabled = !tailscalePublicReady(next);
   }
   paintReady(shown, done, cosBrowser, allSet, accessLevel(next), !accessWorks(next));
 
@@ -1995,13 +2000,15 @@ function connectorCards(next: AppState): HTMLElement[] {
 
     // On the OpenAI method the connector is picked from a list of tunnels instead of
     // pasted as a URL, so showing a loopback address there would only mislead.
-    const url =
-      surface.publicUrl ?? (config.tunnel.kind === 'manual' ? surface.localUrl : null);
+    const url = tailscalePublicReady(next)
+      ? surface.publicUrl ?? (config.tunnel.kind === 'manual' ? surface.localUrl : null) : null;
     if (url) {
       card.append(copyRow(() => t("MCP server URL"), url, 'URL'));
       card.append(
         el('p', 'hint', () => t("Anyone with this URL can use your enabled tools. Do not share it."))
       );
+    } else if (config.tunnel.kind === 'tailscale' && !tailscalePublicReady(next)) {
+      card.append(el('p', 'hint', () => t('Wait for public HTTPS verification before connecting this URL in Gemini.')));
     } else if (config.tunnel.kind === 'openai') {
       card.append(
         el(

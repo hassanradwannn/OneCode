@@ -510,10 +510,13 @@ export interface ConnectionStatus {
   surfaces: SurfaceStatus[];
 }
 
+export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error';
 export interface TailscaleStatus {
   cli: 'missing' | 'ready' | 'error';
   account: 'unknown' | 'signed-out' | 'ready';
   funnel: 'unknown' | 'permission-required' | 'ready' | 'error';
+  /** Public ingress is independent of local Serve/Funnel configuration and Gemini use. */
+  publicIngress?: { state: 'checking' | 'ready' | 'retry-required' | TailscalePublicFailure; checkedAt: number | null };
   version?: string;
   checkedAt: number;
   /** Fixed app-owned explanation; never raw CLI output or account/peer data. */

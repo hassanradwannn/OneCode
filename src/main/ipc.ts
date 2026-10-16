@@ -16,6 +16,8 @@ import { checkGitHubSkillUpdates, importGitHubSkill, linkGitHubSkill, updateGitH
 import { SKILL_ID_PATTERN } from '../shared/skills.js';
 import { listSkillLibrary } from './skill-library.js';
 import { installRecommendedSkill, listRecommendedSkills } from './recommended-skills.js';
+import { copyBundledGeminiSkill, exportBundledGeminiSkill } from './gemini-web-skill.js';
+import { GEMINI_SKILLS_URL } from '../shared/gemini-web-skill.js';
 import { noteChatOrigin } from './session/recorder.js';
 import { refreshAppProxy } from './app-proxy.js';
 import { committedResumeAncestorsFromSummary, DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB, type SessionChange } from '../shared/session.js';
@@ -1233,6 +1235,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('clipboard:write', async (payload) => {
     const { text } = z.object({ text: z.string().max(1_000_000) }).parse(payload);
     await clipboard.writeText(text);
+    return true;
+  });
+  handle('geminiSkill:export', async payload => {
+    const { format } = z.object({ format: z.enum(['markdown', 'zip']) }).strict().parse(payload);
+    return exportBundledGeminiSkill(format, getWindow());
+  });
+  handle('geminiSkill:copy', async payload => {
+    z.object({}).strict().parse(payload ?? {});
+    return copyBundledGeminiSkill();
+  });
+  handle('geminiSkill:open', async payload => {
+    z.object({}).strict().parse(payload ?? {});
+    if (getConfig().ui.chatBrowser === 'cos') throw new Error('Choose a full browser in Setup before opening Gemini Skills.');
+    await openInPreferredBrowser(GEMINI_SKILLS_URL, { reveal: true });
     return true;
   });
 

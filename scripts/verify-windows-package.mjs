@@ -28,7 +28,7 @@ export function assertWindowsPackageIsolation(resources) {
       inspectText(extractFile(archive, file.split('/').join(path.sep)), file); ownedFiles++;
     }
   }
-  const allowed = new Set(['app.asar', 'app.asar.unpacked', 'extension', 'node', 'pets', 'rg', 'tunnel',
+  const allowed = new Set(['app.asar', 'app.asar.unpacked', 'extension', 'node', 'pets', 'rg', 'tunnel', 'skills',
     'LICENSE', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'THIRD-PARTY-NOTICES.txt', 'WINDOWS-SETUP.md']);
   for (const name of readdirSync(resources)) if (!allowed.has(name) && !/^THIRD-PARTY-NOTICES-sharp-win32-(?:x64|arm64)\.md$/.test(name))
     throw new Error(`Unapproved resource input: ${name}`);
@@ -37,9 +37,12 @@ export function assertWindowsPackageIsolation(resources) {
       const file = path.join(directory, name), label = relative ? `${relative}/${name}` : name;
       const stat = lstatSync(file);
       if (stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) throw new Error(`Linked/special file in packaged resources: ${label}`);
+      if ((label === 'skills' || label.startsWith('skills/')) && !(stat.isDirectory()
+        ? label === 'skills' || label === 'skills/gemini-code'
+        : label === 'skills/gemini-code/SKILL.md')) throw new Error(`Unapproved skill resource input: ${label}`);
       if (isPrivate(label, stat.isDirectory())) throw new Error(`Private profile/credential file in packaged resources: ${label}`);
       if (stat.isDirectory()) visit(file, label);
-      else if ((label.startsWith('extension/') || label === 'WINDOWS-SETUP.md') && /\.(?:js|json|html|css|md|txt)$/i.test(label)) {
+      else if ((label.startsWith('extension/') || label === 'WINDOWS-SETUP.md' || label === 'skills/gemini-code/SKILL.md') && /\.(?:js|json|html|css|md|txt)$/i.test(label)) {
         inspectText(readFileSync(file), label); ownedFiles++;
       }
     }

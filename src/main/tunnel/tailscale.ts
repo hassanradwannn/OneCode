@@ -15,6 +15,7 @@ import { logInfo, logWarn } from '../logger.js';
 import type { TunnelHandle, TunnelStartOptions } from './index.js';
 import { locateBinary } from './locate.js';
 import { createTailscaleRelay, type TailscaleRelay } from './tailscale-relay.js';
+import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.js';
 
 class FunnelSetupError extends Error {}
 type Row = Record<string, unknown>;
@@ -25,6 +26,9 @@ interface Dependencies {
   locate(hint: string): string | null;
   stateDir: string;
   relay(origin: string, publicHost: string, publicMount: string): Promise<TailscaleRelay>;
+  probe(url: string, signal: AbortSignal): Promise<FunnelPublicResult>;
+  now(): number;
+  retryWindowMs: number;
   watchMs: number;
 }
 const PORTS = [443, 8443, 10000];
@@ -164,9 +168,10 @@ async function runCli(binary: string, args: string[]): Promise<string> {
 }
 
 export async function startTailscale(opts: TunnelStartOptions, overrides: Partial<Dependencies> = {}): Promise<TunnelHandle> {
-  const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay, watchMs: 15_000, ...overrides };
+  const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
+    probe: probeFunnelPublic, now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, ...overrides };
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
-  const report = (state: 'connecting-tunnel' | 'connected' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
+  const report = (state: 'connecting-tunnel' | 'connected' | 'offline' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
     check.checkedAt = Date.now(); check.detail = detail;
     opts.report({ state, detail, publicUrl, tailscale: { ...check } });
   };
@@ -176,8 +181,9 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
   let relay: TailscaleRelay | undefined;
   let custody: FunnelCustody | undefined;
   let stopped = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let checking = false;
+  const publicProbe = new AbortController();
   let nativeMutation = false;
   const custodyFile = path.join(deps.stateDir, `tailscale-funnel-${createHash('sha256').update(opts.settings.profileId ?? 'default').digest('hex').slice(0, 24)}.json`);
   const readNode = async (): Promise<{ id: string; dnsName: string }> => {
@@ -196,7 +202,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     const capabilities = new Set([...Object.keys(object(self.CapMap)), ...(Array.isArray(self.Capabilities) ? self.Capabilities : [])]);
     if (!capabilities.has('funnel') || !capabilities.has('https')) {
       check.funnel = 'permission-required';
-      throw new FunnelSetupError('Enable HTTPS and Funnel for this device in your Tailscale account, then retry Connect. OneCode does not change tailnet policy.');
+      throw new FunnelSetupError('Open Funnel permission help in Setup and follow Tailscale’s Enable Funnel approval for this device, including HTTPS, then retry Connect. OneCode does not change tailnet policy.');
     }
     return { id: self.ID, dnsName };
   };
@@ -281,7 +287,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       await deps.run(binary, ['funnel', '--bg', `--https=${custody.port}`, `--set-path=${route.mount}`, '--yes', route.proxy]);
       installed.add(route.mount);
     }
-    const verify = async (publish = true): Promise<string | undefined> => {
+    const verifyNative = async (): Promise<string | undefined> => {
       const liveNode = await readNode();
       const live = await readConfig();
       if (stopped) return;
@@ -294,27 +300,65 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       check.funnel = 'ready';
       const origin = `https://${custody.dnsName}${custody.port === 443 ? '' : `:${custody.port}`}`;
       const publicUrl = `${origin}${custody.mount}${local.pathname}`;
-      if (publish) report('connected', 'OneCode Funnel route verified. Use the HTTPS connector URL below; Gemini access is verified when a request arrives.', publicUrl);
       return publicUrl;
     };
-    const publicUrl = await verify(false);
+    const publicUrl = await verifyNative();
     delete custody.previousProxy;
     delete custody.previousMetadataProxy;
     await persist();
-    report('connected', 'OneCode Funnel route verified. Use the HTTPS connector URL below; Gemini access is verified when a request arrives.', publicUrl);
-    timer = setInterval(() => {
-      if (stopped || checking) return;
+    check.publicIngress = { state: 'checking', checkedAt: null };
+    report('connecting-tunnel', 'The owned Funnel route is configured. Checking its exact connector through public DNS and HTTPS…', publicUrl);
+    let failedSince: number | null = null, failures = 0;
+    const details: Record<Exclude<FunnelPublicResult['state'], 'ready'>, string> = {
+      'dns-pending': 'Public DNS has not published this device yet. Tailscale says propagation can take up to 10 minutes.',
+      'dns-error': 'The Cloudflare public DNS check could not verify a public ingress address. Check network access to the DNS-over-HTTPS resolver.',
+      'tls-error': 'Public DNS resolves, but verified TLS to the Funnel ingress failed. Local Tailscale readiness does not prove public reachability.',
+      'http-error': 'Public HTTPS answered, but the exact connector metadata path did not return HTTP 200. Check the current OneCode URL and Funnel routing.',
+      'metadata-error': 'Public HTTPS did not return metadata for this exact current connector. A different or stale mount cannot verify this connection.'
+    };
+    const cycle = async (initial = false): Promise<void> => {
+      if (stopped || checking || !publicUrl) return;
       checking = true;
-      void verify().catch(error => {
+      let delay: number | undefined = deps.watchMs;
+      try {
+        if (!initial) await verifyNative();
         if (stopped) return;
+        const result = await deps.probe(publicUrl, publicProbe.signal);
+        if (stopped) return;
+        // A slow public result cannot publish a route whose custody changed meanwhile.
+        await verifyNative();
+        if (stopped) return;
+        check.publicIngress = { state: result.state, checkedAt: Date.now() };
+        if (result.state === 'ready') {
+          failedSince = null; failures = 0;
+          report('connected', 'The exact OneCode connector is reachable through public DNS and verified HTTPS. Gemini installation and tool use are verified separately.', publicUrl);
+        } else {
+          failedSince ??= deps.now(); failures++;
+          if (deps.now() - failedSince >= deps.retryWindowMs) {
+            check.publicIngress = { state: 'retry-required', checkedAt: Date.now() };
+            report('tunnel-unavailable', `${details[result.state]} Automatic public checks have paused. Click Connect to retry; the saved route and URL were retained.`, publicUrl);
+            delay = undefined;
+          } else {
+            report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
+            delay = Math.min(60_000, deps.watchMs * 2 ** Math.min(failures - 1, 3));
+          }
+        }
+      } catch (error) {
+        if (stopped) return;
+        check.publicIngress = undefined;
         if (check.funnel !== 'permission-required') check.funnel = 'error';
         report('tunnel-unavailable', error instanceof FunnelSetupError ? error.message : describeFailure(error));
-      }).finally(() => { checking = false; });
-    }, deps.watchMs);
-    timer.unref?.();
-    return { stop: async () => { if (stopped) return; stopped = true; clearInterval(timer); await removeOwned(); await relay?.stop(); } };
+      } finally {
+        checking = false;
+        if (!stopped && delay !== undefined) { timer = setTimeout(() => void cycle(), delay); timer.unref?.(); }
+      }
+    };
+    // Return the existing handle before networking so Disconnect can abort the first probe.
+    void cycle(true);
+    return { stop: async () => { if (stopped) return; stopped = true; publicProbe.abort(); clearTimeout(timer); await removeOwned(); await relay?.stop(); } };
   } catch (error) {
-    clearInterval(timer);
+    publicProbe.abort(); clearTimeout(timer);
+    check.publicIngress = undefined;
     await removeOwned();
     await relay?.stop();
     if (check.funnel !== 'permission-required') check.funnel = 'error';

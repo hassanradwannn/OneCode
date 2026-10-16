@@ -8,11 +8,14 @@ A desktop workspace that connects Gemini to tools on your Windows PC. Work with 
 
 1. Download **OneCode-Setup-x64.exe** from Releases and run it.
 2. Install [Tailscale](https://tailscale.com/download/windows) on your PC and sign in with your own account.
-3. Open OneCode → **Settings → Setup**. Follow the connection checks to enable Tailscale Funnel and copy your connector URL.
+3. Open OneCode → **Settings → Setup**. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. A new Tailscale address can take up to ten minutes to appear in public DNS.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
 5. In Gemini's **Connected apps**, add **OneCode Core** using the URL from Setup. Return to OneCode, approve a working folder and choose the tools you want to enable.
+6. Setup also offers the optional **gemini-code** skill: save its ZIP, open Gemini → **Customize → Skills**, upload it and choose **Create**. Enable OneCode's skill option only after installing it in the Google account you use with OneCode. [SKILL.md](resources/skills/gemini-code/SKILL.md) is included in the installer and source; the ZIP is also on Releases.
 
 Send tasks from OneCode. Your Gemini account supplies the model; no Gemini API key is required. Each person runs OneCode and Tailscale on their own PC. There is no OneCode cloud service to subscribe to or share.
+
+The skill provides reusable instructions. The **Core connector** provides access to local tools and works without the skill: OneCode selects it and supplies its tool instructions when sending a task. Installing the skill cannot repair an unreachable server URL. Use the same Google account for the connector, skill and Companion.
 
 ## A connection that survives restarts
 

@@ -60,6 +60,8 @@ extraResources:
       - '!**/*.d.ts'
   - from: docs/WINDOWS-SETUP.md
     to: WINDOWS-SETUP.md
+  - from: resources/skills/gemini-code/SKILL.md
+    to: skills/gemini-code/SKILL.md
 
 npmRebuild: false
 

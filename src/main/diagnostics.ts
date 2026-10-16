@@ -7,8 +7,8 @@
  * line: the local MCP server, the tunnel process, the tunnel's route to OpenAI, and
  * whether Gemini has ever actually arrived here.
  *
- * Everything is loopback-only. Nothing is sent to OpenAI, and the results contain no
- * secrets: the session token in the local URL is never included.
+ * Local server probes use loopback. The Tailscale rows report the adapter's latest
+ * local and public HTTPS checks separately. Results never include connector tokens.
  */
 
 import { getStatus, isServerRunning, tunnelHealthBase } from './connection.js';
@@ -361,10 +361,19 @@ export async function runDiagnostics(): Promise<Diagnosis> {
   const base = tunnelHealthBase();
   if (config.tunnel.kind === 'tailscale') {
     const snapshot = status.tailscale;
-    const ready = status.state === 'connected' && snapshot?.funnel === 'ready' && !!status.publicUrl;
+    const configured = snapshot?.funnel === 'ready';
     checks.push({
-      name: 'Tailscale Funnel route', status: ready ? 'pass' : snapshot ? 'fail' : 'not-run', ok: ready ? true : snapshot ? false : null,
-      detail: snapshot?.detail ?? 'Connect first to check the system Tailscale account and owned public route. This does not prove Gemini has reached it.'
+      name: 'Tailscale Funnel configuration', status: configured ? 'pass' : snapshot ? 'fail' : 'not-run', ok: configured ? true : snapshot ? false : null,
+      detail: configured ? 'The system Tailscale account and OneCode-owned routes passed their local checks. Public HTTPS is checked separately.'
+        : snapshot?.detail ?? 'Connect first to check the system Tailscale account and owned route.'
+    });
+    const ingress = snapshot?.publicIngress?.state;
+    const publicReady = status.state === 'connected' && ingress === 'ready' && !!status.publicUrl;
+    const pending = !ingress || ingress === 'checking' || ingress === 'dns-pending';
+    checks.push({
+      name: 'Public HTTPS to OneCode', status: publicReady ? 'pass' : pending ? 'not-run' : 'fail', ok: publicReady ? true : pending ? null : false,
+      detail: publicReady ? 'The exact connector metadata answered through public Funnel ingress with a valid TLS certificate. Gemini use is checked separately.'
+        : snapshot?.detail ?? 'Connect first to verify the public endpoint. Local Tailscale access alone does not prove Gemini can reach this PC.'
     });
   } else if (config.tunnel.kind !== 'openai') {
     checks.push({
@@ -429,7 +438,7 @@ export async function runDiagnostics(): Promise<Diagnosis> {
     ok: seen === null ? null : true,
     detail:
       seen === null
-        ? 'No request has arrived since the server started. If Gemini reports an error, it never got as far as this app — that failure is on Gemini’s side, not here.'
+        ? 'No request has arrived since the server started. Check public HTTPS, the exact Core URL and the Google account where the connector was added.'
         : `Last request from Gemini ${ago(seen)}.`
   });
 

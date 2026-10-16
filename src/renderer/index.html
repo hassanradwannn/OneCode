@@ -196,7 +196,6 @@
                 <label class="setting"><span class="setting-text"><b>Playful status words</b><em>Show rotating gym jokes instead of “Working”.</em></span><input id="playfulStatus" type="checkbox" /></label>
                 <label class="setting"><span class="setting-text"><b>Playful asides in automatic Continue</b><em>Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.</em></span><input id="playfulContinue" type="checkbox" /></label>
                 <label class="setting"><span class="setting-text"><b>Mention OneCode Core</b><em>Makes sure Gemini can use this app in every chat. Turn it off if Gemini starts plain questions with an unneeded tool call. Workers, Goal, Loop and Continue always keep the mention.</em></span><input id="mentionCore" type="checkbox" /></label>
-                <label class="setting"><span class="setting-text"><b>Use Gemini's gemini-code skill</b><em>Enable that native skill in Gemini first. Adds a reference to it alongside the compact chat setup. Workspace details, selected local skills and session credentials still update normally.</em></span><input id="useGeminiWebSkill" type="checkbox" /></label>
               </div>
             </section>
             <section class="appearance-section" id="privacyScreenshotsSetting">
@@ -771,11 +770,12 @@
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/install/windows">Install and sign in</button>
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/features/tailscale-funnel">Funnel permission help</button>
                     </div>
-                    <p class="hint">Click Connect to check the CLI, account and Funnel permission and publish this app. Installation or sign-in alone does not connect Gemini.</p>
+                    <p class="hint">Click Connect to check Tailscale and the exact connector through public DNS and HTTPS. Installation, sign-in or a local Funnel route alone does not connect Gemini.</p>
                     <p class="hint"><b>Tailscale CLI:</b> <span id="tailscaleCli">Not checked</span></p>
                     <p class="hint"><b>Tailscale account:</b> <span id="tailscaleAccount">Not checked</span></p>
                     <p class="hint"><b>Funnel permission:</b> <span id="tailscaleFunnel">Not checked</span></p>
-                    <p class="hint"><b>Published HTTPS address:</b> <span id="tailscalePublished">Not published</span></p>
+                    <p class="hint"><b>Public HTTPS reachability:</b> <span id="tailscalePublicIngress">Not checked</span></p>
+                    <p class="hint"><b>Configured HTTPS address:</b> <span id="tailscalePublished">Not published</span></p>
                     <p class="hint" id="tailscaleChecked" hidden></p>
                     <p class="hint" id="tailscaleDetail" role="status" hidden></p>
                     <p class="hint is-warn" id="tailscaleStorageWarning" hidden>Secure storage is unavailable. Tailscale cannot connect until this computer can safely keep its connector URLs.</p>
@@ -885,6 +885,29 @@
                 </div>
               </li>
             </ol>
+
+            <details class="advanced" id="geminiSkillSetup" open>
+              <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini skill — optional</summary>
+              <div class="field">
+                <p>OneCode includes reusable guidance for Gemini, named <b translate="no">gemini-code</b>. Core tools work without this skill: the app selects Core and provides current tool instructions automatically.</p>
+                <div class="step-actions">
+                  <button class="btn" id="saveGeminiSkillMarkdown" type="button">Save SKILL.md</button>
+                  <button class="btn" id="saveGeminiSkillZip" type="button">Save skill ZIP</button>
+                  <button class="btn" id="copyGeminiSkillInstructions" type="button">Copy instructions</button>
+                  <button class="btn btn-solid" id="openGeminiSkills" type="button">Open Gemini Skills</button>
+                </div>
+                <ol>
+                  <li>Save SKILL.md or the ZIP, then open Gemini Skills in the same Google account as OneCode Core.</li>
+                  <li>In Gemini, choose <b>Upload</b>, select the saved file, review the name <b translate="no">gemini-code</b> and instructions, then choose <b>Create</b>. For manual creation, use that name, describe it as “Use OneCode's connected tools for coding and workspace tasks”, and paste the copied instructions.</li>
+                  <li>Activate the skill in Gemini. Only then enable the option below and start a new OneCode chat.</li>
+                </ol>
+                <label class="setting"><span class="setting-text"><b>Use Gemini's gemini-code skill</b><em>I installed and activated this skill in the Google account I use. OneCode will request it for new chats; this option does not install it.</em></span><input id="useGeminiWebSkill" type="checkbox" /></label>
+                <p class="hint" id="geminiSkillResult" role="status">Saving or copying does not install the skill in your Google account.</p>
+                <p class="hint" id="geminiSkillBrowserHelp" hidden>Choose a full browser in Setup before opening Gemini Skills.</p>
+                <p class="hint">Google controls Skills availability and requires Keep Activity to be on. If your account has no Skills page or upload option, leave this off and use Core normally. A skill does not repair “MCP server could not be reached”; first resolve the public connection and Core URL.</p>
+                <button class="btn" type="button" data-link="https://support.google.com/gemini/answer/17094296?hl=en">Google’s skill upload instructions</button>
+              </div>
+            </details>
 
             <details class="advanced">
               <summary>
