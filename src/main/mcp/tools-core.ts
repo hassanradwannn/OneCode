@@ -1,0 +1,2492 @@
+import { toolDeclaration } from './tool-declarations.js';
+import { registerPlanTool } from './plan-tool.js';
+import { registerPluginBridge } from './plugin-bridge-tool.js';
+import { readSkillCatalog, SKILL_CATALOG_PATH } from '../skill-library.js';
+import { goalWorkerChat, imageExportCapable } from '../bridge.js';
+import { exportImage, ImageExportError } from '../image-export.js';
+import { awaitRequestCorrelation } from '../session/correlation.js';
+import { announceSessionFinish, sessionFinishDeadline } from '../session/finish.js';
+import { getConfig } from '../config.js';
+import { liveConnectorName } from './surfaces.js';
+/**
+ * The Core connector: reading, changing and running code on this PC.
+ *
+ * A no-query discovery returns every exposed schema here at once. Keep the surface
+ * bounded and derive its count from the live declarations in surfaces.ts.
+ *
+ * The surface separates primitives from procedures: `exec_command` can run git, so `git`
+ * is a skill rather than a tool; `read` can open a directory, a text file or an image,
+ * because those are three shapes of one question. Anything that reads as "and also, for
+ * this special case…" belongs in a skill over these primitives, not in a schema every
+ * conversation pays for.
+ */
+
+import { rawPromises as fs } from '../rawfs.js';
+import nodeFs from 'node:fs';
+import nodePath from 'node:path';
+import { z } from 'zod';
+import { DEFAULT_READ_BYTES, MAX_READ_BYTES, formatBytes } from '../fsops.js';
+import { BinaryReadError, listDirectoryLevel, readTextFile, statInfo, walkFiles } from '../codex/read-backend.js';
+import {
+  VIEW_IMAGE_DESCRIPTION,
+  VIEW_IMAGE_PATH_DESCRIPTION,
+  ViewImageError,
+  viewImage
+} from '../codex/view-image.js';
+import { logInfo, logWarn } from '../logger.js';
+import { SandboxError, isAbsoluteVirtualPath, isNativeWindowsPath, resolvePath, strayVirtualPath } from '../sandbox.js';
+import { currentWorkspace, primeWorkspace } from '../workspace.js';
+import { getSessionProject } from '../projects.js';
+import { acceptAgentMutation, measureSleepingWorkers, spawnAgentWorkers } from '../agent-admission.js';
+import type { Capabilities, Root } from '../../shared/types.js';
+import { commandHasSameArguments, evaluateCommandAllowlist } from '../../shared/command-allowlist.js';
+import type { FileChange } from '../../shared/session.js';
+import { REASONING_EFFORTS } from '../../shared/session.js';
+import { DEFAULT_EXCLUDES, MAX_CONTENT_FILE_BYTES, globToRegExp, search, searchOneFile } from '../search.js';
+import {
+  ApplyPatchError,
+  PatchParseError,
+  executeApplyPatch,
+  parsePatch,
+  verifyApplyPatchArgs,
+  type AppliedPatchDelta,
+  type Hunk,
+  type PatchPathResolver
+} from '../codex/apply-patch/index.js';
+import { DEFAULT_APPLY_PATCH_FILE_UPDATE_MODE } from '../codex/apply-patch/mode.js';
+import { maybeParseApplyPatchForExec } from '../codex/apply-patch/invocation.js';
+import { composeCommandBatch, parseCommandBatchSections } from '../codex/command-batch.js';
+import { formatExecOutputForModel, newStreamOutput } from '../codex/exec-output.js';
+import { DEFAULT_TRUNCATION_POLICY, EXEC_OUTPUT_CEILING_POLICY, unifiedExecManager } from '../codex/manager.js';
+import {
+  backgroundExecObligations,
+  execOwnershipFailure,
+  executionPrincipal,
+  forgetExecOwner,
+  MAX_UNREAD_EXEC_RESULTS_PER_CONVERSATION,
+  noteExecAttended,
+  noteExecOwner,
+  runningIdenticalExec
+} from '../codex/ownership.js';
+import {
+  UnifiedExecError,
+  applyUnifiedExecEnv,
+  execCommandResponseText,
+  execCommandStructuredOutput,
+  type ExecCommandToolOutput
+} from '../codex/unified-exec.js';
+import {
+  DEFAULT_EXEC_YIELD_TIME_MS,
+  DEFAULT_TTY,
+  DEFAULT_WRITE_STDIN_YIELD_TIME_MS
+} from '../codex/unified-exec-constants.js';
+import { defaultUserShell, deriveExecArgs, getShellByModelProvidedPath, shlexJoin, withPosixPathPrefix } from '../codex/shell.js';
+import {
+  APPLY_PATCH_ARGUMENT_DESCRIPTION,
+  APPLY_PATCH_DESCRIPTION,
+  EXEC_COMMAND_CMD_DESCRIPTION,
+  EXEC_COMMAND_CMDS_DESCRIPTION,
+  EXEC_COMMAND_DESCRIPTION,
+  EXEC_COMMAND_LOGIN_DESCRIPTION,
+  EXEC_COMMAND_SHELL_DESCRIPTION,
+  EXEC_COMMAND_TTY_DESCRIPTION,
+  EXEC_COMMAND_WORKDIR_DESCRIPTION,
+  EXEC_COMMAND_YIELD_TIME_DESCRIPTION,
+  MAX_OUTPUT_TOKENS_DESCRIPTION,
+  WRITE_STDIN_CHARS_DESCRIPTION,
+  WRITE_STDIN_DESCRIPTION,
+  WRITE_STDIN_SESSION_ID_DESCRIPTION,
+  WRITE_STDIN_YIELD_TIME_DESCRIPTION
+} from '../codex/tool-specs.js';
+import { lineDelta } from '../diffstat.js';
+import {
+  benignExitNote,
+  bindBundledRipgrep,
+  execRecoveryHints,
+  nonZeroExitIsBenign,
+  normalizePowerShellOperators,
+  normalizeShellCommand,
+  repairPowerShellQuoting,
+  execNotesText,
+  withExecNotes
+} from '../exec-hints.js';
+import { childEnv } from '../exec.js';
+import { locateRipgrep } from '../ripgrep.js';
+import { ensureDevToolchain } from '../toolchain.js';
+import {
+  agentForCaller,
+  agentFamiliesForCaller,
+  reconcileAgentRequestOwners,
+  PRIME_ID,
+  requestWorkerBootstraps,
+  requestWorkerRevivals,
+  statusForCaller,
+  stageFinishAgent,
+  stageMessages,
+  stagePrimeMessage,
+  managedWorkerIsolationRequired,
+  managedWorkerAllocationIdentity,
+  swarmRunning,
+  type Caller
+} from '../agents.js';
+import { repairPrimeFromResumeShadow } from '../session/continuation.js';
+import {
+  currentCall,
+  currentCaller,
+  noteChanges,
+  noteCount,
+  noteDetail,
+  noteExec
+} from './call-context.js';
+import {
+  awaitFreshCallOrigin,
+  recordAgentMessage
+} from '../session/recorder.js';
+import { findSessionByConversation, readRecentEvents } from '../session/store.js';
+import { requestCorrelation } from '../session/correlation.js';
+import {
+  adoptAgent,
+  fail,
+  failIdentity,
+  validatedWorkspace,
+  formatFileInfo,
+  friendlyError,
+  guard,
+  IDENTITY_EVIDENCE_MS,
+  PRIME_EVIDENCE_MS,
+  SPAWN_EVIDENCE_MS,
+  ok,
+  pathArg,
+  lineNumberArg,
+  resolveCwd,
+  resolveIn,
+  type SurfaceRegistrar,
+  type ToolResult
+} from './kernel.js';
+
+/** Entries one `read` of a directory returns before it says it stopped. */
+const MAX_DIR_ENTRIES = 200;
+/** Files one glob may expand to. A pattern is a convenience, not a way to bulk-read a repo. */
+const MAX_GLOB_MATCHES = 20;
+/** Files a single `read` call may touch after every path and glob is expanded. */
+const MAX_READ_TARGETS = 40;
+const MAX_READ_IMAGES = 4;
+const MAX_READ_IMAGE_BYTES = 12 * 1024 * 1024;
+/** Entries a glob walk will look at before giving up on the pattern. */
+const GLOB_SCAN_LIMIT = 5_000;
+
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+// Codex advertises these as JSON Schema `number`, but serde still deserializes them into
+// integer Rust types. Refinements preserve the model-visible number schema while rejecting
+// values Rust would reject before the handler runs.
+const int32Number = z
+  .number()
+  .refine((value) => Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647);
+const unsignedIntegerNumber = z.number().refine((value) => Number.isSafeInteger(value) && value >= 0);
+const excludeFolderPattern = z
+  .string()
+  .min(1)
+  .max(100)
+  .refine(
+    (value) =>
+      !/[\\/]/.test(value) &&
+      (value.indexOf('*') === -1 || (value.endsWith('*') && value.indexOf('*') === value.length - 1)),
+    'exclude entries must be folder names with at most one trailing * prefix wildcard'
+  );
+
+const unifiedExecOutputSchema = z
+  .object({
+    chunk_id: z.string().optional().describe('Output chunk identifier.'),
+    wall_time_seconds: z.number().describe('Seconds spent waiting for output.'),
+    exit_code: z.number().optional().describe('Process exit code when the command finished during this call.'),
+    session_id: z
+      .number()
+      .optional()
+      .describe('Session ID while running.'),
+    completed_session_id: z.number().optional().describe('Use as write_stdin session_id to reread completed output.'),
+    expected_exit: z.boolean().optional().describe('Non-zero exit is an expected result, not a failure.'),
+    output_replayed: z.boolean().optional().describe('Retained output; command was not run again.'),
+    original_token_count: z.number().optional().describe('Approximate token count before output truncation.'),
+    output: z.string().describe('Command output text, possibly truncated.'),
+    supplemental_context: z.string().optional().describe('App context, not process output.')
+  })
+  .strict();
+
+/** Whether the one-time note about a discovered toolchain has already been logged. */
+let toolchainLogged = false;
+
+/**
+ * The environment `exec_command` hands its child.
+ *
+ * Built through `normalizeEnvironment` rather than by spreading `process.env`, because
+ * `ensureDevToolchain` has to edit PATH and env.ts exists precisely to stop a second
+ * spelling of it appearing beside the first. `applyUnifiedExecEnv` stays last so the Codex
+ * pager/colour contract is still the final word, exactly as it was before.
+ */
+function execChildEnvironment(): NodeJS.ProcessEnv {
+  // Start from the one shared child-process environment contract. Rebuilding only the PATH
+  // casing fix here looked equivalent but quietly dropped two security/correctness guarantees
+  // that `childEnv()` already owns: connector secrets are stripped before the child can read
+  // them, and the bundled ripgrep directory is put on PATH (plus Windows' irreducible system
+  // paths are repaired when the parent environment is sparse). Unified exec used to bypass
+  // all three, so `exec_command` was the one launcher that could leak OPENAI_API_KEY and could
+  // fail to find the very rg binary the app ships. Extend the shared environment only with the
+  // dev-toolchain discovery that is specific to this surface.
+  const env = childEnv();
+  const added = ensureDevToolchain(env);
+  if (added.length > 0 && !toolchainLogged) {
+    toolchainLogged = true;
+    logInfo(`exec_command: filled in unset toolchain variables (${added.join(', ')})`);
+  }
+  return applyUnifiedExecEnv(env);
+}
+
+/** One stable owner for the running model turn, upgraded lazily when page proof arrives. */
+function execPrincipal(): string | null {
+  const caller = currentCaller();
+  return executionPrincipal(caller.requestId, caller.sessionId ?? null);
+}
+
+export function registerCoreTools(reg: SurfaceRegistrar): void {
+  const { ctx, caps, exposedCaps } = reg;
+  registerPluginBridge(reg);
+  // Named from the live roots, never from a `/project` that may not exist: a worked example the
+  // model cannot act on costs a refused call and a retry. What followed the root had the same
+  // problem and cost more of them. `/<root>/src/main.ts` is a project's shape, so it read as a
+  // promise that the root *is* the project — and an approved root is a folder somebody picked,
+  // routinely a parent holding several. Reading it that way turns every repo-relative path into
+  // `/<root>/AGENTS.md` for a file that lives a folder deeper, which was the single most
+  // repeated read failure in the recorded corpus. The relationship is the fact worth the bytes;
+  // the rest of the path the model already has, because it is the one it gives exec_command as
+  // `workdir`. No example is invented here, and the host path stays unsaid, so nothing in this
+  // sentence can be stale or unreachable.
+  const virtualRoots = ctx.roots.map((root) => `/${root.name}`);
+  const readPathDescription =
+    virtualRoots.length > 0
+      ? `Paths inside the live approved roots: ${virtualRoots.join(', ')}. A root is an approved folder, usually a parent of the project rather than the project itself, so name every folder between the root and the file — the same path exec_command takes as workdir. Reading a root lists it one level deep. ` +
+        'Absolute native paths copied from command output are also accepted when they resolve inside one of these roots; globs work in either spelling.'
+      : 'Paths require an approved virtual root in the form /<root>/...; no root is currently approved. Globs are supported after a root is approved.';
+
+  // ------------------------------------------------------------------- read
+
+  // Registered whenever any of the three reading permissions is on, because one tool now
+  // answers all three questions. Which of them a given path actually gets is decided per
+  // path below, so a user who granted metadata but not content still gets exactly that.
+  if (exposedCaps.read || exposedCaps.browse || exposedCaps.metadata) {
+    reg.register(
+      'read',
+      toolDeclaration('read', () => ({
+        title: 'Read files and folders',
+        description:
+          'Read what is at one or more paths. A folder is listed one level deep, a text file comes back as numbered lines, ' +
+          'a PNG/JPEG/GIF/WebP comes back as an image, and anything else returns its metadata and why it was not decoded. ' +
+          `Read ${SKILL_CATALOG_PATH} for the current scoped local Skills catalog (metadata only); read a returned SKILL.md to use it. ` +
+          'Paths may contain * ? and ** and are expanded here. Every result starts with a header giving size, timestamps and line count. ' +
+          `The line-number prefix is display metadata, not file content — strip it before quoting text into apply_patch. ` +
+          `start_line/end_line apply to every file the call resolves to; a path may instead carry its own range as path:12-40 or path:12, so several ranges of one file fit in one call. A typical 1,500-line source file fits in the default read: do not pre-paginate it. ` +
+          `Batch related paths in one call; only continue from a line when the returned header says more lines follow. Text is bounded at about ${formatBytes(MAX_READ_BYTES)}; images have a separate ${MAX_READ_IMAGES}-image, ${formatBytes(MAX_READ_IMAGE_BYTES)} base64 budget and view_image's per-file validation.`,
+        inputSchema: z
+          .object({
+            paths: z
+              .array(pathArg)
+              .min(1)
+              .max(20)
+              .describe(readPathDescription),
+            start_line: lineNumberArg
+              .optional()
+              .describe('First line, 1-based. Applied to every file the call reads, so prefer one path when the range is file-specific.'),
+            end_line: lineNumberArg
+              .optional()
+              .describe('Last line, inclusive. Applied to every file the call reads, so prefer one path when the range is file-specific.'),
+            max_bytes: z
+              .number()
+              .int()
+              .min(1)
+              .max(MAX_READ_BYTES)
+              .optional()
+              .describe(
+                `Per-text-file payload cap. Default ${formatBytes(DEFAULT_READ_BYTES)}; maximum ${formatBytes(MAX_READ_BYTES)}. Omit it for ordinary source files.`
+              )
+          })
+          .strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+      }), readPathDescription),
+      async ({ paths, start_line, end_line, max_bytes }) =>
+        guard('read', async () => {
+          if (!caps.read && !caps.browse && !caps.metadata) {
+            return fail(
+              'TOOL_DISABLED: read is disabled by the current Chat On Steroids permissions. Ask the user to enable reading in the app.'
+            );
+          }
+          const targets: ReadTarget[] = [];
+          const notes: string[] = [];
+          for (const item of paths) {
+            if (targets.length >= MAX_READ_TARGETS) {
+              notes.push(`(stopped expanding at ${MAX_READ_TARGETS} paths)`);
+              break;
+            }
+            const { path: requested, range } = splitLineRange(item);
+            if (!hasGlob(requested)) {
+              targets.push({ path: requested, range });
+              continue;
+            }
+            const expanded = await expandGlob(ctx.roots, requested);
+            if (expanded.matches.length === 0) {
+              notes.push(
+                expanded.truncated === 'scan'
+                  ? `${requested}: glob scan stopped after ${GLOB_SCAN_LIMIT} entries before finding a match; narrow the pattern or start from a deeper folder`
+                  : `${requested}: no matches`
+              );
+              continue;
+            }
+            targets.push(
+              ...expanded.matches.slice(0, MAX_READ_TARGETS - targets.length).map((match) => ({ path: match, range }))
+            );
+            if (expanded.truncated === 'matches') {
+              notes.push(`${requested}: more than ${MAX_GLOB_MATCHES} matches, narrow the pattern`);
+            } else if (expanded.truncated === 'scan') {
+              notes.push(
+                `${requested}: glob scan stopped after ${GLOB_SCAN_LIMIT} entries; more matches may exist, narrow the pattern or start from a deeper folder`
+              );
+            }
+          }
+
+          const ranged = start_line !== undefined || end_line !== undefined;
+          // A line range asked for once and quietly dropped is worse than a refusal: the
+          // reply looks like an answer, every file arrives from line 1 whether or not that
+          // was asked for, and nothing says the range went away. That objection is about *silence*, not
+          // about the range itself — so the range is now honoured for every file and said
+          // out loud, which was the only outcome that discarded neither the caller's intent
+          // nor the truth. Each section header already states `lines X-Y of Z`, so a file
+          // shorter than the range cannot be mistaken for a complete read.
+          //
+          // Refusing instead was the single largest source of rejected calls in the recorded
+          // sessions, and every one of them was a caller that had already said what it
+          // wanted. Globs are still resolved first, since one pattern is what usually turns
+          // a single-path call into a multi-path one.
+          const sharedRange = targets.filter((target) => target.range === null).length;
+          if (sharedRange > 1 && ranged) {
+            notes.push(
+              `(start_line/end_line applied to each of the ${sharedRange} files this call resolved to; ` +
+                'every header states the lines actually returned)'
+            );
+          }
+          const sections: string[] = [];
+          const images: Array<{ data: string; mimeType: string }> = [];
+          let remaining = MAX_READ_BYTES;
+          let imageBytes = 0;
+          let failures = 0;
+          let successes = 0;
+
+          for (const target of targets) {
+            if (remaining <= 0) {
+              sections.push('(output cap reached; read the remaining paths in another call)');
+              break;
+            }
+            try {
+              const section = await readOne(target.path, {
+                roots: ctx.roots,
+                canRead: caps.read,
+                canBrowse: caps.browse,
+                startLine: target.range ? target.range.start : start_line,
+                endLine: target.range ? target.range.end : end_line,
+                maxBytes: Math.min(max_bytes ?? DEFAULT_READ_BYTES, remaining),
+                imageBytes: images.length < MAX_READ_IMAGES ? MAX_READ_IMAGE_BYTES - imageBytes : 0
+              });
+              remaining -= section.bytes;
+              successes++;
+              sections.push(section.text);
+              if (section.image) {
+                images.push(section.image);
+                imageBytes += section.image.data.length;
+              }
+            } catch (err) {
+              failures++;
+              // One stale or missing path must not destroy the useful reads. The requested
+              // virtual path is safe to echo; friendlyError never exposes real paths.
+              const nearby = caps.browse ? await nearestFolderListing(ctx.roots, target.path, err) : '';
+              sections.push(`--- ${target.path} — ERROR ---\n${friendlyError(err)}${nearby}`);
+            }
+          }
+
+          logInfo(`tool read (${targets.length} target(s), ${failures} failed)`);
+          // Count what was actually read, not every target that merely was not observed to
+          // fail. Once the aggregate output cap is exhausted the remaining targets are never
+          // attempted; `targets.length - failures` therefore counted those unread paths as
+          // successful results. That made session evidence claim more files than the response
+          // contained, which is especially misleading in the telemetry used to audit tool
+          // reliability. `successes` advances only after readOne returned a real section.
+          noteCount(successes);
+          const text = [...sections, ...notes].join('\n\n');
+          // Partial multi-read is intentionally useful: one stale path must not discard the
+          // files that did resolve. But zero successful explicit targets is not a successful
+          // read. Returning ok(text) in that case made Activity record the call as healthy
+          // even though the model received nothing except ERROR sections, biasing the very
+          // error-rate telemetry used to find tool problems.
+          if (targets.length > 0 && failures === targets.length) return fail(text || 'Nothing could be read.');
+          if (images.length === 0) return ok(text || 'Nothing to read.');
+          return {
+            content: [
+              { type: 'text' as const, text },
+              ...images.map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType }))
+            ]
+          };
+        })
+    );
+  }
+
+  // -------------------------------------------------------------- view_image
+
+  if (exposedCaps.read) {
+    reg.register(
+      'view_image',
+      toolDeclaration('view_image', () => ({
+        description: VIEW_IMAGE_DESCRIPTION,
+        inputSchema: z
+          .object({
+            path: z.string().describe(VIEW_IMAGE_PATH_DESCRIPTION)
+          })
+          .strict()
+      })),
+      async ({ path }) =>
+        guard('view_image', async () => {
+          if (!caps.read) {
+            return fail(
+              'TOOL_DISABLED: view_image is disabled by the current Chat On Steroids permissions. Ask the user to enable reading in the app.'
+            );
+          }
+          const resolved = await resolveIn(ctx.roots, path, { access: 'read' });
+          try {
+            const image = await viewImage(resolved.real, null, undefined, resolved.virtual);
+            logInfo(`tool view_image ${resolved.virtual} (${formatBytes(image.bytes)})`);
+            return {
+              content: [{ type: 'image' as const, data: image.base64, mimeType: image.mimeType }]
+            };
+          } catch (error) {
+            if (error instanceof ViewImageError) return fail(error.message);
+            throw error;
+          }
+        })
+    );
+  }
+
+  // -------------------------------------------------------------- save_image
+  //
+  // The original of an image ChatGPT generated in this chat, saved into an approved folder (#889).
+  // The chat's own page fetches it; see image-export.ts.
+  if (exposedCaps.create) {
+    reg.register(
+      'save_image',
+      toolDeclaration('save_image', () => ({
+        description: 'Save the original file of an image ChatGPT generated in this chat (not a screenshot or preview) to a new file in an approved folder. ' +
+          'Never replaces an existing file. The chat must be open in the browser with the image on its page.',
+        inputSchema: z
+          .object({
+            path: z.string().describe('New file path in an approved folder, for example /workspace/images/logo.png. Without an extension the image\'s own (.png, .jpg or .webp) is added.'),
+            // A number, not a name: ChatGPT fills a string here with the picture's `file_…` id and then
+            // fails the call internally before it reaches the app (measured live 2026-10-05).
+            nth: z.number().int().min(1).max(100).optional().describe('Which image, counting back from the newest generated in this chat: 1 (the default) is the latest, 2 the one before, and so on.')
+          })
+          .strict()
+      })),
+      async ({ path, nth }) =>
+        guard('save_image', async () => {
+          if (!caps.create) {
+            return fail('TOOL_DISABLED: save_image is disabled by the current Chat On Steroids permissions. Ask the user to enable creating files in the app.');
+          }
+          const caller = currentCaller();
+          const conversationId = caller.conversationId ??
+            (caller.requestId ? (await awaitRequestCorrelation(caller.requestId, 20_000))?.conversationId ?? null : null);
+          // Never guessed from recent activity: a wrong guess would save another chat's image.
+          if (!conversationId) {
+            // Name the Core that answered: with one ChatGPT account on several computers, ChatGPT
+            // may send a chat's call to another computer's Core, which never sees that chat (#1097).
+            return fail(`${liveConnectorName('core')} could not tell which chat this save_image call came from, ` +
+              'so it does not know which image to save. If the chat belongs to another computer, call save_image of that ' +
+              'computer\'s Chat On Steroids Core instead. Otherwise call save_image directly as its own tool call, not from ' +
+              'inside a JavaScript or exec step, and try again.');
+          }
+          if (!imageExportCapable()) {
+            return fail('save_image needs the Chat On Steroids browser extension to be connected and up to date, so the chat\'s page can hand over the image.');
+          }
+          const session = await findSessionByConversation(conversationId);
+          const recorded = session ? await readRecentEvents(session.id, 400, { kinds: ['native_image'] }) : [];
+          const images = recorded.filter((event): event is Extract<typeof event, { kind: 'native_image' }> =>
+            event.kind === 'native_image' && event.providerStatus !== 'in_progress');
+          const chosen = images.at(-(nth ?? 1));
+          if (!chosen) {
+            return fail(images.length
+              ? `save_image found only ${images.length} generated image${images.length === 1 ? '' : 's'} in this chat. Use nth ${images.length} or lower, or omit nth for the latest.`
+              : 'save_image found no image generated in this chat yet.');
+          }
+          const target = await resolveIn(ctx.roots, path, { allowMissing: true });
+          try {
+            await fs.lstat(target.real);
+            return fail(`${target.virtual} already exists. save_image never replaces a file; choose another name.`);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          try {
+            const saved = await exportImage({ conversationId, messageId: chosen.messageId, assetId: chosen.providerAssetId }, target);
+            logInfo(`tool save_image ${saved.virtual} (${formatBytes(saved.bytes)})`);
+            return ok(`Saved ${saved.virtual} (${saved.width}x${saved.height} ${saved.format.toUpperCase()}, ${formatBytes(saved.bytes)}), the original file ChatGPT generated.`);
+          } catch (error) {
+            if (error instanceof ImageExportError) return fail(`save_image did not save the image: ${error.message}`);
+            throw error;
+          }
+        })
+    );
+  }
+
+  // ------------------------------------------------------------------- find
+  //
+  // Only when commands are unavailable. With `exec_command` present, ripgrep through the
+  // shell is strictly better than anything this can offer, and a seventh Core schema that
+  // duplicates a capability the model already has is exactly the kind of weight this
+  // surface exists to refuse.
+  //
+  // `reg.findExposed` rather than `!exposedCaps.command && exposedCaps.search`: the second
+  // form reads a monotonically widening value, so switching command execution on mid-run
+  // would delete `find` from under a cached tool list. The decision is frozen for the life
+  // of the endpoint instead, which is the same rule every other tool here follows.
+  if (reg.findExposed) {
+    reg.register(
+      'find',
+      toolDeclaration('find', () => ({
+        title: 'Find files or text',
+        description:
+          'Find files by name, or find text inside files, without running a command. ' +
+          `Content matches come back as path:line: text; files over ${formatBytes(MAX_CONTENT_FILE_BYTES)} are skipped rather than loaded into search. ` +
+          'Build and dependency folders are skipped unless you pass your own exclude list.',
+        inputSchema: z
+          .object({
+            query: z
+              .string()
+              .max(1000)
+              .refine((value) => value.trim().length > 0, 'query must contain non-whitespace text')
+              .describe('Text to look for'),
+            path: pathArg
+              .optional()
+              .describe('File or folder to search. Virtual paths and absolute native paths inside approved roots are accepted. Defaults to every approved root.'),
+            mode: z.enum(['name', 'content']).optional().describe('Default name.'),
+            include: z.string().max(200).optional().describe('Glob filter such as **/*.ts'),
+            exclude: z
+              .array(excludeFolderPattern)
+              .max(50)
+              .optional()
+              .describe('Folder names to skip; trailing * is a prefix match. Replaces the defaults — pass [] to search everywhere.'),
+            case_sensitive: z.boolean().optional().describe('Default false.'),
+            regex: z.boolean().optional().describe('Content mode only: treat query as a regex. Default false.'),
+            max_results: z.number().int().min(1).max(500).optional().describe('Default 50.')
+          })
+          .superRefine((input, ctx) => {
+            if ((input.mode ?? 'name') !== 'content' && input.regex === true) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['regex'],
+                message: 'regex=true is only valid with mode=content'
+              });
+            }
+          })
+          .strict(),
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+      })),
+      async ({ query, path: p, mode, include, exclude, case_sensitive, regex, max_results }) =>
+        reg.guarded('search', 'find', async () => {
+          const limit = Math.min(500, Math.max(1, Math.floor(max_results ?? 50)));
+          const deadline = Date.now() + 10_000;
+          const scopes: Array<{ real: string; virtual: string }> = [];
+          if (p) {
+            const resolved = await resolveIn(ctx.roots, p, { access: 'read' });
+            const stat = await fs.stat(resolved.real);
+            if (stat.isFile()) {
+              const outcome = await searchOneFile(resolved.real, resolved.virtual, {
+                query,
+                mode: mode ?? 'name',
+                include,
+                caseSensitive: case_sensitive === true,
+                regex: regex === true,
+                maxResults: limit,
+                deadline
+              });
+              const hits = outcome.hits.map((hit) =>
+                hit.line === undefined ? hit.path : `${hit.path}:${hit.line}: ${hit.text}`
+              );
+              noteCount(hits.length);
+              if (outcome.stoppedBecause === 'size') {
+                return fail(
+                  `File was not searched: content search skips files over ${formatBytes(MAX_CONTENT_FILE_BYTES)}. ` +
+                    'Narrow it with read start_line/end_line, or use exec_command when command execution is available.'
+                );
+              }
+              return ok(hits.length === 0 ? 'No matches' : `${hits.length} matches\n${hits.join('\n')}`);
+            }
+            if (!stat.isDirectory()) return fail(`${resolved.virtual} is not a regular file or folder`);
+            scopes.push({ real: resolved.real, virtual: resolved.virtual });
+          } else {
+            for (const root of ctx.roots) {
+              const resolved = await resolvePath(ctx.roots, `/${root.name}`);
+              scopes.push({ real: resolved.real, virtual: resolved.virtual });
+            }
+          }
+          if (scopes.length === 0) return fail('No folders are approved');
+
+          const hits: string[] = [];
+          const stopReasons = new Set<string>();
+          let scanned = 0;
+          let elapsedMs = 0;
+          for (const scope of scopes) {
+            if (Date.now() >= deadline) {
+              stopReasons.add('time');
+              break;
+            }
+            if (hits.length >= limit) break;
+            const outcome = await search({
+              realDir: scope.real,
+              virtualDir: scope.virtual,
+              query,
+              mode: mode ?? 'name',
+              include,
+              exclude: exclude ?? DEFAULT_EXCLUDES,
+              caseSensitive: case_sensitive === true,
+              regex: regex === true,
+              maxResults: limit - hits.length,
+              deadline
+            });
+            scanned += outcome.filesScanned;
+            elapsedMs += outcome.elapsedMs;
+            if (outcome.stoppedBecause) stopReasons.add(outcome.stoppedBecause);
+            for (const hit of outcome.hits) {
+              hits.push(hit.line === undefined ? hit.path : `${hit.path}:${hit.line}: ${hit.text}`);
+            }
+          }
+          noteCount(hits.length);
+          const reason = stopReasons.size > 0 ? `\ntruncated: ${[...stopReasons].join(',')}` : '';
+          const contentLimit = (mode ?? 'name') === 'content' ? `\ncontent_file_limit: ${formatBytes(MAX_CONTENT_FILE_BYTES)}` : '';
+          const meta = `\n\nfiles_scanned: ${scanned}\nelapsed_ms: ${elapsedMs}\nresults_returned: ${hits.length}${contentLimit}${reason}`;
+          if (hits.length === 0) return ok(`No matches${meta}`);
+          return ok(`${hits.length} matches\n${hits.join('\n')}${meta}`);
+        })
+    );
+  }
+
+  // ------------------------------------------------------------- apply_patch
+
+  if (exposedCaps.create || exposedCaps.edit || exposedCaps.move || exposedCaps.deleteFile) {
+    reg.register(
+      'apply_patch',
+      toolDeclaration('apply_patch', () => ({
+        description: APPLY_PATCH_DESCRIPTION,
+        inputSchema: z
+          .object({
+            patch: z.string().describe(APPLY_PATCH_ARGUMENT_DESCRIPTION)
+          })
+          .strict()
+      })),
+      async ({ patch }) =>
+        guard('apply_patch', async () => {
+          if (!caps.create && !caps.edit && !caps.move && !caps.deleteFile) {
+            return fail(
+              'TOOL_DISABLED: apply_patch is disabled by the current Chat On Steroids permissions. Ask the user to enable changing files in the app.'
+            );
+          }
+
+          let args: { patch: string; hunks: Hunk[]; workdir: string | null; environmentId: string | null };
+          try {
+            args = parsePatch(patch);
+          } catch (error) {
+            return fail(`apply_patch verification failed: ${applyPatchErrorText(error)}`);
+          }
+
+          // This connector exposes one local environment. Current Codex accepts the hidden
+          // `*** Environment ID:` preamble only when spec_plan enabled multi-environment
+          // selection; in the single-environment case the handler rejects it verbatim.
+          if (args.environmentId !== null) {
+            return fail('apply_patch environment selection is unavailable for this turn');
+          }
+          // apply_patch previously read the synchronous cwd cache, bypassing the managed
+          // lease check shared by resolveIn/resolveCwd. Validate before patch base selection.
+          const workspace = await validatedWorkspace();
+          const hasRelativePath = args.hunks.some(hunk => {
+            const paths = hunk.kind === 'update_file' && hunk.movePath !== null
+              ? [hunk.path, hunk.movePath]
+              : [hunk.path];
+            return paths.some(path => !isAbsoluteVirtualPath(path) && !isNativeWindowsPath(path));
+          });
+          if (!workspace && swarmRunning() && hasRelativePath) {
+            return fail(
+              'WORKSPACE_REQUIRED: this request has no workspace yet. Use an absolute approved path in this patch or another file tool first so the project can be learned.'
+            );
+          }
+          const fallback = firstTaskRoot(ctx.roots);
+          const baseVirtual = workspace?.virtual ?? (fallback ? `/${fallback.name}` : null);
+          if (baseVirtual === null) {
+            return fail('No folder is approved, so there is nowhere to apply the patch.');
+          }
+          const base = await resolveIn(ctx.roots, baseVirtual);
+          await validatedWorkspace();
+          return (await runParsedPatch(args, ctx.roots, base, caps)).result;
+        })
+    );
+  }
+
+  // ------------------------------------------------------- exec / write_stdin
+
+  if (exposedCaps.command) {
+    reg.register(
+      'exec_command',
+      toolDeclaration('exec_command', () => ({
+        description: EXEC_COMMAND_DESCRIPTION,
+        inputSchema: z
+          .object({
+            cmd: z.string().optional().describe(EXEC_COMMAND_CMD_DESCRIPTION),
+            cmds: z.array(z.string()).min(1).max(20).optional().describe(EXEC_COMMAND_CMDS_DESCRIPTION),
+            workdir: z.string().optional().describe(EXEC_COMMAND_WORKDIR_DESCRIPTION),
+            tty: z.boolean().optional().describe(EXEC_COMMAND_TTY_DESCRIPTION),
+            yield_time_ms: unsignedIntegerNumber.optional().describe(EXEC_COMMAND_YIELD_TIME_DESCRIPTION),
+            // Accepted and ignored on purpose; see MAX_OUTPUT_TOKENS_DESCRIPTION.
+            max_output_tokens: unsignedIntegerNumber.optional().describe(MAX_OUTPUT_TOKENS_DESCRIPTION),
+            shell: z.string().optional().describe(EXEC_COMMAND_SHELL_DESCRIPTION),
+            login: z.boolean().optional().describe(EXEC_COMMAND_LOGIN_DESCRIPTION)
+          })
+          .strict()
+          .superRefine((input, refinement) => {
+            if ((input.cmd === undefined) === (input.cmds === undefined)) {
+              refinement.addIssue({
+                code: 'custom',
+                path: [],
+                message: 'exec_command requires exactly one of cmd or cmds'
+              });
+            }
+          }),
+        outputSchema: unifiedExecOutputSchema
+      })),
+      async (input) =>
+        reg.guarded('command', 'exec_command', async () => {
+          const dir = await resolveCwd(ctx, input.workdir);
+          const rawCommands = input.cmd === undefined ? input.cmds! : [input.cmd];
+          const isBatch = input.cmd === undefined;
+          for (const [index, rawCommand] of rawCommands.entries()) {
+            const virtualCommandPath = strayVirtualPath(rawCommand, ctx.roots);
+            if (virtualCommandPath) {
+              return fail(
+                `INVALID_COMMAND_PATH${isBatch ? ` in command ${index + 1}` : ''}: ${virtualCommandPath} is an app virtual path, but shell commands do not understand virtual paths. ` +
+                  `Use workdir plus a relative path, or use the approved folder's native filesystem path. No command was run.`
+              );
+            }
+          }
+          const shell = input.shell === undefined ? defaultUserShell() : getShellByModelProvidedPath(input.shell, dir.real);
+          if (!shell) {
+            return fail(
+              `SHELL_NOT_FOUND: the explicitly requested shell ${JSON.stringify(input.shell)} could not be resolved. ` +
+                'No command was run. Omit shell to use the configured default, or provide an existing recognised shell binary.'
+            );
+          }
+          // One preflight owns direct calls and code-mode children. It runs before command
+          // normalization, patch interception, process-id allocation or process launch, and a
+          // batch is admitted only after every user-authored command passes.
+          const policy = evaluateCommandAllowlist(getConfig().commandAllowlist, rawCommands, shell.shellType);
+          if (!policy.allowed) {
+            const location = isBatch ? ` in command ${policy.commandIndex + 1}` : '';
+            const reason = policy.kind === 'unmatched'
+              ? 'the command did not match any allow rule'
+              : policy.kind === 'denied'
+                ? 'the command matched a deny rule'
+              : policy.kind === 'invalid-policy'
+                ? 'the saved policy is invalid'
+                : 'the command uses unsupported or ambiguous shell syntax';
+            return fail(
+              `COMMAND_NOT_ALLOWED${location}: ${reason}. ${policy.detail} No command was run. ` +
+              'Change the command policy in Settings if this launch should be permitted.'
+            );
+          }
+          // Does only what the shell itself would have done — today, expanding a bare filename
+          // glob PowerShell hands to a native program uninterpreted. Anything it does not
+          // understand reaches the shell exactly as the model wrote it. A listing is read
+          // lazily from the resolved workdir or one validated relative child directory, so a
+          // command with no eligible glob in it never touches the disk here.
+          // Normalize first, bind second, and the order is load-bearing. The normalizer
+          // recognises ripgrep by its leading program token; binding rewrites that token into
+          // `& '<path>\rg.exe'`, which the normalizer does not read as ripgrep at all. Running
+          // the bind first therefore silently switched off glob and brace expansion for every
+          // ordinary `rg` call — the single failure this file exists to prevent — while looking
+          // entirely correct. Binding only ever replaces the program token, so it composes
+          // cleanly on top of an already-expanded argument list.
+          // Repair before normalising, because everything downstream reads this line by its
+          // quotes. A command carrying a bash-style backslash-quote has no coherent quoting
+          // to read: the normalizer would tokenize past the end of an argument the shell was
+          // going to reject outright. Repairing first means the rest of the pipeline sees a
+          // line PowerShell can actually parse, and a line it cannot repair is left exactly
+          // as written for the shell to refuse and the hint to explain.
+          const commandNotes: string[] = [];
+          const normalizedCommands: string[] = [];
+          const boundCommands = rawCommands.map((rawCommand, index) => {
+            const repaired = repairPowerShellQuoting(rawCommand, shell.shellType);
+            const normalized = normalizeShellCommand(repaired.cmd, shell.shellType, (relativeDirectory = '.') =>
+              nodeFs.readdirSync(nodePath.resolve(dir.real, relativeDirectory))
+            );
+            normalizedCommands.push(normalized.cmd);
+            const prefix = (note: string): string => (isBatch ? `Command ${index + 1}: ${note}` : note);
+            const bound = bindBundledRipgrep(
+              normalized.cmd,
+              shell.shellType,
+              shell.shellType === 'cmd' ? null : locateRipgrep()
+            );
+            const chained = normalizePowerShellOperators(bound, shell.shellType, shell.shellPath);
+            commandNotes.push(
+              ...repaired.notes.map(prefix),
+              ...normalized.notes.map(prefix),
+              ...chained.notes.map(prefix)
+            );
+            return chained.cmd;
+          });
+          if (getConfig().commandAllowlist.enabled) {
+            const changed = normalizedCommands.findIndex((command, index) =>
+              !commandHasSameArguments(policy.args[index]!, command, shell.shellType)
+            );
+            if (changed !== -1) {
+              return fail(
+                `COMMAND_NOT_ALLOWED${isBatch ? ` in command ${changed + 1}` : ''}: command normalization changed the authorized argument list. ` +
+                'No command was run. Change the command policy in Settings if this launch should be permitted.'
+              );
+            }
+          }
+          // Shell functions/aliases can resolve before applications on PATH. The app deliberately
+          // ships ripgrep, parses rg's flags against that exact version, and puts it first on child
+          // PATH, so a shadowing `rg` is not a harmless customization: it breaks the normalizer's
+          // assumptions and makes exit-code attribution unknowable. Bind ordinary bare rg/ripgrep
+          // invocations to the shipped executable on PowerShell and POSIX shells.
+          const batch = isBatch ? composeCommandBatch(boundCommands, shell.shellType) : undefined;
+          const boundCommand = batch?.command ?? boundCommands[0]!;
+          const commandDetail = isBatch
+            ? `[batch ${rawCommands.length}] ${rawCommands.join(' ; ')}`
+            : rawCommands[0]!;
+          // PowerShell profiles are user-custom startup programs. Loading them for every
+          // connector command adds arbitrary output/aliases and can spend seconds on network
+          // profile work before the requested command even begins. Keep explicit login=true,
+          // but make the deterministic/no-profile path the Windows default.
+          const useLoginShell = input.login ?? process.platform !== 'win32';
+          const command = deriveExecArgs(shell, boundCommand, useLoginShell);
+          try {
+            await validatedWorkspace();
+            // Current Codex intercepts an explicit `apply_patch` shell invocation before spawning
+            // the shell process. The parser is the port of apply-patch/src/invocation.rs and uses
+            // the same tree-sitter-bash grammar/query as upstream.
+            if (!isBatch) {
+              const interceptedPatch = maybeParseApplyPatchForExec(command, dir.real);
+              if (interceptedPatch.kind === 'correctness_error') {
+                return fail(`apply_patch verification failed: ${interceptedPatch.error.message}`);
+              }
+              if (interceptedPatch.kind === 'body') {
+                const patchRun = await runParsedPatch(interceptedPatch.args, ctx.roots, dir);
+                if (patchRun.result.isError || patchRun.content === null) return patchRun.result;
+
+                // `exec_command.rs` converts a successful intercepted patch into an
+                // ExecCommandToolOutput with zero wall time and no process/exit/chunk metadata.
+                const output: ExecCommandToolOutput = {
+                  chunkId: '',
+                  wallTimeMs: 0,
+                  rawOutput: Buffer.from(patchRun.content, 'utf8'),
+                  truncationPolicy: EXEC_OUTPUT_CEILING_POLICY,
+                  maxOutputTokens: undefined,
+                  processId: null,
+                  exitCode: null,
+                  originalTokenCount: null,
+                  outputOmittedBytes: null
+                };
+                noteExec({ running: false, exitCode: null, timedOut: false, durationMs: 0 });
+                noteDetail(commandDetail.replace(/\s+/g, ' ').slice(0, 120));
+                return {
+                  content: [{ type: 'text' as const, text: execCommandResponseText(output) }],
+                  structuredContent: execCommandStructuredOutput(output)
+                };
+              }
+            }
+
+            const owner = execPrincipal();
+            const unread = backgroundExecObligations(owner).exitedUnread;
+            if (unread.length >= MAX_UNREAD_EXEC_RESULTS_PER_CONVERSATION) {
+              const sessionIds = unread.map((session) => session.processId).join(', ');
+              return fail(
+                  `EXEC_RESULTS_UNREAD: ${unread.length} completed background results are still waiting for this session. ` +
+                  `Their output follows in tool responses; read it before retrying. Explicit write_stdin is also available for IDs ${sessionIds}. No child was spawned.`
+              );
+            }
+
+            // Read before this launch registers, so the new copy never names itself.
+            const identical = runningIdenticalExec(owner, commandDetail, dir.virtual);
+            if (identical.length) {
+              const ids = identical.map((row) => row.processId).join(', ');
+              const ageS = Math.max(0, Math.round((Date.now() - identical[0]!.startedAt) / 1000));
+              commandNotes.push(
+                `The same command in this folder is still running from earlier in this chat as session${identical.length > 1 ? 's' : ''} ${ids} ` +
+                  `(started ${ageS} s ago); this call started another copy. If this was a retry of a lost answer, ` +
+                  `read the running one with write_stdin(session_id=${identical[0]!.processId}, chars="") instead of starting more.`
+              );
+            }
+
+            const processId = unifiedExecManager.allocateProcessId();
+            // Process ids are deliberately small/reusable, while chat ownership lives in a
+            // separate registry. Clear any stale row at the allocation boundary so a recycled
+            // id cannot briefly authorize its previous chat before this call publishes the new owner.
+            forgetExecOwner(processId);
+
+            const ripgrep = locateRipgrep();
+            const executionCommand = deriveExecArgs(shell,
+              withPosixPathPrefix(boundCommand, shell.shellType, ripgrep ? nodePath.dirname(ripgrep) : null), useLoginShell);
+            await validatedWorkspace();
+            const output = await unifiedExecManager.execCommand({
+              classifyExit: (exitCode, rawOutput) => {
+                if (!batch) return nonZeroExitIsBenign(boundCommand, exitCode, rawOutput);
+                const sections = parseCommandBatchSections(rawOutput, batch.marker);
+                const nonzero = sections.filter(section => section.exitCode !== 0);
+                return exitCode !== null && exitCode !== 0 && sections.length === rawCommands.length && nonzero.length > 0 &&
+                  nonzero.every(section => nonZeroExitIsBenign(boundCommands[section.index - 1] ?? '', section.exitCode, section.text));
+              },
+              batchMarker: batch?.marker,
+              command: executionCommand,
+              shellType: shell.shellType,
+              hookCommand: commandDetail,
+              processId,
+              yieldTimeMs: input.yield_time_ms ?? DEFAULT_EXEC_YIELD_TIME_MS,
+              maxOutputTokens: undefined,
+              truncationPolicy: EXEC_OUTPUT_CEILING_POLICY,
+              cwd: dir.real,
+              displayCwd: dir.virtual,
+              env: execChildEnvironment(),
+              tty: input.tty ?? DEFAULT_TTY
+            });
+            // Which exact session or temporary request principal may later write to this
+            // process id. Request custody upgrades lazily when exact correlation arrives.
+            noteExecOwner(output.processId ?? output.completedSessionId ?? null, owner);
+            const responseText = execCommandResponseText(output);
+            // A search that found nothing exits 1 and has not failed. Recording it as an
+            // error made a session's error count meaningless; see exec-hints.ts for why this
+            // cannot launder a real failure. `benign` only ever *withholds* the error mark —
+            // it never turns a genuine non-zero exit into a success.
+            // A batch has one exit code and several commands, so the single-command classifier
+            // cannot be handed the wrapper script — it would be asking whether a `for` loop is a
+            // search. Classify each section on its own command and its own output instead. This
+            // matters most for the case batching exists to serve: several ripgrep searches, where
+            // "no matches" is exit 1 and reporting the batch as failed is what makes a model run
+            // the whole thing again. Require a complete set of sections, so a truncated tail
+            // cannot let an unseen real failure pass as benign.
+            const batchSections = batch ? parseCommandBatchSections(output.rawOutput.toString('utf8'), batch.marker) : [];
+            const nonZeroSections = batchSections.filter((section) => section.exitCode !== 0);
+            const benign = output.benignExit === true;
+            noteExec({
+              completion: output.completion,
+              ...(output.processId === null ? {} : { id: String(output.processId) }),
+              running: output.processId !== null,
+              exitCode: output.exitCode,
+              timedOut: false,
+              durationMs: output.wallTimeMs,
+              benignExit: benign
+            });
+            noteDetail(commandDetail.replace(/\s+/g, ' ').slice(0, 120));
+            logInfo(`tool exec_command ${shell.shellType} -> ${output.processId ?? `exit ${output.exitCode ?? 'unknown'}`}`);
+            // `benign` was previously spent only on the error count, leaving the model to read
+            // `Process exited with code 1` under an empty body and re-run a search that had
+            // already answered. It is the same classification, now also said out loud.
+            // A batch carries one top-line exit code for several commands, and in the recorded
+            // sessions 69 of 91 non-zero batches had at least one command that succeeded. Say
+            // which ones, so the model reruns the failed command and not the whole batch.
+            const mixedBatch =
+              isBatch &&
+              !benign &&
+              batchSections.length === rawCommands.length &&
+              nonZeroSections.length > 0 &&
+              nonZeroSections.length < batchSections.length
+                ? [
+                    `Batch: ${nonZeroSections.map((section) => `command ${section.index} exited ${section.exitCode}`).join(', ')}; ` +
+                      `the other ${batchSections.length - nonZeroSections.length === 1 ? 'command' : `${batchSections.length - nonZeroSections.length} commands`} exited 0. ` +
+                      'The top-line exit code is the first non-zero one.'
+                  ]
+                : [];
+            const notes = [
+              ...commandNotes,
+              ...mixedBatch,
+              ...(benign
+                ? isBatch
+                  ? nonZeroSections.map(
+                      (section) =>
+                        `Command ${section.index}: ${benignExitNote(
+                          boundCommands[section.index - 1] ?? '',
+                          shell.shellType,
+                          section.exitCode,
+                          section.text
+                        )}`
+                    )
+                  : [benignExitNote(boundCommand, shell.shellType, output.exitCode, responseText)]
+                : []),
+              // A batch parses each command independently. Its earlier mutations may already
+              // have succeeded when a later command has a syntax error: never tell the caller
+              // to rerun the whole batch on the strength of that one diagnostic. Completed
+              // authenticated sections also keep source text printed by a successful read from
+              // becoming an invented shell failure. With incomplete framing, abstain.
+              ...(isBatch
+                ? nonZeroSections.flatMap((section) =>
+                    execRecoveryHints(rawCommands[section.index - 1] ?? '', section.text, shell.shellType)
+                      .map((hint) => `Command ${section.index}: ${hint}`)
+                  )
+                : output.exitCode !== null && output.exitCode !== 0
+                  ? execRecoveryHints(rawCommands[0] ?? '', responseText, shell.shellType)
+                  : [])
+            ];
+            // ChatGPT gives the model this tool's structuredContent, not its text, so notes that
+            // only follow the text never reached it (a live retry asked to quote the repeated-
+            // command note quoted nothing, 2026-10-10). They travel in `supplemental_context`,
+            // the schema's field for app context that is not process output.
+            return {
+              content: [{ type: 'text' as const, text: withExecNotes(responseText, notes) }],
+              structuredContent: {
+                ...execCommandStructuredOutput(output),
+                ...(notes.length > 0 ? { supplemental_context: execNotesText(notes) } : {})
+              }
+            };
+          } catch (error) {
+            const detail = error instanceof UnifiedExecError ? error.debug() : friendlyError(error);
+            return fail(`exec_command failed for \`${shlexJoin(command)}\`: ${detail}`);
+          }
+        })
+    );
+
+    reg.register(
+      'write_stdin',
+      toolDeclaration('write_stdin', () => ({
+        description: WRITE_STDIN_DESCRIPTION,
+        inputSchema: z
+          .object({
+            session_id: int32Number.describe(WRITE_STDIN_SESSION_ID_DESCRIPTION),
+            chars: z.string().optional().describe(WRITE_STDIN_CHARS_DESCRIPTION),
+            yield_time_ms: unsignedIntegerNumber.optional().describe(WRITE_STDIN_YIELD_TIME_DESCRIPTION),
+            max_output_tokens: unsignedIntegerNumber.optional().describe(MAX_OUTPUT_TOKENS_DESCRIPTION)
+          })
+          .strict(),
+        outputSchema: unifiedExecOutputSchema
+      })),
+      async (input) =>
+        reg.guarded('command', 'write_stdin', async () => {
+          // The ownership registry decides both admission and the reason for refusal.
+          // A request-scoped caller can continue a process it opened before proof. Another
+          // request must wait for exact correlation; a numeric process id is not custody.
+          let asking = execPrincipal();
+          let denied = execOwnershipFailure(input.session_id, asking);
+          if (denied === 'unidentified') {
+            const caller = currentCaller();
+            if (caller.requestId) {
+              // A later turn in the same chat can reach Core before the page reports this
+              // request-id mate. Wait only for that exact correlation, then re-run the same
+              // ownership check; the numeric session id never becomes authority by itself.
+              await awaitFreshCallOrigin(
+                'write_stdin',
+                currentCall()?.startedAt ?? Date.now(),
+                IDENTITY_EVIDENCE_MS,
+                { exact: true, requestId: caller.requestId }
+              );
+              asking = execPrincipal();
+              denied = execOwnershipFailure(input.session_id, asking);
+            }
+          }
+          if (denied) {
+            const reason = {
+              unavailable: 'EXEC_SESSION_UNAVAILABLE: This process id is not available to this call in the running app. Check the original exec_command response and earlier results for its exit/output before deciding what remains; do not rerun the command solely because its id is unavailable.',
+              anonymous: 'EXEC_SESSION_ANONYMOUS: This process was launched without proven chat identity. An identified chat cannot adopt it. Check the original command and its saved output; retrying from this identified chat cannot change its ownership.',
+              unidentified: 'EXEC_CALLER_UNIDENTIFIED: The current request has not been proven to own this process, so it cannot access it yet. After exact identity recovers, retry this same session_id once; do not launch a replacement command.',
+              'different-owner': 'EXEC_SESSION_OWNER_MISMATCH: This process belongs to a different local session. Only its owning session can poll it or send input; use a process id returned to this session.'
+            }[denied];
+            const message = `write_stdin failed for session ${input.session_id}: ${reason} No input was sent and no output was read. This refusal concerns this process id, not Read-only mode or permission to edit files or launch other authorized work.`;
+            return denied === 'unidentified' ? failIdentity(message) : fail(message);
+          }
+          // A worker can keep an interactive shell running after its Git worktree has been
+          // replaced. Verify the exact current allocation before forwarding even empty polls:
+          // stdin may execute writes in the shell's now user-owned directory.
+          await validatedWorkspace();
+          // Both sides of the wait. An empty poll blocks for seconds by design, and a caller
+          // sitting in one is attending its session rather than neglecting it.
+          noteExecAttended(input.session_id);
+          try {
+            const output = await unifiedExecManager.writeStdin({
+              processId: input.session_id,
+              input: input.chars ?? '',
+              yieldTimeMs: input.yield_time_ms ?? DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
+              maxOutputTokens: undefined,
+              truncationPolicy: EXEC_OUTPUT_CEILING_POLICY
+            });
+            noteExecAttended(input.session_id);
+            noteExec({
+              ...(output.processId === null ? {} : { id: String(output.processId) }),
+              running: output.processId !== null,
+              exitCode: output.exitCode,
+              timedOut: false,
+              benignExit: output.benignExit,
+              durationMs: output.wallTimeMs
+            });
+            logInfo(`tool write_stdin ${input.session_id} (${(input.chars ?? '').length} chars)`);
+            return {
+              content: [{ type: 'text' as const, text: execCommandResponseText(output) }],
+              structuredContent: execCommandStructuredOutput(output)
+            };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const retry =
+              error instanceof UnifiedExecError && error.kind === 'write_to_stdin'
+                ? ` Retry this same session_id (${input.session_id}); do not replace it with a new command.`
+                : '';
+            return fail(`write_stdin failed: ${message}${retry}`);
+          }
+        })
+    );
+  }
+
+  // ------------------------------------------------------- plan and finish
+
+  if (reg.sessionToolsExposed) {
+    registerPlanTool(reg);
+  }
+  if (reg.ctx.exposedFinishTool ?? getConfig().ui.finishTool === true) {
+    reg.register('session_finish', toolDeclaration('session_finish', () => ({
+      description: 'Only when explicitly requested by a user prompt, with any model. Call near actual completion, after implementing the requested work. Receives queued instructions; complete and verify them before calling again. Do not use for progress updates or queue collection. While HELD with no work remaining, call to wait. Each call waits at most 25 seconds.',
+      inputSchema: z.object({ summary: z.string().min(1).max(1000) }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    })), async ({ summary }) => {
+      if (!getConfig().ui.finishTool) return { content: [{ type: 'text' as const, text: 'RELEASED: The user disabled finish hold. You may write your final answer.' }] };
+      const caller = currentCaller();
+      if (!caller.sessionId || !caller.conversationId) return failIdentity('Exact session identity is required');
+      if (goalWorkerChat(caller.conversationId)) return fail('Session finish hold is not applicable to workers or decision helpers. Workers report with agents action=finish; decision helpers answer normally.');
+      const deadline = sessionFinishDeadline(currentCall()?.startedAt ?? Date.now());
+      return guard('session_finish', async () => ({ content: [{ type: 'text', text: await announceSessionFinish(caller.sessionId!, summary, deadline) }] }));
+    });
+  }
+
+
+  // ----------------------------------------------------------------- usage
+
+  // #482: read-only, so the person can ask for their usage from the chat. Each figure names its
+  // source and age; Codex and Claude Code are read only while Settings › Usage allows it. Like
+  // `read`, offered only while a reading permission is on.
+  if (exposedCaps.read || exposedCaps.browse || exposedCaps.metadata) reg.register('usage', toolDeclaration('usage', () => ({
+    title: 'Usage and limits',
+    description: 'Only when the user asks about their usage, limits or quota. Read-only: ChatGPT\'s and Codex\'s reported limits, and tokens counted from Codex\'s and Claude Code\'s local logs, each with source and age. Report missing figures as not reported; never estimate.',
+    inputSchema: z.object({}),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  })), async () => guard('usage', async () => {
+    const report = usageReport(reportedUsageLimits(), await readProviderUsage(), Date.now());
+    return { content: [{ type: 'text', text: report.text }], structuredContent: report.structured };
+  }));
+
+
+  // ----------------------------------------------------------------- agents
+
+  if (reg.agentToolsExposed) registerAgentsTool(reg);
+}
+
+
+// ---------------------------------------------------------------------------
+// agents
+// ---------------------------------------------------------------------------
+
+/**
+ * One tool, four actions, registered only while multi-agent mode is on. Fresh installs enable
+ * it; existing configs keep their stored choice, so a user who has it off never sees this schema.
+ *
+ * Caller identity comes from transport/page evidence, never model arguments. When permitted,
+ * an unresolved request can own a provisional prime family. The same broker later attaches it
+ * to the real session's frontend, preserving every worker and any existing fleets. Workers
+ * retain their app-proven conversation binding. run_id selects an owned family, not a role.
+ *
+ * Every result here also carries `structuredContent`. The text half is what the model should
+ * act on and is kept to a sentence or two; ids, states and counts are machine state and belong
+ * in a shape the caller can read without parsing English.
+ */
+function registerAgentsTool(reg: SurfaceRegistrar): void {
+  reg.register(
+    'agents',
+    toolDeclaration('agents', () => ({
+      title: 'Multi-agent run',
+      description:
+        'Run Gemini workers. Omit model and reasoning_effort unless the user explicitly requests an override; saved app defaults apply. Do not ask the user to choose them. Reuse a suitable sleeping worker with message before spawn. ' +
+        'message: prime↔worker. Reports ride tool results, never restart primes. Use status once to collect pending reports before finalizing; otherwise state that review is pending. Never poll repeatedly. ' +
+        'status: your active, sleeping/revivable and terminal workers, including parked families. finish: record the report, then normally sleep.',
+      inputSchema: z.object({
+        action: z.enum(['spawn', 'message', 'status', 'finish']).describe('What to do.'),
+        run_id: z.string().uuid().optional().describe('Select your returned worker family when status lists several; never grants another caller’s workers.'),
+        context: z
+          .string()
+          .max(4000)
+          .optional()
+          .describe(
+            'spawn: shared instructions prepended to every task, e.g. repo, conventions, edit limits and validation.'
+          ),
+        workers: z
+          .array(
+            z.object({
+              label: z.string().max(60).optional().describe('Name its job in 1-3 words, e.g. "Tests"; shown to the user.'),
+              task: z
+                .string()
+                .min(1)
+                .max(4000)
+                .describe(
+                  'This worker\'s job: objective, relevant files, constraints and expected handoff.'
+                ),
+              model: z
+                .string()
+                .max(80)
+                .optional()
+                .describe(
+                  'Omit unless explicitly requested by the user; app settings supply defaults. Use an exact account-observed model id or provider alias. Invalid overrides return observed ids before opening; the browser confirms availability before Send.'
+                ),
+              reasoning_effort: z
+                .enum(REASONING_EFFORTS)
+                .optional()
+                .describe(
+                  'Omit unless explicitly requested by the user; app settings supply defaults. Do not ask just to spawn a worker. This selects reasoning only, never a model.'
+                )
+            }).strict()
+          )
+          .min(1)
+          .max(8)
+          .optional()
+          .describe(
+            'spawn: fresh workers to create only after checking status for a suitable sleeping worker; revive one explicitly with message.'
+          ),
+        messages: z
+          .array(
+            z.object({
+              to: z.string().min(1).max(40).describe('Recipient.'),
+              text: z.string().min(1).max(4000).describe('What to say.'),
+              label: z.string().trim().min(1).max(60).optional().describe('New job name when waking.')
+            }).strict()
+          )
+          .min(1)
+          .max(16)
+          .optional()
+          .describe(
+            'message: atomic batch; prefer this to one call per recipient.'
+          ),
+        to: z
+          .string()
+          .min(1)
+          .max(40)
+          .optional()
+          .describe('message: one recipient; messaging a sleeping worker wakes it.'),
+        target_run_id: z
+          .string()
+          .min(1)
+          .max(36)
+          .optional()
+          .describe('message: existing prime run id; prime-only, no worker/status access.'),
+        text: z.string().min(1).max(4000).optional().describe('message: what to say.'),
+        result: z
+          .string()
+          .min(1)
+          .max(4000)
+          .optional()
+          .describe(
+            'finish: factual handoff under RESULT / CHANGES / VALIDATION / BLOCKERS.'
+          )
+      })
+      .superRefine((input, ctx) => {
+        const reject = (field: 'context' | 'workers' | 'messages' | 'to' | 'target_run_id' | 'text' | 'result', message: string): void => {
+          if (input[field] !== undefined) ctx.addIssue({ code: 'custom', path: [field], message });
+        };
+        if (input.action !== 'spawn') {
+          reject('context', 'context is only valid with action=spawn');
+          reject('workers', 'workers is only valid with action=spawn');
+        }
+        if (input.action !== 'message') {
+          reject('messages', 'messages is only valid with action=message');
+          reject('to', 'to is only valid with action=message');
+          reject('target_run_id', 'target_run_id is only valid with action=message');
+          reject('text', 'text is only valid with action=message');
+        }
+        if (input.action !== 'finish') reject('result', 'result is only valid with action=finish');
+      })
+      .strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    })),
+    async (input) => {
+      // One clock for one MCP call. The dispatcher owns startedAt and the recorder later uses
+      // that exact value to consume any page request reserved while proving caller identity.
+      // Taking a second Date.now() here made callerNow reserve evidence under one timestamp
+      // and recordToolCall look for it under another, leaving the first request permanently
+      // reserved until TTL and breaking the very next worker control call.
+      const startedAt = currentCall()?.startedAt ?? Date.now();
+      return guard('agents', async () => {
+        if (!reg.agentToolsLive) return reg.featureDisabled('Multi-agent mode', 'Multi-agent mode (experimental)');
+
+        if (input.action === 'spawn') {
+          if (!input.workers) return fail('agents action=spawn requires workers.');
+          // Reserve under exact chat proof or the permitted transport request, atomically.
+          // The request remains the reachable prime before browser attachment; later proof
+          // changes its frontend projection without recreating workers or replaying spawn.
+          const spawnCaller = await callerNow(startedAt, { exact: true, runId: input.run_id });
+          // A stale managed worker whose family and ordinary retired-worker TTL have expired
+          // must not bootstrap a new prime family to regain local mutation authority. Session
+          // origin and durable managed tombstones are denial-only, not adoption credentials.
+          if (await managedWorkerIsolationRequired(spawnCaller) && !managedWorkerAllocationIdentity(spawnCaller)) {
+            return fail('WORKTREE_OWNER_UNAVAILABLE: a retired worker cannot create a prime run after its isolated checkout owner was lost.');
+          }
+          const { created, becamePrime, runId, defaultNotes, isolationNotes } = await spawnAgentWorkers({
+            workers: input.workers,
+            context: input.context ?? null,
+            caller: spawnCaller
+          }, async () => {
+            const sessionId = currentCall()?.caller.sessionId;
+            return (sessionId ? await getSessionProject(sessionId) : null) ??
+              primeWorkspace(currentCaller().conversationId) ?? currentWorkspace();
+          }, () => !reg.ctx.readOnly && reg.caps.command && reg.caps.create && reg.caps.edit);
+          if (currentCall()) currentCall()!.caller.runId = runId;
+          // Browser tabs are a publication side effect, never part of planning. They become
+          // visible only after the exact broker revision above is durable.
+          requestWorkerBootstraps(created.map((worker) => worker.id), runId);
+          await adoptAgent(PRIME_ID);
+          const invited = created.filter((worker) => worker.state === 'invited');
+          const sleeping = created.filter((worker) => worker.state === 'sleeping' && worker.revivable);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  (becamePrime ? `This ${currentCaller().conversationId ? 'conversation' : 'request'} is now the prime agent of run ${runId}. ` : '') +
+                  `${created.length} worker(s) matched: ${created.map((info) => `${info.id} (${info.label}, ${info.state}${info.model ? `, model ${info.model}` : ''}${info.reasoningEffort ? `, reasoning ${info.reasoningEffort}` : ''})`).join(', ')}. ` +
+                  (invited.length > 0 ? 'New worker chats are opening with their briefs already in them. ' : '') +
+                  (defaultNotes?.length ? `${defaultNotes.join(' ')} ` : '') +
+                  (isolationNotes.length ? `${isolationNotes.join(' ')} ` : '') +
+                  (sleeping.length > 0
+                    ? `${sleeping.map((worker) => worker.id).join(', ')} already finished that earlier piece and is sleeping in its existing chat; wake it with action=message instead of spawning a duplicate. `
+                    : '') +
+                  'Carry on with your own work — results and ' +
+                  'messages arrive at the end of later tool results, so there is nothing to wait for and never anything ' +
+                  'to poll. A short correction with action=message while a worker is still going is far cheaper than ' +
+                  'the alternative.'
+              }
+            ],
+            structuredContent: {
+              action: 'spawn',
+              run_id: runId,
+              self: PRIME_ID,
+              became_prime: becamePrime,
+              workers: created.map((info) => ({ id: info.id, label: info.label, state: info.state, model: info.model, reasoning_effort: info.reasoningEffort }))
+            }
+          };
+        }
+
+        if (input.action === 'message') {
+          if (input.target_run_id) {
+            if (input.messages?.length) {
+              return fail('agents action=message with target_run_id takes one text message, not messages[].');
+            }
+            if (input.to && input.to !== PRIME_ID) {
+              return fail('agents action=message with target_run_id can address only the destination prime.');
+            }
+            if (!input.text) {
+              return fail('agents action=message with target_run_id requires text.');
+            }
+            const caller = await callerNow(startedAt, { runId: input.run_id, member: true });
+            const staged = stagePrimeMessage(caller, input.target_run_id, input.text);
+            await acceptAgentMutation(staged,
+              'The prime message could not cross its durable acceptance barrier. Nothing was queued; retry the same message request.',
+              'TARGET_RUN_UNAVAILABLE: the destination prime family changed before acceptance. Nothing was queued.');
+            if (currentCall()) currentCall()!.caller.runId = staged.sourceRunId;
+            await recordAgentMessage(staged.message, 'sent', caller.conversationId);
+            return {
+              content: [{
+                type: 'text' as const,
+                text:
+                  `Queued for prime family ${staged.targetRunId}. The recipient can reply with target_run_id=${staged.sourceRunId}.`
+              }],
+              structuredContent: {
+                action: 'message',
+                run_id: staged.sourceRunId,
+                target_run_id: staged.targetRunId,
+                queued: [{ to: PRIME_ID }]
+              }
+            };
+          }
+
+          // Two spellings of one operation. A single message is the common case and stays a
+          // pair of scalars; `messages` is the same thing in bulk. Both in one call is a
+          // request whose intended order nobody can read, so it is refused rather than
+          // guessed at.
+          const batch = input.messages ?? [];
+          const single = input.to && input.text ? [{ to: input.to, text: input.text }] : [];
+          if (batch.length > 0 && single.length > 0) {
+            return fail('agents action=message takes either to+text or messages, not both.');
+          }
+          const items = batch.length > 0 ? batch : single;
+          if (items.length === 0) return fail('agents action=message requires to and text, or a messages array.');
+          // Before any slot is reserved: a sleeping worker whose chat has since crossed the
+          // context ceiling is not revivable, and this is the call that would otherwise wake it.
+          const caller = await callerNow(startedAt, { runId: input.run_id, member: true });
+          await measureSleepingWorkers(caller);
+          // One call, one identity resolution, one all-or-nothing delivery: a prime
+          // redirecting its whole run cannot end up with two of its three messages sent.
+          const staged = stageMessages(caller, items);
+          await acceptAgentMutation(staged,
+            'The agent message could not cross its durable acceptance barrier. Nothing was queued; retry the same message request.');
+          const sent = staged.messages;
+          const woken = staged.waking;
+          // Reopening a sleeping worker's chat is a browser side effect, so it happens only
+          // after the broker revision that reserved its slot is durable — exactly as a spawn's
+          // tabs do. Nothing has been typed into that chat yet at this point.
+          const runId = staged.runId;
+          if (currentCall()) currentCall()!.caller.runId = runId;
+          if (woken.length > 0 && runId) requestWorkerRevivals(woken, runId);
+          for (const message of sent) await recordAgentMessage(message, 'sent', caller.conversationId);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  `Queued for ${[...new Set(sent.map((message) => message.to))].join(', ')}.` +
+                  (woken.length > 0
+                    ? ` Waking ${woken.join(', ')} in ${woken.length === 1 ? 'the same chat' : 'their existing chats'}.`
+                    : '')
+              }
+            ],
+            structuredContent: {
+              action: 'message',
+              run_id: runId,
+              queued: sent.map((message) => ({ to: message.to })),
+              waking: woken
+            }
+          };
+        }
+
+        if (input.action === 'finish') {
+          if (!input.result) {
+            return fail(
+              'agents action=finish requires result: the report the prime reads in your place — what you changed, what you verified and what is left. Send it as result and call finish again.'
+            );
+          }
+          const staged = stageFinishAgent(await callerNow(startedAt, { runId: input.run_id, member: true }), input.result);
+          if (!staged.repeat) {
+            await acceptAgentMutation(staged,
+              'The worker finish could not cross its durable acceptance barrier. Nothing was published; retry the same finish result.');
+          }
+          const { info, report, repeat } = staged;
+          if (report) await recordAgentMessage(report, 'sent', info.conversationId);
+          // A retry is answered as a retry. Repeating "marked finished" would read as a
+          // second finish and invite the model to keep going until it gets a different
+          // answer, which is how one lost result became a queue of identical reports.
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: repeat
+                  ? `${info.id} was already ${info.state}; the previous result was already recorded for the prime, so nothing was ` +
+                    'queued again. This acknowledgment does not confirm delivery to the prime. Stop working and stop calling tools.'
+                  : info.state === 'finished'
+                    ? `${info.id} is finished. Your result was recorded for the prime. This acknowledgment does not confirm delivery to the prime. This chat has also reached its context ` +
+                      'limit, so there will be no more work in it: stop working and stop calling tools.'
+                    : `${info.id} reported and is now asleep but remains reusable. Your result was recorded for the prime. ` +
+                      'This acknowledgment does not confirm delivery to the prime. Your worker slot is free. Stop working and stop calling tools; for related follow-up work the ' +
+                      'prime should wake this same chat with agents action=message before spawning a replacement.'
+              }
+            ],
+            structuredContent: { action: 'finish', self: info.id, state: info.state, repeat }
+          };
+        }
+
+        // Status describes only this exact caller's family. No family is a normal empty
+        // result, independent of whether another prime has workers; discovery grants no role.
+        const caller = await callerNow(startedAt, { runId: input.run_id });
+        await measureSleepingWorkers(caller);
+        const status = statusForCaller(caller);
+        const me = status.self;
+        const state = status.state;
+        const families = agentFamiliesForCaller(caller);
+        const familyNotice = families.length > 1
+          ? `\n\nYour worker families: ${families.map(family => `${family.run_id} (${family.running ? 'active' : 'retained'})`).join(', ')}. Use run_id to select a family; worker names are local to that family.`
+          : '';
+        if (!me) return {
+          content: [{ type: 'text' as const, text: families.length
+            ? `Select one of your worker families with run_id.${familyNotice}`
+            : 'No workers or retained worker history belong to this caller. Use agents action=spawn if the task needs workers.' }],
+          structuredContent: { action: 'status', run_id: null, self: null, agents: [], free_worker_slots: status.freeWorkerSlots,
+            ...(families.length > 1 ? { available_runs: families } : {}) }
+        };
+        const failed = state.agents.filter((info) => info.state === 'failed');
+        // The word the model reads here is the whole answer to "may I use this worker again".
+        // A sleeping worker is not a spent one, and calling it finished in this table is what
+        // sends a prime off to spawn a fourth chat for work its first worker already knows the
+        // background to.
+        const shown = (info: { state: string; revivable: boolean }): string =>
+          info.state === 'sleeping'
+            ? info.revivable
+              ? 'sleeping (reusable; wake with action=message)'
+              : 'sleeping'
+            : info.state === 'waking'
+              ? 'waking (your message is being delivered to its chat)'
+              : info.state === 'finished'
+                ? 'finished (not reusable)'
+              : info.state;
+        const asleep = state.agents.filter((info) => info.state === 'sleeping' && info.revivable);
+        const slots = status.freeWorkerSlots;
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `You are ${me.id}.\n` +
+                state.agents
+                  .map(
+                    (info) =>
+                      `${info.id}  ${info.role}  ${shown(info)}  waiting ${info.pending}  ${info.label}` +
+                      (info.model ? `  model ${info.model}` : '') +
+                      (info.reasoningEffort ? `  reasoning ${info.reasoningEffort}` : '') +
+                      (info.result
+                        ? `\n    ${info.state === 'failed' ? 'failure' : info.state === 'finished' ? 'result' : 'latest result'}: ${info.result.slice(0, 300)}`
+                        : '')
+                  )
+                  .join('\n') +
+                (me.id === PRIME_ID
+                  ? `\n\n${slots} of your worker slots ${slots === 1 ? 'is' : 'are'} free.` +
+                    (asleep.length > 0
+                      ? ` REUSE FIRST: ${asleep.map((info) => info.id).join(', ')} ${asleep.length === 1 ? 'is' : 'are'} asleep and ` +
+                        'can be woken with agents action=message, in the chat they already have and with everything ' +
+                        'they learned there still in it. For related follow-up work, do this before action=spawn' +
+                        (slots === 0 ? ', once a slot frees up.' : '.')
+                      : '')
+                  : '') +
+                // Said in words as well as in the table: a failed worker will not report, and
+                // waiting for it is the mistake this line prevents.
+                (failed.length > 0
+                  ? `\n\n${failed.map((info) => info.id).join(', ')} will not report. Do that work yourself or wake ` +
+                    'another worker; do not wait for them.'
+                  : '') +
+                // A status check is a glance, not a stopping point. Without this the table reads
+                // like an answer to hand back to the user, and a prime that has just looked at its
+                // workers stops mid-run to report what it saw.
+                familyNotice + '\n\nThis is the current stats, keep working.'
+            }
+          ],
+          structuredContent: {
+            action: 'status',
+            run_id: status.runId,
+            self: me.id,
+            free_worker_slots: slots,
+            ...(families.length > 1 ? { available_runs: families } : {}),
+            agents: state.agents.map((info) => ({
+              id: info.id,
+              role: info.role,
+              label: info.label,
+              model: info.model,
+              reasoning_effort: info.reasoningEffort,
+              state: info.state,
+              revivable: info.revivable,
+              waiting: info.pending,
+              result: info.result ?? null
+            }))
+          }
+        };
+      });
+    }
+  );
+}
+
+/**
+ * Who is making this `agents` call, established for this call alone.
+ *
+ * The prime holds no credential by design, and the dispatcher deliberately hands ordinary
+ * tool calls no authority from "the only chat that has been active lately" — that is not
+ * proof that the chat made this call, and stale page state once authenticated prime calls as
+ * worker-1. So identity is proven here per call by joining ChatGPT's inbound MCP HTTP
+ * `x-request-id` to the same request id reported from one concrete conversation's message
+ * model. The page evidence may arrive just before or just after the MCP request; the id, not
+ * timing, is the join. If its exact mate never appears, the broker refuses the operation.
+ * Missing request-id evidence never falls back to a visible row, active/generating chat,
+ * agent key, or recent browser state.
+ *
+ * The proven identity is then adopted for the rest of the call, so this result is recorded
+ * against the right agent and carries the right inbox.
+ */
+async function callerNow(startedAt: number, options: { exact?: boolean; runId?: string; member?: boolean } = {}): Promise<Caller> {
+  const base = currentCaller();
+  // `exact` marks the one action that binds a run: spawn. It is the call whose refusal the
+  // model cannot absorb, so it gets the longer ceiling; every other `agents` action can be
+  // declined and asked again on the next tool call.
+  const window = base.requestId ? (options.exact ? SPAWN_EVIDENCE_MS : IDENTITY_EVIDENCE_MS) : PRIME_EVIDENCE_MS;
+  const allowRequest = Boolean(base.requestId && (currentCall()?.allowUnattributed ?? getConfig().multiAgent.allowUnattributedCalls));
+  const requestOwnsTarget = !options.member || agentFamiliesForCaller(base).length > 0;
+  const resolved =
+    base.conversationId ??
+    requestCorrelation(base.requestId)?.conversationId ??
+    (allowRequest && requestOwnsTarget ? null : await awaitFreshCallOrigin('agents', startedAt, window, {
+      ...options,
+      // ChatGPT's own id for this request, when it sent one. It names the conversation
+      // outright, so two workers calling at the same moment are no longer a hard case.
+      requestId: base.requestId
+    }));
+  const caller: Caller = {
+    ...base,
+    conversationId: resolved,
+    runId: options.runId
+  };
+  const call = currentCall();
+  if (call) call.caller.runId = options.runId;
+  if (resolved) {
+    const call = currentCall();
+    if (call) call.caller.conversationId = resolved;
+    const proof = requestCorrelation(base.requestId);
+    if (proof?.conversationId === resolved) {
+      caller.sessionId = proof.sessionId;
+      if (call) call.caller.sessionId = proof.sessionId;
+    }
+    // A pre-fix Compact & Resume can leave this exact app-opened replacement chat with its own
+    // shadow session while the reusable-worker run is still bound to the source chat. Repair
+    // only that durably-proven historical failure before membership is evaluated; unrelated
+    // conversations still hit AGENTS_BUSY exactly as before.
+    await repairPrimeFromResumeShadow(resolved);
+  }
+  if (!resolved && !allowRequest) {
+    logWarn(
+      base.requestId
+        ? `agents caller not identified: no page evidence matched HTTP request ${base.requestId.slice(0, 20)}…`
+        : 'agents caller not identified: this MCP request carried no request id and page evidence was insufficient'
+    );
+  }
+  await reconcileAgentRequestOwners();
+  await adoptAgent(agentForCaller(caller));
+  return caller;
+}
+
+// ---------------------------------------------------------------------------
+// apply_patch adapter helpers
+// ---------------------------------------------------------------------------
+
+function applyPatchErrorText(error: unknown, includeSourceContext = false): string {
+  if (error instanceof ApplyPatchError && includeSourceContext && error.sourceContext) {
+    return `${error.message}\n\n${error.sourceContext}`;
+  }
+  return error instanceof PatchParseError || error instanceof ApplyPatchError ? error.message : friendlyError(error);
+}
+
+interface ParsedPatchRun {
+  result: ToolResult;
+  content: string | null;
+  exitCode: number | null;
+}
+
+/** Existing bytes kept so a failed model-facing patch can restore its pre-call state. */
+interface PatchRollbackSnapshot {
+  virtual: string;
+  bytes: Buffer | null;
+}
+
+/** Keep the connector's atomicity promise bounded even when many large files are patched. */
+const MAX_PATCH_ROLLBACK_BYTES = 64 * 1024 * 1024;
+
+async function readOptionalPatchBytes(real: string): Promise<Buffer | null> {
+  try {
+    const stat = await fs.lstat(real);
+    if (!stat.isFile()) throw new Error('apply_patch target changed from a file before execution');
+    return await fs.readFile(real);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function capturePatchRollbackSnapshots(resolution: PatchResolution): Promise<Map<string, PatchRollbackSnapshot>> {
+  const snapshots = new Map<string, PatchRollbackSnapshot>();
+  let total = 0;
+  for (const [real, virtual] of resolution.virtualPaths) {
+    const bytes = await readOptionalPatchBytes(real);
+    total += bytes?.length ?? 0;
+    if (total > MAX_PATCH_ROLLBACK_BYTES) {
+      throw new Error(
+        `apply_patch touches more than ${formatBytes(MAX_PATCH_ROLLBACK_BYTES)} of existing file data; split it into smaller patches so atomic rollback stays bounded.`
+      );
+    }
+    snapshots.set(real, { virtual, bytes });
+  }
+  return snapshots;
+}
+
+function samePatchState(left: Buffer | null, right: Buffer | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.equals(right);
+}
+
+function expectedPatchStates(
+  snapshots: ReadonlyMap<string, PatchRollbackSnapshot>,
+  delta: AppliedPatchDelta
+): Map<string, Buffer | null> {
+  const expected = new Map<string, Buffer | null>();
+  for (const [real, snapshot] of snapshots) expected.set(real, snapshot.bytes);
+  for (const { path: real, change } of delta.changes) {
+    if (change.kind === 'add') {
+      expected.set(real, Buffer.from(change.content, 'utf8'));
+    } else if (change.kind === 'delete') {
+      expected.set(real, null);
+    } else if (change.movePath === null) {
+      expected.set(real, Buffer.from(change.newContent, 'utf8'));
+    } else {
+      expected.set(real, null);
+      expected.set(change.movePath, Buffer.from(change.newContent, 'utf8'));
+    }
+  }
+  return expected;
+}
+
+/**
+ * Best-effort transaction rollback for the connector's stronger contract around raw Codex.
+ *
+ * Only a path still equal to the state recorded in the runtime delta is rewritten. If another
+ * process changed it concurrently, leave that user's newer data alone and report rollback as
+ * incomplete instead of "restoring" over an identity we can no longer prove belongs to us.
+ */
+async function rollbackFailedPatch(
+  snapshots: Map<string, PatchRollbackSnapshot>,
+  delta: AppliedPatchDelta
+): Promise<{ complete: boolean; note: string }> {
+  const expected = expectedPatchStates(snapshots, delta);
+  const problems: string[] = [];
+
+  for (const [real, snapshot] of snapshots) {
+    let current: Buffer | null;
+    try {
+      current = await readOptionalPatchBytes(real);
+    } catch {
+      problems.push(`${snapshot.virtual}: could not inspect current state`);
+      continue;
+    }
+    if (samePatchState(current, snapshot.bytes)) continue;
+    const patchState = expected.get(real) ?? null;
+    if (!samePatchState(current, patchState)) {
+      problems.push(`${snapshot.virtual}: changed outside the recorded patch state`);
+      continue;
+    }
+    try {
+      if (snapshot.bytes === null) await fs.rm(real, { force: true });
+      else await fs.writeFile(real, snapshot.bytes);
+    } catch {
+      problems.push(`${snapshot.virtual}: restore failed`);
+    }
+  }
+
+  // Prove the final state rather than assuming successful write/remove calls meant restoration.
+  for (const [real, snapshot] of snapshots) {
+    try {
+      if (!samePatchState(await readOptionalPatchBytes(real), snapshot.bytes)) {
+        if (!problems.some((problem) => problem.startsWith(`${snapshot.virtual}:`))) {
+          problems.push(`${snapshot.virtual}: restore verification failed`);
+        }
+      }
+    } catch {
+      if (!problems.some((problem) => problem.startsWith(`${snapshot.virtual}:`))) {
+        problems.push(`${snapshot.virtual}: restore verification failed`);
+      }
+    }
+  }
+
+  if (problems.length === 0) {
+    delta.changes.splice(0);
+    delta.exact = true;
+    return { complete: true, note: 'All file changes from this failed patch were rolled back.' };
+  }
+  delta.exact = false;
+  return { complete: false, note: `WARNING: failed patch rollback was incomplete: ${problems.join('; ')}` };
+}
+
+/** Shared execution path for the standalone tool and exec_command's upstream apply_patch intercept. */
+async function runParsedPatch(
+  args: { patch: string; hunks: Hunk[]; workdir: string | null; environmentId: string | null },
+  roots: readonly Root[],
+  base: { real: string; virtual: string },
+  caps?: Capabilities
+): Promise<ParsedPatchRun> {
+  if (caps !== undefined) {
+    // Product permission gates around the otherwise ported Codex patch runtime. exec_command's
+    // interception deliberately omits this extra gate because command execution already grants
+    // shell-equivalent mutation ability, matching Codex's shell-tool interception path.
+    const denial = patchCapabilityDenial(args.hunks, caps);
+    if (denial !== null) return { result: fail(denial), content: null, exitCode: null };
+  }
+
+  // `invocation.rs` turns `cd foo && apply_patch ...` into `args.workdir = "foo"`. Resolve that
+  // once against the selected exec environment, then clear it before handing the already-effective
+  // cwd to the verifier/runtime. The patch text itself never contains this shell-level workdir.
+  let effectiveBase = base;
+  let effectiveArgs = args;
+  if (args.workdir !== null) {
+    try {
+      // Preserve the shell gate from `cd dir && apply_patch`: interception must not execute a
+      // patch that the submitted shell command would never have reached. The cwd must already
+      // exist and be a directory; patch-created parents apply only to paths *inside* it.
+      effectiveBase = await resolveIn(roots, args.workdir, { base: base.virtual });
+      const stat = await fs.stat(effectiveBase.real);
+      if (!stat.isDirectory()) {
+        return { result: fail('apply_patch workdir must be an existing folder'), content: null, exitCode: null };
+      }
+    } catch (error) {
+      return { result: fail(friendlyError(error)), content: null, exitCode: null };
+    }
+    effectiveArgs = { ...args, workdir: null };
+  }
+
+  // Every path the patch names is resolved through the connector environment up front, and the
+  // synchronous resolver handed into the Codex port reads that table back.
+  let resolution: PatchResolution;
+  try {
+    resolution = await resolvePatchPaths(roots, effectiveBase.virtual, effectiveArgs.hunks);
+  } catch (error) {
+    return { result: fail(friendlyError(error)), content: null, exitCode: null };
+  }
+  if (caps !== undefined) {
+    try {
+      const denial = await patchEffectCapabilityDenial(effectiveArgs.hunks, caps, resolution.resolve);
+      if (denial !== null) return { result: fail(denial), content: null, exitCode: null };
+    } catch (error) {
+      return { result: fail(friendlyError(error)), content: null, exitCode: null };
+    }
+  }
+  // Move-only is a separate permission from Edit. Upstream's default update mode normalizes
+  // even context-only moves to LF, so a CRLF file would be byte-rewritten under Move alone.
+  // Preserve line endings whenever Edit is unavailable; any real content change was already
+  // rejected by patchCapabilityDenial before resolution.
+  const patchUpdateMode = caps !== undefined && !caps.edit ? 'preserve_line_endings' : DEFAULT_APPLY_PATCH_FILE_UPDATE_MODE;
+
+  try {
+    await verifyApplyPatchArgs(
+      effectiveArgs,
+      effectiveBase.real,
+      patchUpdateMode,
+      resolution.resolve
+    );
+  } catch (error) {
+    return {
+      result: fail(`apply_patch verification failed: ${safePatchOutput(applyPatchErrorText(error, caps?.read === true), resolution)}`),
+      content: null,
+      exitCode: null
+    };
+  }
+
+  let rollbackSnapshots: Map<string, PatchRollbackSnapshot> | null = null;
+  if (caps !== undefined) {
+    try {
+      rollbackSnapshots = await capturePatchRollbackSnapshots(resolution);
+    } catch (error) {
+      return { result: fail(friendlyError(error)), content: null, exitCode: null };
+    }
+  }
+
+  const execution = await executeApplyPatch({
+    patch: effectiveArgs.patch,
+    cwd: effectiveBase.real,
+    updateFileMode: patchUpdateMode,
+    resolvePath: resolution.resolve
+  });
+  let rollbackNote = '';
+  if (execution.exitCode !== 0 && rollbackSnapshots !== null) {
+    const rollback = await rollbackFailedPatch(rollbackSnapshots, execution.delta);
+    rollbackNote = rollback.note;
+  }
+  const stdout = safePatchOutput(execution.stdout, resolution);
+  const stderr = safePatchOutput(`${execution.stderr}${rollbackNote ? `${execution.stderr.endsWith('\n') || execution.stderr === '' ? '' : '\n'}${rollbackNote}\n` : ''}`, resolution);
+  const aggregatedOutput = `${stdout}${stderr}`;
+  const content = formatExecOutputForModel(
+    {
+      exitCode: execution.exitCode,
+      stdout: newStreamOutput(stdout),
+      stderr: newStreamOutput(stderr),
+      aggregatedOutput: newStreamOutput(aggregatedOutput),
+      durationMs: execution.durationMs,
+      timedOut: false
+    },
+    DEFAULT_TRUNCATION_POLICY
+  );
+
+  const recordedChanges = patchFileChanges(execution.delta, resolution.virtualPaths);
+  noteChanges(recordedChanges.map(entry => entry.change), execution.exitCode === 0 && execution.delta.exact
+    ? recordedChanges.map(({ before, after }) => ({ before, after })) : undefined);
+  logInfo(`tool apply_patch (${execution.delta.changes.length} file(s), exit ${execution.exitCode})`);
+  return {
+    result: execution.exitCode === 0 ? ok(content) : fail(content),
+    content,
+    exitCode: execution.exitCode
+  };
+}
+
+/** Product permission gates around the otherwise ported Codex patch runtime. */
+function patchCapabilityDenial(hunks: readonly Hunk[], caps: Capabilities): string | null {
+  for (const hunk of hunks) {
+    if (hunk.kind === 'add_file') {
+      if (!caps.create) return 'TOOL_DISABLED: this patch adds a file but Create files and folders is disabled.';
+      continue;
+    }
+    if (hunk.kind === 'delete_file') {
+      if (!caps.deleteFile) return 'TOOL_DISABLED: this patch deletes a file but Delete files is disabled.';
+      continue;
+    }
+
+    // Current Codex rejects an entirely empty Update hunk, including a move-only one. A rename
+    // can still be expressed with a context-only chunk (` old` == `new`), so distinguish that
+    // no-op content check from a real rewrite and preserve this app's separate Move permission.
+    const contentChange =
+      hunk.movePath === null ||
+      hunk.chunks.some(
+        (chunk) =>
+          chunk.oldLines.length !== chunk.newLines.length ||
+          chunk.oldLines.some((line, index) => line !== chunk.newLines[index])
+      );
+    if (contentChange && !caps.edit) {
+      return 'TOOL_DISABLED: this patch updates a file but Edit files is disabled.';
+    }
+    if (hunk.movePath !== null && !caps.move) {
+      return 'TOOL_DISABLED: this patch moves a file but Move / rename is disabled.';
+    }
+  }
+  return null;
+}
+
+/**
+ * Permission checks whose answer depends on the filesystem effect rather than patch syntax.
+ *
+ * Codex intentionally lets `Add File` replace an existing regular file and lets a move replace
+ * an occupied destination. Those are useful patch semantics, but in this product they are edits
+ * to existing data, not "create" or pure "move" effects. Require Edit in addition to the syntax
+ * permission before handing such a patch to the runtime.
+ */
+async function patchEffectCapabilityDenial(
+  hunks: readonly Hunk[],
+  caps: Capabilities,
+  resolve: PatchPathResolver
+): Promise<string | null> {
+  const exists = async (target: string): Promise<boolean> => {
+    try {
+      await fs.lstat(target);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  };
+  const samePath = (left: string, right: string): boolean =>
+    process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+
+  for (const hunk of hunks) {
+    if (hunk.kind === 'add_file') {
+      if (!caps.edit && (await exists(resolve(hunk.path, '')))) {
+        return 'TOOL_DISABLED: this patch replaces an existing file but Edit files is disabled.';
+      }
+      continue;
+    }
+    if (hunk.kind !== 'update_file' || hunk.movePath === null || caps.edit) continue;
+    const source = resolve(hunk.path, '');
+    const destination = resolve(hunk.movePath, '');
+    if (!samePath(source, destination) && (await exists(destination))) {
+      return 'TOOL_DISABLED: this patch replaces an existing move destination but Edit files is disabled.';
+    }
+  }
+  return null;
+}
+
+interface PatchResolution {
+  resolve: PatchPathResolver;
+  /** Real path -> safe virtual path, used only for recorder change evidence. */
+  virtualPaths: Map<string, string>;
+  /** Exact model-visible/real spellings that must never be echoed back as native paths. */
+  displayRewrites: Map<string, string>;
+}
+
+function safePatchOutput(text: string, resolution: PatchResolution): string {
+  let safe = text;
+  const rewrites = [...resolution.displayRewrites].sort(([a], [b]) => b.length - a.length);
+  for (const [from, to] of rewrites) {
+    if (from === '' || from === to || !safe.includes(from)) continue;
+    safe = safe.split(from).join(to);
+  }
+  return safe;
+}
+
+/**
+ * Resolves every spelling before the Codex verifier/runtime sees it.
+ *
+ * Codex normally does `cwd.join(path)`. This connector must retain its approved-root boundary,
+ * so the synchronous resolver handed into the port reads a table that was produced by the same
+ * sandbox path resolver every other filesystem tool uses.
+ */
+async function resolvePatchPaths(
+  roots: readonly Root[],
+  baseVirtual: string,
+  hunks: readonly Hunk[]
+): Promise<PatchResolution> {
+  const realBySpelling = new Map<string, string>();
+  const virtualPaths = new Map<string, string>();
+  const displayRewrites = new Map<string, string>();
+  // The Codex verifier/runtime is sequential: a later hunk may legally read a path an earlier
+  // Add/Move created, or may deliberately fail because an earlier Delete/Move removed it. Path
+  // resolution has to model that same presence state instead of consulting only pre-patch disk.
+  const pendingPresence = new Map<string, boolean>();
+  const pathKey = (real: string): string => (process.platform === 'win32' ? real.toLowerCase() : real);
+
+  const add = async (spelledPath: string, requireExisting: boolean): Promise<string> => {
+    // First resolve the sandbox identity without requiring the leaf to exist. This gives later
+    // hunks a stable real key even when the path exists only in the patch's simulated state.
+    let resolved = await resolveIn(roots, spelledPath, { base: baseVirtual, allowMissing: true });
+    const state = pendingPresence.get(pathKey(resolved.real));
+    // An untouched initial Update/Delete keeps the old strict Not-found behaviour. Once an
+    // earlier hunk has established presence/absence, the verifier owns the sequential verdict.
+    if (requireExisting && state === undefined) {
+      resolved = await resolveIn(roots, spelledPath, { base: baseVirtual, allowMissing: false });
+    }
+    realBySpelling.set(spelledPath, resolved.real);
+    virtualPaths.set(resolved.real, resolved.virtual);
+    displayRewrites.set(resolved.real, resolved.virtual);
+    if (isNativeWindowsPath(spelledPath)) displayRewrites.set(spelledPath, resolved.virtual);
+    return resolved.real;
+  };
+
+  for (const hunk of hunks) {
+    if (hunk.kind === 'add_file') {
+      const target = await add(hunk.path, false);
+      pendingPresence.set(pathKey(target), true);
+      continue;
+    }
+    if (hunk.kind === 'delete_file') {
+      const target = await add(hunk.path, true);
+      pendingPresence.set(pathKey(target), false);
+      continue;
+    }
+
+    const source = await add(hunk.path, true);
+    if (hunk.movePath === null) {
+      pendingPresence.set(pathKey(source), true);
+      continue;
+    }
+    const destination = await add(hunk.movePath, false);
+    pendingPresence.set(pathKey(source), false);
+    pendingPresence.set(pathKey(destination), true);
+  }
+
+  const resolve: PatchPathResolver = (spelledPath) => {
+    const resolved = realBySpelling.get(spelledPath);
+    if (resolved === undefined) {
+      throw new SandboxError(`Patch path was not validated before use: ${spelledPath}`);
+    }
+    return resolved;
+  };
+  return { resolve, virtualPaths, displayRewrites };
+}
+
+function patchFileChanges(delta: AppliedPatchDelta, virtualPaths: ReadonlyMap<string, string>): Array<{ change: FileChange; before: string; after: string }> {
+  return delta.changes.map(({ path, change }) => {
+    let realPath = path;
+    let before: string;
+    let after: string;
+    if (change.kind === 'add') {
+      before = change.overwrittenContent ?? '';
+      after = change.content;
+    } else if (change.kind === 'delete') {
+      before = change.content;
+      after = '';
+    } else {
+      realPath = change.movePath ?? path;
+      before = change.oldContent;
+      after = change.newContent;
+    }
+    const counts = lineDelta(before, after);
+    return {
+      change: {
+        path: virtualPaths.get(realPath) ?? '[unresolved patch path]',
+        added: counts.added,
+        removed: counts.removed,
+        approximate: counts.approximate || !delta.exact
+      },
+      before,
+      after
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// read helpers
+// ---------------------------------------------------------------------------
+
+function hasGlob(path: string): boolean {
+  return path.includes('*') || path.includes('?');
+}
+
+/**
+ * Expands a glob to real virtual paths, bounded twice over.
+ *
+ * Bounded on the walk (`GLOB_SCAN_LIMIT`) so a pattern rooted at a huge tree cannot spend
+ * minutes, and bounded on the result (`MAX_GLOB_MATCHES`) so a pattern cannot quietly turn
+ * one call into a bulk read of a repository. Both bounds are reported rather than silently
+ * applied — a truncated expansion the model does not know about is worse than no expansion.
+ */
+async function expandGlob(
+  roots: Parameters<typeof resolvePath>[0],
+  pattern: string
+): Promise<{ matches: string[]; truncated: 'matches' | 'scan' | null }> {
+  const normalised = process.platform === 'win32' ? pattern.replace(/\\/g, '/') : pattern;
+  const segments = normalised.split('/');
+  const baseSegments: string[] = [];
+  for (const segment of segments) {
+    if (hasGlob(segment)) break;
+    baseSegments.push(segment);
+  }
+  // A leading wildcard is workspace-relative. Substituting `/` here silently changed
+  // `*.ts` into an absolute virtual-root lookup and made every learned workspace useless.
+  const base = baseSegments.join('/') || (normalised.startsWith('/') ? '/' : '');
+  const rest = segments.slice(baseSegments.length).join('/');
+  if (!rest) return { matches: [normalised], truncated: null };
+
+  const resolved = await resolveIn(roots, base, { access: 'read' });
+  const info = await statInfo(resolved.real, resolved.virtual, { scanContent: false });
+  if (info.type !== 'directory') throw new SandboxError(`${resolved.virtual} is not a folder, so it cannot be globbed`);
+
+  // `**` walks with Codex's bounded breadth-first walk; a single-level pattern needs one
+  // directory read and nothing more.
+  let candidates: string[];
+  let scanTruncated = false;
+  if (rest.includes('**')) {
+    const walked = await walkFiles(resolved.real, resolved.virtual, {
+      maxEntries: GLOB_SCAN_LIMIT,
+      exclude: DEFAULT_EXCLUDES
+    });
+    candidates = walked.files;
+    scanTruncated = walked.truncated;
+  } else {
+    const listed = await listDirectoryLevel(resolved.real, resolved.virtual, GLOB_SCAN_LIMIT, false);
+    candidates = listed.entries.filter((entry) => entry.type === 'file').map((entry) => entry.virtualPath);
+    scanTruncated = listed.truncated;
+  }
+
+  const matcher = globToRegExp(rest, false);
+  const prefixLength = resolved.virtual.length + 1;
+  const matches: string[] = [];
+  for (const candidate of candidates) {
+    if (!matcher.test(candidate.slice(prefixLength))) continue;
+    // Truncation means there is an actual omitted match, not merely that the result landed
+    // exactly on the cap. Returning `matches` as soon as the 20th item was added made a folder
+    // with exactly 20 matches claim "more than 20 matches" and sent the model narrowing a query
+    // that had already been answered completely.
+    if (matches.length >= MAX_GLOB_MATCHES) return { matches, truncated: 'matches' };
+    matches.push(candidate);
+  }
+  return { matches, truncated: scanTruncated ? 'scan' : null };
+}
+
+interface ReadOneOptions {
+  roots: Parameters<typeof resolvePath>[0];
+  canRead: boolean;
+  canBrowse: boolean;
+  startLine?: number;
+  endLine?: number;
+  maxBytes: number;
+  imageBytes: number;
+}
+
+interface ReadTarget {
+  path: string;
+  /** A range the caller attached to this one path, or null for the call-wide range. */
+  range: { start: number; end: number | undefined } | null;
+}
+
+/**
+ * Reads a `path:12-40` or `path:12` suffix off one requested path.
+ *
+ * It is the spelling a model reaches for when it wants several ranges of one file in one
+ * call, and the sandbox used to refuse it as a colon in a path — five calls across the 50 most
+ * recent recorded sessions, each carrying three or four ranges of the same file. Only a suffix
+ * after the last separator counts, so a `C:\\...` drive letter is never read as a range, and
+ * a range that runs backwards is left on the path for the sandbox to refuse as before.
+ */
+function splitLineRange(requested: string): { path: string; range: ReadTarget['range'] } {
+  const match = /^(.*[^\\/:]):(\d{1,9})(?:-(\d{1,9}))?$/.exec(requested);
+  if (!match) return { path: requested, range: null };
+  const start = Number(match[2]);
+  const end = match[3] === undefined ? undefined : Number(match[3]);
+  if (start < 1 || (end !== undefined && end < start)) return { path: requested, range: null };
+  return { path: match[1]!, range: { start, end } };
+}
+
+/** How many entries a not-found error lists from the nearest folder that does exist. */
+const MISSING_PATH_LISTING = 40;
+
+/**
+ * For a path that does not exist, the nearest folder above it that does, listed.
+ *
+ * "Not found" alone sends the model into a listing call it could have been spared: in the 50
+ * most recent recorded sessions the single most repeated read failure was a repository file
+ * guessed one folder too high, followed by a read of the folder to see what was there. Listing
+ * the nearest existing ancestor answers that follow-up in the same reply. It walks up through
+ * the sandbox one level at a time and says nothing unless a folder resolved.
+ */
+async function nearestFolderListing(roots: Root[], requested: string, err: unknown): Promise<string> {
+  if (!(err instanceof SandboxError) || !err.message.startsWith('Not found:')) return '';
+  const meant = await pathUnderNamedRoot(roots, requested);
+  if (meant) return `\nDid you mean ${meant}? It exists under the approved root of that name.`;
+  let candidate = requested;
+  for (let depth = 0; depth < 8; depth++) {
+    const parent = candidate.replace(/[\\/]+[^\\/]+[\\/]*$/, '');
+    if (parent === candidate || parent === '' || /^[A-Za-z]:$/.test(parent)) return '';
+    candidate = parent;
+    let resolved;
+    try {
+      resolved = await resolveIn(roots, candidate, { access: 'read' });
+    } catch (error) {
+      if (error instanceof SandboxError && error.message.startsWith('Not found:')) continue;
+      return '';
+    }
+    try {
+      const { entries, truncated } = await listDirectoryLevel(resolved.real, resolved.virtual, MISSING_PATH_LISTING, false);
+      const names = entries.map((entry) => `${entry.type === 'directory' ? 'd' : 'f'} ${entry.name}`);
+      const more = truncated ? `, …` : '';
+      return `\nThe nearest existing folder is ${resolved.virtual}${
+        entries.length === 0 ? ', and it is empty.' : `; it contains: ${names.join(', ')}${more}`
+      }`;
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+/**
+ * A missing path that names another approved root further down, where the rest exists.
+ *
+ * Live 2026-10-12: with roots `/downloads` and `/voxelcraft`, a model read
+ * `/downloads/.Dev-projects/voxelcraft/shared/adventure.ts`, the project's disk path under the
+ * wrong root. The listing that followed showed the user's Downloads folder, unrelated to the
+ * project, instead of the file it was after.
+ */
+async function pathUnderNamedRoot(roots: Root[], requested: string): Promise<string | null> {
+  const segments = requested.split(/[\\/]+/).filter(Boolean);
+  for (let index = 1; index < segments.length - 1; index++) {
+    const root = roots.find(entry => entry.name.toLowerCase() === segments[index]!.toLowerCase());
+    if (!root) continue;
+    const candidate = `/${[root.name, ...segments.slice(index + 1)].join('/')}`;
+    try {
+      return (await resolveIn(roots, candidate, { access: 'read' })).virtual;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * One path, one section of output, and the byte cost of producing it.
+ *
+ * The three result shapes are decided here rather than by an action argument, because from
+ * the caller's side they are one question — what is at this path — and asking a model to
+ * pick the right verb for a path it has not looked at yet is how `read_file` on a directory
+ * became a routine error.
+ */
+async function readOne(
+  requested: string,
+  options: ReadOneOptions
+): Promise<{ text: string; bytes: number; image?: { data: string; mimeType: string } }> {
+  const catalogPath = process.platform === 'win32' ? requested.replace(/\\/g, '/').toLowerCase() : requested;
+  if (catalogPath === SKILL_CATALOG_PATH) {
+    if (!options.canRead) return { text: `--- ${SKILL_CATALOG_PATH} ---\nTOOL_DISABLED: the Skills catalog requires the Read files permission.`, bytes: 0 };
+    // Scope comes from the already admitted caller's project/worktree owner, never
+    // from a model-supplied folder or a first-root fallback. Do not learn /skills as cwd.
+    const workspace = await validatedWorkspace();
+    const catalog = await readSkillCatalog({ projectPath: workspace?.real ?? null });
+    const current = await validatedWorkspace();
+    if (current?.real !== workspace?.real) throw new Error('The Skills catalog workspace changed while it was being read');
+    const lines = JSON.stringify(catalog, null, 2).split('\n');
+    const first = options.startLine ?? 1;
+    if (options.endLine !== undefined && options.endLine < first) throw new Error('endLine must be greater than or equal to startLine');
+    const last = Math.min(options.endLine ?? lines.length, lines.length);
+    if (last >= first && Buffer.byteLength(lines[first - 1]!, 'utf8') + 1 > options.maxBytes)
+      throw new Error(`Line ${first} is larger than max_bytes=${options.maxBytes}. Increase max_bytes (up to ${MAX_READ_BYTES}).`);
+    const selected = last >= first ? lines.slice(first - 1, last).join('\n') : '';
+    const numbered = boundedNumberedRead(selected, first, last >= first, options.maxBytes);
+    const note = numbered.truncated ? `\n(output cap reached; continue from line ${numbered.lastLine + 1})`
+      : last < lines.length ? `\n(more lines follow — continue from line ${last + 1})` : '';
+    const text = `--- ${SKILL_CATALOG_PATH} — lines ${first}-${numbered.lastLine} of ${lines.length}, generated metadata ---\n${numbered.text}${note}`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+  // The virtual root itself: a model that has not looked yet naturally starts at "/", and "Path
+  // is empty" left it guessing the names. The shared folders are what "/" contains.
+  if (typeof requested === 'string' && (process.platform === 'win32' ? /^[/\\]+$/ : /^\/+$/).test(requested.trim())) {
+    if (!options.canBrowse) {
+      return { text: `--- / ---\nTOOL_DISABLED: listing folders needs the Browse folders permission.`, bytes: 0 };
+    }
+    const text = options.roots.length === 0
+      ? '--- / — no folders are shared yet ---'
+      : `--- / — ${options.roots.length} entr${options.roots.length === 1 ? 'y' : 'ies'}, one level ---\n${options.roots.map(root => `d ${root.name}`).join('\n')}`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+  const resolved = await resolveIn(options.roots, requested, { access: 'read' });
+  const info = await statInfo(resolved.real, resolved.virtual, { scanContent: !options.canRead });
+
+  if (info.type === 'directory') {
+    if (!options.canBrowse) {
+      return { text: `--- ${resolved.virtual} ---\nTOOL_DISABLED: listing folders needs the Browse folders permission.`, bytes: 0 };
+    }
+    const { entries, truncated } = await listDirectoryLevel(resolved.real, resolved.virtual, MAX_DIR_ENTRIES);
+    const prefixLength = resolved.virtual.length + 1;
+    const body = entries
+      .map((entry) => {
+        const kind = entry.type === 'directory' ? 'd' : entry.type === 'file' ? 'f' : '?';
+        const size = entry.bytes === null ? '' : `  ${formatBytes(entry.bytes)}`;
+        return `${kind} ${entry.virtualPath.slice(prefixLength)}${size}`;
+      })
+      .join('\n');
+    const note = truncated
+      ? `\n(stopped at ${MAX_DIR_ENTRIES} entries — read a subfolder, or use a glob such as ${resolved.virtual}/**/*.ts)`
+      : '';
+    const text =
+      entries.length === 0
+        ? `--- ${resolved.virtual} — empty folder ---`
+        : `--- ${resolved.virtual} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}, one level ---\n${body}${note}`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  if (info.type !== 'file') {
+    const text = `--- ${resolved.virtual} ---\n${formatFileInfo(info)}\nNot a regular file, so there is nothing to read.`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  if (!options.canRead) {
+    // Metadata without content is a real answer when the user granted exactly that, and it
+    // is strictly better than refusing the path outright.
+    const text = `--- ${resolved.virtual} ---\n${formatFileInfo(info)}\n(file contents need the Read files permission)`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  const extension = nodePath.extname(resolved.virtual).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    // The same loader `view_image` uses, so an image opened through either tool is validated and
+    // decoded identically. `view_image` still exists in its own right: it is Codex's tool, with
+    // Codex's name, schema and errors, and this branch is only `read` continuing to answer "what
+    // is at this path" for a path that happens to be a picture.
+    // Text and image representations have separate aggregate bounds. An ordinary screenshot
+    // must not fail solely because it is larger than the text budget. Still charge base64,
+    // not just compressed file bytes, and refuse an exhausted image batch before decoding.
+    if (options.imageBytes <= 0) throw new Error('Read image output cap reached; read remaining images in another call or use view_image.');
+    const image = await viewImage(resolved.real, null, undefined, resolved.virtual);
+    logInfo(`tool read image ${resolved.virtual} (${formatBytes(image.bytes)})`);
+    const text = `--- ${resolved.virtual} — ${formatBytes(image.bytes)} ${image.mimeType} ---`;
+    if (image.base64.length > options.imageBytes) {
+      throw new Error(
+        `Read image output cap reached (${formatBytes(MAX_READ_IMAGE_BYTES)} base64 per call); read remaining images in another call or use view_image.`
+      );
+    }
+    return {
+      text,
+      bytes: Buffer.byteLength(text, 'utf8'),
+      image: { data: image.base64, mimeType: image.mimeType }
+    };
+  }
+
+  if (info.binary) {
+    // Never dumped as base64. A model that asked to read a .dll wanted to know what it is,
+    // and several megabytes of base64 answers a question nobody asked at ruinous cost.
+    const text =
+      `--- ${resolved.virtual} ---\n${formatFileInfo(info)}\n` +
+      'Binary file, so its bytes are not returned. Use exec_command if you need to inspect or convert it.';
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
+  let result;
+  try {
+    result = await readTextFile(resolved.real, {
+      startLine: options.startLine,
+      endLine: options.endLine,
+      maxBytes: options.maxBytes
+    });
+  } catch (error) {
+    if (!(error instanceof BinaryReadError)) throw error;
+    info.binary = true;
+    const text =
+      `--- ${resolved.virtual} ---\n${formatFileInfo(info)}\n` +
+      'Binary file, so its bytes are not returned. Use exec_command if you need to inspect or convert it.';
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+  if (result.lastLine >= result.firstLine) noteDetail(`lines ${result.firstLine}–${result.lastLine}`);
+  /*
+   * How long is this file?
+   *
+   * That is the question the header's line count exists to answer, and it used to go unanswered
+   * on exactly the reads that needed it: a range read stopped at `end_line`, so `totalLines` was
+   * null and the header said `lines 600-750` with no denominator. The caller could see what it
+   * had and not what it was a part of — which is how "600-750" gets mistaken for a whole file,
+   * and how a follow-up read gets aimed at a line that does not exist.
+   *
+   * `info.lines` is no help here: `readOne` calls `statInfo` with `scanContent: !canRead`, so in
+   * the ordinary read path the content scan is skipped and `info.lines` is null. The total now
+   * comes from the read itself, which counts on past the range (see `MAX_LINE_COUNT_BYTES`).
+   *
+   * So a total is missing in one case only — a range inside a file too big to be worth counting —
+   * and the header then states the range plainly rather than inventing a denominator.
+   */
+  const numbered = boundedNumberedRead(
+    result.text,
+    result.firstLine,
+    result.lastLine >= result.firstLine,
+    options.maxBytes
+  );
+  const visibleLastLine = numbered.lastLine;
+  const range =
+    visibleLastLine < result.firstLine
+      ? result.totalLines === null
+        ? 'no lines in that range'
+        : `no lines in that range; the file has ${result.totalLines}`
+      : result.totalLines === null
+        ? `lines ${result.firstLine}-${visibleLastLine}`
+        : `lines ${result.firstLine}-${visibleLastLine} of ${result.totalLines}`;
+  const note = result.truncated || numbered.truncated
+    ? `\n(output cap reached; continue from line ${visibleLastLine + 1} or raise max_bytes up to ${MAX_READ_BYTES})`
+    : result.hasMore
+      ? `\n(more lines follow — continue from line ${visibleLastLine + 1})`
+      : '';
+  const header = `--- ${resolved.virtual} — ${range}, ${formatBytes(info.bytes)}, modified ${info.modified} ---`;
+  const text = `${header}${numbered.text === '' && visibleLastLine < result.firstLine ? '' : `\n${numbered.text}`}${note}`;
+  return {
+    text,
+    // Charge the aggregate call budget for what is actually serialized, including headers and
+    // line-number prefixes. Counting only raw file bytes let thousands of short lines amplify a
+    // nominal 512 KiB cap into a multi-megabyte MCP response.
+    bytes: Buffer.byteLength(text, 'utf8')
+  };
+}
+
+/**
+ * Adds the model-visible line-number prefix without letting that metadata amplify a bounded
+ * file slice into an unbounded MCP result. `readTextFile` caps raw decoded bytes; a file made of
+ * hundreds of thousands of empty/tiny lines can add several extra megabytes of decimal prefixes
+ * afterwards. Spend the same budget on the numbered representation too. A real empty logical
+ * line is represented by `N\t`; `hasLine=false` is the only case that renders no row.
+ */
+function boundedNumberedRead(
+  text: string,
+  firstLine: number,
+  hasLine: boolean,
+  maxBytes: number
+): { text: string; lastLine: number; truncated: boolean } {
+  if (!hasLine) return { text: '', lastLine: firstLine - 1, truncated: false };
+  const lines = text.split('\n');
+  const kept: string[] = [];
+  let bytes = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const rendered = `${firstLine + index}\t${lines[index] ?? ''}`;
+    const cost = Buffer.byteLength(rendered, 'utf8') + (kept.length === 0 ? 0 : 1);
+    // Always return the first logical line. The backend already guaranteed that raw line fits
+    // the requested budget; the small line-number prefix must not turn that into an empty-page
+    // retry loop.
+    if (kept.length > 0 && bytes + cost > maxBytes) break;
+    kept.push(rendered);
+    bytes += cost;
+  }
+  return {
+    text: kept.join('\n'),
+    lastLine: firstLine + kept.length - 1,
+    truncated: kept.length < lines.length
+  };
+}
+
+export type { ToolResult };
+import { firstTaskRoot } from '../skill-access.js';
+import { reportedUsageLimits } from '../session/usage.js';
+import { readProviderUsage } from '../provider-usage.js';
+import { usageReport } from '../usage-tool.js';

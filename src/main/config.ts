@@ -1,0 +1,851 @@
+import { DEFAULT_HELPER_CHAT_MODEL, SUPERSEDED_HELPER_CHAT_MODELS } from '../shared/chat-models.js';
+import { UI_LANGUAGES } from '../shared/ui-language.js';
+import { DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB } from '../shared/session.js';
+import { appearanceSchema } from './appearance-schema.js';
+import { BROWSER_BRIDGE_PORTS } from '../shared/browser-bridge.js';
+import { CONNECTOR_SUFFIX_MAX, CONNECTOR_SUFFIX_PATTERN } from '../shared/connector-names.js';
+/**
+ * Non-secret settings, stored as one small JSON file in the app's userData folder.
+ * No database: there are at most a handful of roots and a dozen booleans.
+ *
+ * Everything read from disk is re-validated, because a hand-edited or corrupted file
+ * must not be able to widen permissions or smuggle in a root that was never approved.
+ */
+
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { z } from 'zod';
+import {
+  CAPABILITIES,
+  CHAT_BROWSERS,
+  DEFAULT_CAPABILITIES,
+  GOAL_MODES,
+  GOAL_PROVIDERS,
+  GOAL_REASONING_LEVELS,
+  WRITE_CAPABILITIES,
+  type Capabilities,
+  DESKTOP_CAPABILITIES,
+  type CompactionSettings,
+  type Config,
+  type GoalSettings,
+  type MultiAgentSettings,
+  type Root,
+  type SessionSettings
+} from '../shared/types.js';
+import {
+  DEFAULT_GOAL_MODEL,
+  DEFAULT_GOAL_LOOP_SYSTEM_PROMPT,
+  DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT,
+  DEFAULT_GOAL_SYSTEM_PROMPT,
+  MAX_GOAL_SYSTEM_PROMPT_CHARS,
+  SUPERSEDED_GOAL_LOOP_SYSTEM_PROMPTS,
+  SUPERSEDED_GOAL_OBJECTIVE_SYSTEM_PROMPTS,
+  SUPERSEDED_GOAL_SYSTEM_PROMPTS
+} from '../shared/goal.js';
+import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, HANDOFF_LENGTHS, MAX_HANDOFF_PROMPT_CHARS } from '../shared/handoff.js';
+import { logError } from './logger.js';
+import { APP_VERSION } from './version.js';
+import { RESERVED_ROOT_NAMES } from './sandbox.js';
+import { capabilitiesForPlatform } from './platform.js';
+import {
+  MAX_COMMAND_ALLOWLIST_RULES,
+  MAX_COMMAND_ALLOWLIST_RULE_CHARS,
+  validateCommandAllowlistRule
+} from '../shared/command-allowlist.js';
+
+export const browserBridgePortSchema = z.union([z.literal('auto'), z.literal(BROWSER_BRIDGE_PORTS)]);
+
+/**
+ * Defaults for the newer sections, in one place so the schema and defaultConfig()
+ * cannot drift apart.
+ *
+ * Recording is always ON and retained without an age limit. Everything the app is actually
+ * for — the readable timeline, Compact & resume, and agent attribution — reads that durable
+ * history. It writes only to this app's own data folder and uploads nothing. The separate
+ * bounded image store keeps its own quota and explicit cleanup controls.
+ *
+ * Existing configs still keep every explicit permission choice. Fresh installs are different:
+ * the Home screen is meant to start fully usable, so every tool permission and the agents
+ * surface begin enabled. The migration defaults below remain conservative so an upgrade never
+ * widens an older config merely because a field did not exist when that config was written.
+ */
+/**
+ * Where the pressure meter turns amber and red.
+ *
+ * These are measured in *this app's* units — `estimateTokens`, four characters to a token,
+ * over the events it kept — and not in whatever Gemini counts. The two are not the same
+ * number and never will be: the app cannot see the system prompt, the memory, the file
+ * attachments or the model's own reasoning, and Gemini's counter is private.
+ *
+ * So the thresholds are calibrated against observed behaviour rather than a published
+ * context window. The first pair (180k/200k) was set from the published figure, and a real
+ * session then ran past 400k of these units before Gemini would take no more — meaning the
+ * meter had been demanding a compaction since roughly the halfway mark, for hours, on a
+ * chat that was fine. A warning that cries wolf at half the real capacity is a warning
+ * people learn to click past, which costs more than having no warning at all.
+ *
+ * 300k/400k put the amber line where there was still comfortable room to compact and the
+ * red line at the point that had actually been seen to fail. In use that was still early:
+ * chats sat amber and compacted themselves well before anything was wrong with them, and a
+ * threshold that fires on a conversation that is fine costs a fresh chat every time. The
+ * window is 400k now, at the figure the ceiling has actually been observed near, and the
+ * red line follows it a third further on.
+ *
+ * All of it remains a setting, because the real ceiling moves with the account, the model
+ * and the size of what is attached.
+ */
+const DEFAULT_CONTEXT_WINDOW = 400_000;
+/** Only the sizes Settings offers; anything else in a hand-edited file falls back to the default. */
+const recordingStorageLimit = z.number()
+  .refine(size => (RECORDING_STORAGE_LIMITS_GIB as readonly number[]).includes(size))
+  .transform(size => size as RecordingStorageLimitGiB);
+
+const DEFAULT_SESSIONS: SessionSettings = {
+  record: true,
+  retainDays: 0,
+  advisoryTokens: DEFAULT_CONTEXT_WINDOW,
+  // Derived, never typed. The Chat panel writes `limit = threshold × 4/3` on every save,
+  // so a default that did not already satisfy that relation would be a state the UI cannot
+  // produce: the red line would move the first time anyone opened the panel and saved.
+  limitTokens: Math.round((DEFAULT_CONTEXT_WINDOW * 4) / 3),
+  storageLimitGiB: DEFAULT_RECORDING_STORAGE_GIB
+};
+
+/**
+ * The 1.7.1 recalibration, applied once to configs that never chose their own numbers.
+ *
+ * Raising a default only helps a fresh install: every existing config was written with the
+ * old figures spelled out, so it would keep the too-early warning forever. A stored pair
+ * that is *exactly* the old defaults was never a decision — it is what the app wrote for
+ * itself — so it moves. Anything else the user typed, and it stays put.
+ */
+const OLD_TOKEN_DEFAULTS = [
+  { advisoryTokens: 180_000, limitTokens: 200_000 },
+  { advisoryTokens: 300_000, limitTokens: 400_000 }
+];
+const DEFAULT_COMPACTION: CompactionSettings = {
+  // On, at the advisory line.
+  //
+  // Automatic compaction is edge-triggered since 1.8: an old chat that merely opens above
+  // this number does nothing. That is what makes the advisory line usable as the trigger —
+  // the crossing turn still finishes and still writes its handoff, rather than the app
+  // waiting for a chat that is already over the line and compacting it on sight.
+  auto: true,
+  autoTokens: DEFAULT_SESSIONS.advisoryTokens,
+  handoffPrompt: DEFAULT_HANDOFF_PROMPT,
+  handoffLength: DEFAULT_HANDOFF_LENGTH
+};
+/**
+ * The goal loop's defaults.
+ *
+ * Off until explicitly enabled, with Gemini as the default response source.
+ * API provider/model settings apply only when API is selected; saved choices remain exact.
+ */
+/**
+ * The shipped Goal baseline. Keep the exact OpenRouter model id here rather than a provider
+ * fallback or a local alias: changing providers after one failed request would also change the
+ * protocol behaviour the Goal loop is validating. Existing user-selected models remain stored
+ * verbatim; this value is only the fresh/repair default.
+ */
+export { DEFAULT_GOAL_MODEL } from '../shared/goal.js';
+const DEFAULT_GOAL: GoalSettings = {
+  backend: 'chatgpt',
+  loopBackend: 'chatgpt',
+  impulseMinutes: 0,
+  includeToolCalls: false,
+  helperModel: DEFAULT_HELPER_CHAT_MODEL,
+  helperReasoning: 'high',
+  enabled: false,
+  // The mode a fresh install runs the moment somebody flips the switch. Goal, because it is
+  // the one that can end by itself: a loop that never stops is a deliberate choice, not a
+  // default anybody should discover by turning something on.
+  mode: 'goal',
+  // Default for the optional API backend only; Gemini does not read this block.
+  provider: { kind: 'openrouter', baseUrl: '' },
+  model: DEFAULT_GOAL_MODEL,
+  reasoning: 'default',
+  prompt: DEFAULT_GOAL_SYSTEM_PROMPT,
+  objectivePrompt: DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT,
+  loopPrompt: DEFAULT_GOAL_LOOP_SYSTEM_PROMPT
+};
+// Retain the reference's conservative two-worker cap. Gemini's actual concurrency
+// allowance belongs to the signed-in account and is not inferred from that default.
+const DEFAULT_MULTI_AGENT: MultiAgentSettings = {
+  enabled: false,
+  maxWorkers: 2,
+  // Preserve the historical behavior unless the user explicitly opts into a cap shared by
+  // independent prime families. Existing per-family maxWorkers remains authoritative too.
+  globalMaxWorkers: 0,
+  allowUnattributedCalls: false,
+  strictChatAllowlist: false,
+  // Off: Goal/Loop chats are always recovered, and reopening anything else — a worker, a prime,
+  // a plain chat that once called a tool — is the user's choice to make.
+  recoverAgentTabs: false,
+  // Off: waiting for a run's own workers before its next automatic step is a deliberate choice.
+  // A chat that delegated nothing, and a chat with no run, never wait either way.
+  waitForSubAgents: false,
+  // Off by default on both fresh and migrated installs: Git workspace creation is opt-in.
+  autoWorktrees: false,
+  // Off: ending an OS process is a real side effect even though the worker identity survives.
+  // The user must opt in before sleeping-worker runtime maintenance can terminate anything.
+  endSleepingWorkerProcesses: false,
+  // Off: archiving changes the user's Gemini chat list, so it is opt-in (#1460).
+  archiveWorkerChats: false
+};
+/** Fresh-install exposure. Kept separate from migration defaults on purpose. */
+const ALL_FIRST_LAUNCH_CAPABILITIES: Capabilities = Object.fromEntries(
+  CAPABILITIES.map((capability) => [capability, capability === 'read'])
+) as Capabilities;
+// Fresh Gemini installs require attributed calls and explicit worker opt-in.
+// A missing companion/binding must fail setup rather than silently relax caller identity.
+const FIRST_LAUNCH_MULTI_AGENT: MultiAgentSettings = {
+  ...DEFAULT_MULTI_AGENT,
+  enabled: false,
+  allowUnattributedCalls: false
+};
+
+const rootSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(32)
+    .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Root names are lowercase letters, digits, dot, dash, underscore'),
+  path: z.string().min(2).max(4096)
+});
+
+/**
+ * Repairs root names from older/hand-edited configs without ever publishing an ambiguous
+ * virtual namespace. Reserved names and duplicates are renamed deterministically in input
+ * order, preserving the first usable spelling and suffixing later collisions.
+ */
+function uniqueStoredRoots(roots: Root[]): Root[] {
+  const used = new Set<string>();
+  const nextFree = (wanted: string): string => {
+    const reserved = RESERVED_ROOT_NAMES.has(wanted);
+    const base = reserved ? `${wanted}-folder` : wanted;
+    let candidate = base.slice(0, 32);
+    for (let suffix = 2; RESERVED_ROOT_NAMES.has(candidate) || used.has(candidate); suffix++) {
+      const tail = `-${suffix}`;
+      candidate = `${base.slice(0, Math.max(1, 32 - tail.length))}${tail}`;
+    }
+    return candidate;
+  };
+  return roots.map((root) => {
+    const name = nextFree(root.name);
+    used.add(name);
+    return name === root.name ? root : { ...root, name };
+  });
+}
+
+/**
+ * Migrates configs written before the tools were consolidated.
+ *
+ * `powershell` and `command` used to be one tool each and are now the single
+ * `exec_command`, so a user who had granted only PowerShell keeps the ability they
+ * chose. `deleteFolder` is dropped rather than folded into `deleteFile`: they were never
+ * the same permission, and quietly turning one into the other would widen what the user
+ * approved. Both keys are removed afterwards so the file stops carrying dead permissions.
+ */
+function migrateCapabilities(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const caps = { ...(value as Record<string, unknown>) };
+  if (caps['powershell'] === true) caps['command'] = true;
+  delete caps['powershell'];
+  delete caps['deleteFolder'];
+  return caps;
+}
+
+// Missing capability keys are filled from safe defaults so adding a new optional
+// permission in an update never resets an existing user's folders/tunnel settings.
+const capabilitiesSchema = z
+  .preprocess(
+    migrateCapabilities,
+    z.object(
+      Object.fromEntries(CAPABILITIES.map((c) => [c, z.boolean().optional()])) as Record<
+        (typeof CAPABILITIES)[number],
+        z.ZodOptional<z.ZodBoolean>
+      >
+    )
+  )
+  .transform((caps) => ({ ...DEFAULT_CAPABILITIES, ...caps }) as Capabilities);
+
+/**
+ * The user's own MCP instructions.
+ *
+ * Empty by default, and deliberately so: the connector instructions are how the app explains
+ * its own tools, and inventing text on the user's behalf there would put words the app cannot
+ * honour in front of the model.
+ */
+export const MAX_MCP_INSTRUCTIONS_CHARS = 4000;
+const DEFAULT_MCP = { instructions: '', persistentUrls: true } as const;
+/** Off for fresh installs and for every config written before the switches existed. */
+const DEFAULT_CONTROL_API = { enabled: false, allowActions: false } as const;
+const DEFAULT_COMMAND_ALLOWLIST = { enabled: false, mode: 'allow', rules: [] } as const;
+const commandAllowlistRuleSchema = z.string().max(MAX_COMMAND_ALLOWLIST_RULE_CHARS).superRefine((rule, ctx) => {
+  const message = validateCommandAllowlistRule(rule);
+  if (message) ctx.addIssue({ code: 'custom', message });
+});
+
+const configSchema = z.object({
+  // A config written by hand — or by a build before `/skills` was reserved — must not be
+  // able to claim a reserved virtual root. Renamed rather than rejected: a single bad root
+  // name is not a reason to throw away the whole config and every other approved folder.
+  roots: z
+    .array(rootSchema)
+    .max(32)
+    .transform(uniqueStoredRoots),
+  capabilities: capabilitiesSchema,
+  readOnly: z.boolean(),
+  commandAllowlist: z.object({
+    enabled: z.boolean(),
+    mode: z.enum(['allow', 'deny']).optional().default('allow'),
+    rules: z.array(commandAllowlistRuleSchema).max(MAX_COMMAND_ALLOWLIST_RULES)
+  }).optional().default({ ...DEFAULT_COMMAND_ALLOWLIST, rules: [] }),
+  tunnel: z.object({
+    profileId: z.string().min(1).max(64).optional(),
+    profileName: z.string().trim().min(1).max(80).optional(),
+    profileEpoch: z.number().int().nonnegative().optional(),
+    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual']),
+    tunnelId: z.string().max(128),
+    // Optional with an empty default, so a config written before the connector split
+    // loads unchanged and simply has no Desktop tunnel yet — which is also the correct
+    // state for it, since the user has not created that connector in Gemini either.
+    desktopTunnelId: z.string().max(128).optional().default(''),
+    pluginsTunnelId: z.string().max(128).optional().default(''),
+    binaryPath: z.string().max(4096)
+  }),
+  // A damaged value falls back to the plain names instead of failing the whole file.
+  connectorSuffix: z.string().trim().max(CONNECTOR_SUFFIX_MAX).regex(CONNECTOR_SUFFIX_PATTERN).optional().catch(undefined),
+  setupProfiles: z.array(z.object({
+    id: z.string().min(1).max(64), name: z.string().trim().min(1).max(80),
+    tunnelId: z.string().max(128), desktopTunnelId: z.string().max(128), pluginsTunnelId: z.string().max(128)
+  })).max(11).refine(rows => new Set(rows.map(row => row.id)).size === rows.length, 'Duplicate setup profile').optional(),
+  ui: z.object({
+    appearance: appearanceSchema.optional().catch(undefined),
+    autoContinue: z.boolean().optional().default(true),
+    defaultChatModel: z.string().trim().min(1).max(80).optional().catch(undefined),
+    defaultChatReasoning: z.enum(REASONING_EFFORTS).optional().catch(undefined),
+    chatBrowser: z.enum(CHAT_BROWSERS).optional().default('chrome'),
+    /** Where a minimized built-in browser window goes. */
+    cosBrowserMinimize: z.enum(['taskbar', 'tray']).optional().default('taskbar'),
+    developerMode: z.boolean().optional(),
+    playfulStatus: z.boolean().optional(),
+    playfulContinue: z.boolean().optional(),
+    /** Keep the chat at its end while it grows, in the app and on Gemini, until the reader scrolls up. */
+    followOutput: z.boolean().optional().default(true),
+    mentionCore: z.boolean().optional().default(true),
+    language: z.enum(UI_LANGUAGES).optional(),
+    // The version this install last started as; What's New shows once per real update (#1172).
+    lastSeenVersion: z.string().trim().min(1).max(40).optional().catch(undefined),
+    browserPreferences: z.object({ overwrite: z.boolean(), durations: z.boolean() }).strict().optional(),
+    cosBrowserTrayHint: z.boolean().optional(),
+    finishTool: z.boolean().optional(),
+    planBackend: z.enum(['chatgpt', 'api']).optional(),
+    finishAction: z.enum(['notify', 'goal']).optional(),
+    finishLeadMinutes: z.number().int().min(3).max(5).optional(),
+    backgroundChats: z.boolean().optional().default(true),
+    backgroundPlacement: z.enum(['window', 'group']).optional().default('window').catch('window'),
+    followUp: z.enum(['steer', 'queue']).optional().default('steer').catch('steer'),
+    enterSends: z.boolean().optional().default(true),
+    browserBridgePort: browserBridgePortSchema.optional().default('auto'),
+    browserOnly: z.boolean().optional().default(false),
+    autoRefreshPlugins: z.boolean().optional().default(false),
+    autoRefreshPluginsAsked: z.boolean().optional().default(false),
+    autoSelectSkills: z.boolean().optional().default(false),
+    tabsToKeepOpen: z.number().int().min(1).max(50).optional(),
+    minimizeToTray: z.boolean(),
+    autoConnect: z.boolean(),
+    startAtLogin: z.boolean().optional().default(false),
+    turnNotifications: z.boolean().optional().default(true),
+    // #1402: a fresh turn after this many minutes of one (0 = off). A malformed value keeps the default.
+    rotateTurnMinutes: z.number().int().min(0).max(120).optional().default(30).catch(30),
+    // Reading Codex's and Claude Code's own logs for the Usage page (#482). Missing means on.
+    localAppUsage: z.boolean().optional().default(true),
+    keepAwake: z.boolean().optional().default(true),
+    keepScreenAwake: z.boolean().optional().default(false),
+    privacyScreenshots: z.boolean().optional().default(false),
+    // Dark is the design the app is drawn for, and a config written before the theme
+    // existed has no stored answer to override — so it is the default rather than the
+    // fallback. An explicit `light` is somebody's own choice and is never touched.
+    theme: z.enum(['light', 'dark']).optional().default('dark')
+  }),
+  // Whole sections are optional, so a config written by an older build keeps working
+  // and simply gains the new features switched off. The default object is spelled out
+  // rather than left as {} because zod 4 returns a default as-is instead of parsing it.
+  sessions: z
+    .object({
+      record: z.boolean().optional().default(DEFAULT_SESSIONS.record),
+      retainDays: z.number().int().min(0).max(3650).optional().default(DEFAULT_SESSIONS.retainDays),
+      advisoryTokens: z
+        .number()
+        .int()
+        .min(10_000)
+        .max(4_000_000)
+        .optional()
+        .default(DEFAULT_SESSIONS.advisoryTokens),
+      limitTokens: z.number().int().min(10_000).max(4_000_000).optional().default(DEFAULT_SESSIONS.limitTokens),
+      storageLimitGiB: recordingStorageLimit.catch(DEFAULT_RECORDING_STORAGE_GIB)
+    })
+    // `record` and `retainDays` remain readable for old configs and wire compatibility, but
+    // they are no longer user choices. Normalizing here covers disk load, renderer saves,
+    // extension/config writers and direct updateConfig callers at one boundary.
+    .transform((sessions) => ({ ...sessions, record: true, retainDays: 0 }))
+    .optional()
+    .default({ ...DEFAULT_SESSIONS, storageLimitGiB: DEFAULT_RECORDING_STORAGE_GIB }),
+  compaction: z
+    .object({
+      auto: z.boolean().optional().default(DEFAULT_COMPACTION.auto),
+      // The floor is high enough that the threshold cannot be set somewhere a fresh chat
+      // is already past, which would compact every conversation the moment it started.
+      autoTokens: z
+        .number()
+        .int()
+        .min(10_000)
+        .max(4_000_000)
+        .optional()
+        .default(DEFAULT_COMPACTION.autoTokens),
+      // Existing configs predate this editor. Blank/oversized hand edits recover to the
+      // shipped content policy; protocol framing remains outside this user-authored field.
+      handoffPrompt: z
+        .string()
+        .max(MAX_HANDOFF_PROMPT_CHARS)
+        .optional()
+        .default(DEFAULT_COMPACTION.handoffPrompt)
+        .transform((prompt) => prompt.trim() === '' ? DEFAULT_COMPACTION.handoffPrompt : prompt.trim())
+        .catch(DEFAULT_COMPACTION.handoffPrompt),
+      // Absent in every config before 2.1.27: those keep the shipped 10k–30k brief.
+      handoffLength: z.enum(HANDOFF_LENGTHS).optional().default(DEFAULT_HANDOFF_LENGTH).catch(DEFAULT_HANDOFF_LENGTH)
+    })
+    .optional()
+    .default({ ...DEFAULT_COMPACTION, handoffLength: DEFAULT_HANDOFF_LENGTH }),
+  multiAgent: z
+    .object({
+      enabled: z.boolean().optional().default(DEFAULT_MULTI_AGENT.enabled),
+    defaultModel: z.string().max(80).optional(),
+    defaultReasoning: z.enum(['', ...REASONING_EFFORTS]).optional(),
+      maxWorkers: z.number().int().min(1).max(8).optional().default(DEFAULT_MULTI_AGENT.maxWorkers),
+      globalMaxWorkers: z.number().int().min(0).max(64).optional().default(DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0),
+      allowUnattributedCalls: z.boolean().optional().default(DEFAULT_MULTI_AGENT.allowUnattributedCalls),
+      strictChatAllowlist: z.boolean().optional().default(DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false),
+      recoverAgentTabs: z.boolean().optional().default(DEFAULT_MULTI_AGENT.recoverAgentTabs),
+      waitForSubAgents: z.boolean().optional().default(DEFAULT_MULTI_AGENT.waitForSubAgents ?? false),
+      autoWorktrees: z.boolean().optional().default(DEFAULT_MULTI_AGENT.autoWorktrees ?? false),
+      endSleepingWorkerProcesses: z.boolean().optional().default(DEFAULT_MULTI_AGENT.endSleepingWorkerProcesses ?? false),
+      archiveWorkerChats: z.boolean().optional().default(DEFAULT_MULTI_AGENT.archiveWorkerChats ?? false)
+    })
+    .optional()
+    .default({
+      enabled: DEFAULT_MULTI_AGENT.enabled,
+      maxWorkers: DEFAULT_MULTI_AGENT.maxWorkers,
+      globalMaxWorkers: DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0,
+      allowUnattributedCalls: DEFAULT_MULTI_AGENT.allowUnattributedCalls,
+      strictChatAllowlist: DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false,
+      recoverAgentTabs: DEFAULT_MULTI_AGENT.recoverAgentTabs,
+      waitForSubAgents: DEFAULT_MULTI_AGENT.waitForSubAgents ?? false,
+      autoWorktrees: DEFAULT_MULTI_AGENT.autoWorktrees ?? false,
+      endSleepingWorkerProcesses: DEFAULT_MULTI_AGENT.endSleepingWorkerProcesses ?? false,
+      archiveWorkerChats: DEFAULT_MULTI_AGENT.archiveWorkerChats ?? false
+    }),
+  // An empty model id is repaired rather than rejected: the id is free text from a
+  // provider listing that changes weekly, and a config that lost it must still load with
+  // every root and permission in it intact.
+  goal: z
+    .object({
+      impulseMinutes: z.number().int().min(0).max(60).optional().default(0).catch(0),
+      includeToolCalls: z.boolean().optional().default(false),
+      enabled: z.boolean().optional().default(DEFAULT_GOAL.enabled),
+      backend: z.enum(['api', 'chatgpt', 'templates']).optional().default('chatgpt'),
+      loopBackend: z.enum(['api', 'chatgpt']).optional().default('chatgpt'),
+      helperModel: z.string().trim().min(1).max(80).optional().default(DEFAULT_HELPER_CHAT_MODEL).catch(DEFAULT_HELPER_CHAT_MODEL),
+      helperReasoning: z.enum(REASONING_EFFORTS).optional().default('high').catch('high'),
+      // Repaired rather than rejected for the same reason `reasoning` below is: a config
+      // written by a version that knows one more mode than this one must not send every root
+      // and permission in the file through conservative recovery over a single word.
+      mode: z.enum(GOAL_MODES).optional().default(DEFAULT_GOAL.mode).catch(DEFAULT_GOAL.mode),
+      provider: z
+        .object({
+          // Repaired rather than rejected like `mode` above: a config written by a version
+          // that knows one more provider than this one must not invalidate every root and
+          // permission in the file over a single word.
+          kind: z.enum(GOAL_PROVIDERS).optional().default('openrouter').catch('openrouter'),
+          // Stored verbatim and validated at draft time: a URL cannot be repaired the way an
+          // enum can, and silently rewriting it would point a key at a host nobody chose.
+          baseUrl: z.string().max(2048).optional().default('')
+        })
+        .optional()
+        .default({ ...DEFAULT_GOAL.provider }),
+      model: z
+        .string()
+        .max(160)
+        .optional()
+        .default(DEFAULT_GOAL.model)
+        .transform((model) => (model.trim() === '' ? DEFAULT_GOAL.model : model.trim())),
+      // Repaired for the same reason, and one this section is specifically exposed to: the
+      // set of levels is a provider's vocabulary, so a config written by a version that
+      // knows one more of them than this one does is a config this app will meet. Rejecting
+      // it would send the whole file — every root, every permission — through conservative
+      // recovery over a word in one field nobody would miss.
+      reasoning: z
+        .enum(GOAL_REASONING_LEVELS)
+        .optional()
+        .default(DEFAULT_GOAL.reasoning)
+        .catch(DEFAULT_GOAL.reasoning),
+      // Existing configs predate the editor, and a hand-edited blank prompt must not turn
+      // Goal Mode into an unconstrained continuation model. Both adopt the strong default.
+      prompt: z
+        .string()
+        .max(MAX_GOAL_SYSTEM_PROMPT_CHARS)
+        .optional()
+        .default(DEFAULT_GOAL.prompt)
+        .transform((prompt) => (prompt.trim() === '' ? DEFAULT_GOAL.prompt : prompt.trim()))
+        .catch(DEFAULT_GOAL.prompt),
+      // Repaired exactly like `prompt` above, and for the same reason: a config predating the
+      // second editor, or hand-edited to blank, must not leave the goal driver running with no
+      // instruction at all. Both fall back to the shipped default rather than to emptiness.
+      objectivePrompt: z
+        .string()
+        .max(MAX_GOAL_SYSTEM_PROMPT_CHARS)
+        .optional()
+        .default(DEFAULT_GOAL.objectivePrompt)
+        .transform((prompt) =>
+          prompt.trim() === '' ? DEFAULT_GOAL.objectivePrompt : prompt.trim()
+        )
+        .catch(DEFAULT_GOAL.objectivePrompt),
+      // The third editor, repaired exactly like the two above. Loop is the mode that cannot
+      // stop on its own, so an empty instruction here would be an unconstrained model typing
+      // into somebody's chat forever — the one shape this section must never load in.
+      loopPrompt: z
+        .string()
+        .max(MAX_GOAL_SYSTEM_PROMPT_CHARS)
+        .optional()
+        .default(DEFAULT_GOAL.loopPrompt)
+        .transform((prompt) => (prompt.trim() === '' ? DEFAULT_GOAL.loopPrompt : prompt.trim()))
+        .catch(DEFAULT_GOAL.loopPrompt)
+    })
+    .optional()
+    .default({ ...DEFAULT_GOAL, backend: 'chatgpt', loopBackend: 'chatgpt', impulseMinutes: 0, includeToolCalls: false, helperModel: DEFAULT_HELPER_CHAT_MODEL, helperReasoning: 'high' }),
+  mcp: z
+    .object({
+      // Repaired rather than rejected, like the Goal prompts above: this is free text a person
+      // typed, and one over-long or malformed field must not send the whole config — every
+      // root, every permission — through conservative recovery.
+      instructions: z
+        .string()
+        .optional()
+        .default(DEFAULT_MCP.instructions)
+        .transform((value) => value.slice(0, MAX_MCP_INSTRUCTIONS_CHARS).trim())
+        .catch(DEFAULT_MCP.instructions),
+      useGeminiWebSkill: z.boolean().optional().catch(false),
+      // Opt-in only: a malformed value repairs to off, the rotating default.
+      persistentUrls: z.boolean().optional().default(false).catch(false)
+    })
+    .optional()
+    .default({ ...DEFAULT_MCP })
+    .catch({ ...DEFAULT_MCP }),
+  // A malformed value falls back to off rather than to conservative recovery: the switches can
+  // only ever widen access, so "off" is the safe repair and the rest of the file stays valid.
+  // Each field repairs on its own, so a bad `allowActions` cannot switch the API itself off, and
+  // actions never outlive the API: a hand-edited `{ enabled: false, allowActions: true }` loads as off.
+  controlApi: z
+    .object({
+      enabled: z.boolean().optional().default(DEFAULT_CONTROL_API.enabled).catch(DEFAULT_CONTROL_API.enabled),
+      allowActions: z.boolean().optional().default(DEFAULT_CONTROL_API.allowActions).catch(DEFAULT_CONTROL_API.allowActions)
+    })
+    .transform((value) => ({ enabled: value.enabled, allowActions: value.enabled && value.allowActions }))
+    .optional()
+    .default({ ...DEFAULT_CONTROL_API })
+    .catch({ ...DEFAULT_CONTROL_API })
+}).transform(value => value.tunnel.kind === 'tailscale'
+  ? { ...value, mcp: { ...value.mcp, persistentUrls: true } }
+  : value);
+
+/**
+ * Fresh-install Desktop exposure differs by host. Windows starts the Desktop group on. macOS has
+ * a native backend too, but it starts **off** and is switched on by the user: every Desktop
+ * action there also needs Screen Recording / Accessibility consent from System Settings, and a
+ * fresh install must not publish a second connector nobody can use yet. Unsupported hosts mask
+ * the group at the platform boundary while preserving stored choices for a moved config.
+ */
+function firstLaunchCapabilities(platform: NodeJS.Platform, release?: string): Capabilities {
+  const capabilities = capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform, release);
+  if (platform === 'darwin') for (const capability of DESKTOP_CAPABILITIES) capabilities[capability] = false;
+  return capabilities;
+}
+
+export function defaultConfig(platform: NodeJS.Platform = process.platform, release?: string): Config {
+  return {
+    roots: [],
+    capabilities: firstLaunchCapabilities(platform, release),
+    readOnly: false,
+    commandAllowlist: { ...DEFAULT_COMMAND_ALLOWLIST, rules: [] },
+    tunnel: { kind: 'tailscale', tunnelId: '', desktopTunnelId: '', binaryPath: '' },
+    // Fresh installs refresh changed connector tools on their own: a permission chosen in Setup
+    // changes the tool list, and nothing else tells a new user to refresh the plugin in Gemini.
+    // Older configs keep the schema default (off).
+    ui: { minimizeToTray: true, autoConnect: false, startAtLogin: false, keepAwake: true, keepScreenAwake: false, cosBrowserMinimize: 'taskbar', turnNotifications: true, rotateTurnMinutes: 30, localAppUsage: true, privacyScreenshots: false, theme: 'dark', autoRefreshPlugins: false, autoRefreshPluginsAsked: true, autoSelectSkills: false, backgroundChats: true, backgroundPlacement: 'window', followUp: 'steer', enterSends: true, browserBridgePort: 'auto', autoContinue: true, followOutput: true, mentionCore: true,
+      // The built-in browser is opt-in: Chrome with the companion stays the default for new and
+      // existing installs alike, and the built-in one runs only once someone chooses it.
+      chatBrowser: 'brave' },
+    sessions: { ...DEFAULT_SESSIONS },
+    compaction: { ...DEFAULT_COMPACTION },
+    multiAgent: { ...FIRST_LAUNCH_MULTI_AGENT },
+    goal: { ...DEFAULT_GOAL },
+    mcp: { ...DEFAULT_MCP },
+    controlApi: { ...DEFAULT_CONTROL_API }
+  };
+}
+
+/**
+ * Recovery for a config file that exists but cannot be trusted.
+ *
+ * A missing file is a real first launch and intentionally gets the fully-enabled defaults
+ * above. A malformed/corrupt existing file is different: treating damage as consent would
+ * widen filesystem/desktop/process access merely because parsing failed. Keep that path on
+ * the historical narrow capability set and read-only mode until the user saves settings again.
+ */
+function conservativeRecoveryConfig(): Config {
+  return {
+    ...defaultConfig(),
+    capabilities: { ...DEFAULT_CAPABILITIES },
+    readOnly: true,
+    multiAgent: { ...DEFAULT_MULTI_AGENT },
+    // Damage is not a choice of browser either: keep the one every older config reads as.
+    ui: { ...defaultConfig().ui, autoContinue: false, autoRefreshPlugins: false, chatBrowser: 'chrome' },
+    // A config file that could not be trusted is not consent to have a second model typing
+    // into the user's chat, whatever the unreadable file said.
+    goal: { ...DEFAULT_GOAL }
+  };
+}
+
+/**
+ * Moves any exactly-as-shipped Goal prompt, from any past version, onto the current default.
+ *
+ * All three prompts — the gate, the driver and the loop — are editable and persisted, so
+ * changing a source constant alone would leave an existing untouched install on the old
+ * behaviour forever. Exact equality is the fence: any user customization, even a one-character
+ * change, is preserved verbatim. Each list is walked rather than compared against one
+ * predecessor, so an install that skipped a release still migrates instead of being stranded on
+ * a default two generations old.
+ */
+function adoptCurrentGoalPrompt(config: Config): Config {
+  const goal = { ...config.goal };
+  if (SUPERSEDED_GOAL_SYSTEM_PROMPTS.includes(goal.prompt)) goal.prompt = DEFAULT_GOAL_SYSTEM_PROMPT;
+  if (SUPERSEDED_GOAL_OBJECTIVE_SYSTEM_PROMPTS.includes(goal.objectivePrompt)) {
+    goal.objectivePrompt = DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT;
+  }
+  if (SUPERSEDED_GOAL_LOOP_SYSTEM_PROMPTS.includes(goal.loopPrompt)) {
+    goal.loopPrompt = DEFAULT_GOAL_LOOP_SYSTEM_PROMPT;
+  }
+  // The same fence for the helper model: only the exact shipped value moves. GPT-5.6 Sol is no longer
+  // in Gemini's catalog, so a config still holding it fell back to Gemini's selection on every decision.
+  if (goal.helperModel && SUPERSEDED_HELPER_CHAT_MODELS.includes(goal.helperModel)) goal.helperModel = DEFAULT_HELPER_CHAT_MODEL;
+  return { ...config, goal };
+}
+
+let configPath = '';
+let current: Config = defaultConfig();
+// This run started from conservativeRecoveryConfig. Setup says so beside its access choice, because
+// read-only with no reason given reads as a broken app. Lasts until read-only is switched off.
+let recovered = false;
+
+export function settingsRecovered(): boolean {
+  return recovered;
+}
+// Every UI mutation ultimately lands in the same tiny JSON file. Keep those
+// read-modify-write transactions strictly ordered so two fast checkbox/root changes
+// cannot race on config.json.tmp or overwrite each other's newer state.
+let mutationQueue: Promise<void> = Promise.resolve();
+
+export function initConfigPath(userDataDir: string): void {
+  configPath = path.join(userDataDir, 'config.json');
+}
+
+/**
+ * Keeps an unusable settings file before recovery defaults can replace it.
+ *
+ * The next save after a failed read writes the recovery settings over the file. Found on the
+ * Windows test VM (2026-10-06): a settings file with a byte-order mark lost its folders and tunnel
+ * that way within a second. The copy keeps the original bytes next to the file; failing to write it
+ * is logged and never blocks starting.
+ */
+async function keepUnreadable(raw: string): Promise<void> {
+  const copy = `${configPath}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  try {
+    await fs.writeFile(copy, raw, 'utf8');
+    logError(`The settings file could not be used; its original was kept as ${path.basename(copy)}`);
+  } catch (error) {
+    logError(`Could not keep a copy of the unusable settings file: ${(error as Error).message}`);
+  }
+}
+
+export async function loadConfig(): Promise<Config> {
+  let raw: string | null = null;
+  try {
+    raw = await fs.readFile(configPath, 'utf8');
+    // Windows PowerShell 5.1 and older Notepad start UTF-8 files with a byte-order mark; it is not JSON.
+    const parsed = configSchema.safeParse(JSON.parse(raw.replace(/^\uFEFF/, '')));
+    if (!parsed.success) {
+      logError('Settings file was invalid and has been reset to defaults');
+      await keepUnreadable(raw);
+      current = conservativeRecoveryConfig();
+      recovered = true;
+    } else {
+      current = adoptCurrentGoalPrompt(adoptWiderWindow(adoptAutoCompaction(recalibrateTokens(parsed.data))));
+      // Duplicate root names would make a virtual path ambiguous.
+      const seen = new Set<string>();
+      current.roots = current.roots.filter((r) => {
+        const key = r.name.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logError(`Could not read settings: ${(err as Error).message}`);
+      if (raw !== null) await keepUnreadable(raw);
+      current = conservativeRecoveryConfig();
+      recovered = true;
+    } else {
+      // A fresh install has nothing new to show: it records its own version before anything can.
+      current = { ...defaultConfig(), ui: { ...defaultConfig().ui, lastSeenVersion: APP_VERSION } };
+    }
+  }
+  return current;
+}
+
+/** Applies any superseded pair in OLD_TOKEN_DEFAULTS → DEFAULT_SESSIONS, untouched pairs only. */
+function recalibrateTokens(config: Config): Config {
+  const { advisoryTokens, limitTokens } = config.sessions;
+  const untouched = OLD_TOKEN_DEFAULTS.some(
+    (old) => advisoryTokens === old.advisoryTokens && limitTokens === old.limitTokens
+  );
+  if (!untouched) {
+    return config;
+  }
+  return {
+    ...config,
+    sessions: {
+      ...config.sessions,
+      advisoryTokens: DEFAULT_SESSIONS.advisoryTokens,
+      limitTokens: DEFAULT_SESSIONS.limitTokens
+    }
+  };
+}
+
+/**
+ * What automatic compaction used to default to, for the same one-time move as above.
+ *
+ * A config written before 1.7.5 spells the old answer out, so raising the default alone
+ * would only ever reach a fresh install. A stored pair that is *exactly* the old default
+ * was never a decision — it is what the app wrote for itself — so it moves. Anything the
+ * user actually chose is left alone, including switching it off on purpose, which is why
+ * `auto: true` with the old threshold is not touched: that is somebody's own setting.
+ */
+const OLD_AUTO_DEFAULTS = { auto: false, autoTokens: 300_000 };
+
+function adoptAutoCompaction(config: Config): Config {
+  const { auto, autoTokens } = config.compaction;
+  if (auto !== OLD_AUTO_DEFAULTS.auto || autoTokens !== OLD_AUTO_DEFAULTS.autoTokens) return config;
+  return {
+    ...config,
+    compaction: { ...config.compaction, auto: DEFAULT_COMPACTION.auto, autoTokens: DEFAULT_COMPACTION.autoTokens }
+  };
+}
+
+/**
+ * The 1.8 automatic default, moved up with the window.
+ *
+ * This is the third time a stored number that was never chosen has had to follow a default,
+ * and it is the one case where the file's own rule is uncomfortable. `adoptAutoCompaction`
+ * above deliberately leaves `auto: true` at the old threshold alone, on the grounds that
+ * switching it on was a decision — but that was written when `auto: false` was the shipped
+ * default. Since 1.8 the app writes `auto: true` at 300k for itself, so the two populations
+ * are no longer distinguishable in the file, and the larger of them never decided anything.
+ *
+ * They move. A threshold that is any other number was typed by somebody and stays.
+ *
+ * There is no matching migration downward: 400k is what this now defaults to, so a config
+ * that already holds it, whether from 1.7 or from a person, simply keeps it.
+ */
+const SUPERSEDED_AUTO_DEFAULTS = { auto: true, autoTokens: 300_000 };
+
+function adoptWiderWindow(config: Config): Config {
+  const { auto, autoTokens } = config.compaction;
+  if (auto !== SUPERSEDED_AUTO_DEFAULTS.auto || autoTokens !== SUPERSEDED_AUTO_DEFAULTS.autoTokens) return config;
+  return {
+    ...config,
+    compaction: { ...config.compaction, autoTokens: DEFAULT_COMPACTION.autoTokens }
+  };
+}
+
+export function getConfig(): Config {
+  return current;
+}
+
+/**
+ * Read-only mode is enforced here as well as at the tool layer, so the effective
+ * capability set can never disagree with what the UI shows.
+ */
+export function effectiveCapabilities(
+  config: Config,
+  platform: NodeJS.Platform = process.platform,
+  release?: string
+): Capabilities {
+  const live = capabilitiesForPlatform(config.capabilities, platform, release);
+  if (!config.readOnly) return live;
+  // Derived from WRITE_CAPABILITIES rather than listed again here, so adding a new
+  // writing capability cannot accidentally leave it enabled in read-only mode.
+  const capped = { ...live };
+  for (const capability of WRITE_CAPABILITIES) capped[capability] = false;
+  return capped;
+}
+
+async function persistConfig(parsed: Config): Promise<Config> {
+  const tmp = `${configPath}.tmp`;
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(tmp, JSON.stringify(parsed, null, 2), 'utf8');
+  await fs.rename(tmp, configPath);
+  // Only publish the new in-memory state after the durable write succeeded. A disk
+  // error must not leave the UI believing settings were saved when they were not.
+  current = parsed;
+  if (!parsed.readOnly) recovered = false;
+  return current;
+}
+
+/**
+ * Atomically updates settings from the latest committed state.
+ *
+ * The callback itself runs inside the queue. This matters more than merely queuing the
+ * final file write: a root change and a permission change that start at the same time
+ * must each see the result of the one ahead of it instead of composing two stale full
+ * Config objects and letting the later write silently erase the earlier change.
+ */
+export function updateConfig(
+  update: (latest: Config) => Config | Promise<Config>,
+  afterPublish?: (next: Config, previous: Config) => void | Promise<void>,
+  publish?: (next: Config, previous: Config, persist: () => Promise<Config>) => Promise<Config>
+): Promise<Config> {
+  const operation = mutationQueue.then(async () => {
+    const previous = current;
+    // Validate before reserving external resources. The optional publisher owns their rollback.
+    const proposed = configSchema.parse(await update(previous));
+    const persist = () => persistConfig(proposed);
+    const next = await (publish ? publish(proposed, previous, persist) : persist());
+    // Keep dependent durable retirement inside the same settings transaction;
+    // the next On cannot overtake a published Off's cancellation work.
+    await afterPublish?.(next, previous);
+    return next;
+  });
+  mutationQueue = operation.then(
+    () => undefined,
+    () => undefined
+  );
+  return operation;
+}
+
+/** Replaces the complete config. Prefer updateConfig for read-modify-write changes. */
+export function saveConfig(next: Config): Promise<Config> {
+  return updateConfig(() => next);
+}
+

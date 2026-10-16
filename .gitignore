@@ -1,0 +1,9 @@
+node_modules/
+out/
+release/
+build/
+resources/
+*.log
+.env*
+*.private.*
+/extension/build-stamp.txt

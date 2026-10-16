@@ -1,0 +1,956 @@
+import type { ReasoningEffort, RecordingStorageLimitGiB } from './session.js';
+import type { PluginRefreshStatus } from './plugin-refresh.js';
+import { WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_INPUT_METHODS } from './windows-computer.js';
+import { BROWSER_READ_TOOLS, BROWSER_WRITE_TOOLS } from './browser-control.js';
+import type { CommandAllowlistSettings } from './command-allowlist.js';
+export type { CommandAllowlistSettings } from './command-allowlist.js';
+/** Types shared between the main process and the renderer. No runtime logic here. */
+
+/**
+ * One capability per user-facing checkbox. Tools are only registered on the MCP
+ * server when their capability is enabled, so a disabled capability is invisible
+ * to the model rather than merely refused.
+ */
+/*
+ * Two permissions were removed when the tools were consolidated, because no tool could
+ * honour them any more and a checkbox that grants nothing — or worse, less than its
+ * label promises — is a lie about the security boundary:
+ *
+ * - `powershell` and `command` were one tool each. `exec_command` replaced both, and it
+ *   runs PowerShell by default, so leaving the pair in place meant "Run executable" was
+ *   silently also "Run PowerShell" while the PowerShell checkbox granted nothing at all.
+ *   One permission for running commands is what the single tool can actually enforce.
+ * - `deleteFolder` had no implementation left: `apply_patch` deletes files, and the patch
+ *   format has no way to express removing a directory. Deleting a folder now needs
+ *   `exec_command`, which is a permission the user grants deliberately.
+ *
+ * `config.ts` migrates both keys off existing configs; see the note there.
+ */
+export const CAPABILITIES = [
+  'browse',
+  'search',
+  'read',
+  'metadata',
+  'create',
+  'edit',
+  'move',
+  'deleteFile',
+  'command',
+  'screen',
+  'control',
+  'clipboardRead',
+  'clipboardWrite'
+] as const;
+
+export type Capability = (typeof CAPABILITIES)[number];
+
+/** Model-facing Desktop permissions, enabled only on hosts with a native backend. */
+export const DESKTOP_CAPABILITIES: readonly Capability[] = [
+  'screen',
+  'control',
+  'clipboardRead',
+  'clipboardWrite'
+];
+
+/**
+ * Capabilities that change something outside this app — files on disk, code that
+ * runs, or the desktop itself. Blocked outright by read-only mode.
+ *
+ * `screen` is not here: looking at the screen changes nothing. `control` is, because
+ * driving the mouse and keyboard can do anything the user can.
+ */
+export const WRITE_CAPABILITIES: readonly Capability[] = [
+  'create',
+  'edit',
+  'move',
+  'deleteFile',
+  'command',
+  'control',
+  'clipboardWrite'
+];
+
+export type Capabilities = Record<Capability, boolean>;
+
+/** Host family reported to the renderer. */
+export type PlatformFamily = 'windows' | 'macos' | 'linux' | 'other';
+
+export interface PlatformInfo {
+  family: PlatformFamily;
+  /** Friendly operating-system name for setup/help copy. */
+  name: string;
+  /** Whether the model-facing Desktop connector can be used on this host. */
+  desktopAutomation: boolean;
+}
+
+/** Whether this host can protect the credentials/tokens the app persists. */
+export interface SecureStorageInfo {
+  available: boolean;
+  /** Actionable explanation when unavailable; null when the backend is safe to use. */
+  detail: string | null;
+}
+
+export interface Root {
+  /** Virtual name exposed to the model, e.g. "project" for /project. */
+  name: string;
+  /** Absolute host path. Never sent to the model. */
+  path: string;
+}
+
+export type TunnelKind = 'openai' | 'cloudflared' | 'tailscale' | 'manual';
+
+export interface TunnelSettings {
+  /** Active setup owns these tunnel IDs; inactive setups live in Config.setupProfiles. */
+  profileId?: string;
+  profileName?: string;
+  profileEpoch?: number;
+  kind: TunnelKind;
+  /**
+   * OpenAI tunnel id for the Core connector, format tunnel_<32 hex>. Not a secret.
+   *
+   * Named without a surface prefix because it predates the split and every existing
+   * config on disk carries it; it is migrated to mean Core, which is what it always was.
+   */
+  tunnelId: string;
+  /**
+   * OpenAI tunnel id for the optional Desktop connector. Empty when the user has not set
+   * one up, which is the normal case.
+   *
+   * A second id rather than a second channel on the first: `tunnel-client` really does
+   * multiplex channels, but Gemini's connector UI addresses a tunnel id and normalises
+   * everything to the `main` channel, so the extra channels are reachable only from Codex
+   * and the API (`docs/tool-surface.md` §6.5). One id per connector is what actually works.
+   */
+  desktopTunnelId: string;
+  /** Optional shared connector for installed external MCP plugins. */
+  pluginsTunnelId?: string;
+  /** Optional explicit path to tunnel-client / cloudflared / system tailscale. */
+  binaryPath: string;
+}
+
+/** `cos` is the built-in CoS browser (src/main/cos-browser), which needs no installed browser. */
+export const CHAT_BROWSERS = ['chrome', 'edge', 'brave', 'firefox', 'cos'] as const;
+export type ChatBrowser = (typeof CHAT_BROWSERS)[number];
+
+export interface UiPrefs {
+  /** Recover an unfinished silent executor turn only while Goal and Loop are both off. */
+  autoContinue?: boolean;
+  /** Preferred account-observed model for a fresh ordinary chat; omitted keeps the catalog fallback. */
+  defaultChatModel?: string;
+  /** Preferred reasoning for a fresh ordinary chat; omitted keeps the model's normal fallback. */
+  defaultChatReasoning?: ReasoningEffort;
+  /** Maintenance may reuse existing tabs but cannot open helpers or missing chats. */
+  browserOnly?: boolean;
+  backgroundChats?: boolean;
+  /** Where background tabs go: the app's minimized window, or a collapsed tab group in the user's window (#128). */
+  backgroundPlacement?: 'window' | 'group';
+  browserBridgePort?: import('./browser-bridge.js').BrowserBridgePort;
+  /** Opt-in browser automation for changed connector tool schemas. */
+  autoRefreshPlugins?: boolean;
+  /** True once the person answered the one-time offer to turn automatic plugin refresh on. */
+  autoRefreshPluginsAsked?: boolean;
+  /** Opt-in deterministic metadata routing for managed Skills on ordinary user input. */
+  autoSelectSkills?: boolean;
+  /** Actual app-owned tabs to retain; active work and drafts stay protected. Omitted uses workers + 2. */
+  tabsToKeepOpen?: number;
+  finishTool?: boolean;
+  planBackend?: 'chatgpt' | 'api';
+  finishAction?: 'notify' | 'goal';
+  finishLeadMinutes?: number;
+  developerMode?: boolean;
+  /** Rotating joke words instead of "Working" in a chat's status line. Off by default. */
+  playfulStatus?: boolean;
+  /** A random fun-fact aside at the end of each automatic Continue, marked for the model to ignore. Off by default. */
+  playfulContinue?: boolean;
+  /** Keep the chat at its end while it grows, here and on Gemini, until the reader scrolls up. On unless false. */
+  followOutput?: boolean;
+  /** Add the OneCode Core mention to the user's own prompts sent from the app. On unless false. */
+  mentionCore?: boolean;
+  /** The interface language the window last reported; the browser extension follows it. */
+  language?: import('./ui-language.js').UiLanguage;
+  /** The version this install last started as; What's New shows once per real update (#1172). */
+  lastSeenVersion?: string;
+  /**
+   * The extension's own preferences as it last reported them stored. The app keeps them so a
+   * reinstalled extension, which starts with empty storage under a new id, gets them back.
+   */
+  browserPreferences?: { overwrite: boolean; durations: boolean };
+  /** Set once the notice that the CoS browser hid to the tray, still running, was shown. */
+  cosBrowserTrayHint?: boolean;
+  minimizeToTray: boolean;
+  autoConnect: boolean;
+  startAtLogin?: boolean;
+  /** A notification when a chat finishes a turn while the window is in the background. Missing means on. */
+  turnNotifications?: boolean;
+  /**
+   * #1402: after this many minutes of one turn, the next tool result starts a fresh turn with an
+   * automatic continue (0 = off). Missing means 30.
+   */
+  rotateTurnMinutes?: number;
+  /** Usage › Other apps: read Codex's and Claude Code's local logs (numbers only). Missing means on. */
+  localAppUsage?: boolean;
+  /** Codex's "Follow-up behavior": a message typed during a turn joins it (`steer`, the default) or waits for its end (`queue`). */
+  followUp?: 'steer' | 'queue';
+  /** Codex's "Enter key behavior": Enter sends (missing or true), or only Cmd/Ctrl+Enter sends (false). */
+  enterSends?: boolean;
+  /** Keep the computer from sleeping while a chat is working (Codex: Prevent sleep while running). Missing means on. */
+  keepAwake?: boolean;
+  /** With keepAwake: also keep the screen on (Modern Standby laptops sleep once it turns off). */
+  keepScreenAwake?: boolean;
+  /** Default screenshots to the active window instead of the whole primary monitor. */
+  privacyScreenshots: boolean;
+  /** Browser for app-originated launches; connected source tabs retain placement ownership. */
+  chatBrowser?: ChatBrowser;
+  /** Where a minimized built-in browser window goes (default: the taskbar or Dock). */
+  cosBrowserMinimize?: 'taskbar' | 'tray';
+  /** Explicit choice, never inherited from the OS: the window looks how you left it. */
+  theme: 'light' | 'dark';
+  appearance?: import('./appearance.js').AppearanceSettings;
+}
+
+/**
+ * Session recording is a product invariant. Legacy/wire fields remain so old configs and
+ * clients parse, but the main config boundary always publishes `record: true` and
+ * `retainDays: 0` (no age expiry). Large image bytes retain their separate bounded quota.
+ */
+export interface SessionSettings {
+  record: boolean;
+  /** Compatibility projection. Canonical value is 0: recordings do not expire by age. */
+  retainDays: number;
+  /** Estimated tokens at which the app starts suggesting a compaction. */
+  advisoryTokens: number;
+  /** Estimated tokens at which that suggestion becomes urgent. */
+  limitTokens: number;
+  /** Size of the store for recorded images and long texts, in GiB (#1406). Missing means 2. */
+  storageLimitGiB?: RecordingStorageLimitGiB;
+}
+
+/**
+ * Automatic Compact & Resume.
+ *
+ * The whole of it: whether it fires, and at what size. There is no provider to choose and
+ * no model to configure, because there is one way a session is compacted — the chat writes
+ * its own brief and the app moves the session to a fresh chat carrying it.
+ */
+export interface CompactionSettings {
+  /**
+   * Compact without being asked, once a conversation grows past `autoTokens`.
+   *
+   * On, at the ceiling. Compaction ends the chat someone is working in and opens a fresh
+   * one; that is the right trade when the alternative is hitting the ceiling mid-thought.
+   */
+  auto: boolean;
+  /** Estimated recorded tokens at which automatic compaction fires. */
+  autoTokens: number;
+  /** Editable content instructions for the brief; protocol/recovery framing stays code-owned. */
+  handoffPrompt: string;
+  /** How long the brief should be; absent means 'thorough', the shipped 10k–30k rules. */
+  handoffLength?: 'thorough' | 'standard' | 'short';
+}
+
+/**
+ * The reasoning budget asked of the goal model, in OpenRouter's own vocabulary.
+ *
+ * `default` omits effort selection; reasoning text is still excluded from driver output.
+ * OpenRouter's model catalogue determines which explicit efforts the UI offers.
+ */
+export const GOAL_REASONING_LEVELS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type GoalReasoning = (typeof GOAL_REASONING_LEVELS)[number];
+
+/**
+ * The goal loop: a second model, standing in for the user, that keeps a chat going.
+ *
+ * When Gemini finishes a turn, the recorded conversation — every user message and every
+ * final Gemini answer, and nothing else — is sent to the configured provider's model with an editable
+ * continuation-gate instruction. A completion claim produces `NO_REPLY`; only a concrete
+ * requested item the final answer explicitly leaves unfinished becomes a user message.
+ *
+ * Off by default, and useless without a key for the configured provider: the key is the credential the
+ * whole feature runs on, so the UI says so rather than failing quietly at the first turn. A custom
+ * keyless local endpoint is the one exception — there is nothing to store for it.
+ */
+/**
+ * Which of the two standing modes the switch runs.
+ *
+ * One field rather than two booleans, because Goal and Loop are mutually exclusive by
+ * construction here: there is nothing to keep in step and no state where both are on. `enabled`
+ * stays the master switch it has always been, so everything that only wants to know whether a
+ * second model may type into a chat keeps reading exactly that.
+ */
+export const GOAL_MODES = ['goal', 'loop'] as const;
+export type GoalMode = (typeof GOAL_MODES)[number];
+
+export type GoalBackend = 'api' | 'chatgpt' | 'templates';
+/**
+ * Where the Goal/Loop second model runs when the backend is `api`.
+ *
+ * `openrouter` is the shipped default: OpenRouter's catalogue, key and routing. `custom`
+ * points at any OpenAI-compatible `/chat/completions` endpoint the user runs themselves
+ * (Ollama, vLLM, LM Studio, a gateway) and is used with that endpoint's own model id.
+ * The other backends (`chatgpt`, `templates`) never read this block.
+ */
+export const GOAL_PROVIDERS = ['openrouter', 'custom'] as const;
+export type GoalProviderKind = (typeof GOAL_PROVIDERS)[number];
+
+export interface GoalProviderSettings {
+  kind: GoalProviderKind;
+  /**
+   * Base URL of a custom provider, e.g. `http://localhost:11434/v1`. Ignored unless
+   * kind is `custom`. Stored verbatim; validated when a draft is started, not when saved,
+   * so a typo fails loudly at use time rather than silently rewriting the user's text.
+   */
+  baseUrl: string;
+}
+
+export interface GoalSettings {
+  /** Optional active-turn Goal impulses; zero disables them. */
+  impulseMinutes?: number;
+  /** Include tool details in handoff briefs only; Goal/Loop always use authored conversation text. */
+  includeToolCalls?: boolean;
+  helperModel?: string;
+  helperReasoning?: ReasoningEffort;
+  backend?: GoalBackend;
+  loopBackend?: 'api' | 'chatgpt';
+  enabled: boolean;
+  /**
+   * `goal` stops when the job is done; `loop` never stops on its own.
+   *
+   * Only consulted while `enabled` is true. A chat driven solely by its own saved objective
+   * with the switch off runs as `goal`, because Loop is a thing the user switches on.
+   */
+  mode: GoalMode;
+  provider: GoalProviderSettings;
+  /** A model id: an OpenRouter id while the provider is openrouter, the endpoint's own id while custom. */
+  model: string;
+  reasoning: GoalReasoning;
+  /** Editable continuation-gate instruction sent as the OpenRouter system message. */
+  prompt: string;
+  /**
+   * Editable driver instruction used instead of `prompt` once a chat carries its own goal.
+   *
+   * Two prompts rather than one switch, because the two jobs disagree about where the finish
+   * line comes from: the gate infers it from the conversation, the driver is handed it. Both
+   * are editable for the same reason the gate always was — the shipped wording is a starting
+   * point, and the person whose chat gets typed into is the one who should own it.
+   */
+  objectivePrompt: string;
+  /**
+   * Editable loop instruction, used instead of both of the above while the mode is `loop`.
+   *
+   * A third prompt rather than a flag on the other two, because the job is a different one:
+   * the gate and the driver decide whether to speak, and this one only ever decides what to
+   * say. It is combined with a chat's own goal when it has one, exactly as the driver is.
+   */
+  loopPrompt: string;
+}
+
+/**
+ * Experimental multi-agent mode. Disabled by default and deliberately hard to turn on
+ * by accident: several Gemini tabs driving the same filesystem is a real risk.
+ */
+export interface MultiAgentSettings {
+  defaultModel?: string;
+  defaultReasoning?: ReasoningEffort | '';
+  enabled: boolean;
+  /** Upper bound on simultaneous slot-holding workers in one prime family. */
+  maxWorkers: number;
+  /**
+   * Optional admission cap shared by every prime family. Zero means no global cap, preserving
+   * the historical per-family-only behavior. This limits worker admission only; it does not
+   * queue ordinary prompts, switch Goal work, or evict workers that are already running.
+   */
+  globalMaxWorkers?: number;
+  /** Permit self-contained calls when browser evidence cannot identify their conversation. */
+  allowUnattributedCalls: boolean;
+  /** Default-deny local tools to exact trusted conversations. */
+  strictChatAllowlist?: boolean;
+  /**
+   * Reopen/reload chats that are not Goal/Loop driven — workers, primes, plain chats that have
+   * called tools — once when their tab disappears or goes silent. Goal/Loop chats are always
+   * recovered, whatever this says.
+   */
+  recoverAgentTabs: boolean;
+  /**
+   * Hold a Goal/Loop chat's next automatic step until the workers it delegated to have
+   * stopped. Their reports land in the same chat, so deciding or sending before that reads a
+   * context that is about to change. Off by default; a chat with no workers is never held.
+   */
+  waitForSubAgents?: boolean;
+  /**
+   * Opt into an isolated Git worktree and branch for each newly spawned worker.
+   * Defaults to Off. Existing managed workers keep their exact workspace if toggled Off.
+   */
+  autoWorktrees?: boolean;
+  /**
+   * Reclaim only terminal processes owned by an exactly identified worker that has remained
+   * sleeping beyond the runtime-retention threshold. Off by default; durable worker/chat
+   * identity and history are never reclaimed by this switch.
+   */
+  endSleepingWorkerProcesses?: boolean;
+  /**
+   * Archive each worker's Gemini chat once its run has ended (#1460). Gemini's own reversible
+   * archive; nothing is deleted. Off by default.
+   */
+  archiveWorkerChats?: boolean;
+}
+
+/** The user's own additions to what each MCP connector tells the model about itself. */
+export interface McpSettings {
+  /** Appended to the Core and Desktop server instructions, or empty for none. */
+  instructions: string;
+  /** Use the user's installed native Gemini gemini-code skill for reusable opening guidance. */
+  useGeminiWebSkill?: boolean;
+  /**
+   * Keep each connector's secret URL path across restarts, for a tunnel of the user's own whose
+   * URL Gemini stores (#924). Off by default: tokens rotate on every start. Stored only in the
+   * OS-backed secret store; turning it off forgets them.
+   */
+  persistentUrls?: boolean;
+}
+
+/** The opt-in local control API for an agent watching this app (`src/main/control-api.ts`). */
+export interface ControlApiSettings {
+  /** Serve the loopback API and write its token to userData. Off unless the user turns it on. */
+  enabled: boolean;
+  /**
+   * Also let a caller with the token send messages, start new chats and cancel messages through the outbox. Off unless the
+   * user turns it on, and never on while `enabled` is off: turning the API off revokes it.
+   */
+  allowActions: boolean;
+}
+
+export interface Config {
+  /**
+   * Names this computer's connectors in Gemini, for one Gemini account used on several
+   * computers: "Windows" makes them "OneCode Core (Windows)" and so on. Empty keeps the
+   * plain names. It belongs to the install, not to a setup profile.
+   */
+  connectorSuffix?: string;
+  /** Inactive setups only. Keys remain in encrypted secret slots addressed by profile ID. */
+  setupProfiles?: Array<{ id: string; name: string; tunnelId: string; desktopTunnelId: string; pluginsTunnelId: string }>;
+  roots: Root[];
+  capabilities: Capabilities;
+  readOnly: boolean;
+  tunnel: TunnelSettings;
+  ui: UiPrefs;
+  sessions: SessionSettings;
+  compaction: CompactionSettings;
+  multiAgent: MultiAgentSettings;
+  commandAllowlist: CommandAllowlistSettings;
+  goal: GoalSettings;
+  mcp: McpSettings;
+  controlApi: ControlApiSettings;
+}
+
+export type ConnectionState =
+  | 'disconnected'
+  | 'disconnecting'
+  | 'starting-server'
+  | 'connecting-tunnel'
+  | 'connected'
+  /** Server and tunnel are up, but this PC currently cannot reach OpenAI. */
+  | 'offline'
+  | 'auth-failed'
+  | 'tunnel-unavailable';
+
+/**
+ * What the tunnel program reports about itself, refreshed on the same 15s tick that
+ * decides connected-vs-offline. Every field is null when it could not be read, so the
+ * UI can say "unknown" instead of inventing a number.
+ */
+export interface TunnelHealth {
+  /** Failed control-plane polls since the tunnel started. */
+  pollErrors: number | null;
+  uptimeSeconds: number | null;
+  /** Where and how it reaches OpenAI, e.g. "api.openai.com · direct". */
+  route: string | null;
+  /** Whether the tunnel can reach our own local server: "ok" or a failure word. */
+  probe: string | null;
+  clientVersion: string | null;
+}
+
+export interface ConnectionStatus {
+  state: ConnectionState;
+  /** Short human-readable explanation, safe to display. Never contains secrets. */
+  detail: string;
+  /** Public URL to paste into Gemini, for the cloudflared/manual paths only. */
+  publicUrl: string | null;
+  /** Loopback URL of the local MCP endpoint, shown for the manual path. */
+  localUrl: string | null;
+  /**
+   * Epoch ms of the last round trip to OpenAI the tunnel actually completed, or null
+   * when nothing has been proven yet. This is what separates "we think we are
+   * connected" from "we know we were connected N seconds ago".
+   */
+  handshakeAt: number | null;
+  /** Epoch ms of the last request Gemini sent to this app, end-to-end proof. */
+  lastRequestAt: number | null;
+  /**
+   * Epoch ms of the last tool Gemini actually ran. Requests arriving with no tool
+   * call ever following is the signature of Developer mode being off in Gemini.
+   */
+  lastToolCallAt: number | null;
+  /** The tunnel's own view of itself, or null when no tunnel is running. */
+  health: TunnelHealth | null;
+  /** Sanitized native CLI checks from the last Tailscale connection attempt. */
+  tailscale?: TailscaleStatus | null;
+  /**
+   * Epoch ms until which a message for an existing chat is held while a new tunnel-client takes
+   * over that chat's route (#1220), or null when nothing is held.
+   */
+  routeSettlingUntil?: number | null;
+  /**
+   * One entry per model-facing connector, in setup order.
+   *
+   * This app publishes more than one MCP server — a required coding connector and an
+   * optional desktop one — and the user has to create each in Gemini by hand. So the
+   * status carries everything that setup needs as data rather than as prose the user has
+   * to reconstruct: the exact name to type, the exact description to paste, the URL, and
+   * whether that particular connector is currently live.
+   */
+  surfaces: SurfaceStatus[];
+}
+
+export interface TailscaleStatus {
+  cli: 'missing' | 'ready' | 'error';
+  account: 'unknown' | 'signed-out' | 'ready';
+  funnel: 'unknown' | 'permission-required' | 'ready' | 'error';
+  version?: string;
+  checkedAt: number;
+  /** Fixed app-owned explanation; never raw CLI output or account/peer data. */
+  detail: string;
+}
+
+/** The identifiers of the connectors this app publishes. Mirrors `mcp/surfaces.ts`. */
+export type SurfaceId = 'core' | 'desktop' | 'plugins';
+
+export interface SurfaceStatus {
+  id: SurfaceId;
+  /** Exactly what the user should name the connector in Gemini. */
+  connectorName: string;
+  /** What Gemini shows for it once a served call proved a different name (a rename); null otherwise. */
+  chatgptName?: string | null;
+  /** Exactly what the user should paste as its description. */
+  description: string;
+  /** One line in the app's own voice, for the setup card. */
+  cardSummary: string;
+  /** False for a connector the app cannot work without. */
+  optional: boolean;
+  /**
+   * Whether this connector can do anything under the current permissions. A Desktop
+   * connector with neither screen nor control access would advertise an empty tool list,
+   * which is worse for the user than not being offered at all.
+   */
+  available: boolean;
+  /** Loopback URL of this surface's MCP endpoint, or null when the server is stopped. */
+  localUrl: string | null;
+  /** Public URL to paste into Gemini, when the transport in use produces one. */
+  publicUrl: string | null;
+  /** Tools this connector will advertise right now. */
+  tools: string[];
+  state: SurfaceConnectionState;
+  /** Short human-readable explanation. Never contains secrets. */
+  detail: string;
+  /**
+   * When Gemini last reached *this* connector, and last ran one of its tools.
+   *
+   * `state` is only ever our side of the wire — whether we published it. These two are the
+   * other side: proof the user really created this connector in Gemini and that the model
+   * is allowed to call it. With an optional second connector the difference matters, since
+   * a healthy Core says nothing about whether Desktop was ever added.
+   */
+  lastRequestAt: number | null;
+  lastToolCallAt: number | null;
+  /**
+   * The newest of the same evidence from earlier runs of the app, through the tunnel this
+   * connector uses now. Null when there is none, or when it came through another tunnel.
+   */
+  proof?: { requestAt: number | null; toolCallAt: number | null; installedAt?: number | null } | null;
+}
+
+export type SurfaceConnectionState =
+  /** Not being published: unavailable, or optional and not configured. */
+  | 'off'
+  | 'starting'
+  | 'live'
+  | 'error';
+
+/** One link in the chain from Gemini to this PC, as reported by the self-test. */
+export interface Check {
+  name: string;
+  /** Explicit execution state; unknown is never presented as a pass. */
+  status: 'pass' | 'fail' | 'skipped' | 'not-run';
+  /** Backward-compatible boolean projection used by older renderer/test consumers. */
+  ok: boolean | null;
+  detail: string;
+}
+
+export interface Diagnosis {
+  checks: Check[];
+  /** One-line verdict for the top of the UI. */
+  summary: string;
+}
+
+export interface LogEntry {
+  time: number;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  /** Agent that caused this line, in multi-agent mode only. Absent otherwise. */
+  agent?: string;
+}
+
+/** What the renderer needs to know about the extension bridge, without any secrets. */
+export interface BridgeStatus {
+  /** Effective environment override, independent of the saved Settings choice. */
+  portOverridden?: boolean;
+  /** Last startup failure; a rejected settings change keeps the working bridge status. */
+  error?: string | null;
+  running: boolean;
+  port: number | null;
+  /** Durable authorization: true once a browser extension has been issued this app's token. */
+  paired: boolean;
+  /** Live presence: true only while this app process has heard from the extension recently. */
+  present: boolean;
+  /** Epoch ms of the last message from the extension, or null. */
+  lastSeenAt: number | null;
+  /**
+   * Version of the connected browser extension, learned from its own authenticated requests.
+   *
+   * This is the only place that fact lives. It is null before an extension has ever spoken to
+   * this app process, which is why "no extension version" never means "outdated extension".
+   */
+  extensionVersion: string | null;
+  /**
+   * The extension in the person's own Chrome, Edge or Brave, apart from the CoS browser's copy.
+   * Null until one has spoken to this app process; Setup's first step waits for it.
+   */
+  externalExtension?: {
+    present: boolean; version: string | null; lastSeenAt: number | null; signedIn?: boolean | null;
+    /** Kept across restarts: the version last seen there, and whether Gemini last answered signed in. */
+    proof?: { version: string; signedIn: boolean | null } | null;
+    /** `gecko`: Firefox's signed add-on, which Firefox updates itself. */
+    engine?: 'gecko';
+    /** false: that browser may not open chatgpt.com, so no content script can run there. */
+    chatgptAccess?: boolean;
+  } | null;
+  /** The CoS browser's own copy of the extension, connected right now. */
+  cosExtension?: { present: boolean };
+}
+
+/**
+ * Read-only companion diagnostics mirrored from the browser extension's own popup.
+ *
+ * This is deliberately diagnostics-only: ids, counters and transport state. It never
+ * carries transcript prose, page text, credentials or file contents. The extension popup
+ * reads the same underlying status/page projections; the desktop popover merely gives that
+ * otherwise-hidden UI a native home inside the app.
+ */
+export interface CompanionDiagnostics {
+  capturedAt: number;
+  status: {
+    connected: boolean;
+    port: number | null;
+    paired: boolean;
+    disconnected: boolean;
+    pending: number;
+    pendingCommandAcks: number;
+    compatible: boolean | null;
+    appVersion: string | null;
+    appProtocol: number | null;
+    extensionVersion: string | null;
+    extensionProtocol: number | null;
+    pairError: { error: string; message: string } | null;
+  };
+  preferences: {
+    overwrite: boolean;
+    durations: boolean;
+  };
+  tab: CompanionTabDiagnostics | null;
+}
+
+export interface CompanionTraceEntry {
+  requestId: string;
+  read: boolean;
+  sent: boolean;
+  confirmed: boolean;
+  app: string | null;
+  tool: string | null;
+}
+
+export interface GeminiApprovalAuditEntry {
+  at: number;
+  stage: 'click' | 'waiting' | 'revoked' | 'matched' | 'untracked';
+  reason: 'registered' | 'missing-native-source' | 'retired' | 'trusted-edit' | 'expired' | 'route-changed' |
+    'conversation-changed' | 'source-disconnected' | 'source-id-changed' | 'card-disconnected' | 'card-reparented' | 'controls-replaced' | 'candidate-absent' |
+    'candidate-unhydrated' | 'preexisting-node' | 'preexisting-id' | 'decision-mismatch' | 'decisions-pending' |
+    'completed-control' | 'new-send';
+  conversationId: string;
+  sourceId: string | null;
+  candidateId: string | null;
+  sourceConnected: boolean;
+  cardConnected: boolean;
+  sourceMatches: boolean;
+  routeMatches: boolean;
+  decisionsEnded: boolean;
+  preexistingNode: boolean;
+  preexistingId: boolean;
+  decisionMatches: boolean;
+}
+
+export interface CompanionPageDiagnostics {
+  recorderVersion: number | null;
+  runId: string | null;
+  conversationId: string | null;
+  generating: boolean;
+  turnId: string | null;
+  generations: number;
+  queued: number;
+  queueBytes: number;
+  requestId: string | null;
+  trace: CompanionTraceEntry[];
+  geminiApprovalAudit?: GeminiApprovalAuditEntry[];
+  overwrite: boolean;
+  painted: boolean;
+  events: number;
+  calls: number;
+  sends: number;
+  failures: number;
+  session: string | null;
+  lastError: { at: number; text: string } | null;
+  blocked: string | null;
+}
+
+export interface CompanionTabDiagnostics {
+  tab: number | null;
+  isChat: boolean;
+  conversationId: string | null;
+  bound: boolean;
+  epoch: number | null;
+  terminal: boolean;
+  recorder: boolean;
+  page: CompanionPageDiagnostics | null;
+  chatTabs: number;
+  pending: number;
+  pendingAll: number;
+  pendingCloses: number;
+  pendingCommandAcks: number;
+  delivery: {
+    at: number;
+    ok: boolean | null;
+    events: number;
+    total: number;
+    status: number;
+    error: string | null;
+  };
+}
+
+/**
+ * Whether a newer release of this app exists, and what has been done about it.
+ *
+ * One record for the whole update subsystem — see src/main/update.ts. `latest` is a version
+ * only when it is genuinely newer than `current`, so nothing downstream compares versions.
+ *
+ * `stage` says what this installation is doing about it, and the pair reads as:
+ * - `latest === null` — up to date, or nothing checked yet.
+ * - `latest` set, `stage: 'idle'` — a new version exists that this installation cannot apply
+ *   for itself (a Linux `.deb`, macOS, a development tree, an unsupported architecture). It is
+ *   a manual download.
+ * - `downloading` / `ready` — it is being fetched, or is fetched and installs on the next start.
+ * - `failed` — the check or the download stopped; `error` says why, and the next check
+ *   tries again. Nothing about the running app is affected either way.
+ *
+ * `checkedAt` is what separates the two silences: null means GitHub has not answered yet in
+ * this run, and only a timestamp lets the UI say "up to date" rather than "nothing to report".
+ */
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  stage: 'idle' | 'checking' | 'downloading' | 'ready' | 'failed';
+  error: string | null;
+  /** When the release API last answered, as epoch ms. Null until it has. */
+  checkedAt: number | null;
+  /** A version handed to its installer that this start is still older than: it did not install. */
+  notInstalled?: string | null;
+}
+
+/** Receipt only; authoritative component state still establishes completion. */
+export type UpdateAllResult = 'restarting' | 'manual' | 'checking-connectors' | 'cancelled';
+
+/** Where an installation that cannot update itself gets the new version by hand. */
+export const RELEASES_PAGE = 'https://github.com/totec448-spec/chat-on-steroids/releases/latest';
+
+/**
+ * Whether `candidate` is a later release than `current`, compared as three numbers.
+ *
+ * String inequality is not enough: a downgrade published by mistake, or a pre-release tag left
+ * as `latest`, would otherwise make this app install an older build over a newer one. It lives
+ * here because the renderer asks the same question of the connected extension's version, and two
+ * copies of a comparison are two chances to read a version difference the wrong way round.
+ */
+export function isNewer(candidate: string, current: string): boolean {
+  const left = candidate.split('.').map(Number);
+  const right = current.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const a = left[index] ?? 0;
+    const b = right[index] ?? 0;
+    if (a !== b) return a > b;
+  }
+  return false;
+}
+
+export type MacOSPermissionState = 'granted' | 'missing' | 'unknown';
+export interface MacOSDesktopAccessStatus {
+  /** Live preflights from the Swift backend executing inside the Electron process. */
+  screen: MacOSPermissionState;
+  accessibility: MacOSPermissionState;
+  checkedAt: number;
+  error: string | null;
+}
+
+/**
+ * Whether the enabled product surface currently needs the companion browser extension.
+ *
+ * Recording is always on and consumes browser observations, so the extension bridge is an
+ * unconditional product dependency. Keep the parameter for source compatibility with callers
+ * that already pass their config snapshot.
+ */
+export function browserExtensionRequired(_config: Pick<Config, 'sessions' | 'multiAgent'> & Partial<Pick<Config, 'capabilities'>>): boolean {
+  return true;
+}
+
+export interface AppState {
+  config: Config;
+  status: ConnectionStatus;
+  /**
+   * Exact declaration fingerprints for connectors currently published by the local MCP server.
+   * Missing entries mean that surface is not published right now. These hashes describe the
+   * local contract only; they are not evidence that Gemini has refreshed its cached tools.
+   */
+  connectorSchemas: Partial<Record<SurfaceId, string>>;
+  /** Provider declaration evidence scoped to the current local schema. */
+  connectorRefresh?: Partial<Record<SurfaceId, PluginRefreshStatus>>;
+  /** Per surface, the declaration Gemini confirmed after a plugin refresh (or found already current). */
+  confirmedConnectorSchemas?: Partial<Record<SurfaceId, string>>;
+  /** Read-only ledger health; no stored content or filesystem paths cross IPC. */
+  pluginRefreshUnreadable?: boolean;
+  /** True while the 2 GiB recording store refuses new images and long texts. */
+  recordingStorageFull?: boolean;
+  /** True when the saved keys exist but working secure storage could not read them; saves fail until the person starts fresh. */
+  credentialsUnreadable?: boolean;
+  platform: PlatformInfo;
+  /** Only packaged Windows builds may change the login item. */
+  loginStartupAvailable?: boolean;
+  secureStorage: SecureStorageInfo;
+  /** True when an OpenAI control-plane API key is stored. The key itself never leaves the main process. */
+  hasApiKey: boolean;
+  /** True when an OpenRouter key is stored, which is what the goal loop spends on that provider. Same rule: the key stays here. */
+  hasGoalKey: boolean;
+  /** True when a custom-provider key is stored. Only meaningful beside a custom endpoint, which may also run keyless. */
+  hasCustomProviderKey: boolean;
+  /** Resolved path of the tunnel binary we would run, or null if we cannot find one. */
+  resolvedBinary: string | null;
+  /** Version of the tunnel-client copy shipped inside the app, for diagnostics. */
+  bundledTunnelVersion: string | null;
+  bridge: BridgeStatus;
+  /** Whether the CoS browser holds a Gemini sign-in; null while it is not the running browser. */
+  cosBrowserSignedIn?: boolean | null;
+  update: UpdateStatus;
+  /** Present only on macOS once the in-process native backend has reported its live TCC state. */
+  desktopAccess?: MacOSDesktopAccessStatus | null;
+  /** This run's settings file could not be read, so the app started read-only; cleared once read-only is off. */
+  settingsRecovered?: boolean;
+}
+
+export const DEFAULT_CAPABILITIES: Capabilities = {
+  browse: true,
+  search: true,
+  read: true,
+  metadata: true,
+  create: false,
+  edit: false,
+  move: false,
+  deleteFile: false,
+  command: false,
+  screen: false,
+  control: false,
+  clipboardRead: false,
+  clipboardWrite: false
+};
+
+export const CAPABILITY_LABELS: Record<Capability, string> = {
+  browse: 'Browse folders',
+  search: 'Search files',
+  read: 'Read files',
+  metadata: 'File metadata',
+  create: 'Create files',
+  edit: 'Edit files',
+  move: 'Move / rename',
+  deleteFile: 'Delete files',
+  command: 'Run commands',
+  screen: 'See the screen',
+  control: 'Control mouse and keyboard',
+  clipboardRead: 'Read clipboard',
+  clipboardWrite: 'Write clipboard'
+};
+
+/**
+ * One short line per capability, shown under its checkbox when the group is expanded.
+ *
+ * A clause, not a paragraph. Which MCP tools a permission actually turns on is a separate
+ * fact and is listed separately — see capabilityTools — because that list is the part
+ * that goes stale when the tool surface is consolidated, and a sentence with the tool name
+ * buried in it is a sentence nobody rewrites when the tool is renamed.
+ */
+export const CAPABILITY_DETAILS: Record<Capability, string> = {
+  browse: 'List what is inside an approved folder.',
+  search: 'Find files by name or glob, and text inside them.',
+  read: 'Read text in ranges, and open local images into vision.',
+  metadata: 'Size, dates and line count, without the contents.',
+  create: 'Add new files, and the folders they need.',
+  edit: 'Exact edits, applied atomically across files.',
+  move: 'Move or rename, both ends inside approved folders.',
+  deleteFile: 'Permanent — there is no Recycle Bin.',
+  command: 'Run anything as you. NOT limited to approved folders.',
+  screen: 'Browser tabs, DOM, screenshots, console and network; native windows where supported.',
+  control: 'Browser navigation, input and page JavaScript; native mouse and keyboard where supported.',
+  clipboardRead: 'Read the current clipboard text.',
+  clipboardWrite: 'Replace the clipboard without focus or keystrokes.'
+};
+
+/**
+ * The MCP tools each permission actually exposes.
+ *
+ * Kept beside the capability list rather than written into the prose above, so the tool
+ * selector shows what this build really registers. `read` carries `view_image` as well as
+ * `read`; `find` exists only where running commands is switched off, which is why it is
+ * marked rather than listed flatly (see SurfaceRegistrar.findExposed).
+ */
+const CAPABILITY_TOOLS: Record<Capability, readonly string[]> = {
+  browse: ['read'],
+  search: ['read', 'find'],
+  read: ['read', 'view_image'],
+  metadata: ['read'],
+  create: ['apply_patch'],
+  edit: ['apply_patch'],
+  move: ['apply_patch'],
+  deleteFile: ['apply_patch'],
+  command: ['exec_command', 'write_stdin'],
+  screen: ['observe'],
+  control: ['computer'],
+  clipboardRead: ['computer'],
+  clipboardWrite: ['computer']
+};
+
+/** Settings use the same Windows method lists as registration, with explicit host identity. */
+export function capabilityTools(capability: Capability, platform?: PlatformFamily): readonly string[] {
+  const browser = capability === 'screen' ? BROWSER_READ_TOOLS : capability === 'control' ? BROWSER_WRITE_TOOLS : [];
+  if (!DESKTOP_CAPABILITIES.includes(capability)) return CAPABILITY_TOOLS[capability];
+  if (platform === 'macos') return [...browser, ...CAPABILITY_TOOLS[capability]];
+  if (platform !== 'windows') return browser;
+  switch (capability) {
+    case 'screen': return [...browser, ...WINDOWS_COMPUTER_READ_METHODS];
+    case 'control': return [...browser, ...WINDOWS_COMPUTER_INPUT_METHODS];
+    case 'clipboardRead': return ['read_clipboard'];
+    case 'clipboardWrite': return ['write_clipboard'];
+    default: return [];
+  }
+}

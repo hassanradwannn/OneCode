@@ -1,0 +1,83 @@
+/**
+ * Builds the MCP server for one surface.
+ *
+ * There is no "the" tool list any more. Each connector is its own server with its own
+ * `tools/list`, because that list is the unit the provider discovers: a discovery pull
+ * returns everything one server advertises, so the only real way to bound what a
+ * conversation can be handed is to publish less per server (`docs/tool-surface.md` §6.4).
+ *
+ * The invariant this file enforces is that the boundary is *real*. A server registers the
+ * tools its surface names and nothing else, so a Core server has no handler for `computer`
+ * and answers a call for it with an unknown-tool error from the protocol layer itself.
+ * There is no hidden acceptance of names a server did not advertise, and there is no
+ * merged list. Core's advertised plugins tool is an explicit discovery/call bridge:
+ * it invokes the existing Plugins dispatcher with inherited caller proof, never a
+ * hidden handler for an external tool name on Core.
+ */
+
+import { McpServer } from '@modelcontextprotocol/server';
+import { toolSchemaJson } from './tool-declarations.js';
+import type { PluginToolSchema } from '../../shared/plugin-refresh.js';
+import { createRegistrar, type ToolContext } from './kernel.js';
+import { registerCoreTools } from './tools-core.js';
+import { registerDesktopTools } from './tools-desktop.js';
+import { registerPluginTools } from './tools-plugins.js';
+import { registerCodeMode } from './code-mode-tool.js';
+import { surfaceDefinition, type SurfaceId } from './surfaces.js';
+import { serverInstructions } from './instructions.js';
+import { APP_VERSION } from './../version.js';
+import { toVirtualPath } from '../sandbox.js';
+import { logWarn } from '../logger.js';
+import { withManagedSkills } from '../skill-access.js';
+import { geminiRoutingSchemaJson } from '../gemini/routing-schema.js';
+
+export function buildServer(ctx: ToolContext, surface: SurfaceId, observe?: (connectorName: string, version: string, instructions: string, tools: PluginToolSchema[]) => void, liveContext: () => ToolContext = () => ctx): McpServer {
+  if (surface === 'core') ctx = withManagedSkills(ctx);
+  const definition = surfaceDefinition(surface);
+  const instructions = serverInstructions(ctx, surface);
+  const server = new McpServer(
+    { name: definition.serverName, version: APP_VERSION },
+    { capabilities: { tools: {} }, instructions }
+  );
+
+  const tools: PluginToolSchema[] = [];
+  if (surface === 'plugins') {
+    const declarations = registerPluginTools(server, ctx.setupProfileId ?? null);
+    observe?.(definition.connectorName, APP_VERSION, instructions, declarations);
+    return server;
+  }
+  const registrar = createRegistrar(server, ctx, surface, observe ? (name, config) => {
+    // Match the SDK's Standard Schema conversion target and object-root normalization.
+    const schema = geminiRoutingSchemaJson(toolSchemaJson(config.inputSchema));
+    tools.push({ name, description: config.description, inputSchema: { type: 'object', ...schema }, ...(config.annotations ? { annotations: { ...config.annotations } } : {}) });
+  } : undefined);
+  if (surface === 'core') registerCoreTools(registrar);
+  else registerDesktopTools(registrar);
+  registerCodeMode(registrar, (name, args, parent) => {
+    // Reuse the same registration/validation/handler authority, refreshed for every child
+    // so a permission or approved-root change during an awaited script takes effect.
+    const live = liveContext();
+    const nested = createRegistrar(null, surface === 'core' ? withManagedSkills(live) : live, surface);
+    if (surface === 'core') registerCoreTools(nested);
+    else registerDesktopTools(nested);
+    return nested.invokeNested(name, args, parent);
+  }, { windowsDesktop: surface === 'desktop' && process.platform === 'win32', surface });
+
+  // Cheap self-check on a property the tests assert and the design depends on: a surface
+  // may register fewer tools than it declares — permissions decide that — but it may never
+  // register one it does not declare. Logged rather than thrown, because refusing to serve
+  // would turn a naming slip into a dead connector for the user.
+  const declared = new Set(definition.tools);
+  for (const name of registrar.registered()) {
+    if (!declared.has(name)) {
+      logWarn(`MCP surface ${surface} registered "${name}", which it does not declare — check surfaces.ts`);
+    }
+  }
+
+  observe?.(definition.connectorName, APP_VERSION, instructions, tools);
+  return server;
+}
+
+export { toVirtualPath };
+export type { ToolContext };
+export { chunkText, lastToolCallAt, resetToolClock, transportIdentityStatus } from './kernel.js';

@@ -1,0 +1,206 @@
+appId: io.onecode.desktop
+productName: OneCode
+copyright: MIT licensed
+
+directories:
+  output: release
+  buildResources: build
+
+# Only built output + runtime dependencies ship. Native prebuilds are narrowed again in each
+# platform section so a package never carries another OS/CPU's executable payload.
+files:
+  - out/**
+  - package.json
+  - '!node_modules/@img/sharp-*/**/*'
+  - '!node_modules/@img/sharp-libvips-*/**/*'
+  - '!node_modules/@koromix/koffi-*/**/*'
+  - '!node_modules/koffi/build/**/*'
+  # PDF.js is bundled into the renderer (including its worker). Its optional @napi-rs/canvas
+  # dependency is a Node-only fallback and is neither imported nor needed by the Electron UI.
+  - '!node_modules/pdfjs-dist/**/*'
+  - '!node_modules/@napi-rs/canvas/**/*'
+  - '!node_modules/@napi-rs/canvas-*/**/*'
+  # node-pty prefers build/Release over prebuilds. npm may leave a host-native build there,
+  # which would silently override the target prebuild in a cross-arch package.
+  - '!node_modules/node-pty/build/**/*'
+  - '!node_modules/node-pty/third_party/**/*'
+  - '!node_modules/node-pty/prebuilds/**/*'
+  - '!node_modules/tree-sitter/prebuilds/**/*'
+  - '!node_modules/tree-sitter-bash/prebuilds/**/*'
+  - '!out/**/*.map'
+  - '!**/*.private.json'
+  - '!**/*.private.txt'
+  - '!**/.env*'
+
+# Common real-filesystem resources. Platform-specific tunnel/rg/native notices are appended
+# below because their filenames and executable formats differ by OS.
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
+  - from: node_modules/electron/dist/LICENSE
+    to: LICENSE.electron.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: LICENSES.chromium.html
+  - from: pets
+    to: pets
+    filter:
+      - '*/pet.json'
+      - '*/atlas.png'
+      - '*/animations.json'
+  - from: extension
+    to: extension
+    filter:
+      - '**/*'
+      - '!**/*.map'
+      - '!**/*.private.*'
+      - '!**/.env*'
+      - '!**/*.md'
+      - '!**/*.d.ts'
+  - from: docs/WINDOWS-SETUP.md
+    to: WINDOWS-SETUP.md
+
+npmRebuild: false
+
+# macOS only; a no-op on every other platform. See the hook and the mac.identity note below.
+afterPack: scripts/afterpack-macos-adhoc-seal.mjs
+
+asarUnpack:
+  - '**/node_modules/@koromix/koffi-*/**'
+  - '**/node_modules/node-pty/**'
+  - '**/node_modules/sharp/**'
+  - '**/node_modules/@img/**'
+  - '**/node_modules/tree-sitter/**'
+  - '**/node_modules/tree-sitter-bash/**'
+compression: maximum
+
+# electron-builder 26 defaults to the legacy FUSE2 AppImage runtime. Ubuntu 24.04 renamed
+# libfuse2 to libfuse2t64 and does not install it by default, so use builder's static runtime
+# toolset instead. This keeps the standalone AppImage actually portable on the release target.
+toolsets:
+  appimage: "1.0.3"
+
+win:
+  target: nsis
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+  files:
+    - from: resources/packaging/native/win32/${arch}/node_modules
+      to: node_modules
+      filter: ['**/*']
+  extraResources:
+    - from: resources/packaging/node/win32/${arch}
+      to: node
+      filter: ['**/*']
+    # electron-builder always excludes a FileSet root's node_modules directory.
+    # Copy the official npm/dependency tree from that directory as its own root.
+    - from: resources/packaging/node/win32/${arch}/node_modules
+      to: node/node_modules
+      filter: ['**/*']
+    - from: resources/packaging/native/win32/${arch}/node_modules/@img/sharp-win32-${arch}/README.md
+      to: THIRD-PARTY-NOTICES-sharp-win32-${arch}.md
+    - from: resources/packaging/tunnel/win32/${arch}
+      to: tunnel
+      filter: ['**/*']
+    - from: resources/packaging/rg/win32/${arch}
+      to: rg
+      filter: ['**/*']
+
+nsis:
+  include: scripts/windows-installer-acl.nsh
+  oneClick: false
+  perMachine: false
+  # Current-user installs and this fork's disabled updater need no elevation helper.
+  packElevateHelper: false
+  allowElevation: false
+  buildUniversalInstaller: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OneCode
+  artifactName: OneCode-Setup-${arch}.${ext}
+  uninstallDisplayName: OneCode
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - dmg
+    - zip
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  minimumSystemVersion: "13.0"
+  extendInfo:
+    NSUserNotificationAlertStyle: alert
+    NSScreenCaptureUsageDescription: OneCode captures a display or window only when the enabled Desktop connector asks to observe it.
+    NSLocalNetworkUsageDescription: OneCode connects to devices and services on your local network when you run approved tools or commands.
+  # v2.0.2 intentionally ships unsigned/unnotarized macOS artifacts. Make that policy
+  # deterministic instead of depending on whatever identities or Apple env vars happen to be
+  # present on a hosted runner. Remove these two lines when real signing credentials are wired.
+  #
+  # Unsigned still has to mean *coherent*. Every arm64 Mach-O is ad-hoc signed by the linker
+  # whether anyone asks or not, so skipping bundle signing shipped an app whose executables
+  # claimed a resource seal the bundle did not have; macOS calls that damaged and refuses to
+  # launch it (issue #66). afterPack re-seals ad-hoc — no Authority, no TeamIdentifier, still
+  # nothing Gatekeeper will vouch for — and verifies the result.
+  identity: null
+  notarize: false
+  artifactName: OneCode-macOS-${arch}.${ext}
+  files:
+    - from: resources/packaging/native/darwin/${arch}/node_modules
+      to: node_modules
+      filter: ['**/*']
+  extraResources:
+    - from: resources/packaging/desktop/darwin/${arch}
+      to: desktop
+      filter: ['macos-desktop-addon.node', 'libcos-desktop.dylib']
+    - from: resources/packaging/native/darwin/${arch}/node_modules/@img/sharp-libvips-darwin-${arch}/README.md
+      to: THIRD-PARTY-NOTICES-sharp-libvips-darwin-${arch}.md
+    - from: resources/packaging/tunnel/darwin/${arch}
+      to: tunnel
+      filter: ['**/*']
+    - from: resources/packaging/rg/darwin/${arch}
+      to: rg
+      filter: ['**/*']
+
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: build/icon.png
+  category: Development
+  executableName: onecode
+  maintainer: OneCode <128387215+hassanradwannn@users.noreply.github.com>
+  syncDesktopName: true
+  # electron-builder rewrites x64 to x86_64 for AppImage and amd64 for DEB when ${arch}
+  # is used. Keep one stable public architecture label across formats/releases instead.
+  artifactName: OneCode-Linux-${env.COS_PACKAGE_ARCH}.${ext}
+  files:
+    - from: resources/packaging/native/linux/${arch}/node_modules
+      to: node_modules
+      filter: ['**/*']
+  extraResources:
+    - from: build/runtime-icon.png
+      to: runtime-icon.png
+    - from: resources/packaging/native/linux/${arch}/node_modules/@img/sharp-libvips-linux-${arch}/README.md
+      to: THIRD-PARTY-NOTICES-sharp-libvips-linux-${arch}.md
+    - from: resources/packaging/tunnel/linux/${arch}
+      to: tunnel
+      filter: ['**/*']
+    - from: resources/packaging/rg/linux/${arch}
+      to: rg
+      filter: ['**/*']
+
+deb:
+  depends:
+    # Ubuntu 24.04 renamed GTK 3's runtime package for the time64 transition. Keep the old
+    # package as an alternative so the same .deb remains installable on Ubuntu 22.04/Debian.
+    - libgtk-3-0 | libgtk-3-0t64
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0 | libatspi2.0-0t64
+    - libuuid1
+    - libsecret-1-0

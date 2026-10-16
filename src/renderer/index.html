@@ -1,0 +1,1540 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>OneCode</title>
+    <link rel="stylesheet" href="./icons.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./settings.css" />
+    <link rel="stylesheet" href="./dictation.css" />
+  </head>
+  <body>
+    <!-- Interface icons are Phosphor glyphs (icons.css, dom.ts icon()). Only the bespoke
+         product mark stays here, stroke-based on a 24 grid; every <use> carries a
+         viewBox or the browser shows the top-left corner of that grid. -->
+    <svg class="sprite" aria-hidden="true">
+      <defs>
+        <!-- The product mark: the same folder-behind-a-message shape as the app and
+             extension icons (scripts/make-icon.mjs), drawn in stroke for this grid. -->
+        <g id="i-mark">
+          <path d="M3.5 8.5V5.5a1 1 0 0 1 1-1h3.1L9 6.4h6.5" />
+          <path
+            d="M5.5 8.5h13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-8L7 20v-3.5H5.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"
+          />
+        </g>
+      </defs>
+    </svg>
+
+    <div class="app" data-screen="chat">
+      <div class="app-topbar">
+        <button class="btn" id="sidebarToggle" type="button" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true" title="Toggle sidebar"><i class="ico ph ph-sidebar-simple" aria-hidden="true"></i></button>
+        <button class="btn" id="viewMenu" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="View" title="View"><i class="ico ph ph-list" aria-hidden="true"></i></button>
+      </div>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-resize" id="sidebarResize" role="separator" tabindex="0" aria-label="Chat list width" aria-orientation="vertical" aria-controls="sidebar" title="Drag to resize · Double-click to reset"></div>
+        <button class="btn" id="backToChat" type="button" hidden><i class="ico ph ph-arrow-left" aria-hidden="true"></i><span>Back to chat</span></button>
+        <div class="sidebar-brand"><span class="mark"><svg class="ico" viewBox="0 0 24 24"><use href="#i-mark" /></svg></span><strong>OneCode</strong><button class="btn sidebar-brand-search" id="searchChatsButton" type="button" aria-haspopup="dialog" aria-controls="searchDialog" title="Search chats" aria-label="Search chats"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i></button></div>
+        <div class="sidebar-primary" id="sidebarPrimary">
+          <button class="btn new-chat" id="newChat" type="button"><i class="ico ph ph-pencil-simple" aria-hidden="true"></i>New chat</button>
+          <button class="btn sidebar-primary-link" id="sidebarPlugins" data-sidebar-page="plugins" type="button"><i class="ico ph ph-puzzle-piece" aria-hidden="true"></i>Plugins</button>
+          <button class="btn sidebar-primary-link" id="sidebarSkills" data-sidebar-page="skills" type="button"><i class="ico ph ph-cube" aria-hidden="true"></i>Skills</button>
+          <button class="btn sidebar-primary-link" id="sidebarPets" data-sidebar-page="pets" type="button"><i class="ico ph ph-paw-print" aria-hidden="true"></i>Pets</button>
+        </div>
+      <!-- Settings search: while it holds a query, its results take the page list's place. -->
+      <div class="settings-find" id="settingsFindBox" hidden>
+        <i class="ico ph ph-magnifying-glass" aria-hidden="true"></i>
+        <input id="settingsFind" type="search" placeholder="Search settings…" aria-label="Search settings" autocomplete="off" spellcheck="false" />
+        <button class="btn settings-find-clear" id="settingsFindClear" type="button" title="Clear search" aria-label="Clear search" hidden></button>
+      </div>
+      <div class="settings-find-results" id="settingsFindResults" aria-live="polite" hidden></div>
+      <nav id="tabs" aria-label="Settings navigation" hidden>
+        <button class="is-sel" data-tab="home" type="button">
+          <i class="ico ph ph-house" aria-hidden="true"></i>Workspace
+        </button>
+        <button data-tab="general" type="button"><i class="ico ph ph-sliders-horizontal" aria-hidden="true"></i>General</button>
+        <button data-tab="usage" type="button"><i class="ico ph ph-chart-line" aria-hidden="true"></i>Usage</button>
+<button data-tab="setup" type="button">
+          <i class="ico ph ph-list-checks" aria-hidden="true"></i>Setup
+          <span class="badge" id="setupBadge" hidden></span>
+        </button>
+        <button data-tab="settings" type="button">
+          <i class="ico ph ph-robot" aria-hidden="true"></i>Agents &amp; automation
+        </button>
+        <button data-tab="appearance" type="button"><i class="ico ph ph-sun" aria-hidden="true"></i>Appearance</button>
+        <button data-tab="activity" type="button">
+          <i class="ico ph ph-activity" aria-hidden="true"></i>Activity
+        </button>
+      </nav>
+        <section class="sidebar-sessions">
+          <div class="scroll">
+            <div id="sessionList">
+              <details class="sidebar-session-section" id="projectsSection" open>
+                <summary class="sidebar-session-heading">
+                  <span class="sidebar-session-label"><svg class="disclosure-chevron sidebar-section-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Projects</span>
+                  <span class="acts"><button class="btn" id="addProject" type="button" title="Add a project folder" aria-label="Add a project folder"><i class="ico ph ph-plus" aria-hidden="true"></i></button></span>
+                </summary>
+                <div id="projectList"><p class="empty" role="status">Loading projects…</p></div>
+                <p class="empty sidebar-section-empty" id="projectsEmpty" hidden>No projects yet.</p>
+              </details>
+              <details class="sidebar-session-section" id="chatsSection" open>
+                <summary class="sidebar-session-heading">
+                  <span class="sidebar-session-label"><svg class="disclosure-chevron sidebar-section-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Chats</span>
+                  <span class="acts"><button class="btn" id="chatRefresh" type="button" title="Refresh chats" aria-label="Refresh chats"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i></button></span>
+                </summary>
+                <div id="chatList"><p class="empty" role="status">Loading chats…</p></div>
+                <p class="empty sidebar-section-empty" id="sessionsEmpty" hidden>No chats outside projects yet.</p>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <div class="sidebar-bottom">
+          <button class="btn" id="workspaceSettings" type="button"><i class="ico ph ph-gear-six" aria-hidden="true"></i>Settings</button>
+          <div class="connection-anchor">
+            <button
+              class="sidebar-connection"
+              id="sidebarConnection"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="connectionPopover"
+              aria-label="Not connected"
+              title="Not connected"
+            >
+              <span class="sidebar-connection-dot" aria-hidden="true"></span>
+              <span class="sidebar-connection-label" aria-hidden="true"><span id="sidebarConnectionLabel">Connect</span></span>
+            </button>
+            <span class="sr-only" id="connectionAnnounce" role="status" aria-live="polite"></span>
+            <section class="connection-popover scroll" id="connectionPopover" role="dialog" aria-label="Connection" hidden>
+              <div class="connection-popover-head">
+                <strong id="connectionPopoverTitle">Not connected</strong>
+                <span class="connection-popover-status-dot" aria-hidden="true"></span>
+              </div>
+              <div class="connection-popover-card">
+                <div class="connection-popover-row">
+                  <span>Gemini</span>
+                  <span id="connectionPopoverConnector" class="sr-only">Not connected</span>
+                  <i aria-hidden="true"></i>
+                </div>
+                <div class="connection-popover-row">
+                  <span>Extension</span>
+                  <span id="connectionPopoverBrowser" class="sr-only">Not seen</span>
+                  <i aria-hidden="true"></i>
+                </div>
+              </div>
+              <div class="connection-popover-actions">
+                <button class="btn btn-solid" id="connectionPopoverToggle" type="button">Connect</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Everything this app knows about being out of date, in one line. Painted from
+           state.update plus the extension version the bridge already reports; see
+           src/main/update.ts. Hidden whenever there is nothing to say. -->
+      <div class="notices">
+      <!-- A new macOS build asks once for the Keychain password; everything that needs saved keys
+           waits for the answer. See src/renderer/keychain-notice.ts. -->
+      <div class="notice" id="keychainNotice" role="status" hidden>
+        <i class="ico ph ph-lock-key" aria-hidden="true"></i>
+        <span>macOS asks for your password once after each update, so this version can open its saved keys. Enter your Mac login password and choose “Always Allow”. Chats and the browser connection continue as soon as you answer.</span>
+      </div>
+      <div class="notice" id="updateNotice" hidden>
+        <i class="ico ph ph-lightning" aria-hidden="true"></i>
+        <span id="updateText"></span>
+        <button class="btn btn-quiet" id="updateGet" type="button" hidden>Get it</button>
+        <button class="btn btn-quiet" id="updateInstall" type="button" hidden>Install now</button>
+        <button class="btn btn-quiet" id="updateExtension" type="button" hidden>Update extension</button>
+      </div>
+      <div class="notice offer-card" id="pluginRefreshOffer" role="region" aria-labelledby="pluginRefreshOfferTitle" hidden>
+        <div class="offer-icon"><i class="ico ph ph-arrows-clockwise" aria-hidden="true"></i></div>
+        <div class="offer-text">
+          <b id="pluginRefreshOfferTitle">Keep plugins up to date in Gemini</b>
+          <em>When an update changes a plugin's tools, OneCode refreshes it in Gemini for you. You can change this later in Settings.</em>
+        </div>
+        <button class="offer-later" id="pluginRefreshOfferLater" type="button">Not now</button>
+        <button class="offer-accept" id="pluginRefreshOfferAccept" type="button">Turn on</button>
+      </div>
+      <div class="notice" id="pluginRefreshReminder" role="status" hidden>
+        <i class="ico ph ph-activity" aria-hidden="true"></i>
+        <span>The tools of a OneCode plugin changed. Refresh that plugin in Gemini; this is separate from the browser extension.</span>
+        <button class="btn btn-icon" id="dismissPluginRefreshReminder" type="button" title="Dismiss reminder" aria-label="Dismiss reminder"><i class="ico ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      <div class="notice" id="credentialsUnreadable" role="alert" hidden>
+        <i class="ico ph ph-lock-key" aria-hidden="true"></i>
+        <span>The keys saved on this computer could not be read, so new keys cannot be saved. If restarting the app does not help, you can start fresh.</span>
+        <button class="btn btn-quiet" id="credentialsStartFresh" type="button">Start fresh…</button>
+      </div>
+      <div class="notice" id="recordingStorageFull" role="status" hidden>
+        <i class="ico ph ph-warning" aria-hidden="true"></i>
+        <span>Recording storage is full. New images and long texts are no longer saved in your chats.</span>
+        <button class="btn btn-quiet" id="freeRecordingStorage" type="button">Free storage</button>
+        <button class="btn btn-icon" id="dismissRecordingStorageFull" type="button" title="Dismiss reminder" aria-label="Dismiss reminder"><i class="ico ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      </div>
+
+      <main>
+
+        <!-- ========================================================= General
+             App-wide behavior that is not part of connecting. It used to sit in Setup › Advanced,
+             where nobody looking for "how chats behave" would open it. Shares the Appearance
+             page's layout classes. -->
+        <section class="panel appearance-panel general-panel scroll" data-panel="general" aria-labelledby="generalTitle">
+          <div class="appearance-content settings-page-content">
+            <header class="settings-page-head appearance-page-head">
+              <div><h1 id="generalTitle">General</h1><p>How the app behaves day to day. Changes apply immediately.</p></div>
+            </header>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Chats</h2><p>What you see while Gemini answers, and what your messages carry.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+                <label class="setting"><span class="setting-text"><b>Follow new output</b><em>Stay at the end of the chat while answers grow, here and on Gemini. Scrolling up pauses it.</em></span><input id="followOutput" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Notify when a chat finishes</b><em>A notification when a chat's answer is done while this window is in the background. Workers and chats with Goal or Loop on don't notify.</em></span><input id="turnNotifications" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Messages during a running turn</b><em>What a message you send while Gemini works does by default. ⌘⇧Enter (Ctrl+Shift+Enter on Windows and Linux) sends it the other way.</em></span><select id="followUp"><option value="steer">Join the running turn</option><option value="queue">Wait until the turn ends</option></select></label>
+                <label class="setting"><span class="setting-text"><b>Send messages with</b><em>Which key sends what you type. With ⌘Enter (Ctrl+Enter on Windows and Linux), Enter starts a new line.</em></span><select id="enterSends"><option value="enter">Enter</option><option value="modifier">⌘Enter / Ctrl+Enter</option></select></label>
+                <label class="setting"><span class="setting-text"><b>Keep awake while a chat works</b><em>Stops the computer from going to sleep, so long runs keep going. Some Windows laptops still sleep once the screen turns off; for those, choose The computer and screen.</em></span><select id="keepAwake"><option value="off">Off</option><option value="computer">The computer</option><option value="screen">The computer and screen</option></select></label>
+                <label class="setting"><span class="setting-text"><b>Playful status words</b><em>Show rotating gym jokes instead of “Working”.</em></span><input id="playfulStatus" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Playful asides in automatic Continue</b><em>Add a random fun fact or meme joke to each automatic Continue, marked for the model to ignore.</em></span><input id="playfulContinue" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Mention OneCode Core</b><em>Makes sure Gemini can use this app in every chat. Turn it off if Gemini starts plain questions with an unneeded tool call. Workers, Goal, Loop and Continue always keep the mention.</em></span><input id="mentionCore" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Use Gemini's gemini-code skill</b><em>Enable that native skill in Gemini first. Adds a reference to it alongside the compact chat setup. Workspace details, selected local skills and session credentials still update normally.</em></span><input id="useGeminiWebSkill" type="checkbox" /></label>
+              </div>
+            </section>
+            <section class="appearance-section" id="privacyScreenshotsSetting">
+              <header class="settings-section-head"><div><h2>Privacy</h2><p>What Gemini sees of your screen.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+                <label class="setting"><span class="setting-text"><b>Privacy screenshots</b><em>Screenshots show the active window by default instead of the whole screen.</em></span><input id="privacyScreenshots" type="checkbox" /></label>
+              </div>
+            </section>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>For developers</h2><p>Troubleshooting details and access for tools on this computer.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+                <label class="setting"><span class="setting-text"><b>Developer mode</b><em>Show turn boundaries and recovery events in the chat.</em></span><input id="developerMode" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Keep plugin URLs across restarts</b><em>Preserves the secret paths Gemini stores. Required for Tailscale Funnel; also useful with your own stable HTTPS tunnel. Anyone with a plugin URL can use it within this app's permissions. Needs secure storage.</em></span><input id="mcpPersistentUrls" type="checkbox" /></label>
+                <p class="hint" id="mcpPersistentUrlsRequired" hidden>Tailscale requires saved connector paths. Choose another connection method before turning this off.</p>
+                <label class="setting"><span class="setting-text"><b>Local control API</b><em>Let agents on this computer read app status and chats.</em></span><input id="controlApiEnabled" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Allow actions</b><em>Let those agents also send messages, start new chats and cancel messages. Needs the local control API.</em></span><input id="controlApiAllowActions" type="checkbox" disabled /></label>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="panel appearance-panel scroll" data-panel="appearance" id="appearancePanel" aria-labelledby="appearanceTitle">
+          <div class="appearance-content settings-page-content">
+            <header class="settings-page-head appearance-page-head">
+              <div><h1 id="appearanceTitle">Appearance</h1><p>Make this workspace yours. Changes appear immediately.</p></div>
+              <button class="btn" id="appearanceReset" type="button"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i>Reset appearance</button>
+            </header>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Preview</h2><p>See changes as you adjust the workspace.</p></div></header>
+              <div class="appearance-preview" aria-label="Appearance preview">
+                <div class="appearance-preview-sidebar"><svg class="ico brand-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mark" /></svg><span></span><span class="is-selected"></span><span></span></div>
+                <div class="appearance-preview-chat">
+                  <div class="appearance-preview-message"><span class="appearance-preview-avatar">You</span><p>Check the build and show what changed.</p></div>
+                  <div class="appearance-preview-message"><span class="appearance-preview-avatar is-agent">Gemini</span><div><p>Build passed. Here is the updated command:</p><pre><code>npm run build</code></pre><span class="appearance-preview-badge">✓ Complete</span></div></div>
+                  <div class="appearance-preview-composer"><span>Ask anything…</span><b aria-hidden="true">↑</b></div>
+                </div>
+              </div>
+            </section>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Colors</h2><p>Fine-tune background and accent colors for the selected theme.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+              <label class="setting"><span class="setting-text"><b>Theme</b><em>Light and dark keep their own colors.</em></span><select id="appearanceTheme"><option value="light">Light</option><option value="dark">Dark</option></select></label>
+
+              <div class="setting"><label class="setting-text" for="appearance-accent"><b>Accent color</b></label><div class="appearance-color"><input id="appearance-accent" type="color" data-color="accent" aria-label="Accent color" /><input id="appearance-accent-hex" type="text" data-hex="accent" aria-label="Accent color HEX" pattern="#[0-9a-fA-F]{6}" maxlength="7" spellcheck="false" autocomplete="off" /></div></div>
+              <div class="setting"><label class="setting-text" for="appearance-background"><b>Background color</b></label><div class="appearance-color"><input id="appearance-background" type="color" data-color="background" aria-label="Background color" /><input id="appearance-background-hex" type="text" data-hex="background" aria-label="Background color HEX" pattern="#[0-9a-fA-F]{6}" maxlength="7" spellcheck="false" autocomplete="off" /></div></div>
+              <div class="setting"><label class="setting-text" for="appearance-sidebar"><b>Sidebar color</b></label><div class="appearance-color"><input id="appearance-sidebar" type="color" data-color="sidebar" aria-label="Sidebar color" /><input id="appearance-sidebar-hex" type="text" data-hex="sidebar" aria-label="Sidebar color HEX" pattern="#[0-9a-fA-F]{6}" maxlength="7" spellcheck="false" autocomplete="off" /></div></div>
+              <label class="setting"><span class="setting-text"><b>Contrast</b><em>How strongly text stands out from its background.</em></span><span class="appearance-range"><input id="appearanceContrast" type="range" min="0" max="100" aria-label="Contrast" /><output id="appearanceContrastValue" for="appearanceContrast"></output></span></label>
+              <label class="setting"><span class="setting-text"><b>Translucent sidebar</b><em>Blend your sidebar color softly into the background.</em></span><input id="appearanceTranslucent" type="checkbox" /></label>
+              </div>
+            </section>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Typography</h2><p>Choose how text reads throughout the workspace.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+              <label class="setting"><span class="setting-text"><b>Font</b></span><select id="appearanceFont"><option value="system">System default</option><option value="sans">Sans serif</option><option value="serif">Serif</option><option value="mono">Monospace</option></select></label>
+              <label class="setting"><span class="setting-text"><b>Text size</b></span><span class="appearance-range"><input id="appearanceSize" type="range" min="12" max="18" aria-label="Text size" /><output id="appearanceSizeValue" for="appearanceSize"></output></span></label>
+              </div>
+            </section>
+            <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Preferences</h2><p>Language and setup profiles stay independent of appearance.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+                <label class="setting" for="uiLanguage"><span class="setting-text"><b>Language</b><em>Changes the app interface immediately. Your messages stay as written.</em></span><select id="uiLanguage" class="language-select" translate="no"><option value="de" lang="de">Deutsch</option><option value="en" lang="en">English</option><option value="es" lang="es">Español</option><option value="fr" lang="fr">Français</option><option value="pt-BR" lang="pt-BR">Português (Brasil)</option><option value="pt-PT" lang="pt-PT">Português (Portugal)</option><option value="ru" lang="ru">Русский</option><option value="tr" lang="tr">Türkçe</option><option value="vi" lang="vi">Tiếng Việt</option><option value="ja" lang="ja">日本語</option><option value="ko" lang="ko">한국어</option><option value="zh-CN" lang="zh-CN">简体中文</option><option value="zh-TW" lang="zh-TW">繁體中文</option></select></label>
+                <div class="setting setup-profile-setting">
+                  <span class="setting-text"><b id="setupProfileLabel">Setup profile</b><em>Switches the saved tunnel IDs and tunnel API key, for example for another Gemini account.</em></span>
+                  <div class="setup-profile-controls">
+                    <button class="btn" id="setupProfile" type="button" popovertarget="setupProfileMenu" aria-labelledby="setupProfileLabel setupProfileCurrent"><span id="setupProfileCurrent" translate="no">Default</span><svg class="disclosure-chevron dropdown-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg></button>
+                    <button class="btn" id="setupProfileAdd" type="button" title="Add profile" aria-label="Add profile"><i class="ico ph ph-plus" aria-hidden="true"></i></button>
+                  </div>
+                  <div id="setupProfileMenu" popover aria-labelledby="setupProfileLabel"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+        <section class="panel plugins-panel" data-panel="plugins">
+          <div class="plugins-content">
+          <header class="plugin-page-head"><div><h1>Plugins</h1><p>Bring your favorite tools into the conversation.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="pluginsSearch" type="search" placeholder="Search plugins" aria-label="Search plugins" /></label><button class="btn plugin-add" id="pluginsAdd" type="button" aria-label="Add a plugin" title="Add a plugin"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
+          <section class="plugin-connection" aria-labelledby="pluginsSetupTitle">
+            <div><h2 id="pluginsSetupTitle">Set up plugins before your first use</h2><p id="pluginsSetupHint">Add OneCode Plugins to Gemini once, so Gemini can use your installed plugins.</p><span id="pluginsConnectionStatus" role="status">Setup required · connect your plugins</span></div>
+            <button class="btn btn-solid" id="pluginsSetupLink" type="button">Set up plugins</button>
+          </section>
+          <div class="plugin-refresh-guide"><p>After installing, updating or changing enabled plugins, refresh <strong id="pluginsRefreshName" translate="no">OneCode Plugins</strong> in Gemini to make its tools available.</p><button class="btn" id="pluginsOpenGemini" type="button">Open Gemini plugins</button></div>
+          <div class="plugin-section-head"><h2>Installed <span id="pluginsCount" class="plugin-count">Loading…</span></h2><button class="btn" id="pluginsRefresh" type="button">Check local status</button></div>
+          <div id="pluginsInstalled" aria-live="polite"></div>
+          <div class="plugin-section-head"><h2>Explore plugins</h2><span class="muted">Made for your workflow</span></div>
+          <div id="pluginsExplore" class="plugin-directory"></div>
+          <details class="plugin-legal"><summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Legal Notices / Third-party Licenses</summary><p>Catalog illustrations are original Chat On Steroids artwork, Copyright © 2026 Chat On Steroids contributors, licensed under the app’s MIT license. They illustrate independent integrations and are not official product logos or endorsements. Product names belong to their respective owners.</p><p>Installed plugins retain their own licenses. Open a plugin’s details to see its source, version and license. Review the upstream project before installation. Bundled dependency notices and reviewed catalog license texts are included in THIRD-PARTY-NOTICES.txt with the application; external plugins are downloaded separately.</p><button class="btn" id="pluginsLegalOpen" type="button">Open full third-party license texts</button></details>
+          </div>
+        </section>
+        <section class="panel plugins-panel skills-panel" data-panel="skills">
+          <div class="plugins-content">
+            <header class="plugin-page-head"><div><h1>Skills</h1><p>Reusable instructions for the work you do in OneCode.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="skillsSearch" type="search" placeholder="Search skills" aria-label="Search skills" /></label><details class="plugin-menu skill-import-menu"><summary class="btn plugin-add" aria-label="Import a skill" title="Import a skill"><i class="ico ph ph-plus" aria-hidden="true"></i></summary><div class="plugin-menu-actions"><button class="btn" id="skillsImportFolder" type="button">Import folder</button><button class="btn" id="skillsImportFile" type="button">Import SKILL.md</button><button class="btn" id="skillsImportGithub" type="button">Import from GitHub</button></div></details></div></header>
+            <div class="plugin-refresh-guide pet-import-guide"><p>Import a folder, a standalone SKILL.md, or a public GitHub skill. Local skills can be linked to their GitHub source to check for updates; installing an update stays your choice.</p></div>
+            <dialog class="plugin-dialog pet-delete-dialog" id="skillGithubDialog" aria-labelledby="skillGithubTitle">
+              <div class="plugin-dialog-head"><h2 id="skillGithubTitle">Import from GitHub</h2><button class="btn" id="skillGithubClose" type="button">Close</button></div>
+              <form id="skillGithubForm" class="plugin-dialog-body">
+                <p id="skillGithubDescription">Paste a public GitHub folder link or a link to its SKILL.md. The complete skill folder will be copied to your CoS library.</p>
+                <label class="plugin-field" for="skillGithubUrl"><span>GitHub URL</span><input id="skillGithubUrl" type="url" required autocomplete="url" spellcheck="false" placeholder="https://github.com/owner/repo/tree/main/skill" /></label>
+                <p id="skillGithubError" class="plugin-error" role="alert" hidden></p>
+                <div class="pet-delete-actions"><button class="btn" id="skillGithubCancel" type="button">Cancel</button><button class="btn btn-solid" id="skillGithubSubmit" type="submit">Import skill</button></div>
+              </form>
+            </dialog>
+            <div class="plugin-section-head"><h2>Installed <span id="skillsCount" class="plugin-count">Loading…</span></h2><button class="btn" id="skillsRefresh" type="button"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i>Refresh</button></div>
+            <div id="skillsInstalled" class="pet-library-grid" aria-live="polite"></div>
+            <section id="skillsRecommendedSection" hidden>
+              <div class="plugin-section-head"><h2>Recommended <span id="skillsRecommendedCount" class="plugin-count"></span></h2></div>
+              <div id="skillsRecommended" class="pet-library-grid" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+        <section class="panel plugins-panel pets-panel" data-panel="pets">
+          <div class="plugins-content">
+            <header class="plugin-page-head"><div><h1>Pets</h1><p>Your little desktop companions.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="petsSearch" type="search" placeholder="Search pets" aria-label="Search pets" /></label><button class="btn plugin-add" id="petsImport" type="button" aria-label="Import CoS Pet folder" title="Import CoS Pet folder"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
+            <div class="plugin-refresh-guide pet-import-guide">
+              <p>A compatible pet is a folder with three files.</p>
+              <button class="btn" id="petsFormatGuide" type="button">What can I import?</button>
+            </div>
+            <dialog class="plugin-dialog" id="petFormatDialog" aria-labelledby="petFormatTitle">
+              <div class="plugin-dialog-head"><h2 id="petFormatTitle">What can I import?</h2><button class="btn" id="petsFormatClose" type="button">Close</button></div>
+              <div class="plugin-dialog-body pet-format-content">
+                <div class="pet-format-guide-head"><p>A compatible pet is a folder with three files.</p><button class="btn" id="petsCopyInstructions" type="button">Copy instructions</button></div>
+                <p class="pet-format-folder">Import the folder itself with <code>pet.json</code>, <code>atlas.png</code>, and <code>animations.json</code>. OneCode validates all three before copying the pet into your local library.</p>
+                <div class="pet-format-ai-help">
+                  <strong>AI-assisted creation</strong>
+                  <p>Copy the production brief below and replace <code>&lt;describe your character here&gt;</code> with the character, personality, colors, style, accessories, and references you want. In Codex, invoke <code>$hatch-pet</code> for visual generation and QA; its official URL is included for discovery, while this app’s 96-frame CoS format remains authoritative.</p>
+                </div>
+                <pre id="petsFormatInstructions"></pre>
+              </div>
+            </dialog>
+            <section id="petsFavoritesSection" hidden>
+              <div class="plugin-section-head"><h2>Favorites <span id="petsFavoritesCount" class="plugin-count"></span></h2></div>
+              <div id="petsFavorites" class="pet-library-grid" aria-live="polite"></div>
+            </section>
+            <div class="plugin-section-head"><h2>Library <span id="petsCount" class="plugin-count">Loading…</span></h2></div>
+            <div id="petsInstalled" class="pet-library-grid" aria-live="polite"></div>
+          </div>
+        </section>
+        <section class="panel usage-panel" data-panel="usage">
+          <div class="settings-page-content usage-content">
+            <header class="settings-page-head">
+              <h1>Usage</h1>
+              <p>Model availability and the work recorded in this workspace.</p>
+            </header>
+            <div class="settings-surface usage-summary" id="usageSummary"></div>
+            <div class="usage-sections">
+              <section class="settings-section usage-section usage-messages" aria-labelledby="usageMessagesTitle">
+                <header class="settings-section-head">
+                  <div><h2 id="usageMessagesTitle">Messages and limits</h2><p>Gemini account quotas are not exposed to this integration. Local activity is shown below.</p></div>
+                  <button class="btn" id="refreshUsage" type="button"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i>Refresh</button>
+                </header>
+                <div class="settings-surface usage-message-surface">
+                  <p class="muted usage-status" id="usageStatus" role="status">Updating usage in the background. After an update, this can take a few minutes. You can keep using the app.</p>
+                  <dl hidden class="usage-message-counts" id="usageMessageCounts" aria-live="polite">
+                    <div class="usage-limit"><dt translate="no">GPT-5.6</dt><dd><strong id="usageMessages56" translate="no">—</strong><span class="muted">sent</span></dd></div>
+                    <div class="usage-limit"><dt translate="no">GPT-6</dt><dd><strong id="usageMessages6" translate="no">—</strong><span class="muted">sent</span></dd></div>
+                  </dl>
+                  <select class="usage-week-start" id="usageWeekStart" title="Change start day" aria-label="Change start day" aria-describedby="usageMessagePeriod"></select>
+                  <span class="sr-only" id="usageMessagePeriod"></span>
+                  <div id="modelUsage"><div class="usage-limits" id="usageLimits"></div></div>
+                </div>
+              </section>
+              <section class="settings-section usage-section usage-other-apps" aria-labelledby="usageOtherAppsTitle">
+                <header class="settings-section-head">
+                  <div><h2 id="usageOtherAppsTitle">Other apps on this computer</h2><p>Codex and Claude Code, read from their own logs here. Limits are as the app last reported them; tokens are counted from the logs.</p></div>
+                </header>
+                <div class="settings-surface usage-message-surface">
+                  <label class="setting"><span class="setting-text"><b>Read Codex and Claude Code usage</b><em>Only numbers, never what you wrote. Nothing leaves this computer unless you ask for your usage in a chat.</em></span><input id="localAppUsage" type="checkbox" /></label>
+                  <div class="usage-limits" id="otherAppsUsage" aria-live="polite"></div>
+                </div>
+              </section>
+              <section class="settings-section usage-section">
+                <header class="settings-section-head">
+                  <div><h2>Token activity per day</h2><p id="usageHeatmapCaption">Estimated context processed per tool call · last 52 weeks</p></div>
+                </header>
+                <div class="settings-surface usage-heatmap-surface"><div id="usageHeatmap" class="usage-heatmap"></div></div>
+              </section>
+              <section class="settings-section usage-section">
+                <header class="settings-section-head">
+                  <div><h2>Cost estimate per day</h2><p id="usageCost">Set per-model cached-input rates to compare costs.</p></div>
+                </header>
+                <details id="usageFormulaDetails" class="settings-surface usage-formula-panel"><summary>Edit cost formula</summary>
+                  <p id="usageFormula" class="muted"></p> <p class="muted">Per-model rates are editable cost comparisons, not Gemini subscription charges or actual bills.</p> <label class="setting"><span class="setting-text"><b>Context times unique tool calls, divided by</b><em>Changes estimated tokens and costs.</em></span><input id="usageDivisor" aria-label="Usage token divisor" type="number" min="0.01" step="0.01" value="2" /></label> <label class="setting"><span class="setting-text"><b>Cached-input cost multiplier</b><em>Applied after each model's cached-input rate.</em></span><input id="usageMultiplier" aria-label="Cached-input cost multiplier" type="number" min="0" step="0.01" value="1.2" /></label> <div id="usageRates"></div>
+                </details>
+                <div id="usageDays" class="settings-surface usage-table-stack"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+        <!-- ============================================================ Home -->
+        <section class="panel" data-panel="home">
+          <div class="settings-page-content workspace-content">
+            <header class="settings-page-head workspace-page-head">
+              <h1>Workspace</h1>
+              <p>Choose what Gemini can access and keep your connection healthy.</p>
+            </header>
+            <div class="workspace-layout">
+              <div class="workspace-column">
+                <!-- ----------------------------------------------- permissions -->
+                <section class="settings-section workspace-section workspace-permissions">
+                  <header class="settings-section-head workspace-section-head">
+                    <div><h2>Permissions</h2><p>Control which local capabilities Gemini can use.</p></div>
+                    <button class="btn" id="readOnlyBtn" type="button">
+                      <i class="ico ph ph-lock-key" aria-hidden="true"></i>Read-only
+                    </button>
+                  </header>
+                  <div class="settings-surface workspace-surface scroll">
+                    <div id="groups"></div>
+                    <div class="desktop-access" id="desktopAccess" hidden>
+                      <strong id="desktopAccessTitle">Desktop access needs attention</strong>
+                      <p id="desktopAccessDetail"></p>
+                      <button class="btn btn-solid" id="requestDesktopAccessibility" type="button">Request Accessibility</button>
+                      <button
+                        class="btn"
+                        id="openDesktopScreen"
+                        type="button"
+                        data-link="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                      >Open Screen Recording settings</button>
+                      <button
+                        class="btn"
+                        id="openDesktopAccessibility"
+                        type="button"
+                        data-link="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+                      >Open Accessibility settings</button>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- -------------------------------------------------- activity -->
+                <section class="settings-section workspace-section workspace-activity">
+                  <header class="settings-section-head workspace-section-head">
+                    <div><h2>Activity</h2><p>Recent local events and failures.</p></div>
+                    <span class="workspace-section-actions">
+                      <span class="problems" id="homeProblems" hidden></span>
+                      <button class="btn" id="copyLog" type="button">
+                        <i class="ico ph ph-copy" aria-hidden="true"></i>Copy
+                      </button>
+                    </span>
+                  </header>
+                  <div class="settings-surface workspace-surface scroll feed" id="homeFeed"></div>
+                </section>
+              </div>
+
+              <div class="workspace-column">
+                <!-- --------------------------------------------------- folders -->
+                <section class="settings-section workspace-section" id="foldersCard">
+                  <header class="settings-section-head workspace-section-head">
+                    <div><h2>Folders</h2><p>Approved locations available to local tools.</p></div>
+                    <button class="btn" id="addFolder" type="button">
+                      <i class="ico ph ph-plus" aria-hidden="true"></i>Add
+                    </button>
+                  </header>
+                  <div class="settings-surface workspace-surface scroll">
+                    <div id="rootList"></div>
+                    <p class="empty" id="rootsEmpty">
+                      Nothing shared yet. Press Add or drop a folder here. Gemini sees short names
+                      like <code>/project</code> — your real system paths are never sent.
+                    </p>
+                  </div>
+                </section>
+
+                <!-- ---------------------------------------------------- health -->
+                <section class="settings-section workspace-section workspace-health">
+                  <header class="settings-section-head workspace-section-head">
+                    <div><h2>Health</h2><p>Connection and runtime status.</p></div>
+                    <button class="btn" id="runChecks" type="button">
+                      <i class="ico ph ph-activity" aria-hidden="true"></i>
+                      <span id="runChecksLabel">Run checks</span>
+                    </button>
+                  </header>
+                  <div class="settings-surface workspace-surface scroll">
+                    <div class="big">
+                      <div><b id="bigHandshake">—</b><span>verified link</span></div>
+                      <div><b id="bigRequest">—</b><span>last Gemini call</span></div>
+                    </div>
+                    <div class="facts" id="facts"></div>
+                    <div class="checks" id="checksBox" hidden>
+                      <div class="checks-head">
+                        <strong id="checksSummary"></strong>
+                        <button class="btn btn-quiet" id="closeChecks" type="button">
+                          <i class="ico ph ph-x" aria-hidden="true"></i>
+                        </button>
+                      </div>
+                      <ul id="checkList"></ul>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- =========================================================== Setup -->
+        <section class="panel setup-panel scroll" data-panel="setup">
+          <div class="sheet settings-page-content">
+            <div class="setup-heading settings-page-head">
+              <div><h1 id="setupTitle">Setup</h1><p>Connect your workspace to Gemini.</p></div>
+              <div class="language-tabs" role="group" aria-label="Language">
+                <button type="button" data-language="de" lang="de" translate="no" title="Deutsch" aria-label="Deutsch" aria-pressed="false"><svg class="language-flag" viewBox="0 0 900 600" aria-hidden="true"><image href="./flags/de.svg" width="900" height="600"/></svg></button>
+                <button type="button" data-language="en" lang="en" translate="no" title="English" aria-label="English" aria-pressed="true"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#012169" d="M0 0h60v40H0z"/><path stroke="#fff" stroke-width="8" d="m0 0 60 40M60 0 0 40"/><path stroke="#c8102e" stroke-width="3" d="m0 0 60 40M60 0 0 40"/><path stroke="#fff" stroke-width="13" d="M30 0v40M0 20h60"/><path stroke="#c8102e" stroke-width="7" d="M30 0v40M0 20h60"/></svg></button>
+                <button type="button" data-language="es" lang="es" translate="no" title="Español" aria-label="Español" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#aa151b" d="M0 0h60v40H0z"/><path fill="#f1bf00" d="M0 10h60v20H0z"/></svg></button>
+                <button type="button" data-language="fr" lang="fr" translate="no" title="Français" aria-label="Français" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#002395" d="M0 0h20v40H0z"/><path fill="#fff" d="M20 0h20v40H20z"/><path fill="#ed2939" d="M40 0h20v40H40z"/></svg></button>
+                <button type="button" data-language="pt-BR" lang="pt-BR" translate="no" title="Português (Brasil)" aria-label="Português (Brasil)" aria-pressed="false">
+                  <svg class="language-flag" viewBox="0 0 70 49" aria-hidden="true">
+                    <path fill="#009739" d="M0 0h70v49H0z" />
+                    <path fill="#ffdf00" d="M35 3.5 66.5 24.5 35 45.5 3.5 24.5Z" />
+                    <defs>
+                      <clipPath id="language-br-globe"><circle cx="35" cy="24.5" r="11.2" /></clipPath>
+                      <path id="language-br-star" d="M0-1.5 0.42-.48 1.5-.35.69.36.88 1.42 0 .88-.88 1.42-.69.36-1.5-.35-.42-.48Z" />
+                    </defs>
+                    <circle cx="35" cy="24.5" r="11.2" fill="#002776" />
+                    <g clip-path="url(#language-br-globe)" fill="#fff">
+                      <use href="#language-br-star" transform="translate(35 13.8) scale(.9)" />
+                      <use href="#language-br-star" transform="translate(30 15.5) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(34 16) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(39 16) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(27 18) scale(.7)" />
+                      <use href="#language-br-star" transform="translate(31 18) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(36 18) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(41 18) scale(.7)" />
+                      <use href="#language-br-star" transform="translate(25 22) scale(.65)" />
+                      <use href="#language-br-star" transform="translate(29 22) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(34 22) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(39 23) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(45 24) scale(.65)" />
+                      <use href="#language-br-star" transform="translate(27 27) scale(.7)" />
+                      <use href="#language-br-star" transform="translate(32 27) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(37 27) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(42 28) scale(.7)" />
+                      <use href="#language-br-star" transform="translate(44 30) scale(.6)" />
+                      <use href="#language-br-star" transform="translate(40 32) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(35 31) scale(.8)" />
+                      <use href="#language-br-star" transform="translate(30 31) scale(.75)" />
+                      <use href="#language-br-star" transform="translate(26 30) scale(.6)" />
+                      <use href="#language-br-star" transform="translate(33 34) scale(.65)" />
+                      <use href="#language-br-star" transform="translate(39 34) scale(.6)" />
+                      <use href="#language-br-star" transform="translate(42 31) scale(.65)" />
+                      <use href="#language-br-star" transform="translate(28 24) scale(.65)" />
+                      <use href="#language-br-star" transform="translate(37 33) scale(.6)" />
+                    </g>
+                    <path clip-path="url(#language-br-globe)" fill="#fff" d="M22.7 17.1c6.8.8 16 2.5 24.8 5.1l-.7 3.2c-8.7-2.6-17.9-4.5-24.9-5.1z" />
+                  </svg>
+                </button>
+                <button type="button" data-language="pt-PT" lang="pt-PT" translate="no" title="Português (Portugal)" aria-label="Português (Portugal)" aria-pressed="false"><svg class="language-flag" viewBox="0 0 900 600" aria-hidden="true"><image href="./flags/pt.svg" width="900" height="600"/></svg></button>
+                <button type="button" data-language="ru" lang="ru" translate="no" title="Русский" aria-label="Русский" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#fff" d="M0 0h60v13.333H0z"/><path fill="#0039a6" d="M0 13.333h60v13.334H0z"/><path fill="#d52b1e" d="M0 26.667h60V40H0z"/></svg></button>
+                <button type="button" data-language="tr" lang="tr" translate="no" title="Türkçe" aria-label="Türkçe" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#e30a17" d="M0 0h60v40H0z"/><circle cx="25" cy="20" r="10" fill="#fff"/><circle cx="28" cy="20" r="8" fill="#e30a17"/><path fill="#fff" d="m39 13 1.6 4.8h5l-4 3 1.5 4.7-4.1-2.9-4.1 2.9 1.5-4.7-4-3h5z"/></svg></button>
+                <button type="button" data-language="vi" lang="vi" translate="no" title="Tiếng Việt" aria-label="Tiếng Việt" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#da251d" d="M0 0h60v40H0z"/><path fill="#ff0" d="m30 8 2.9 8.9h9.4l-7.6 5.5 2.9 8.9-7.6-5.5-7.6 5.5 2.9-8.9-7.6-5.5h9.4z"/></svg></button>
+                <button type="button" data-language="ja" lang="ja" translate="no" title="日本語" aria-label="日本語" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#fff" d="M0 0h60v40H0z"/><circle cx="30" cy="20" r="12" fill="#bc002d"/></svg></button>
+                <button type="button" data-language="ko" lang="ko" translate="no" title="한국어" aria-label="한국어" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#fff" d="M0 0h60v40H0z"/><g transform="rotate(-33.69 30 20)"><path fill="#cd2e3a" d="M22 20a8 8 0 0 1 16 0 4 4 0 0 1-8 0 4 4 0 0 0-8 0Z"/><path fill="#0047a0" d="M38 20a8 8 0 0 1-16 0 4 4 0 0 1 8 0 4 4 0 0 0 8 0Z"/></g><g fill="#111"><g transform="translate(7 6) rotate(-34 5.5 5)"><rect width="11" height="1.8"/><rect y="4" width="11" height="1.8"/><rect y="8" width="11" height="1.8"/></g><g transform="translate(42 25) rotate(-34 5.5 5)"><rect width="4.3" height="1.8"/><rect x="6.7" width="4.3" height="1.8"/><rect y="4" width="4.3" height="1.8"/><rect x="6.7" y="4" width="4.3" height="1.8"/><rect y="8" width="4.3" height="1.8"/><rect x="6.7" y="8" width="4.3" height="1.8"/></g><g transform="translate(42 6) rotate(34 5.5 5)"><rect width="4.3" height="1.8"/><rect x="6.7" width="4.3" height="1.8"/><rect y="4" width="11" height="1.8"/><rect y="8" width="4.3" height="1.8"/><rect x="6.7" y="8" width="4.3" height="1.8"/></g><g transform="translate(7 25) rotate(34 5.5 5)"><rect width="11" height="1.8"/><rect y="4" width="4.3" height="1.8"/><rect x="6.7" y="4" width="4.3" height="1.8"/><rect y="8" width="11" height="1.8"/></g></g></svg></button>
+                <button type="button" data-language="zh-CN" lang="zh-CN" translate="no" title="简体中文" aria-label="简体中文" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#de2910" d="M0 0h60v40H0z"/><g fill="#ffde00"><path d="m10 5 1.8 5.5h5.7l-4.6 3.4 1.8 5.4-4.7-3.4-4.7 3.4 1.8-5.4-4.6-3.4h5.7z"/><path id="language-star" d="m20 3 .7 2.1h2.2l-1.8 1.3.7 2.1L20 7.2l-1.8 1.3.7-2.1-1.8-1.3h2.2z"/><use href="#language-star" transform="translate(5 5)"/><use href="#language-star" transform="translate(5 12)"/><use href="#language-star" transform="translate(0 17)"/></g></svg></button>
+                <button type="button" data-language="zh-TW" lang="zh-TW" translate="no" title="繁體中文" aria-label="繁體中文" aria-pressed="false"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#fe0000" d="M0 0h60v40H0z"/><path fill="#000095" d="M0 0h30v20H0z"/><path fill="#fff" d="m15 2 1.1 3.7 2.9-2.6-.9 3.8 3.8-.9-2.6 2.9L23 10l-3.7 1.1 2.6 2.9-3.8-.9.9 3.8-2.9-2.6L15 18l-1.1-3.7-2.9 2.6.9-3.8-3.8.9 2.6-2.9L7 10l3.7-1.1-2.6-2.9 3.8.9-.9-3.8 2.9 2.6z"/><circle cx="15" cy="10" r="4.5" fill="#000095"/><circle cx="15" cy="10" r="3.5" fill="#fff"/></svg></button>
+              </div>
+            </div>
+            <!--
+              The steps side by side: where the user is, what is done, and a way to any step. Only
+              the open step shows below it, so the page never reads as one long manual.
+            -->
+            <div class="setup-track">
+              <nav class="setup-rail" aria-label="Setup steps">
+                <ol>
+                  <li><button type="button" data-rail-step="browser"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Browser</span></button></li>
+                  <li><button type="button" data-rail-step="folder"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Folder</span></button></li>
+                  <li><button type="button" data-rail-step="access"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Access</span></button></li>
+                  <li><button type="button" data-rail-step="tunnel"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Tunnel</span></button></li>
+                  <li><button type="button" data-rail-step="key"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">API key</span></button></li>
+                  <li><button type="button" data-rail-step="connect"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Connect</span></button></li>
+                  <li><button type="button" data-rail-step="chatgpt"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Gemini</span></button></li>
+                  <li class="setup-rail-ready"><button type="button" data-rail-step="ready"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Ready</span></button></li>
+                </ol>
+              </nav>
+              <div class="setup-progress" id="setupProgress" role="progressbar" aria-labelledby="setupTitle" aria-valuemin="0" aria-valuenow="0" aria-valuemax="7">
+                <span class="setup-progress-text" id="setupProgressText"></span>
+              </div>
+            </div>
+
+            <ol class="wizard" id="wizard">
+              <!-- One step, two sequential tasks: external companion, then execution browser. -->
+              <li class="step" data-step="browser">
+                <div class="step-mark"><i class="ico tick ph ph-check" aria-hidden="true"></i></div>
+                <div class="step-body browser-setup">
+                  <div class="browser-setup-header">
+                    <ol class="browser-phases" aria-label="Connect your Gemini">
+                    <li id="browserPhaseExtension" aria-current="step"><span class="phase-number" aria-hidden="true" translate="no">A</span><span>Install the extension</span></li>
+                    <li id="browserPhaseLocation"><span class="phase-number" aria-hidden="true" translate="no">B</span><span>Where Gemini runs</span></li>
+                  </ol>
+                    <div class="browser-picker">
+                      <p class="step-lead">Choose your browser.</p>
+                      <div class="browser-segments" role="radiogroup" aria-label="Browser">
+                        <button type="button" role="radio" data-external-browser="chrome" aria-checked="true"><img src="./browser-icons/chrome.svg" alt="" /><span translate="no">Chrome</span></button>
+                        <button type="button" role="radio" data-external-browser="edge" aria-checked="false" tabindex="-1"><img src="./browser-icons/edge.svg" alt="" /><span translate="no">Edge</span></button>
+                        <button type="button" role="radio" data-external-browser="brave" aria-checked="false" tabindex="-1"><img src="./browser-icons/brave.svg" alt="" /><span translate="no">Brave</span></button>
+                        <button type="button" role="radio" data-external-browser="firefox" aria-checked="false" tabindex="-1"><img src="./browser-icons/firefox.svg" alt="" /><span translate="no">Firefox</span></button>
+                      </div>
+                      </div>
+                    <h3 id="browserExtensionTitle" tabindex="-1">Connect your browser</h3>
+                  </div>
+                  <section id="browserExtensionStage" class="browser-stage" aria-labelledby="browserExtensionTitle">
+                    <div class="browser-stage-copy">
+                      <ol class="browser-install-steps">
+                        <li data-install-engine="gecko" hidden><div><b id="extensionStepAddon">Add the OneCode add-on to Firefox</b><button type="button" class="btn btn-solid" id="openFirefoxAddon"><i class="ico ph ph-puzzle-piece" aria-hidden="true"></i><span>Get the add-on</span></button>
+                          <p>Firefox asks before it adds the add-on. Choose Add.</p></div></li>
+                        <li data-install-engine="chromium"><div><b id="extensionStepOpen">Open the extensions page</b><button type="button" class="btn btn-quiet" id="openExtensionSettings"><span id="setupExtensionAddress" translate="no">chrome://extensions</span><i class="ico ph ph-copy" aria-hidden="true"></i></button>
+                          <p id="extensionStepOpenHint">Click the address to copy it, then paste it into the address bar and press Enter.</p></div></li>
+                        <li data-install-engine="chromium"><div><b id="extensionStepDev">Turn on Developer mode</b><p id="extensionStepDevWhere" hidden></p>
+                          <figure class="ext-figure" id="extensionPictureDev"></figure></div></li>
+                        <li data-install-engine="chromium"><div><b id="extensionStepLoad">Click Load unpacked and choose the extension folder</b><button class="btn btn-solid setup-tunnel-open" id="bridgeFolder" type="button"><i class="ico ph ph-folder" aria-hidden="true"></i><span>Open extension folder</span></button>
+                          <figure class="ext-figure" id="extensionPictureLoad"></figure></div></li>
+                        <li><div><b id="extensionStepChatGpt">Open Gemini in your browser</b><button class="btn btn-quiet" id="openChatGptBrowser" type="button"><span>Open Gemini</span><i class="ico ph ph-arrow-square-out" aria-hidden="true"></i></button></div></li>
+                      </ol>
+                      <details class="extension-help"><summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Need help?</summary><div class="extension-meta"><p class="extension-folder" id="extensionPath"></p><button class="btn btn-quiet" id="bridgeDownload" type="button">Download extension ZIP</button><p id="bridgeState" class="muted"></p></div></details>
+                    </div>
+
+                    <div class="browser-stage-footer">
+                      <div class="status-banner" id="extensionStatusBox" data-tone="wait" role="status" aria-live="polite"><span class="status-banner-title" id="extensionStatus"></span><span class="status-banner-detail" id="extensionSetupDetail"></span></div>
+                      <button class="btn step-next" id="browserContinue" type="button" disabled><span>Continue</span><i class="ico ph ph-arrow-right" aria-hidden="true"></i></button>
+                    </div>
+                  </section>
+                  <section id="browserLocationStage" class="browser-stage" aria-labelledby="browserLocationTitle" hidden>
+                    <div class="browser-stage-copy">
+                      <h3 id="browserLocationTitle" tabindex="-1">Where should Gemini run?</h3>
+                      <p class="step-lead">You can change this later in Settings.</p>
+                      <div class="browser-choice" role="radiogroup" aria-label="Gemini browser">
+                        <button class="browser-option" id="useCosBrowser" type="button" role="radio" data-browser-choice="cos"><img src="./browser-icons/cos.png" alt="" /><b>In OneCode</b><em>Use the app’s built-in browser.</em></button>
+                        <button class="browser-option" id="useExtensionBrowser" type="button" role="radio" data-browser-choice="extension"><img id="setupExternalIcon" src="./browser-icons/chrome.svg" alt="" /><b>In your browser</b><em id="setupExternalLabel"></em></button>
+                      </div>
+                      <div data-browser-variant="cos" class="browser-action"><button class="btn btn-solid" id="showCosBrowser" type="button"><i class="ico ph ph-sign-in" aria-hidden="true"></i><span>Sign in to Gemini</span></button><span class="status-pill" id="cosBrowserState" data-tone="off" role="status"></span></div>
+                      <div data-browser-variant="extension" class="browser-action"><button class="btn btn-solid" id="openSelectedChatGpt" type="button"><i class="ico ph ph-sign-in" aria-hidden="true"></i><span>Sign in to Gemini</span></button><span class="status-pill" id="externalBrowserState" data-tone="off" role="status"></span></div>
+                      <div id="browserConnectionLost" class="browser-connection-lost" role="status" hidden><p>Reconnect or update your browser extension to continue.</p><button id="browserReviewExtension" class="btn btn-quiet" type="button">Review extension</button></div>
+                      <button class="btn step-back browser-back" id="browserBack" type="button"><i class="ico ph ph-arrow-left" aria-hidden="true"></i><span>Back</span></button>
+                    </div>
+                    <div class="setup-guide" data-setup-guide="signin" data-browser-variant="cos"></div>
+                    <div class="setup-guide" data-setup-guide="external-browser" data-browser-variant="extension"></div>
+                  </section>
+                </div>
+              </li>
+              <!-- 2 -->
+              <li class="step" data-step="folder">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <h3>Pick a folder to share</h3>
+                  <p class="step-lead">Gemini can only work inside the folders you share.</p>
+                  <ul class="folder-list" id="wizFolders"></ul>
+                  <div class="step-actions">
+                    <button class="btn step-link" id="wizManageFolders" type="button">Manage folders</button>
+                  </div>
+                  <!-- Like Connect the tunnel: the step's one action is its picture. -->
+                  <div class="step-art connect-art">
+                    <button class="connect-toggle" id="wizAddFolder" type="button" data-tone="off">
+                      <span class="connect-ring" aria-hidden="true"><svg class="setup-folder-icon" viewBox="0 0 48 48" fill="none"><path d="M6 15V11a3 3 0 0 1 3-3h10l5 6h15a3 3 0 0 1 3 3v20a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V15Z"/><path d="M6 18h36M24 24v10m-5-5h10"/></svg></span>
+                      <span class="connect-label">Add</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <!-- What Gemini may do. Read-only and Desktop decide which tools and which connectors
+                   exist, so the choice belongs here, before the plugins are made, not in a setting
+                   a new user never opens. -->
+              <li class="step" data-step="access">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <h3 id="accessTitle">Choose what Gemini can do</h3>
+                  <p class="step-lead">Only inside the folders you share. You can change it later in Workspace.</p>
+                  <p class="hint is-warn" id="accessRecovered" hidden>The settings file could not be read, so the app started in read-only mode. Choose access again.</p>
+                  <div class="browser-choice access-choice" role="radiogroup" aria-labelledby="accessTitle">
+                    <button class="browser-option" type="button" role="radio" data-access="full"><i class="ico ph ph-monitor" aria-hidden="true"></i><b>Full access</b><em>Edit files, run commands, and use your browser and desktop apps.</em></button>
+                    <button class="browser-option" type="button" role="radio" data-access="files"><i class="ico ph ph-terminal-window" aria-hidden="true"></i><b>Files and terminal</b><em>Edit files and run commands. No browser or desktop control.</em></button>
+                    <button class="browser-option" type="button" role="radio" data-access="read"><i class="ico ph ph-eye" aria-hidden="true"></i><b>Read only</b><em>Read and search files. Gemini can't change anything or run commands.</em></button>
+                  </div>
+                  <p class="hint" id="accessNote" hidden></p>
+                  <!-- Workspace's own permission switches, not a copy: the app moves that one surface
+                       here while Setup is on screen, so there is a single place permissions live. -->
+                  <details class="setup-optional access-fine" id="accessFine">
+                    <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Fine-tune permissions</summary>
+                    <div id="accessFineSlot"></div>
+                  </details>
+                </div>
+              </li>
+              <!-- 3 -->
+              <li class="step" data-step="tunnel">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <h3>Create a tunnel</h3>
+                  <p class="step-lead">A private line from Gemini to this app.</p>
+                  <div class="step-actions">
+                    <button
+                      class="btn btn-solid setup-tunnel-open"
+                      type="button"
+                      data-link="https://platform.openai.com/settings/organization/tunnels"
+                    >
+                      <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Open Tunnels
+                    </button>
+                  </div>
+                  <div class="setup-guide" data-setup-guide="tunnel"></div>
+                  <div class="field">
+                    <label for="tunnelId">Tunnel ID — Core plugin</label>
+                    <input
+                      id="tunnelId"
+                      class="setup-required is-empty"
+                      aria-required="true"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="tunnel_0123456789abcdef0123456789abcdef"
+                    />
+                    <p class="hint is-required" id="tunnelIdShared" role="status" hidden></p>
+                  </div>
+                  <!-- Desktop is a second connector in Gemini, so on this method it needs a
+                       second tunnel of its own. Hidden unless desktop permissions are on, so
+                       nobody is asked to create a tunnel for a feature they never enabled. -->
+                  <details class="setup-optional" id="desktopTunnelField" hidden>
+                    <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Desktop control <span class="tag is-optional">optional</span></summary>
+                    <div class="field">
+                      <label for="desktopTunnelId">Tunnel ID — Desktop plugin</label>
+                      <input
+                        id="desktopTunnelId"
+                        type="text"
+                        spellcheck="false"
+                        placeholder="tunnel_0123456789abcdef0123456789abcdef"
+                      />
+                      <p class="hint is-required" id="desktopTunnelIdShared" role="status" hidden></p>
+                      <p class="hint">
+                        Screen and mouse/keyboard control are a separate plugin in Gemini, so they
+                        need a second tunnel. Create another one and paste its ID here. Leave it empty to
+                        keep desktop control off in Gemini.
+                      </p>
+                    </div>
+                  </details>
+                </div>
+              </li>
+              <!-- 4 -->
+              <li class="step" data-step="key">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <h3>Create an API key</h3>
+                  <p class="step-lead">The app uses this key to start your tunnel. Copy it right away: it is shown only once.</p>
+                  <div class="step-actions">
+                    <button
+                      class="btn btn-solid setup-tunnel-open"
+                      type="button"
+                      data-link="https://platform.openai.com/settings/organization/api-keys"
+                    >
+                      <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Open API keys
+                    </button>
+                  </div>
+                  <div class="setup-guide" data-setup-guide="key"></div>
+                  <div class="field">
+                    <label for="apiKey">Tunnel API key</label>
+                    <input id="apiKey" class="setup-required is-empty" aria-required="true" type="password" spellcheck="false" placeholder="sk-…" autocomplete="off" />
+                    <p class="hint" id="apiKeyState"></p>
+                    <div class="step-actions">
+                      <button class="btn" id="removeApiKey" type="button">Remove stored API key</button>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <!-- 5 -->
+              <li class="step" data-step="connect">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <h3>Connect the tunnel</h3>
+                  <p class="step-lead">Click Connect and wait for Connected.</p>
+                  <div class="field">
+                    <label for="tunnelKind">Connection method</label>
+                    <select id="tunnelKind">
+                      <option value="tailscale">Tailscale Funnel — recommended</option>
+                      <option value="cloudflared">Cloudflare quick tunnel — temporary address</option>
+                      <option value="manual">Local only — I run my own tunnel</option>
+                    </select>
+                    <p class="hint" id="methodHint"></p>
+                  </div>
+                  <section class="field" id="tailscaleSetup" aria-label="Tailscale setup" hidden>
+                    <p class="hint">Install Tailscale separately, then sign in from its tray icon using your own account. Keep Tailscale running. If your tailnet restricts Funnel, its owner must allow this device.</p>
+                    <div class="step-actions">
+                      <button class="btn" type="button" data-link-external="https://tailscale.com/docs/install/windows">Install and sign in</button>
+                      <button class="btn" type="button" data-link-external="https://tailscale.com/docs/features/tailscale-funnel">Funnel permission help</button>
+                    </div>
+                    <p class="hint">Click Connect to check the CLI, account and Funnel permission and publish this app. Installation or sign-in alone does not connect Gemini.</p>
+                    <p class="hint"><b>Tailscale CLI:</b> <span id="tailscaleCli">Not checked</span></p>
+                    <p class="hint"><b>Tailscale account:</b> <span id="tailscaleAccount">Not checked</span></p>
+                    <p class="hint"><b>Funnel permission:</b> <span id="tailscaleFunnel">Not checked</span></p>
+                    <p class="hint"><b>Published HTTPS address:</b> <span id="tailscalePublished">Not published</span></p>
+                    <p class="hint" id="tailscaleChecked" hidden></p>
+                    <p class="hint" id="tailscaleDetail" role="status" hidden></p>
+                    <p class="hint is-warn" id="tailscaleStorageWarning" hidden>Secure storage is unavailable. Tailscale cannot connect until this computer can safely keep its connector URLs.</p>
+                    <p class="hint">Connector URLs stay the same across restarts while the Tailscale device name, tailnet and saved app paths stay the same. Tailscale Funnel makes this HTTPS service public; keep its secret connector URLs private.</p>
+                  </section>
+                  <p class="status-pill" id="wizStatusPill" data-tone="off"></p>
+                  <p class="hint is-warn" id="wizStatus" hidden></p>
+                  <p class="hint step-quiet" id="backgroundRunningCopy">
+                    Leave it running while you use its plugins in Gemini. It stays available when
+                    you close the window.
+                  </p>
+                  <!-- The step's one action, as large as its picture would be: what the step is for. -->
+                  <div class="step-art connect-art">
+                    <button class="connect-toggle" id="wizConnect" type="button" data-tone="off">
+                      <span class="connect-ring" aria-hidden="true"><svg class="setup-connect-icon" viewBox="0 0 48 48" fill="none"><path d="M18 7v12m12-12v12M13 19h22v5a11 11 0 0 1-22 0v-5Zm11 16v7"/></svg></span>
+                      <span class="connect-label" id="wizConnectLabel">Connect</span>
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <!-- 6 -->
+              <li class="step" data-step="chatgpt">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <!-- Two columns of even weight: what to do and what to copy on the left; the
+                       pictures and the reference notes on the right. -->
+                  <div class="step-main">
+                    <h3>Add it in Gemini</h3>
+                    <p class="step-lead">Paste the MCP server URL below. Gemini reads the app name, description and tools from this service.</p>
+                    <div class="step-actions">
+                      <button class="btn btn-solid setup-tunnel-open" type="button" data-link="https://gemini.google.com/customize/connectors">
+                        <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Open Gemini Plugins
+                      </button>
+                    </div>
+                    <div id="pluginMoves"></div>
+                    <p class="hint" id="wizChatgpt"></p>
+                    <!-- Only for a tunnel kind the pictures do not show (a published URL). -->
+                    <p class="hint" id="chatgptConn"></p>
+                  </div>
+                  <div class="step-side">
+                    <div class="setup-guide" data-setup-guide="plugin" data-moves-into="pluginMoves"></div>
+                  </div>
+                  <!-- Below both columns: the connectors side by side. -->
+                  <!-- One card per connector. The name and description are what Gemini matches
+                       on when it decides whether to load a connector's tools at all, so both are
+                       given as copyable text rather than described. -->
+                  <!-- One Gemini account on several computers: each needs its own plugins, and they
+                       cannot share a name. The suffix names this computer's set; empty keeps the
+                       plain names, and the cards below always show what to type. -->
+                  <details class="setup-optional step-wide" id="connectorSuffixField">
+                    <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Several computers, one Gemini account <span class="tag is-optional">optional</span></summary>
+                    <div class="field">
+                      <label for="connectorSuffix">Name for this computer</label>
+                      <input
+                        id="connectorSuffix"
+                        translate="no"
+                        type="text"
+                        spellcheck="false"
+                        autocomplete="off"
+                        maxlength="32"
+                        placeholder="Windows"
+                        aria-describedby="connectorSuffixHint"
+                      />
+                      <p class="hint is-warn" id="connectorSuffixError" role="alert" hidden>Use up to 32 letters, digits, spaces, dots, dashes or underscores.</p>
+                      <p class="hint" id="connectorSuffixHint">Each computer needs its own plugins in Gemini, and they can't share a name. “Windows” names this computer's plugins “OneCode Core (Windows)” and so on. After changing it, rename this computer's plugins to match: in Gemini, open Connected apps and reconnect the custom app with its new name.</p>
+                    </div>
+                  </details>
+                  <!-- #1495: a workspace member without admin rights can neither add a custom app nor
+                       see the workspace's Platform organization; say whom to ask and for what. -->
+                  <details class="setup-optional step-wide" id="workspaceMemberHelp">
+                    <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini workspace without admin rights <span class="tag is-optional">optional</span></summary>
+                    <div class="field workspace-member-help">
+                      <p class="hint">Your Google Workspace administrator may control custom connected apps. If Gemini offers no way to add a custom MCP server, ask the administrator about its availability and share the exact Core HTTPS URL shown here.</p>
+                      <p class="hint">Tailscale uses your own Tailscale account and device. Your tailnet administrator may need to allow Funnel. No Gemini model API key is required for this connection.</p>
+                      <p class="hint">Tailscale retains the hostname and app paths across ordinary restarts. Renaming the device or changing tailnets can change that address. A Cloudflare quick tunnel gets a new hostname on every connection; update Gemini when the URL changes.</p>
+                      <p class="hint">Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.</p>
+                    </div>
+                  </details>
+                  <div class="connectors step-wide" id="connectorCards"></div>
+                </div>
+              </li>
+              <!-- 7: not a task but the proof. It reads back every check above, says plainly when
+                   everything works, and points straight at whatever does not yet. -->
+              <li class="step step-ready" data-step="ready">
+                <div class="step-mark">
+                  <i class="ico tick ph ph-check" aria-hidden="true"></i>
+                </div>
+                <div class="step-body">
+                  <div class="ready-hero">
+                    <span class="ready-badge" aria-hidden="true"><i class="ph ph-check"></i></span>
+                    <div>
+                      <h3 id="readyTitle">You’re all set!</h3>
+                      <p class="step-lead" id="readyLead">Gemini can now work in your folders. Ask it anything in a new chat.</p>
+                    </div>
+                  </div>
+                  <ul class="ready-checks" id="readyChecks"></ul>
+                  <div class="ready-limited" id="readyLimited" role="status" hidden>
+                    <i class="ico ph ph-warning" aria-hidden="true"></i>
+                    <p>Access is limited, so Gemini can't edit files or run commands. If you change your mind, choose Full access in Setup's Access step, or turn permissions on in Workspace.</p>
+                    <button class="btn" id="readyChangeAccess" type="button">Change access</button>
+                  </div>
+                  <div class="step-actions">
+                    <button class="btn btn-solid" id="readyStart" type="button"><i class="ico ph ph-chat-circle" aria-hidden="true"></i>Start a chat</button>
+                  </div>
+                </div>
+              </li>
+            </ol>
+
+            <details class="advanced">
+              <summary>
+                <svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>
+                Advanced — program and startup
+              </summary>
+
+              <div class="field">
+                <label for="binaryPath">Tunnel program</label>
+                <div class="row-inline">
+                  <input id="binaryPath" type="text" spellcheck="false" placeholder="Bundled with this app" readonly />
+                  <button class="btn btn-solid" id="pickBinary" type="button">Browse…</button>
+                </div>
+                <p class="hint" id="binaryState"></p>
+              </div>
+
+              <div class="field">
+                <label class="inline" id="startAtLoginRow" hidden><input type="checkbox" id="startAtLogin" /> Start OneCode when I sign in</label>
+                <label class="inline"><input type="checkbox" id="autoConnect" /> Connect automatically at startup</label>
+                <label class="inline"><input type="checkbox" id="minimizeToTray" /> <span id="minimizeToTrayCopy">Keep running when closed</span></label>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <!-- ============================================================ Chat -->
+        <section class="panel is-active" data-panel="chat">
+          <!-- --------------------------------------------------- sessions -->
+          <!-- ------------------------------------------------ session body -->
+          <!-- The main session grid keeps transcript scrolling separate from the composer. -->
+          <section class="card is-session">
+            <!-- The chat's own header: the first row of the chat column, so the right panel beside the
+                 column runs from the title bar to the bottom, and expanding the panel hides it with the chat. -->
+            <header class="chat-head">
+              <span id="chatTitle">New chat</span>
+              <span id="chatProjectContext" class="chat-project-context" hidden>
+                <span aria-hidden="true">/</span>
+                <span id="chatProjectName"></span>
+              </span>
+              <span class="mark"><svg class="ico" viewBox="0 0 24 24"><use href="#i-mark" /></svg></span>
+              <span class="title">
+                OneCode
+                <span id="headerSub">Not set up yet</span>
+              </span>
+              <span class="state">
+                <!-- Only ever visible with a downloaded, digest-checked update waiting. This app
+                     lives in the tray and is closed to it, so "installs the next time you start it"
+                     can mean days. This is the press that means now. -->
+                <button class="btn btn-install" id="installUpdate" type="button" hidden>
+                  <i class="ico ph ph-lightning" aria-hidden="true"></i>
+                  <span>Install update</span>
+                </button>
+              </span>
+            </header>
+            <button id="chatSettingsBtn" type="button" hidden>Chat settings</button>
+            <div class="subhead">
+              <span class="seg" id="chatView" hidden>
+                <button class="is-sel" data-view="timeline" type="button">Timeline</button>
+                <button data-view="compact" type="button">Handoff</button>
+              </span>
+              <span class="subhead-note" id="chatState"></span>
+              <!-- Find in chat (⌘F / Ctrl+F): searches the whole recording of the open chat. -->
+              <div class="chat-find" id="chatFind" role="search" aria-label="Find in chat" hidden>
+                <i class="ico ph ph-magnifying-glass" aria-hidden="true"></i>
+                <input id="chatFindField" type="text" placeholder="Find in chat" aria-label="Find in chat" spellcheck="false" autocomplete="off" />
+                <span class="chat-find-count" id="chatFindCount" aria-live="polite"></span>
+                <button class="btn btn-icon" id="chatFindPrev" type="button" title="Previous match" aria-label="Previous match"><i class="ico ph ph-caret-up" aria-hidden="true"></i></button>
+                <button class="btn btn-icon" id="chatFindNext" type="button" title="Next match" aria-label="Next match"><i class="ico ph ph-caret-down" aria-hidden="true"></i></button>
+                <button class="btn btn-icon" id="chatFindClose" type="button" title="Close" aria-label="Close"><i class="ico ph ph-x" aria-hidden="true"></i></button>
+              </div>
+            </div>
+
+            <div class="scroll" id="chatBody">
+              <!-- timeline -->
+              <div class="view" id="timelineContent" data-view="timeline">
+                <!-- Only shown while a multi-agent run has agents in this session. -->
+                <div class="seg" id="chatAgentFilter" hidden></div>
+                <div id="timeline"></div>
+                <div id="inputQueue" class="input-queue" aria-live="polite"></div>
+                <p class="empty" id="timelineEmpty">
+                  <svg class="ico welcome-mark" viewBox="0 0 24 24"><use href="#i-mark" /></svg><span>What would you like to build?</span>
+                </p>
+              </div>
+
+              <!-- the brief the last compaction left behind -->
+              <div class="view" data-view="compact" hidden>
+                <div class="pane">
+                  <h3 id="handoffHead" hidden>
+                    Latest handoff
+                    <button class="btn" id="copyHandoff" type="button" hidden>
+                      <i class="ico ph ph-copy" aria-hidden="true"></i>Copy
+                    </button>
+                  </h3>
+                  <div id="handoffBox"></div>
+                </div>
+              </div>
+
+              <!--
+                Settings, and only settings that change behaviour.
+
+                Three rows. Everything that used to be explained in six paragraphs here is
+                either a fact about where files go - which belongs in the docs, not in a
+                property sheet - or a threshold that now has exactly one number instead of
+                three overlapping ones. The pairing instructions moved into Setup, where
+                the rest of the once-only work already lives.
+              -->
+              <div class="view settings-page-content automation-content" data-view="settings" hidden>
+                <header class="settings-page-head automation-page-head"><div><h1>Agents &amp; automation</h1><p>Fine-tune your workspace and the way your agents work.</p></div></header>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Continuation sources</h2><p>Choose where continuations come from and what their handoffs include.</p></div></header>
+                <div class="settings-surface pane">
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Automatically recover unfinished answers</b>
+                      <em>Continue an interrupted answer when the app can verify the unfinished turn.</em>
+                    </span>
+                    <input id="autoContinue" type="checkbox" />
+                  </label>
+                  <details class="setting-timing"><summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Recovery timing details</summary><p>Recover unfinished answers, including in Goal and Loop. Reload after 2 minutes without progress (Pro: 10). If still generating, wait 1 more minute (Pro: 5), then stop and send. A final answer selects Goal or Loop instead of Continue. Undelivered steps get at most three page reloads (after 2, 5, and 10 minutes); recovery then stops visibly while the original pending work remains saved.</p></details>
+                  <div class="setting"><span class="setting-text"><b id="rotateTurnMinutesTitle">Start a fresh turn after</b><em>Long work continues in a new turn with an automatic Continue, right after a tool result. Shorter turns break less often. Not used with Pro models, Goal, Loop or sub-agents.</em></span><select id="rotateTurnMinutes" aria-labelledby="rotateTurnMinutesTitle"><option value="0">Off</option><option value="20">20 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="goalBackendTitle">Goal response source</b><em>API is the most reliable. Offline uses completion markers and 200 prepared messages.</em></span><select id="goalBackend" aria-labelledby="goalBackendTitle"><option value="chatgpt">Separate Gemini chat</option><option value="api">API key · Most reliable</option><option value="templates">Offline · No API cost</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="loopBackendTitle">Loop response source</b><em>Loop keeps going until you switch it off.</em></span><select id="loopBackend" aria-labelledby="loopBackendTitle"><option value="api">API key · Most reliable</option><option value="chatgpt">Separate Gemini chat</option></select></div>
+                  <div class="setting"><span class="setting-text"><b>Goal, Loop and Plan model</b><em>Model for Gemini-generated messages and plans.</em></span><select id="helperModel" aria-label="Goal, Loop and Plan model"></select></div>
+                  <div class="setting"><span class="setting-text"><b>Goal, Loop and Plan reasoning</b><em>Used with the Gemini model above; independent from API reasoning.</em></span><select id="helperReasoning" aria-label="Goal, Loop and Plan reasoning"></select></div>
+                  <label class="setting"><span class="setting-text"><b>Include tool details in handoffs</b><em>Compact &amp; Resume briefs keep tool calls and their results. Goal and Loop always read only your messages and the assistant's updates and answers.</em></span><input id="goalIncludeToolCalls" type="checkbox" /></label>
+                  </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Gemini models</h2><p>Choose the default model and reasoning for new chats and sub-agents, from what your account offers.</p></div></header>
+                <div class="settings-surface pane">
+                  <div class="setting"><span class="setting-text"><b>Available Gemini models</b><em id="chatModelStatus">Read model choices from your account.</em></span><button class="btn" id="refreshChatModels" type="button">Refresh</button></div>
+                  <div class="setting"><span class="setting-text"><b id="defaultChatModelTitle">Default new-chat model</b><em>Used when you start a new chat. A chat you continue keeps its own model.</em></span><select id="defaultChatModel" aria-labelledby="defaultChatModelTitle"><option value="">Automatic</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="defaultChatReasoningTitle">Default new-chat reasoning</b><em>Used with the ordinary chat model above; workers and helpers keep their own defaults.</em></span><select id="defaultChatReasoning" aria-labelledby="defaultChatReasoningTitle"><option value="">Automatic</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="workerModelTitle">Default sub-agent model</b><em>Confirmed in Gemini before a worker starts.</em></span><select id="workerModel" aria-labelledby="workerModelTitle"><option value="" disabled>No observed choices</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="workerReasoningTitle">Default sub-agent reasoning</b><em>Selected independently from the model.</em></span><select id="workerReasoning" aria-labelledby="workerReasoningTitle"><option value="" disabled>No observed choices</option></select></div>
+                  </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Skills</h2><p>Choose whether imported Skills can be matched to ordinary messages.</p></div></header>
+                <div class="settings-surface pane">
+                  <label class="setting"><span class="setting-text"><b>Auto-select Skills</b><em>Match one imported Skill by its exact name in the message, not by topic. Explicit Skill choices always win.</em></span><input id="autoSelectSkills" type="checkbox" /></label>
+                </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Workers & recovery</h2><p>Set worker limits and which chats can resume after interruptions.</p></div></header>
+                <div class="settings-surface pane">
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="maWorkersTitle">Sub-agent workers</b>
+                      <em>Needs the browser extension to be connected. This sets the most worker chats one run may open.</em>
+                    </span>
+                    <input id="maWorkers" aria-labelledby="maWorkersTitle" class="num" type="number" min="1" max="8" step="1" />
+                    <span class="unit">max</span>
+                  </div>
+
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="globalMaWorkersTitle">Workers across all chats</b>
+                      <em>The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.</em>
+                    </span>
+                    <input id="globalMaWorkers" aria-labelledby="globalMaWorkersTitle" class="num" type="number" min="0" max="64" step="1" />
+                  </div>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Allow unattributed calls</b>
+                      <em>Lets tools run, including computer use, file editing and JavaScript, even when the app can’t tell which chat called them. Sub-agents and other chat actions still need a known chat. These calls are listed under Unattributed activity.</em>
+                    </span>
+                    <input id="allowUnattributedCalls" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Trust only selected chats</b>
+                      <em>Only chats you trust can use this computer's tools. Existing chats start untrusted; hover a chat in the sidebar and choose Trust (✓). Workers and resumed chats follow the chat they came from. Calls the app can't link to a chat are refused.</em>
+                    </span>
+                    <input id="strictChatAllowlist" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Recover other chats’ tabs</b>
+                      <em>Restore missing or unresponsive work chats. Goal and Loop chats recover automatically.</em>
+                    </span>
+                    <input id="recoverAgentTabs" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Wait for sub-agents</b>
+                      <em>Goal and Loop wait until this chat's workers have reported before taking their next step, so they decide with the results. Messages you type or queue are sent as usual.</em>
+                    </span>
+                    <input id="waitForSubAgents" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Isolate new workers in Git worktrees</b>
+                      <em>When a worker is started for a Git project, give it a separate approved workspace and branch. Requires an approved parent folder. Existing workers are unaffected; integration into your branch requires review.</em>
+                    </span>
+                    <input id="autoWorktrees" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>End background processes of workers asleep for more than 30 minutes</b>
+                      <em>The worker chat and history stay reusable. Off by default; each cleanup is recorded in that worker's transcript.</em>
+                    </span>
+                    <input id="endSleepingWorkerProcesses" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
+                      <b>Archive worker chats in Gemini when they are retired</b>
+                      <em>Once a worker can't be used again (you cleared the workers, the main chat closed, or its finished task sat for a week), its chat is archived in Gemini and leaves your chat list. You can restore it from Gemini's settings; this app keeps its transcript. Nothing is deleted.</em>
+                    </span>
+                    <input id="archiveWorkerChats" type="checkbox" />
+                  </label>
+
+                  <div id="swarmList"></div>
+                  <div class="step-actions">
+                    <button class="btn" id="swarmReset" type="button">Clear workers</button>
+                  </div>
+                </div>
+                <section id="worktreeCleanupSection" class="worktree-cleanup-section" aria-labelledby="worktreeCleanupTitle">
+                  <header class="settings-section-head automation-section-head">
+                    <div>
+                      <h2 id="worktreeCleanupTitle" class="settings-section-title">Worker checkouts</h2>
+                      <p>Review finished or cleared workers' separate Git checkouts. Their branches and committed work are always kept.</p>
+                    </div>
+                    <button class="btn btn-solid" id="worktreeCleanupReview" type="button" data-worktree-review="true" aria-controls="worktreeCleanupList">Review checkouts</button>
+                  </header>
+                  <div class="settings-surface pane worktree-cleanup-surface">
+                    <div id="worktreeCleanupList" class="worktree-cleanup-list" aria-live="polite" aria-relevant="additions removals text">
+                      <div class="setting worktree-cleanup-empty"><span class="setting-text"><b>Checkouts appear here when reviewed.</b><em>Nothing is removed automatically.</em></span></div>
+                    </div>
+                  </div>
+                </section>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Keep the turn open</h2><p>Control plan generation and what happens near the end of a turn.</p></div></header>
+                <div class="settings-surface pane">
+                  <label class="setting"><span class="setting-text"><b>Plan generation</b><em>Create staged tasks. Gemini uses the Goal, Loop and Plan model above; API uses the model and reasoning in API provider settings.</em></span><select id="planBackend"><option value="chatgpt">Gemini</option><option value="api">API provider</option></select></label>
+                  <label class="setting"><span class="setting-text"><b>Session finish</b><em>Offers a near-finish checkpoint when the model calls this tool. Turning it on changes the Core tools; reconnect the custom app in Gemini if the tool is missing.</em></span><input id="finishTool" type="checkbox" /></label>
+                  <div class="setting"><span class="setting-text"><b id="finishLeadMinutesTitle">Requested notice</b><em>How long before its end the model should hold the turn. A request to the model, not a guaranteed countdown.</em></span><select id="finishLeadMinutes" aria-labelledby="finishLeadMinutesTitle"><option value="3">3 minutes</option><option value="5">5 minutes</option></select></div>
+                  <p class="muted">When the model ends the turn this way with Goal or Loop on in this chat, the next step is written from that prompt and response source. Otherwise you get a notification.</p>
+                  </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Browser & history</h2><p>Manage background tabs, browser preferences, and history compaction.</p></div></header>
+                <div class="settings-surface pane">
+                  <label class="setting"><span class="setting-text"><b>Gemini browser</b><em>Used when the app launches a browser. Install the browser extension and sign in to Gemini in this browser's active profile. Already connected tabs stay in their browser. The built-in OneCode browser needs no install and runs hidden in the tray.</em></span><select id="chatBrowser"><option value="chrome">Google Chrome / Chromium</option><option value="edge">Microsoft Edge</option><option value="brave">Brave Browser</option><option value="firefox">Mozilla Firefox</option><option value="cos">OneCode browser (built-in)</option></select></label>
+                  <label class="setting" id="cosBrowserMinimizeRow" hidden><span class="setting-text"><b>Minimize the built-in browser to</b><em>Where its window goes when you minimize it. Its chats go on either way.</em></span><select id="cosBrowserMinimize"><option value="taskbar" id="cosBrowserMinimizeTaskbar">Taskbar</option><option value="tray" id="cosBrowserMinimizeTray">Tray</option></select></label>
+                  <div class="setting"><span class="setting-text"><b>Browser extension</b><em>Disconnect the browser extension from this app.</em></span><button class="btn" id="bridgeUnpair" type="button">Disconnect browser</button></div>
+                  <label class="setting"><span class="setting-text"><b>Browser bridge port</b><em id="browserBridgePortHint">Auto uses the first available port. A fixed port must be available.</em></span><select id="browserBridgePort"><option value="auto">Auto</option><option value="8765">8765</option><option value="8766">8766</option><option value="8767">8767</option><option value="8768">8768</option><option value="8769">8769</option></select></label>
+                  <label class="setting"><span class="setting-text"><b>Background chats</b><em>Keep app-created Gemini tabs in the background.</em></span><input id="backgroundChats" type="checkbox" /></label>
+                  <label class="setting"><span class="setting-text"><b>Background tabs open in</b><em>The group stays collapsed in the window you used last. Chrome saves open tab groups automatically; the app's group closes with its last chat, so it is not kept. If you close that window while app chats are open, Chrome may keep the group in its saved groups, where you can delete it. Browsers without tab groups use a window.</em></span><select id="backgroundPlacement"><option value="window">Their own minimized window</option><option value="group">A tab group in your browser window</option></select></label>
+                  <label class="setting"><span class="setting-text"><b>Automatic plugin refresh</b><em>Let the browser extension refresh changed plugin tools in Gemini, so a permission change reaches it without a manual refresh.</em></span><input id="autoRefreshPlugins" type="checkbox" /></label>
+                  <div id="pluginRefreshRecovery" class="setting" hidden>
+                    <span class="setting-text"><b id="pluginRefreshRecoveryError" role="alert">Could not read plugin-refresh state</b><em>Reset backs up the unreadable state and lets automatic plugin refresh start again. Refreshing can affect existing Gemini chats.</em></span>
+                    <button id="pluginRefreshReset" class="btn" type="button">Reset plugin refresh</button>
+                  </div>
+                  <label class="setting"><span class="setting-text"><b>Browser only</b><em>Do not open tabs for automatic plugin refresh or chat recovery. Explicit new chats, workers and Reload models still work.</em></span><input id="browserOnly" type="checkbox" /></label>
+                  <p class="muted">Idle app-created tabs close after five minutes, finished ones after two. Sleeping worker tabs can close earlier when the worker limit is exceeded. Active turns and unsent drafts stay open.</p>
+                  <label class="setting"><span class="setting-text"><b>Overwrite Gemini tool rows</b><em>Show recorded local activity in the Gemini page.</em></span><input id="browserOverwrite" type="checkbox" disabled /></label>
+                  <label class="setting"><span class="setting-text"><b>Show durations in Gemini</b><em>Uses the same preference as the extension popup.</em></span><input id="browserDurations" type="checkbox" disabled /></label>
+                  <div class="setting"><span class="setting-text"><b>Browser preferences</b><em id="browserPreferencesStatus" role="status">Refresh to read the browser's current preferences.</em></span><button id="browserPreferencesRefresh" class="btn" type="button">Refresh browser preferences</button></div>
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="autoCompactTitle">Compact automatically</b>
+                      <em id="autoCompactHint"></em>
+                    </span>
+                    <input id="autoCompactTokens" aria-labelledby="autoCompactTitle" class="num" type="number" min="10000" max="4000000" step="10000" />
+                    <span class="unit">tokens</span>
+                    <span class="sw"><input type="checkbox" id="autoCompact" aria-labelledby="autoCompactTitle" /><i></i></span>
+                  </div>
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="handoffLengthTitle">Handoff length</b>
+                      <em>How much a Compact &amp; Resume brief keeps. Longer briefs carry more detail into the new chat; shorter ones leave it more room.</em>
+                    </span>
+                    <select id="handoffLength" aria-labelledby="handoffLengthTitle">
+                      <option value="thorough">Thorough · 10k–30k tokens</option>
+                      <option value="standard">Standard · 4k–10k tokens</option>
+                      <option value="short">Short · 2k–6k tokens</option>
+                    </select>
+                  </div>
+                  <div class="setting">
+                    <span class="setting-text"><b>Recording storage</b><em id="recordingStorageUsage">Images and long texts recorded from your chats.</em></span>
+                    <button class="btn" id="settingsFreeImageStorage" type="button">Free storage</button>
+                  </div>
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="recordingStorageLimitTitle">Storage size</b>
+                      <em>How much space recordings may use on this computer. When it is full, new images and the full copies of long texts are no longer kept.</em>
+                    </span>
+                    <select id="recordingStorageLimit" aria-labelledby="recordingStorageLimitTitle">
+                      <option value="2">2 GB</option>
+                      <option value="5">5 GB</option>
+                      <option value="10">10 GB</option>
+                      <option value="20">20 GB</option>
+                      <option value="50">50 GB</option>
+                    </select>
+                  </div>
+                  </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">API provider</h2><p>Set the provider, model, and credentials for API-based decisions.</p></div></header>
+                <div class="settings-surface pane">
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="goalProviderTitle">Provider</b>
+                      <em>OpenRouter, or your own OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a gateway) for the API response source.</em>
+                    </span>
+                    <select id="goalProvider" aria-labelledby="goalProviderTitle">
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="custom">Custom endpoint</option>
+                    </select>
+                  </div>
+
+                  <div class="field" id="goalCustomPanel" hidden>
+                    <label for="goalBaseUrl">Endpoint base URL</label>
+                    <input id="goalBaseUrl" type="text" spellcheck="false" placeholder="http://localhost:11434/v1" autocomplete="off" />
+                    <p class="hint">https, or http on localhost. <code>/chat/completions</code> and <code>/models</code> are called under it.</p>
+                    <label for="goalCustomModel">Model</label>
+                    <input id="goalCustomModel" type="text" spellcheck="false" placeholder="llama3.1" autocomplete="off" />
+                    <p class="hint">Your endpoint's own model id, typed exactly as it serves it.</p>
+                    <label for="goalCustomKey">Endpoint API key (optional)</label>
+                    <input id="goalCustomKey" type="password" spellcheck="false" placeholder="leave empty for a keyless local server" autocomplete="off" />
+                    <p class="hint" id="goalCustomKeyState"></p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalCustomKeyRemove" type="button">Remove stored key</button>
+                    </div>
+                  </div>
+                  <div class="field" id="goalKeyField">
+                    <label for="goalKey">OpenRouter API key</label>
+                    <input id="goalKey" type="password" spellcheck="false" placeholder="sk-or-v1-…" autocomplete="off" />
+                    <p class="hint" id="goalKeyState"></p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalKeyRemove" type="button">Remove stored key</button>
+                      <button class="btn" type="button" data-link="https://openrouter.ai/settings/keys">
+                        <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Open OpenRouter keys
+                      </button>
+                    </div>
+                  </div>
+                  <!--
+                    The catalogue is several hundred models long and changes weekly, so it is
+                    not fetched until somebody actually asks to change the one in use - and
+                    then twenty at a time, newest release first.
+                  -->
+                  <div class="setting" id="goalPickerRow">
+                    <span class="setting-text">
+                      <b>Model</b>
+                      <em id="goalModelName"></em>
+                    </span>
+                    <button class="btn" id="goalPick" type="button">Select model</button>
+                  </div>
+
+                  <div class="field" id="goalModels" hidden>
+                    <label class="plugin-search goal-model-search">
+                      <i class="ico ph ph-magnifying-glass" aria-hidden="true"></i>
+                      <input id="goalModelSearch" type="search" placeholder="Search models" aria-label="Search models" />
+                    </label>
+                    <div id="goalModelList" class="goal-models"></div>
+                    <p class="hint" id="goalModelsState"></p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalMore" type="button">Load 20 more</button>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b id="goalReasoningTitle">Reasoning</b>
+                      <em>Choose a reasoning level supported by the selected API model. Default uses the provider's setting.</em>
+                    </span>
+                    <select id="goalReasoning" aria-labelledby="goalReasoningTitle">
+                      <option value="default">Default</option>
+                    </select>
+                  </div>
+
+                  </div>
+                <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Continuation prompts</h2><p>Shape what Compact &amp; Resume keeps and how Goal and Loop write their next instruction.</p></div></header>
+                <div class="settings-surface pane">
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b>Handoff prompt</b>
+                      <em>Controls what Compact &amp; Resume preserves in the brief. Continuation identity and recovery rules stay fixed.</em>
+                    </span>
+                    <button class="btn" id="handoffPromptEdit" type="button">Edit prompt</button>
+                  </div>
+
+                  <div class="field goal-prompt" id="handoffPromptPanel" hidden>
+                    <label for="handoffPrompt">Handoff prompt</label>
+                    <textarea dir="auto" id="handoffPrompt" rows="14" spellcheck="false"></textarea>
+                    <p class="hint">Saved when you leave the editor. This changes brief content only; Compact &amp; Resume protocol framing remains fixed.</p>
+                    <div class="step-actions">
+                      <button class="btn" id="handoffPromptReset" type="button">Restore default</button>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b>Goal prompt, no task</b>
+                      <em>Reads the goal from your messages and stops when it is complete.</em>
+                    </span>
+                    <button class="btn" id="goalPromptEdit" type="button">Edit prompt</button>
+                  </div>
+
+                  <div class="field goal-prompt" id="goalPromptPanel" hidden>
+                    <label for="goalPrompt">Goal prompt, no task</label>
+                    <textarea dir="auto" id="goalPrompt" rows="14" spellcheck="false"></textarea>
+                    <p class="hint">Saved when you leave the editor. Keep <code>NO_REPLY</code> as the exact stop response.</p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalPromptReset" type="button">Restore default</button>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b>Goal prompt, with a task</b>
+                      <em>Uses the objective saved in the chat controls. Stops when every requirement is met.</em>
+                    </span>
+                    <button class="btn" id="goalObjectivePromptEdit" type="button">Edit prompt</button>
+                  </div>
+
+                  <div class="field goal-prompt" id="goalObjectivePromptPanel" hidden>
+                    <label for="goalObjectivePrompt">Goal prompt, with a task</label>
+                    <textarea dir="auto" id="goalObjectivePrompt" rows="14" spellcheck="false"></textarea>
+                    <p class="hint">Saved when you leave the editor. Keep <code>NO_REPLY</code> as the exact stop response.</p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalObjectivePromptReset" type="button">Restore default</button>
+                    </div>
+                  </div>
+
+                  <div class="setting">
+                    <span class="setting-text">
+                      <b>Loop prompt</b>
+                      <em>Writes the next instruction after each answer, until you turn Loop off.</em>
+                    </span>
+                    <button class="btn" id="goalLoopPromptEdit" type="button">Edit prompt</button>
+                  </div>
+
+                  <div class="field goal-prompt" id="goalLoopPromptPanel" hidden>
+                    <label for="goalLoopPrompt">Loop prompt</label>
+                    <textarea dir="auto" id="goalLoopPrompt" rows="14" spellcheck="false"></textarea>
+                    <p class="hint">Saved when you leave the editor. There is no stop response here - the app refuses one and asks again.</p>
+                    <div class="step-actions">
+                      <button class="btn" id="goalLoopPromptReset" type="button">Restore default</button>
+                    </div>
+                  </div>
+
+                  </div>
+
+              </div>
+            </div>
+            <div class="composer-dock" id="composerDock"><div class="composer-dock-body"><div class="background-exec-status" id="backgroundExecStatus" role="status" hidden><i class="ico ph ph-terminal-window" aria-hidden="true"></i><span class="queue-label"></span><span class="background-exec-time"></span><svg class="disclosure-chevron background-exec-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false" hidden><path d="M6 3.5 10.5 8 6 12.5"></path></svg><button class="background-exec-stop" type="button"><i class="ico ph ph-power" aria-hidden="true"></i><span></span></button></div><div class="sr-only" id="backgroundExecLiveStatus" role="status" aria-live="polite" hidden></div><div class="background-exec-list" id="backgroundExecList" role="list" hidden></div><section class="agent-plan" id="agentPlan" aria-label="Agent task plan" hidden></section><div id="recoveryStatus" role="status" hidden></div><div id="taskPlanPreview" aria-label="Plan stages" hidden></div><div id="finishQueue" aria-label="Queued tasks" hidden></div><div id="activeGoalRow" hidden></div></div></div>
+            <form class="composer" id="composer">
+              <div id="skillPicker" class="skill-autocomplete" aria-label="Skills" hidden></div>
+              <div id="composerSelectedSkills" class="composer-selected-skills" aria-label="Selected skills" hidden></div>
+              <label class="sr-only" for="chatInput">Message Gemini</label>
+              <div id="composerImages" class="composer-images" hidden></div><textarea dir="auto" id="chatInput" rows="1" placeholder="Ask anything…"></textarea>
+              <div class="composer-toolbar">
+                <div class="composer-primary-controls">
+                <details class="composer-menu" id="attachmentMenu">
+                  <summary aria-label="Add attachments" title="Add attachments"><i class="ico ph ph-plus" aria-hidden="true"></i></summary>
+                  <div class="composer-popover">
+                    <button id="attachImages" type="button"><i class="ico ph ph-image" aria-hidden="true"></i>Add photos &amp; files</button>
+                    <button id="composerFolder" type="button"><i class="ico ph ph-folder" aria-hidden="true"></i>Share a folder</button>
+                    <div class="composer-skills-row">
+                      <button id="composerSkills" type="button"><i class="ico ph ph-cube" aria-hidden="true"></i>Skills</button>
+                      <button id="composerAddSkill" type="button" aria-label="Add Skills" title="Add Skills"><i class="ico ph ph-plus" aria-hidden="true"></i></button>
+                    </div>
+                  </div>
+                </details>
+                  <details class="composer-menu" id="composerSettings">
+                    <summary aria-label="Chat mode" title="Chat mode"><i id="composerModeIcon" class="ico ph ph-chat-circle" aria-hidden="true"></i><span id="composerModeLabel">Normal</span><svg class="disclosure-chevron dropdown-chevron picker-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg></summary>
+                    <div class="composer-popover">
+                      <div class="automation-switch" id="automationSwitch" role="radiogroup" aria-label="Chat mode">
+                        <button type="button" role="radio" aria-checked="true" data-mode="off"><i class="ico ph ph-chat-circle" aria-hidden="true"></i><span class="mode-copy"><span>Normal</span><small>One request, without automatic continuation.</small></span><i class="ico ph ph-check mode-check" aria-hidden="true"></i></button>
+                        <div class="mode-option"><button type="button" role="radio" aria-checked="false" data-mode="goal"><i class="ico ph ph-target" aria-hidden="true"></i><span class="mode-copy"><span>Goal</span><small>Continue until this objective is satisfied.</small></span><i class="ico ph ph-check mode-check" aria-hidden="true"></i></button><button type="button" class="mode-edit" data-edit-mode="goal" data-keep-menu="true" aria-label="Edit task" title="Edit task"><i class="ico ph ph-pencil-simple" aria-hidden="true"></i></button></div>
+                        <div class="mode-option"><button type="button" role="radio" aria-checked="false" data-mode="loop"><i class="ico ph ph-arrows-clockwise" aria-hidden="true"></i><span class="mode-copy"><span>Loop</span><small>Keep working within the brief until paused.</small></span><i class="ico ph ph-check mode-check" aria-hidden="true"></i></button><button type="button" class="mode-edit" data-edit-mode="loop" data-keep-menu="true" aria-label="Edit task" title="Edit task"><i class="ico ph ph-pencil-simple" aria-hidden="true"></i></button></div>
+                        </div><select hidden id="chatAutomation" aria-label="Chat automation"><option value="off">Off</option><option value="goal">Goal</option><option value="loop">Loop</option></select>
+                      <label id="loopDeliveryRow" hidden>When to continue<select id="loopDelivery"><option value="finish">Session Finish only</option><option value="after-turn">Also after the turn</option></select></label>
+              <div id="sessionControls" hidden>
+                <div class="session-controls-menu">
+                  <label for="sessionObjective">This chat's goal</label>
+                  <textarea dir="auto" id="sessionObjective" rows="3" maxlength="16000" placeholder="Optional. Leave empty to work toward what you asked in this chat."></textarea>
+                  <button id="saveSessionObjective" data-keep-menu="true" type="button"><i class="ico ph ph-check" aria-hidden="true"></i><span>Save task</span></button>
+                  <select hidden id="sessionObjectiveMode" aria-label="Goal behavior"><option value="goal">Goal · stop when complete</option><option value="loop">Loop · keep going</option></select>
+                  <button id="queueAtFinish" type="button" hidden><i class="ico ph ph-clock" aria-hidden="true"></i><span>Queue at Session finish</span></button>
+                </div>
+              </div>
+                    </div>
+                  </details>
+                  <button id="createPlan" type="button"><i class="ico ph ph-list-checks" aria-hidden="true"></i><span>Plan</span></button>
+                  <button class="composer-dictation-button" id="dictationButton" type="button" aria-label="Start dictation" aria-pressed="false" aria-describedby="dictationStatus" data-state="idle" title="Start dictation" hidden disabled><i class="ico ph ph-microphone" aria-hidden="true"></i><span class="dictation-recording-dot" aria-hidden="true"></span></button>
+                </div>
+                <div class="context-meter" id="contextMeter">
+                  <button type="button" id="contextMeterButton" aria-label="Estimated session context" aria-expanded="false" aria-controls="contextMeterInfo">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><circle class="context-track" cx="8" cy="8" r="6"/><circle id="contextMeterArc" cx="8" cy="8" r="6" stroke-dasharray="0 37.7"/></svg><span id="contextMeterCompact" aria-hidden="true"></span>
+                  </button>
+                  <div id="contextMeterInfo" role="dialog" aria-label="Session context · estimated">
+                    <dl class="context-data"><dt>This chat (estimate)</dt><dd id="contextTokens"></dd><dt>Context limit</dt><dd id="contextLimit"></dd><dt>Filled</dt><dd id="contextPercent"></dd><dt>Compacts automatically at</dt><dd id="contextThreshold"></dd></dl>
+                    <div class="context-progress" role="progressbar" aria-label="Estimated session context" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+                    <button type="button" class="context-action" id="contextDisplay"><i class="ico ph ph-arrows-clockwise" aria-hidden="true"></i><span>Show token values</span></button>
+                    <button id="compactSession" class="context-action" type="button" hidden><i class="ico ph ph-copy" aria-hidden="true"></i><span>Compact &amp; resume</span></button>
+                    <button id="cancelCompaction" class="context-action" type="button" hidden><i class="ico ph ph-x" aria-hidden="true"></i><span>Cancel compaction</span></button>
+                    <p id="sessionControlStatus" role="status"></p>
+                  </div>
+                </div>
+                <details class="composer-menu model-menu" id="modelMenu">
+                  <summary><span id="composerModelLabel">Model</span><svg class="disclosure-chevron dropdown-chevron picker-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg></summary>
+                  <div class="composer-popover">
+                    <p id="composerModelStatus" class="muted" role="status" hidden></p>
+                    <div class="power-header">
+                      <button id="composerSpark" class="power-spark" data-keep-menu="true" data-action="min" type="button" title="Thinking effort" aria-label="Thinking effort" disabled>
+                        <i class="ico ph ph-lightning spark-lightning" aria-hidden="true"></i><i class="ico ph ph-brain spark-brain" aria-hidden="true"></i>
+                      </button>
+                      <div class="power-caption">
+                        <strong id="composerPowerTitle">Thinking effort</strong>
+                        <button id="composerModelToggle" data-keep-menu="true" type="button" aria-expanded="false" aria-controls="composerModelChoices" aria-label="Gemini model" disabled><span id="composerPowerModel">Observed models</span><svg class="disclosure-chevron picker-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg></button>
+                      </div>
+                      <button class="btn model-reload" id="refreshComposerModels" data-keep-menu="true" type="button" title="Reload Gemini models" aria-label="Reload Gemini models"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i></button>
+                    </div>
+                    <div id="composerPowerChoices" role="group" aria-label="Thinking effort"></div><label hidden>Model<select id="composerModel" aria-label="Gemini model"><option value="" disabled>No observed choices</option></select></label>
+                    <label hidden>Reasoning<select id="composerReasoning" aria-label="Reasoning effort"><option value="" disabled>No observed choices</option></select></label>
+                    <div id="composerModelChoices" role="group" aria-label="Model" hidden inert><div class="model-list-clip"><div id="composerModelOptions"></div></div></div>
+                  </div>
+                </details>
+                <button class="btn" id="generateFinishGoal" type="button" hidden>Generate Goal</button>
+                <div class="send-control">
+                  <div class="send-options" id="sendOptions" hidden>
+                    <div class="delivery-choices" role="radiogroup" aria-label="Message delivery">
+                      <button type="button" role="radio" aria-checked="true" data-delivery="auto"><span id="immediateDeliveryLabel">Send</span><i class="ico ph ph-check" aria-hidden="true"></i></button>
+                      <button type="button" role="radio" aria-checked="false" data-delivery="tool"><span>Inject now</span><i class="ico ph ph-check" aria-hidden="true"></i></button>
+                      <button type="button" role="radio" aria-checked="false" data-delivery="after-turn"><span id="afterTurnLabel">After this turn</span><i class="ico ph ph-check" aria-hidden="true"></i></button>
+                    </div>
+                    <select id="sendMode" aria-label="Message delivery" hidden><option value="auto">Send</option><option value="tool">Inject now</option><option value="after-turn">After this turn</option></select>
+                  </div>
+                  <button class="send-button" id="chatSend" type="submit" aria-label="Send message"><i class="ph ph-arrow-up send-icon" aria-hidden="true"></i></button>
+                </div>
+              </div>
+              <p id="composerStatus" role="status" aria-live="polite"></p>
+              <p class="composer-dictation-status" id="dictationStatus" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+            </form>
+            <p class="foot" id="chatFoot" hidden></p>
+          </section>
+        </section>
+
+        <!-- ======================================================== Activity -->
+        <section class="panel activity-panel" data-panel="activity">
+          <div class="settings-page-content activity-content">
+          <header class="settings-page-head">
+            <h1>Activity</h1>
+            <p>Recent local events and failures.</p>
+          </header>
+          <section class="card update-readiness" id="updateReadinessCard" aria-labelledby="updateReadinessTitle">
+            <h2 id="updateReadinessTitle">Update status</h2>
+            <div class="update-readiness-status">
+              <div class="update-readiness-header">
+                <button class="btn update-readiness-toggle" id="updateReadinessToggle" type="button" aria-controls="updateReadinessDetails" aria-expanded="true">
+                  <svg class="disclosure-chevron update-readiness-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg><span id="updateReadinessSummary">Not checked yet</span>
+                </button>
+                <button class="btn btn-solid" id="updateAll" type="button" aria-describedby="updateAllNotice" title="You will be asked before the app restarts. Finish active work before installing.">Update all</button>
+              </div>
+              <span class="sr-only" id="updateReadinessAnnounce" role="status" aria-live="polite" aria-atomic="true"></span>
+              <p id="updateAllError" class="is-warn" role="alert" hidden></p>
+            </div>
+            <details id="updateReadinessDetails" open>
+              <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Component details</summary>
+              <p class="muted">App, browser extension and plugins in Gemini.</p>
+              <ul id="updateReadinessRows"></ul>
+              <p class="muted">Your settings are kept. Manual steps appear in the status list.</p>
+              <p class="muted" id="updateConnectionNotice">After updating, the app connects once to finish plugin checks, even if automatic connection is off.</p>
+              <button class="btn" id="updateReviewSetup" type="button">Review setup</button>
+            </details>
+            <div class="update-readiness-actions">
+              <p class="sr-only" id="updateAllNotice">You will be asked before the app restarts. Finish active work before installing.</p>
+              <div class="update-readiness-buttons">
+                <button class="btn" id="updateDiagnosticsReport" type="button" hidden>Diagnostics report</button>
+              </div>
+            </div>
+          </section>
+          <section class="card">
+            <h2>
+              <span class="sr-only">Activity</span>
+              <span class="acts">
+                <span class="seg" id="logAgentFilter" hidden></span>
+                <span class="seg" id="logFilter">
+                  <button class="is-sel" data-filter="all" type="button">All</button>
+                  <button data-filter="bad" type="button">Problems</button>
+                </span>
+                <span class="problems" id="logProblems" hidden></span>
+                <button class="btn" id="copyLogJson" type="button">
+                  <i class="ico ph ph-copy" aria-hidden="true"></i>JSON
+                </button>
+                <button class="btn" id="copyLogText" type="button">
+                  <i class="ico ph ph-copy" aria-hidden="true"></i>Text
+                </button>
+                <button class="btn" id="saveDiagnosticsReport" type="button" title="Save one file with versions, settings, the connection state and the log, with personal details removed, to attach to a bug report.">
+                  <i class="ico ph ph-file-text" aria-hidden="true"></i>Diagnostics report
+                </button>
+              </span>
+            </h2>
+            <div class="scroll feed" id="fullFeed"></div>
+            <!-- Whether this app and its extension are current, in the panel people open to
+                 find out what is going on. Green when there is nothing to do, red when a check
+                 or a download failed; hidden until GitHub has answered. -->
+            <p class="upline" id="updateLine" hidden></p>
+            <p class="foot" id="versionLine"></p>
+          </section>
+          </div>
+        </section>
+      </main>
+
+      <!-- --------------------------------------------------------------- nav -->
+
+    </div>
+
+    <!-- Chat search (⌘K / Ctrl+K, or the magnifier beside the app name): recent chats, then matches. -->
+    <dialog class="search-dialog" id="searchDialog" aria-label="Search chats">
+      <div class="search-dialog-field">
+        <i class="ico ph ph-magnifying-glass" aria-hidden="true"></i>
+        <input id="chatSearch" type="search" placeholder="Search chats" aria-label="Search chats" aria-controls="searchResults" autocomplete="off" spellcheck="false" />
+        <button class="btn search-dialog-clear" id="chatSearchClear" type="button" title="Clear search" aria-label="Clear search" hidden></button>
+      </div>
+      <div class="search-dialog-results" id="searchResults" aria-live="polite"></div>
+    </dialog>
+
+    <dialog class="whats-new-dialog" id="whatsNewDialog" aria-labelledby="whatsNewTitle" aria-describedby="whatsNewLead">
+      <header class="whats-new-head">
+        <!-- The app's own tile, sealed with a sparkle: the same language as the browser sign-in card. -->
+        <div class="whats-new-hero" aria-hidden="true">
+          <span class="whats-new-tile"><svg class="ico" viewBox="0 0 24 24"><use href="#i-mark" /></svg></span>
+          <span class="whats-new-seal"><i class="ico ph ph-sparkle"></i></span>
+        </div>
+        <span class="whats-new-version" id="whatsNewVersion"></span>
+        <h2 id="whatsNewTitle">What's new</h2>
+        <p class="whats-new-lead" id="whatsNewLead"></p>
+      </header>
+      <ul class="whats-new-list" id="whatsNewList"></ul>
+      <footer class="whats-new-actions">
+        <button class="whats-new-link" id="whatsNewNotes" type="button"><i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Full release notes</button>
+        <button class="whats-new-done" id="whatsNewDone" type="button">Got it</button>
+      </footer>
+    </dialog>
+    <dialog id="setupProfileDialog" class="setup-profile-dialog" aria-labelledby="setupProfileDialogTitle">
+      <form id="setupProfileForm">
+        <h3 id="setupProfileDialogTitle">Add profile</h3>
+        <label for="setupProfileName">Profile name</label>
+        <input id="setupProfileName" type="text" maxlength="80" required autocomplete="off" />
+        <div class="step-actions"><button class="btn" id="setupProfileCancel" type="button">Cancel</button><button class="btn" type="submit">Add profile</button></div>
+      </form>
+    </dialog>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

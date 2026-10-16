@@ -1,0 +1,91 @@
+import { currentCall, type CallContext } from './call-context.js';
+import { getConfig } from '../config.js';
+import { guard, failIdentity, type SurfaceRegistrar, type ToolResult } from './kernel.js';
+import { codeModeSchema, runCodeMode, CODE_MODE_LIMITS, type CodeModeTool, type CodeModeOptions } from './code-mode-runtime.js';
+import { toolDeclaration } from './tool-declarations.js';
+import { SURFACES, surfaceDefinition, type SurfaceId } from './surfaces.js';
+import { connectorsSharingTunnel } from '../../shared/tunnel-ids.js';
+import { geminiBindingIsCurrent } from '../gemini/bindings.js';
+
+/** Contract checked against OpenAI Codex 634ebc1865c6ac840ed3ba118f040d527bf4b55d,
+ * code-mode-protocol/src/description.rs and core/src/tools/code_mode/execute_spec.rs.
+ * MCP requires an object argument; it cannot advertise Codex's freeform grammar/namespace. */
+export const codeModeDeclaration = (options: CodeModeOptions = {}) => toolDeclaration('exec', () => ({
+  title: 'Run JavaScript',
+  description: options.windowsDesktop
+    ? 'Run Windows Computer Use JavaScript with sky: list_apps, list_windows, get_window, launch_app, get_window_state, click, press_key, type_text, scroll, set_value, drag, perform_secondary_action, activate_window. Same arguments as direct tools; sky returns native values and throws tool errors. get_window_state displays screenshots. Use nodeRepl.write(value) or text(value) for concise text; never serialize image base64 as text. sky is supplied (sky.target=windows). Variables do not persist; use get_window across calls. tools.<name> returns MCP results; ALL_TOOLS lists methods. No Node, filesystem, network or timers. 64k source, 32 MiB JS memory, 2s CPU, 60s total, 32 calls, 8 concurrent, 40k text bytes, 4 images and 12 MiB output. Live permissions apply; missing identity needs Allow unattributed calls. Observe, inspect, act, refresh. Script failure does not undo dispatched inputs; observe before retrying.'
+    : 'Run JavaScript to compose this connector’s tools. Argument: {code: "raw JavaScript"}; the host chooses the outer namespace. Inside code, use await tools.<tool_name>(args), await Promise.all([...]), text(value), and image(dataUrlOrMcpImageContent). tools return their normal MCP result objects, including content and isError. Only explicit text/image output reaches the model; intermediate results stay in the runtime and local tool recording. ALL_TOOLS lists {name,description}; use the individual tools’ schemas for arguments. Fresh isolated JavaScript runtime, top-level await, no Node, filesystem, network, console or imports. Requires exact companion chat/session identity or Allow unattributed calls enabled. Limits: 64k source characters, 32 MiB JS memory, 2s active JS time, 60s total, 32 calls, 8 concurrent calls, 40k text bytes, 4 images, 12 MiB emitted payload. Await every call. Termination stops JavaScript/new calls, not actions already dispatched. Individual tools remain available. session_finish and agents action=finish must be direct calls. No recursive exec, pragma, wait/yield or persistent globals. See the connector instructions for examples.',
+  inputSchema: codeModeSchema,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+}), options.windowsDesktop ? 'windows-desktop' : 'standard');
+
+/** Preserve an upstream tool named exec; code mode must never replace its direct contract. */
+export function canAddCodeMode(tools: ReadonlyArray<{ name: string }>): boolean {
+  return tools.length > 0 && !tools.some(tool => tool.name === 'exec');
+}
+
+/** Names a script calls on `tools` (dotted or quoted bracket access) that this connector lacks. */
+export function unknownToolReferences(code: string, available: readonly string[]): string[] {
+  const names = new Set<string>();
+  // Only calls count: `typeof tools.x` and `if (tools.x)` are a script checking, not failing.
+  for (const match of code.matchAll(/\btools\s*(?:\??\.\s*([A-Za-z_$][\w$]*)|\[\s*(['"`])([^'"`\n]{1,64})\2\s*\])\s*(?:\?\.\s*)?\(/g)) names.add(match[1] ?? match[3]!);
+  return [...names].filter(name => !available.includes(name)).slice(0, 8);
+}
+
+/** Connectors whose configured Secure Tunnel ID equals this connector's. */
+function sharedTunnelConnectors(surface: SurfaceId): SurfaceId[] {
+  return connectorsSharingTunnel(getConfig().tunnel, surface);
+}
+
+/**
+ * Says what a bare "not a function" means (#1287): the script called a tool this connector does
+ * not have, usually another connector's. With two connectors on one Secure Tunnel ID, ChatGPT
+ * sends calls to either, so a script written for Core can run on Plugins half the time.
+ */
+export function unknownToolNote(surface: SurfaceId, unknown: readonly string[]): string {
+  const here = surfaceDefinition(surface).connectorName;
+  const named = unknown.map(name => {
+    const owner = (Object.keys(SURFACES) as SurfaceId[]).find(id => id !== surface && name !== 'exec' && SURFACES[id].tools.includes(name));
+    return owner ? `${name} (a ${surfaceDefinition(owner).connectorName} tool)` : name;
+  });
+  const shared = sharedTunnelConnectors(surface);
+  return `UNKNOWN_TOOL_NAMES: this script used tools.${named.join(', tools.')}, which ${here} does not offer; ` +
+    'calling one fails with "not a function". ALL_TOOLS lists this connector\'s tools; call other tools through their own connector.' +
+    (shared.length ? ` ${here} shares its Secure Tunnel ID with ${shared.map(id => surfaceDefinition(id).connectorName).join(' and ')}, ` +
+      'so ChatGPT sends calls to either connector and a script meant for one can run on the other. Give each connector its own tunnel ID in Setup.' : '');
+}
+
+export function codeModeHandler(
+  getTools: () => CodeModeTool[], invoke: (name: string, args: unknown, parent: CallContext) => Promise<ToolResult>,
+  options: CodeModeOptions = {}
+): (args: { code: string }) => Promise<ToolResult> {
+  return ({ code }) => guard('exec', async () => {
+    const parent = currentCall();
+    const allowUnattributed = parent?.allowUnattributed ?? getConfig().multiAgent.allowUnattributedCalls;
+    const localBinding = parent?.caller.geminiBinding;
+    const localProof = localBinding && geminiBindingIsCurrent(localBinding) &&
+      localBinding.conversationId === parent.caller.conversationId && localBinding.sessionId === parent.caller.sessionId;
+    if (!parent || ((!localProof && (!parent.caller.requestId || !parent.caller.conversationId || !parent.caller.sessionId)) &&
+      !allowUnattributed)) {
+      return failIdentity('CALLER_IDENTITY_REQUIRED: code mode needs exact companion chat/session proof or Allow unattributed calls enabled in app settings. No JavaScript or nested tool ran.');
+    }
+    const tools = getTools().filter(tool => tool.name !== 'exec');
+    const result = await runCodeMode(code, tools, (name, args) => invoke(name, args, parent), CODE_MODE_LIMITS, options);
+    const unknown = options.surface ? unknownToolReferences(code, tools.map(tool => tool.name)) : [];
+    return unknown.length ? { ...result, content: [...result.content, { type: 'text', text: unknownToolNote(options.surface!, unknown) }] } : result;
+  });
+}
+
+export function registerCodeMode(
+  reg: SurfaceRegistrar, invoke: (name: string, args: unknown, parent: CallContext) => Promise<ToolResult>,
+  options: CodeModeOptions = {}
+): void {
+  if (!canAddCodeMode(reg.descriptions())) return;
+  reg.register('exec', codeModeDeclaration(options), codeModeHandler(() => reg.descriptions(), invoke, options));
+}
+
+export const CODE_MODE_INSTRUCTIONS = `Code mode: use exec with JavaScript to compose this connector's tools by their listed names and argument schemas. Inspect content, structuredContent and isError in each MCP result. Only text(...) and image(...) emit output. For a requests array you define:
+const results = await Promise.all(requests.map(({name, args}) => tools[name](args)));
+text(results.map((result, index) => ({index, isError: result.isError ?? false, content: result.content})));
+Keep emitted text within 40,000 UTF-8 bytes total. For large read batches, request smaller max_bytes or line ranges, filter the returned content, or use read directly. Forward images with image(...), not text(result); base64 serialized as text consumes the text limit. An oversized text emission returns an explicitly truncated preview and stops the script; inspect already dispatched calls before retrying.
+Run independent calls in parallel only when they cannot conflict; await mutations before dependent work. Forward native images with image(result.content.find(item => item.type === "image")). Children keep the parent’s exact or permitted request identity, recheck live permissions and record separately. No text/image means no emitted output. New user instructions and worker inbox messages arrive with the outer result, outside filtering. Call finish/lifecycle tools directly and supply their actual target. Prefer direct tools for simple calls or native file arguments. No persistent state or wait tool; long-running tools use their usual continuation IDs.`;

@@ -1,0 +1,325 @@
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { launchCommand, runCommand, runPowerShell } from './exec.js';
+import { getConfig } from './config.js';
+import type { ChatBrowser } from '../shared/types.js';
+import { browserWindowBounds } from './browser-window-layout.js';
+
+type Exists = (candidate: string) => boolean;
+type Launch = typeof launchCommand;
+export type ExternalChatBrowser = Exclude<ChatBrowser, 'cos'>;
+export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
+  chrome: 'Chrome', edge: 'Edge', brave: 'Brave', firefox: 'Firefox'
+};
+
+/**
+ * Sign-in uses the person's normal profile, including its installed companion extension. Firefox
+ * is not offered: the session handoff reads Chromium's single cookie store, and Firefox keeps a
+ * store per container, so it is left out until that path is built and tested there.
+ */
+export function installedSignInBrowsers(): Array<{ browser: ExternalChatBrowser; executable: string }> {
+  return (['chrome', 'edge', 'brave'] as const).flatMap(browser => {
+    const executable = preferredBrowserCandidates(process.platform, process.env, undefined, browser)
+      .find(candidate => isExecutableBrowser(candidate, process.platform));
+    return executable ? [{ browser, executable }] : [];
+  });
+}
+
+export async function openBrowserSignIn(browser: ExternalChatBrowser,
+  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch'> = {}): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
+  for (const candidate of new Set(preferredBrowserCandidates(platform, options.env, options.home, browser))) {
+    if (!usable(candidate)) continue;
+    // No throwaway profile: it would have neither the person's extension nor their account.
+    // Start a fresh Gemini login instead of transplanting an embedded OAuth URL/PKCE state.
+    // Firefox takes neither Chromium's window-size switch nor its spelling of one.
+    await (options.launch ?? launchCommand)(candidate,
+      browser === 'firefox' ? ['--new-window', 'https://gemini.google.com/app'] : ['--new-window', '--window-size=520,760', 'https://gemini.google.com/app'],
+      (platform === 'win32' ? path.win32 : path.posix).dirname(candidate));
+    return candidate;
+  }
+  throw new Error(`${EXTERNAL_BROWSER_LABELS[browser]} was not found. Choose another installed browser.`);
+}
+
+/** A successful OS handoff is not a live browser. Unknown probes never grant opening authority. */
+export async function isPreferredBrowserRunning(
+  platform: NodeJS.Platform = process.platform,
+  powershell: typeof runPowerShell = runPowerShell,
+  browser: ChatBrowser = getConfig().ui.chatBrowser ?? 'chrome',
+  command: typeof runCommand = runCommand
+): Promise<boolean | null> {
+  if (browser === 'cos') return (await import('./cos-browser/selection.js')).loadedCosBrowser()?.running() ?? false;
+  try {
+    if (platform !== 'win32') {
+      if (platform !== 'darwin' && platform !== 'linux') return null;
+      // comm contains executable names, never arguments or browsing/profile data.
+      const result = await command('ps', ['-A', '-o', 'comm='], os.tmpdir(), 5000);
+      if (result.timedOut || result.truncated || result.exitCode !== 0 || !result.stdout.trim()) return null;
+      const family = browser === 'firefox'
+        ? /^(?:firefox(?:-bin|-esr|-developer-edition|-nightly)?|Firefox(?: Developer Edition| Nightly)?)$/i
+        : browser === 'edge'
+        ? /^(?:msedge|microsoft-edge(?:-(?:stable|beta|dev))?|Microsoft Edge(?: Beta| Dev| Canary)?(?: Helper.*)?)$/i
+        : browser === 'brave'
+          ? /^(?:brave|brave-browser(?:-(?:stable|beta|dev|nightly))?|Brave Browser(?: Beta| Dev| Nightly)?(?: Helper.*)?)$/i
+        : /^(?:chrome|google-chrome(?:-(?:stable|beta|unstable))?|chromium(?:-browser)?|Google Chrome(?: Beta| Dev| Canary)?(?: Helper.*)?|Chromium(?: Helper.*)?)$/i;
+      return result.stdout.split('\n').some(name => family.test(path.posix.basename(name.trim())));
+    }
+    // Probe only the selected family; another browser cannot prove its presence or absence.
+    // Enumerate names only, never user command lines or profile data. Both names are constants.
+    const processName = browser === 'edge' ? 'msedge' : browser === 'brave' ? 'brave' : browser === 'firefox' ? 'firefox' : 'chrome';
+    const result = await powershell(`$ErrorActionPreference='Stop'; if (@(Get-Process | Where-Object ProcessName -eq '${processName}').Count) { 'running' } else { 'absent' }`, os.tmpdir(), 5000);
+    if (result.timedOut || result.truncated || result.exitCode !== 0) return null;
+    return result.stdout.trim() === 'absent' ? false : result.stdout.trim() === 'running' ? true : null;
+  } catch { return null; }
+}
+
+export interface PreferredBrowserOpenOptions {
+  /** Defaults to the saved Gemini browser choice. */
+  browser?: ChatBrowser;
+  /** Start the owned helper without activating its Windows startup window. */
+  backgroundStartup?: boolean;
+  /**
+   * An explicit user action such as "open this chat". Only the CoS browser distinguishes it: it
+   * brings its window forward, while every other URL opens in a window that stays hidden.
+   */
+  reveal?: boolean;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  /** Test seam and alternate host probe; defaults to executable-file validation. */
+  usable?: Exists;
+  /** Test seam for launch failure/retry ordering. */
+  launch?: Launch;
+  /** Test seam for the Windows minimized startup wrapper. */
+  powershell?: typeof runPowerShell;
+}
+
+function isExecutableBrowser(candidate: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!existsSync(candidate) || !statSync(candidate).isFile()) return false;
+    if (platform !== 'win32') accessSync(candidate, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Installations of the selected companion browser, in preference order.
+ *
+ * Nothing here can choose *which running instance* of that browser the URL reaches: the
+ * platform resolves it to the one that last had focus. A chat that must be opened beside
+ * another chat is therefore not opened from this module at all — the browser holding the
+ * source chat opens it. See `bridge.ts::offerPlacement`.
+ *
+ * Worker/resume URLs require the companion and the user's Gemini account. Browser family
+ * is a saved user choice, not inferred from executable availability or the OS URL handler.
+ * Never cross that choice just because another installed browser is easier to launch.
+ */
+export function preferredBrowserCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home = env.HOME ?? env.USERPROFILE ?? os.homedir(),
+  browser: ChatBrowser = 'chrome'
+): string[] {
+  if (platform === 'win32') {
+    const p = path.win32;
+    const roots = [env.LOCALAPPDATA, env.ProgramFiles, env['ProgramFiles(x86)']].filter((root): root is string => Boolean(root));
+    // Release first; Developer Edition and Nightly install to folders of their own.
+    if (browser === 'firefox') {
+      return ['Mozilla Firefox', 'Firefox Developer Edition', 'Firefox Nightly']
+        .flatMap(folder => roots.map(root => p.join(root, folder, 'firefox.exe')));
+    }
+    const parts = browser === 'edge'
+      ? ['Microsoft', 'Edge', 'Application', 'msedge.exe']
+      : browser === 'brave'
+        ? ['BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe']
+        : ['Google', 'Chrome', 'Application', 'chrome.exe'];
+    return roots.map(root => p.join(root, ...parts));
+  }
+
+  if (platform === 'darwin') {
+    // Release channels have separate bundles. Keep Beta/Dev/Canary-only installs usable
+    // without crossing the user's chosen browser family.
+    const channels = browser === 'firefox' ? [
+      ['Firefox.app', 'firefox'],
+      ['Firefox Developer Edition.app', 'firefox'],
+      ['Firefox Nightly.app', 'firefox']
+    ] : browser === 'edge' ? [
+      ['Microsoft Edge.app', 'Microsoft Edge'],
+      ['Microsoft Edge Beta.app', 'Microsoft Edge Beta'],
+      ['Microsoft Edge Dev.app', 'Microsoft Edge Dev'],
+      ['Microsoft Edge Canary.app', 'Microsoft Edge Canary']
+    ] : browser === 'brave' ? [
+      ['Brave Browser.app', 'Brave Browser'],
+      ['Brave Browser Beta.app', 'Brave Browser Beta'],
+      ['Brave Browser Dev.app', 'Brave Browser Dev'],
+      ['Brave Browser Nightly.app', 'Brave Browser Nightly']
+    ] : [
+      ['Google Chrome.app', 'Google Chrome'],
+      ['Google Chrome Beta.app', 'Google Chrome Beta'],
+      ['Google Chrome Dev.app', 'Google Chrome Dev'],
+      ['Google Chrome Canary.app', 'Google Chrome Canary'],
+      ['Chromium.app', 'Chromium']
+    ] as const;
+    return channels.flatMap(([bundle, executable]) => [
+      path.posix.join('/Applications', bundle, 'Contents', 'MacOS', executable),
+      ...(home ? [path.posix.join(home, 'Applications', bundle, 'Contents', 'MacOS', executable)] : [])
+    ]);
+  }
+
+  if (platform === 'linux') {
+    const pathValue = env.PATH ?? '';
+    // Search release-channel launchers too: the companion need not be installed in Stable.
+    const names = browser === 'firefox' ? ['firefox', 'firefox-esr', 'firefox-developer-edition', 'firefox-nightly'] : browser === 'edge' ? ['microsoft-edge', 'microsoft-edge-stable', 'microsoft-edge-beta', 'microsoft-edge-dev'] : browser === 'brave' ? [
+      'brave-browser',
+      'brave-browser-beta',
+      'brave-browser-dev',
+      'brave-browser-nightly',
+      'brave'
+    ] : [
+      'google-chrome',
+      'google-chrome-stable',
+      'google-chrome-beta',
+      'google-chrome-unstable',
+      'chromium',
+      'chromium-browser'
+    ];
+    const fromPath = pathValue
+      .split(':')
+      .filter(Boolean)
+      .flatMap((dir) => names.map((name) => path.posix.join(dir, name)));
+    if (browser === 'firefox') return [...new Set([
+      ...fromPath,
+      ...names.map(name => path.posix.join('/usr/bin', name)),
+      '/usr/lib/firefox/firefox',
+      '/snap/bin/firefox',
+      home ? path.posix.join(home, '.local', 'share', 'flatpak', 'exports', 'bin', 'org.mozilla.firefox') : '',
+      '/var/lib/flatpak/exports/bin/org.mozilla.firefox'
+    ].filter(Boolean))];
+    if (browser === 'edge') return [...new Set([
+      ...fromPath,
+      ...names.map(name => path.posix.join('/usr/bin', name)),
+      '/opt/microsoft/msedge/msedge', '/opt/microsoft/msedge-beta/msedge', '/opt/microsoft/msedge-dev/msedge'
+    ])];
+    if (browser === 'brave') return [...new Set([
+      ...fromPath,
+      ...names.map(name => path.posix.join('/usr/bin', name)),
+      '/opt/brave.com/brave/brave-browser',
+      '/opt/brave.com/brave-beta/brave-browser-beta',
+      '/opt/brave.com/brave-dev/brave-browser-dev',
+      '/opt/brave.com/brave-nightly/brave-browser-nightly',
+      '/snap/bin/brave',
+      '/usr/lib/brave-browser/brave-browser',
+      home ? path.posix.join(home, '.local', 'share', 'flatpak', 'exports', 'bin', 'com.brave.Browser') : '',
+      '/var/lib/flatpak/exports/bin/com.brave.Browser'
+    ].filter(Boolean))];
+    // Chrome and Chromium are both widely installed through Flatpak on immutable Linux
+    // desktops. Flatpak exports host launchers for installed applications under these
+    // `exports/bin` directories (the exported Chrome desktop file uses the same path as
+    // TryExec), so they can be launched exactly like the distro/Snap wrappers below. Keep
+    // this shell-free: worker/resume markers are URLs and must remain one literal argv item.
+    const userFlatpak = home ? path.posix.join(home, '.local', 'share', 'flatpak', 'exports', 'bin') : '';
+    return [
+      ...fromPath,
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome-beta',
+      '/usr/bin/google-chrome-unstable',
+      '/opt/google/chrome/google-chrome',
+      '/opt/google/chrome-beta/google-chrome-beta',
+      '/opt/google/chrome-unstable/google-chrome-unstable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium',
+      userFlatpak && path.posix.join(userFlatpak, 'com.google.Chrome'),
+      userFlatpak && path.posix.join(userFlatpak, 'com.google.ChromeDev'),
+      userFlatpak && path.posix.join(userFlatpak, 'org.chromium.Chromium'),
+      '/var/lib/flatpak/exports/bin/com.google.Chrome',
+      '/var/lib/flatpak/exports/bin/com.google.ChromeDev',
+      '/var/lib/flatpak/exports/bin/org.chromium.Chromium'
+    ].filter(Boolean);
+  }
+
+  return [];
+}
+
+export function findPreferredBrowser(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home?: string,
+  exists: Exists = (candidate) => isExecutableBrowser(candidate, platform)
+): string | null {
+  for (const candidate of preferredBrowserCandidates(platform, env, home)) {
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Opens an orchestration URL in the saved browser family.
+ *
+ * Existence/executable checks are intentionally not the arbitration cut. A stale wrapper or a
+ * damaged first Chrome install can pass those checks and still fail at spawn time; worker/resume
+ * URLs may try another installation of that family, never the system default or another family.
+ */
+export async function openInPreferredBrowser(
+  url: string,
+  options: PreferredBrowserOpenOptions = {}
+): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const usable = options.usable ?? ((candidate: string) => isExecutableBrowser(candidate, platform));
+  const launch = options.launch ?? launchCommand;
+  const selected = options.browser ?? getConfig().ui.chatBrowser ?? 'chrome';
+  if (selected === 'cos') {
+    // Loaded on demand, only when selected: the default extension path never loads it.
+    const cosBrowser = await (await import('./cos-browser/selection.js')).loadCosBrowser();
+    await cosBrowser.open(url, { reveal: options.reveal === true });
+    return 'cos';
+  }
+  const label = selected === 'edge' ? 'Microsoft Edge' : selected === 'brave' ? 'Brave Browser' : selected === 'firefox' ? 'Firefox' : 'Google Chrome / Chromium';
+  const bounds = browserWindowBounds();
+  // These switches only affect a newly started Chrome process; handing a URL to an
+  // existing instance cannot change its policy. Memory Saver exclusions alone do not
+  // prevent background timer/renderer throttling of long-running orchestration tabs.
+  // Firefox knows none of these Chromium switches; it gets the URL alone.
+  const args = selected === 'firefox' ? [url] : [
+    ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
+    ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
+    url
+  ];
+  let lastError: unknown = null;
+
+  for (const browser of new Set(preferredBrowserCandidates(platform, env, options.home, selected))) {
+    if (!usable(browser)) continue;
+    try {
+      // A windowless Chrome exits once extensions load unless the profile has a
+      // persistent background app. Launch the marked helper itself so its tab
+      // owns browser lifetime; the extension adopts that same tab, never a second.
+      const cwd = (platform === 'win32' ? path.win32 : path.posix).dirname(browser);
+      if (options.backgroundStartup && platform === 'win32') {
+        // Start-Process joins ArgumentList; supply one correctly quoted Windows
+        // command line. PowerShell literals are a separate escaping boundary.
+        const literal = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+        const argument = (value: string): string => `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+        if ([browser, ...args].some(value => value.includes('\0'))) throw new Error('Browser launch contains a null byte');
+        const script = `$ErrorActionPreference='Stop'; Start-Process -FilePath ${literal(browser)} -ArgumentList ${literal(args.map(argument).join(' '))} -WorkingDirectory ${literal(cwd)} -WindowStyle Minimized`;
+        // runPowerShell hides its own console. The child gets a real minimized
+        // startup request, not Node's console-only windowsHide flag. No -Wait:
+        // the owned helper tab, not this wrapper, keeps the browser alive.
+        const result = await (options.powershell ?? runPowerShell)(script, cwd, 10_000);
+        if (result.timedOut || result.exitCode !== 0) throw new Error(`Background browser launch failed: ${result.stderr.slice(0, 300) || 'PowerShell did not complete'}`);
+      }
+      else await launch(browser, args, cwd);
+      return browser;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) throw new Error(`${label} could not start: ${(lastError as Error).message}. Check Settings > Browser & history > Gemini browser.`);
+  throw new Error(`${label} was not found. Install it or change Settings > Browser & history > Gemini browser.`);
+}
