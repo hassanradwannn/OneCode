@@ -17,7 +17,7 @@ import { logInfo } from '../logger.js';
 import { getSession, readSessionPlan, saveHandoff } from './store.js';
 import { destinationContinuationMarker } from './handoff-prompt.js';
 import { userPromptText } from '../../shared/user-prompt.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../../shared/chat-provider.js';
 import type { AgentPlan } from '../../shared/agent-plan.js';
 
 export interface PrepareHandoffInput {
@@ -75,7 +75,7 @@ function handoffPlanNotice(plan: AgentPlan | null): string {
 }
 
 /** Exact body budget of the already-supported native Resume message, including its framing. */
-export async function handoffMarkdownLimit(sessionId: string, token: string, provider: ChatProvider = ACTIVE_CHAT_PROVIDER): Promise<number> {
+export async function handoffMarkdownLimit(sessionId: string, token: string, provider: ChatProvider = DEFAULT_CHAT_PROVIDER): Promise<number> {
   return chatProviderCapabilities(provider).maxMessageChars - resumeBootstrapText('', token).length -
     handoffPlanNotice(await readSessionPlan(sessionId)).length;
 }
@@ -204,7 +204,7 @@ export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handof
   // tool cannot supply it to the replacement model. Budget this same snapshot once.
   const planNotice = handoffPlanNotice(await readSessionPlan(input.sessionId));
   const overhead = resumeBootstrapText('', input.continuationToken).length + planNotice.length;
-  const limit = chatProviderCapabilities(input.sourceReceipt?.provider ?? ACTIVE_CHAT_PROVIDER).maxMessageChars - overhead;
+  const limit = chatProviderCapabilities(input.sourceReceipt?.provider ?? DEFAULT_CHAT_PROVIDER).maxMessageChars - overhead;
   if (exactMarkdown && (text.length > limit || Buffer.byteLength(text + planNotice, 'utf8') > 1024 * 1024))
     throw new Error(`HANDOFF_TOO_LARGE: the complete Markdown must fit ${limit} characters. Nothing was saved or truncated.`);
   if (!exactMarkdown) text = boundBrief(text, limit);

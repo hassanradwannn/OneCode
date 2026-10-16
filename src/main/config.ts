@@ -3,6 +3,7 @@ import { UI_LANGUAGES } from '../shared/ui-language.js';
 import { DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB } from '../shared/session.js';
 import { appearanceSchema } from './appearance-schema.js';
 import { BROWSER_BRIDGE_PORTS } from '../shared/browser-bridge.js';
+import { CHAT_PROVIDERS } from '../shared/chat-provider.js';
 import { CONNECTOR_SUFFIX_MAX, CONNECTOR_SUFFIX_PATTERN } from '../shared/connector-names.js';
 /**
  * Non-secret settings, stored as one small JSON file in the app's userData folder.
@@ -178,6 +179,7 @@ const DEFAULT_MULTI_AGENT: MultiAgentSettings = {
   globalMaxWorkers: 0,
   allowUnattributedCalls: false,
   strictChatAllowlist: false,
+  strictChatAllowlistByProvider: { gemini: false, chatgpt: false },
   // Off: Goal/Loop chats are always recovered, and reopening anything else — a worker, a prime,
   // a plain chat that once called a tool — is the user's choice to make.
   recoverAgentTabs: false,
@@ -325,6 +327,7 @@ const configSchema = z.object({
     autoContinue: z.boolean().optional().default(true),
     defaultChatModel: z.string().trim().min(1).max(80).optional().catch(undefined),
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional().catch(undefined),
+    chatProvider: z.enum(CHAT_PROVIDERS).optional().default('gemini'),
     chatBrowser: z.enum(CHAT_BROWSERS).optional().default('chrome'),
     /** Where a minimized built-in browser window goes. */
     cosBrowserMinimize: z.enum(['taskbar', 'tray']).optional().default('taskbar'),
@@ -427,6 +430,7 @@ const configSchema = z.object({
       globalMaxWorkers: z.number().int().min(0).max(64).optional().default(DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0),
       allowUnattributedCalls: z.boolean().optional().default(DEFAULT_MULTI_AGENT.allowUnattributedCalls),
       strictChatAllowlist: z.boolean().optional().default(DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false),
+      strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional() }).optional(),
       recoverAgentTabs: z.boolean().optional().default(DEFAULT_MULTI_AGENT.recoverAgentTabs),
       waitForSubAgents: z.boolean().optional().default(DEFAULT_MULTI_AGENT.waitForSubAgents ?? false),
       autoWorktrees: z.boolean().optional().default(DEFAULT_MULTI_AGENT.autoWorktrees ?? false),
@@ -440,6 +444,7 @@ const configSchema = z.object({
       globalMaxWorkers: DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0,
       allowUnattributedCalls: DEFAULT_MULTI_AGENT.allowUnattributedCalls,
       strictChatAllowlist: DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false,
+      strictChatAllowlistByProvider: DEFAULT_MULTI_AGENT.strictChatAllowlistByProvider,
       recoverAgentTabs: DEFAULT_MULTI_AGENT.recoverAgentTabs,
       waitForSubAgents: DEFAULT_MULTI_AGENT.waitForSubAgents ?? false,
       autoWorktrees: DEFAULT_MULTI_AGENT.autoWorktrees ?? false,
@@ -582,7 +587,7 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform, rele
     // Fresh installs refresh changed connector tools on their own: a permission chosen in Setup
     // changes the tool list, and nothing else tells a new user to refresh the plugin in Gemini.
     // Older configs keep the schema default (off).
-    ui: { minimizeToTray: true, autoConnect: false, startAtLogin: false, keepAwake: true, keepScreenAwake: false, cosBrowserMinimize: 'taskbar', turnNotifications: true, rotateTurnMinutes: 30, localAppUsage: true, privacyScreenshots: false, theme: 'dark', autoRefreshPlugins: false, autoRefreshPluginsAsked: true, autoSelectSkills: false, backgroundChats: true, backgroundPlacement: 'window', followUp: 'steer', enterSends: true, browserBridgePort: 'auto', autoContinue: true, followOutput: true, mentionCore: true,
+    ui: { minimizeToTray: true, autoConnect: false, startAtLogin: false, keepAwake: true, keepScreenAwake: false, cosBrowserMinimize: 'taskbar', turnNotifications: true, rotateTurnMinutes: 30, localAppUsage: true, privacyScreenshots: false, theme: 'dark', autoRefreshPlugins: false, autoRefreshPluginsAsked: true, autoSelectSkills: false, backgroundChats: true, backgroundPlacement: 'window', followUp: 'steer', enterSends: true, browserBridgePort: 'auto', autoContinue: true, followOutput: true, mentionCore: true, chatProvider: 'gemini',
       // The built-in browser is opt-in: Chrome with the companion stays the default for new and
       // existing installs alike, and the built-in one runs only once someone chooses it.
       chatBrowser: 'brave' },

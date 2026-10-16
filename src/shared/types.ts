@@ -132,6 +132,8 @@ export const CHAT_BROWSERS = ['chrome', 'edge', 'brave', 'firefox', 'cos'] as co
 export type ChatBrowser = (typeof CHAT_BROWSERS)[number];
 
 export interface UiPrefs {
+  /** Provider used for new chats. Existing conversations retain their own provider. */
+  chatProvider?: import('./chat-provider.js').ChatProvider;
   /** Recover an unfinished silent executor turn only while Goal and Loop are both off. */
   autoContinue?: boolean;
   /** Preferred account-observed model for a fresh ordinary chat; omitted keeps the catalog fallback. */
@@ -363,6 +365,8 @@ export interface MultiAgentSettings {
   allowUnattributedCalls: boolean;
   /** Default-deny local tools to exact trusted conversations. */
   strictChatAllowlist?: boolean;
+  /** Independent default-deny switches for each browser provider. */
+  strictChatAllowlistByProvider?: Partial<Record<import('./chat-provider.js').ChatProvider, boolean>>;
   /**
    * Reopen/reload chats that are not Goal/Loop driven — workers, primes, plain chats that have
    * called tools — once when their tab disappears or goes silent. Goal/Loop chats are always

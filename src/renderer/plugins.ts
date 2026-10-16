@@ -4,6 +4,7 @@ import type { SettingsPatch } from '../preload/index.js';
 import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
 import { $, disclosureChevron, el, run, toast } from './dom.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 
 let snapshot: PluginSnapshot = { plugins: [], catalog: [], schemaRevision: 0 };
 let epoch = 0;
@@ -51,12 +52,17 @@ async function mutate(work: ReturnType<typeof window.api.pluginsSnapshot>, notif
   const own = ++epoch; const result = await run(work);
   if (!result) return false;
   if (own === epoch) { snapshot = result; renderInstalled(); }
-  if (notify) toast(t("Plugin settings saved. Refresh {0} in Gemini to update its tools.", [pluginsConnectorName()]));
+  if (notify) toast(t("Plugin settings saved. Refresh {0} in {1} to update its tools.", [pluginsConnectorName(), providerName()]));
   return true;
 }
 /** This computer's Plugins connector name, which carries its suffix when one is set. */
 function pluginsConnectorName(): string {
   return appState?.status.surfaces.find(item => item.id === 'plugins')?.connectorName ?? 'OneCode Plugins';
+}
+function provider(): ChatProvider { return appState?.config.ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER; }
+function providerName(): string { return chatProviderLabel(provider()); }
+function providerPluginsUrl(): string {
+  return provider() === 'chatgpt' ? 'https://chatgpt.com/plugins' : 'https://gemini.google.com/customize/connectors';
 }
 export async function refreshPlugins(): Promise<void> { await mutate(window.api.pluginsSnapshot(), false); }
 export function applyPluginsState(next: AppState): void {
@@ -66,29 +72,32 @@ export function applyPluginsState(next: AppState): void {
   const contacted = surface?.state === 'live' && !!surface.lastRequestAt;
   const configured = !!next.config.tunnel.pluginsTunnelId?.trim() || surface?.state === 'live';
   $('pluginsSetupTitle').closest('.plugin-connection')!.classList.toggle('is-configured', configured);
-  ui($('pluginsSetupTitle'), 'textContent', () => configured ? t("OneCode Plugins in Gemini") : t("Set up plugins before your first use"));
+  const selectedProvider = providerName();
+  ui($('pluginsSetupTitle'), 'textContent', () => configured ? t("OneCode Plugins in {0}", [selectedProvider]) : t("Set up plugins before your first use"));
   ui($('pluginsSetupHint'), 'textContent', () => configured
-    ? t("Your enabled plugins reach Gemini through one plugin there: OneCode Plugins. Manage its connection here.")
-    : t("Add {0} to Gemini once, so Gemini can use your installed plugins.", [pluginsConnectorName()]));
+    ? t("Your enabled plugins reach {0} through one plugin there: OneCode Plugins. Manage its connection here.", [selectedProvider])
+    : t("Add {0} to {1} once, so it can use your installed plugins.", [pluginsConnectorName(), selectedProvider]));
   ui($('pluginsSetupLink'), 'textContent', () => configured ? t("Plugin setup") : t("Set up plugins"));
   ui($('pluginsRefreshName'), 'textContent', pluginsConnectorName);
+  ui($('pluginsProviderName'), 'textContent', () => selectedProvider);
+  ui($('pluginsOpenGemini'), 'textContent', () => t("Open {0} plugins", [selectedProvider]));
   $('pluginsSetupLink').classList.toggle('btn-solid', !configured);
   ui(status, 'textContent', () => surface?.state === 'live'
-    ? contacted ? t("Connected to Gemini") : t("Plugin online · waiting for Gemini")
+    ? contacted ? t("Connected to {0}", [selectedProvider]) : t("Plugin online · waiting for {0}", [selectedProvider])
     : configured ? t("OneCode Plugins offline") : t("Setup required · connect your plugins"));
   status.dataset.live = String(surface?.state === 'live');
   ui(status, 'title', () => t(surface?.detail ?? ''));
   const setupStatus = document.getElementById('pluginSetupStatus');
   if (setupStatus) ui(setupStatus, 'textContent', () => surface?.state === 'live'
-    ? t("{0} tools available · {1}", [surface.tools.length, surface.lastRequestAt ? t("Connected to Gemini") : t("Ready to add in Gemini")])
-    : surface?.state === 'error' ? t(surface.detail) : t("Save your connection below to make enabled plugins available in Gemini."));
+    ? t("{0} tools available · {1}", [surface.tools.length, surface.lastRequestAt ? t("Connected to {0}", [selectedProvider]) : t("Ready to add in {0}", [selectedProvider])])
+    : surface?.state === 'error' ? t(surface.detail) : t("Save your connection below to make enabled plugins available in {0}.", [selectedProvider]));
 }
 function showConnection(): void {
   if (!appState) { toast(t("Connection settings are still loading.")); return; }
   const { config, hasApiKey, status } = appState;
   const surface = status.surfaces.find(item => item.id === 'plugins');
   const { body } = dialog(() => t("Plugin setup"));
-  body.append(el('p', '', () => t("Connect once. Your enabled plugins share this one plugin in Gemini.")));
+  body.append(el('p', '', () => t("Connect once. Your enabled plugins share this one plugin in {0}.", [providerName()])));
   const connectionStatus = el('p', 'plugin-setup-status'); connectionStatus.id = 'pluginSetupStatus'; body.append(connectionStatus);
   const copy = (label: string, value: string) => {
     const input = field(body, label, value); input.readOnly = true;
@@ -108,15 +117,15 @@ function showConnection(): void {
     else key = field(body, () => t("Tunnel API key"), '', true, () => t("Use a restricted key with Tunnels: Read and Tunnels: Use. It is stored securely and shared with Core and Desktop."));
   }
   // Values needed for Gemini setup stay copyable; tool lists belong to each plugin.
-  copy(t("Name in Gemini"), surface?.connectorName ?? 'OneCode Plugins');
+  copy(t("Name in {0}", [providerName()]), surface?.connectorName ?? 'OneCode Plugins');
   copy(t("Description"), surface?.description ?? 'Tools from your enabled OneCode plugins.');
   const url = surface?.publicUrl ?? (config.tunnel.kind === 'manual' ? surface?.localUrl : null);
   if (url) copy(t("MCP server URL"), url);
   body.append(el('p', 'hint', () => config.tunnel.kind === 'openai'
-    ? t("In Gemini, add this as a plugin with Tunnel and select your Plugins tunnel. Refresh it after adding or changing plugins.")
-    : t("In Gemini, add this as a plugin using its MCP server URL. Refresh it after adding or changing plugins.")));
+    ? t("In {0}, add this as a plugin with Tunnel and select your Plugins tunnel. Refresh it after adding or changing plugins.", [providerName()])
+    : t("In {0}, add this as a plugin using its MCP server URL. Refresh it after adding or changing plugins.", [providerName()])));
   const actions = el('div', 'plugin-setup-actions');
-  actions.append(button(() => t("Open Gemini plugins"), async () => { await run(window.api.openLink('https://gemini.google.com/customize/connectors')); }), button(() => t("Save & connect"), async () => {
+  actions.append(button(() => t("Open {0} plugins", [providerName()]), async () => { await run(window.api.openLink(providerPluginsUrl())); }), button(() => t("Save & connect"), async () => {
     if (!appState) return;
     if (tunnel && !tunnel.value.trim()) { tunnel.focus(); throw new Error(t("Enter your Plugins tunnel ID.")); }
     if (key?.value) { const next = await run(window.api.setApiKey(key.value)); if (!next) return; key.value = ''; applyAppState(next); applyPluginsState(next); }
@@ -332,7 +341,7 @@ export function initPlugins(onState: (next: AppState) => void = () => {}): void 
   $('pluginsAdd').addEventListener('click', showCatalog); $('pluginsRefresh').addEventListener('click', () => void refreshPlugins());
   $('pluginsSearch').addEventListener('input', renderInstalled);
   $('pluginsSetupLink').addEventListener('click', showConnection);
-  $('pluginsOpenGemini').addEventListener('click', async () => { await run(window.api.openLink('https://gemini.google.com/customize/connectors')); });
+  $('pluginsOpenGemini').addEventListener('click', async () => { await run(window.api.openLink(providerPluginsUrl())); });
   $('pluginsLegalOpen').addEventListener('click', async () => { await run(window.api.openLegalNotices()); });
   window.api.onPluginsChanged(() => { void refreshPlugins(); }); void refreshPlugins();
 }

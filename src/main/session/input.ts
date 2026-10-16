@@ -10,7 +10,7 @@ import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, validateGeminiBindingReceiptEvidence, validateGeminiBindingEvidence, type GeminiBindingEvidence, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -719,7 +719,7 @@ async function target(entry: InputEntry): Promise<string | null> {
   if (!entry.sessionId) return null;
   const session = await getSession(entry.sessionId);
   if (entry.opening && session?.origin?.kind === 'desktop' && !session.conversationId) return null;
-  if (!session?.conversationId) throw new Error('This recording has no Gemini conversation');
+  if (!session?.conversationId) throw new Error('This recording has no provider conversation');
   if (isChatBlocked(session.conversationId)) throw new Error('Unblock this conversation before sending');
   return session.conversationId;
 }
@@ -747,7 +747,7 @@ async function materializeOpening(entry: InputEntry): Promise<void> {
     title: userTitle(entry.text, entry.text), titleSource: 'fallback',
     origin: { kind: 'desktop', fromSessionId: null, agentId: null, task: '' } });
   if (session.conversationId && session.conversationId !== entry.conversationId)
-    throw new Error('Reserved opening session belongs to another Gemini conversation');
+    throw new Error('Reserved opening session belongs to another provider conversation');
   if (entry.projectId && session.projectId !== entry.projectId) await assignSessionProject(session.id, entry.projectId);
 }
 /**
@@ -1593,7 +1593,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
         const conversationId = await target(entry);
         // A new chat of a project with a native Gemini Project opens in that Project and nowhere
         // else: it waits while the Project is being created or could not be, never the root.
-        const chatgptProject = chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
+        const chatgptProject = chatProviderCapabilities(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
           ? (await getProject(entry.projectId))?.chatgpt : undefined;
         if (chatgptProject && chatgptProject.state !== 'linked') continue;
         const [end] = !entry.silenceBoundary && manualInput(entry) && entry.sessionId

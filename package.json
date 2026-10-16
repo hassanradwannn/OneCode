@@ -1,7 +1,7 @@
 {
   "name": "onecode",
-  "version": "0.2.7",
-  "description": "Desktop workspace for Gemini with local MCP tools and durable chats.",
+  "version": "0.2.8",
+  "description": "Desktop workspace for Gemini and ChatGPT with local MCP tools and durable chats.",
   "license": "MIT",
   "author": "OneCode contributors",
   "desktopName": "io.onecode.desktop",

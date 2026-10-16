@@ -1,5 +1,5 @@
 import type { AppApi } from '../preload/index.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
 import type { AppState } from '../shared/types.js';
 import { toast } from './dom.js';
 import { t } from './i18n.js';
@@ -17,7 +17,7 @@ export function paintPluginRefreshOffer(
   apply: (next: AppState) => void
 ): void {
   const card = document.getElementById('pluginRefreshOffer')!;
-  if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh) { card.hidden = true; return; }
+  if (!chatProviderCapabilities(state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).nativePluginRefresh) { card.hidden = true; return; }
   const accept = document.getElementById('pluginRefreshOfferAccept') as HTMLButtonElement;
   const later = document.getElementById('pluginRefreshOfferLater') as HTMLButtonElement;
   card.hidden = state.config.ui.autoRefreshPlugins === true || state.config.ui.autoRefreshPluginsAsked === true;

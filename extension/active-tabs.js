@@ -4,7 +4,7 @@ export function createActiveTabs(chrome) {
   const scopes = new Map(), states = new Map(), retiring = new Set(), cancelled = new Map();
   let syncing = null, again = false;
   const valid = tab => Number.isInteger(tab?.id) && tab.id > 0 && typeof tab.url === 'string' &&
-    tab.url.length <= 4096 && /^https:\/\/gemini\.google\.com\//.test(tab.url) && !tab.pendingUrl;
+    tab.url.length <= 4096 && /^https:\/\/(?:gemini\.google\.com|chatgpt\.com|chat\.openai\.com)\//.test(tab.url) && !tab.pendingUrl;
   const permitted = () => typeof chrome.permissions?.contains === 'function'
     ? chrome.permissions.contains({ permissions: ['debugger'] }).catch(() => false) : Promise.resolve(false);
   const save = () => chrome.storage.session.set({ [KEY]: [...states.values(), ...retiring]

@@ -1,4 +1,4 @@
-/** Production is Gemini only. The legacy policy is explicit for retained ChatGPT host tests. */
+/** Provider-aware URL policy retained for the optional embedded-browser implementation. */
 import { chatProviderCapabilities, type ChatProvider } from './chat-provider.js';
 export type CosBrowserProvider = ChatProvider;
 const GEMINI_HOSTS = new Set(['gemini.google.com', 'accounts.google.com']);
@@ -51,6 +51,6 @@ export function cosBrowserPolicy(provider: CosBrowserProvider = 'gemini') {
   };
 }
 
-export function opensInCosBrowser(url: string): boolean {
-  return cosBrowserPolicy().opens(url);
+export function opensInCosBrowser(url: string, provider: CosBrowserProvider = 'gemini'): boolean {
+  return cosBrowserPolicy(provider).opens(url);
 }

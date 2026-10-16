@@ -27,6 +27,41 @@ import { createGeminiRouting } from './gemini-routing.js';
 import './i18n.js';
 
 const geminiRouting = createGeminiRouting(chrome, () => storedBackgroundWindow());
+let selectedProvider = 'gemini';
+
+function providerForUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (url.protocol !== 'https:') return null;
+    if (url.hostname === 'gemini.google.com') return 'gemini';
+    if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') return 'chatgpt';
+  } catch { /* Invalid URLs have no provider. */ }
+  return null;
+}
+function providerForConversation(value, fallback = selectedProvider) {
+  const id = typeof value === 'string' ? value.trim() : '';
+  if (/^[0-9a-f]{16}$/i.test(id)) return 'gemini';
+  if (/^[0-9a-f-]{8,64}$/i.test(id)) return 'chatgpt';
+  return fallback === 'chatgpt' ? 'chatgpt' : 'gemini';
+}
+function providerHome(provider = selectedProvider) {
+  return provider === 'chatgpt' ? 'https://chatgpt.com/' : 'https://gemini.google.com/app';
+}
+function providerConversationUrl(conversationId) {
+  return providerForConversation(conversationId) === 'chatgpt'
+    ? `https://chatgpt.com/c/${encodeURIComponent(conversationId)}`
+    : `https://gemini.google.com/app/${encodeURIComponent(conversationId)}`;
+}
+function providerHomeDocument(value, provider = providerForUrl(value)) {
+  try {
+    const url = new URL(String(value || ''));
+    if (provider === 'chatgpt') return url.origin === 'https://chatgpt.com' && url.pathname === '/' && !url.search && !url.hash;
+    return provider === 'gemini' && url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && !url.search && !url.hash;
+  } catch { return false; }
+}
+async function resolveProviderUrl(url, options = {}) {
+  return providerForUrl(url) === 'gemini' ? geminiRouting.resolve(url, options) : url;
+}
 
 let activeTabs = null;
 function getActiveRendering() {
@@ -122,7 +157,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 16;
+const BRIDGE_PROTOCOL = 17;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -1909,7 +1944,7 @@ async function markTerminal(id) {
 
 function cleanConversationId(value) {
   const id = typeof value === 'string' ? value.trim() : '';
-  return /^[0-9a-f]{16}$/i.test(id) ? id.toLowerCase() : null;
+  return /^[0-9a-f-]{8,64}$/i.test(id) ? id.toLowerCase() : null;
 }
 
 /**
@@ -2157,11 +2192,13 @@ async function reconcileBackgroundWindow(policy) {
     if (managed.has(conversationForTab(tab))) return true;
     try {
       const url = new URL(tab.pendingUrl || tab.url || '');
-      if (url.origin !== 'https://gemini.google.com') return false;
+      const provider = providerForUrl(url);
+      if (!provider) return false;
       const inputId = url.searchParams.get('cos-input') || new URLSearchParams(url.hash.slice(1)).get('cos-input');
       // Catalog markers retain ownership across browser restart so the warm empty
       // document can be handed to the first authored input without another window.
-      const catalogHelper = /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && /^[a-f0-9-]{36}$/i.test(url.searchParams.get('cos-model-catalog') || '');
+      const catalogHelper = (provider === 'chatgpt' ? url.pathname === '/' : /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname)) &&
+        /^[a-f0-9-]{36}$/i.test(url.searchParams.get('cos-model-catalog') || '');
       return (inputId && inputIds.has(inputId)) || catalogHelper;
     } catch { return false; }
   };
@@ -2222,7 +2259,7 @@ async function inAppGroup(tab) {
 }
 /** Native work reuses one expanded owned window and never takes OS focus. */
 async function createChatTab(url, background = false, active = !background, sourceConversationId = null, sourceTabId = null) {
-  url = await geminiRouting.resolve(url, { sourceConversationId, sourceTabId });
+  url = await resolveProviderUrl(url, { sourceConversationId, sourceTabId });
   if (!background) return chrome.tabs.create({ url, active });
   return inBackgroundWindow(async () => {
     if (groupsAvailable()) {
@@ -2320,7 +2357,7 @@ function desktopInputReuseCandidate(tab) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
     const hash = new URLSearchParams(url.hash.slice(1));
-    return url.origin === 'https://gemini.google.com' && !url.searchParams.has('clf') && !hash.has('clf') &&
+    return providerForUrl(url) !== null && !url.searchParams.has('clf') && !hash.has('clf') &&
       !url.searchParams.has('cos-input') && !hash.has('cos-input');
   } catch { return false; }
 }
@@ -2388,7 +2425,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
     if (projectInput && !tab && elected?.stage === 'ready' && elected.project === projectInput && Number.isInteger(elected.tab)) {
       const landed = tabs.find(row => row.id === elected.tab);
       let home = false;
-      try { const url = new URL(landed?.url || ''); home = url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && !url.search && !url.hash; } catch {}
+      try { home = providerHomeDocument(landed?.url || '', 'chatgpt'); } catch {}
       if (landed && !landed.pendingUrl && landed.status === 'complete' && home) {
         await call('/project-create', { method: 'POST', body: JSON.stringify({ action: 'gone', inputId: input.id, chatgptId: projectInput }) });
         continue;
@@ -2444,16 +2481,18 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       if (Object.keys(elections).length >= 1000) continue;
       // A new chat of a project with a native ChatGPT Project opens on that Project's own page;
       // borrowing another tab would go through ChatGPT's New chat, which is the root.
-      const project = null; // Workspaces are local; Gemini exposes no ChatGPT Project route.
-      let url = target ? `https://gemini.google.com/app/${encodeURIComponent(target)}`
-        : `https://gemini.google.com/app?${input.lifetime === 'temporary-planner' ? 'cos-helper=planner&' : ''}${marker}#${marker}`;
+      const provider = providerForConversation(target, selectedProvider);
+      const project = provider === 'chatgpt' ? projectInput : null;
+      let url = target ? providerConversationUrl(target)
+        : project ? `https://chatgpt.com/g/${project}/project?${marker}#${marker}`
+        : `${providerHome(provider)}?${input.lifetime === 'temporary-planner' ? (provider === 'chatgpt' ? 'temporary-chat=true&' : 'cos-helper=planner&') : ''}${marker}#${marker}`;
       // Choose the observed native account before borrowing a page or spending
       // new opening authority. An already elected recovery keeps its own source.
-      if (!target) url = await geminiRouting.resolve(url, { sourceTabId: recoveredReuse?.tab ?? null });
+      if (!target) url = await resolveProviderUrl(url, { sourceTabId: recoveredReuse?.tab ?? null });
       if (!target && !project && input.lifetime !== 'temporary-planner') {
         const reusable = new Set(reusableConversations);
         const choices = tabs.filter(candidate => !candidate.pinned && !candidate.pendingUrl && desktopInputReuseCandidate(candidate) &&
-          geminiRouting.sameAccount(candidate.url, url) && modelCatalogTarget?.tab !== candidate.id &&
+          providerForUrl(candidate.url) === provider && (provider !== 'gemini' || geminiRouting.sameAccount(candidate.url, url)) && modelCatalogTarget?.tab !== candidate.id &&
           (recoveredReuse ? candidate.id === recoveredReuse.tab :
             (!conversationForTab(candidate) || reusable.has(conversationForTab(candidate)))))
           .sort((a, b) => Number(!!conversationForTab(a)) - Number(!!conversationForTab(b)) || a.id - b.id);
@@ -2560,7 +2599,7 @@ async function offerStopTurns(requests, background = false) {
           if (!current()) return;
           if (!tab) {
             // Spend before Chrome awaits; a lost creation reply must not open another tab.
-            const opened = await createChatTab(`https://gemini.google.com/app/${encodeURIComponent(request.conversationId)}`, background);
+            const opened = await createChatTab(providerConversationUrl(request.conversationId), background);
             election.tab = opened.id;
             await persistLive();
             return; // the new document must register and adopt its exact native turn first
@@ -2624,8 +2663,8 @@ async function releaseModelCatalogTarget(nonce) {
  * request, one more per extension restart, none ever reused or closed.
  */
 function pluginSettingsRoute(url) {
-  return url.origin === 'https://gemini.google.com' && (
-    (/^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && /^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) ||
+  return url.origin === 'https://chatgpt.com' && (
+    (url.pathname === '/' && /^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) ||
     /^\/(?:settings\/plugins-settings(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?|plugins\/plugin_asdk_app_[a-zA-Z0-9_-]+)$/.test(url.pathname));
 }
 function pluginRefreshMarker(tab) {
@@ -2676,7 +2715,7 @@ function inspectProjectCreates(requests) {
       // A helper the person closed comes back, at most every two minutes: never a tab on every
       // status pass, and never a request left waiting for good.
       if (mine && Date.now() - (mine.openedAt ?? 0) < PROJECT_CREATE_REOPEN_MS) return;
-      const created = await createChatTab(`https://gemini.google.com/app?cos-project-create=${request.id}`, false);
+      const created = await createChatTab(`https://chatgpt.com/?cos-project-create=${request.id}`, false);
       await chrome.storage.session.set({ projectCreateOwner: { id: request.id, tab: created.id, openedAt: Date.now() } });
       return;
     }
@@ -2727,11 +2766,9 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     if (!held) {
       if (browserOnly) return;
       try {
-        const tab = await createChatTab(request.appId
-          // The old hash still redirects to the app's page on the newer shell; without an App Id
-          // it now lands on the home page, so the installed list is opened by its own path.
-          ? `https://gemini.google.com/app?cos-plugin-refresh=${request.id}#settings/Plugins/plugin_${request.appId}`
-          : `https://gemini.google.com/settings?cos-plugin-refresh=${request.id}`, background);
+        const tab = await createChatTab(request.appId && request.observeOnly !== true
+          ? `https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins/plugin_${request.appId}`
+          : `https://chatgpt.com/settings/plugins-settings?cos-plugin-refresh=${request.id}`, background);
         await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: tab.id } });
       }
       catch {
@@ -2759,7 +2796,10 @@ function catalogTabNonce(tab) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
     const nonce = url.searchParams.get('cos-model-catalog');
-    return url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && /^[a-f0-9-]{36}$/i.test(nonce || '') ? nonce : null;
+    const home = selectedProvider === 'chatgpt'
+      ? url.origin === 'https://chatgpt.com' && url.pathname === '/'
+      : url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname);
+    return home && /^[a-f0-9-]{36}$/i.test(nonce || '') ? nonce : null;
   } catch { return null; }
 }
 
@@ -2767,7 +2807,9 @@ function catalogTabNonce(tab) {
 function catalogCandidateTab(tab) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
-    if (url.origin !== 'https://gemini.google.com' || !/^(?:\/u\/\d+)?\/app(?:\/[0-9a-f]{16})?\/?$/i.test(url.pathname)) return false;
+    if (selectedProvider === 'chatgpt') {
+      if (url.origin !== 'https://chatgpt.com' || !/^(?:\/(?:g\/[^/]+\/)?c\/[0-9a-f-]{8,64})?\/?$/i.test(url.pathname)) return false;
+    } else if (url.origin !== 'https://gemini.google.com' || !/^(?:\/u\/\d+)?\/app(?:\/[0-9a-f]{16})?\/?$/i.test(url.pathname)) return false;
   } catch { return false; }
   // Native setup pages can establish account presentation for createChatTab,
   // but they never own a chat composer or a model inspection election.
@@ -2825,7 +2867,7 @@ function inspectRequestedModels(request) {
       if (!current() || wanted.allowOpen === false || owner?.nonce === wanted.nonce || (tabs.length && !bypassBusy)) return;
       await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, opening: true } });
       if (!current()) return;
-      tab = await createChatTab(`https://gemini.google.com/app?cos-model-catalog=${wanted.nonce}`, true);
+      tab = await createChatTab(`${providerHome(selectedProvider)}?cos-model-catalog=${wanted.nonce}`, true);
       await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, tab: tab.id } });
       await chrome.tabs.update(tab.id, { autoDiscardable: false });
       await waiting('opening');
@@ -3220,7 +3262,7 @@ async function revealChats(ids) {
     const [tab] = tabs.filter(candidate => conversationForTab(candidate) === conversationId).sort((a, b) => a.id - b.id);
     const shown = tab
       ? await chrome.tabs.update(tab.id, { active: true })
-      : await createChatTab(`https://gemini.google.com/app/${conversationId}`, false, true);
+      : await createChatTab(providerConversationUrl(conversationId), false, true);
     const windowId = shown?.windowId ?? tab?.windowId;
     if (!Number.isInteger(windowId)) continue;
     // A worker tab can sit in the app's minimized background window; the user asked to see it.
@@ -3304,10 +3346,10 @@ async function maintainOnce() {
   const intent = connectionEpoch;
   let observedTabs = [];
   try { observedTabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS }); } catch { /* Status/recovery still runs; no unobserved tab is pruned. */ }
-  await geminiRouting.observe(observedTabs);
+  await geminiRouting.observe(observedTabs.filter(tab => providerForUrl(tab.url) === 'gemini'));
   const openConversations = [...new Set(observedTabs.map(conversationForTab).filter(Boolean))];
   // Observe login in an existing regular-profile page; extension pairing alone is not login.
-  const loginTab = observedTabs.find(tab => !tab.incognito && !tab.discarded && !tab.frozen && tab.status !== 'loading' &&
+  const loginTab = observedTabs.find(tab => providerForUrl(tab.url) === selectedProvider && !tab.incognito && !tab.discarded && !tab.frozen && tab.status !== 'loading' &&
     typeof tab.id === 'number' && typeof tabDocuments[String(tab.id)] === 'string' && signInStage(tab.url) === 'done');
   const loginEpoch = loginTab ? tabEpochs[String(loginTab.id)] : undefined;
   const loginDocument = loginTab ? tabDocuments[String(loginTab.id)] : undefined;
@@ -3327,14 +3369,21 @@ async function maintainOnce() {
     .filter(Boolean))];
   // Without access to chatgpt.com no content script runs, so nothing on a page could ever answer:
   // a revoked Firefox permission, or Chrome's site access "On click". The app says so in Setup.
+  const selectedOrigin = selectedProvider === 'chatgpt' ? 'https://chatgpt.com/*' : 'https://gemini.google.com/*';
   const chatgptAccess = typeof chrome.permissions?.contains === 'function'
-    ? await chrome.permissions.contains({ origins: ['https://gemini.google.com/*'] }).catch(() => undefined) : undefined;
+    ? await chrome.permissions.contains({ origins: [selectedOrigin] }).catch(() => undefined) : undefined;
   if (intent !== connectionEpoch || !token || disconnected) return;
-  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: false,
+  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: selectedProvider === 'chatgpt',
     chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { await activeTabs?.revoke(); return; }
+  const nextProvider = reply.data.provider === 'chatgpt' ? 'chatgpt' : 'gemini';
+  if (nextProvider !== selectedProvider) {
+    selectedProvider = nextProvider;
+    // Re-run this same owner with the newly selected provider; no app or extension restart.
+    void maintain(true);
+  }
   await rememberBackgroundPlacement(reply.data.backgroundPlacement);
   const liveChats = new Set(Array.isArray(reply.data.nonDiscardableConversations) ? reply.data.nonDiscardableConversations : []);
   const liveOpenings = new Set(Array.isArray(reply.data.inputOpeningIds) ? reply.data.inputOpeningIds : []);
@@ -3361,7 +3410,7 @@ async function maintainOnce() {
         // Once the provider conversation is bound, its ordinary live-chat grant
         // takes over. A manual move to another chat cannot borrow this opening.
         const start = custody.url ? new URL(custody.url) : null;
-        if (!conversationFromUrl(tab.url) && url.origin === 'https://gemini.google.com' &&
+        if (!conversationFromUrl(tab.url) && providerForUrl(url) === providerForUrl(start) &&
             url.pathname === (start?.pathname || '/') &&
             (!queryCommand || !hashCommand || queryCommand === hashCommand) &&
             (queryCommand || hashCommand) === custody.commandId) return true;
@@ -3375,7 +3424,7 @@ async function maintainOnce() {
         opening.documentId === tabDocuments[String(tab.id)] &&
         !Object.prototype.hasOwnProperty.call(terminalDocuments, String(tab.id)) &&
         (tab.url === opening.url && tabEpochs[String(tab.id)] === opening.navigationEpoch ||
-          conversationFromUrl(opening.url) && url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && !id &&
+          conversationFromUrl(opening.url) && providerHomeDocument(url, providerForUrl(opening.url)) && !id &&
           tabEpochs[String(tab.id)] >= opening.navigationEpoch && tabEpochs[String(tab.id)] <= opening.navigationEpoch + 1));
     } catch { return false; }
   };
@@ -3692,7 +3741,7 @@ async function performBrowserRepairs(repairs, policy) {
       }
       if (target) await chrome.tabs.reload(target.id);
       else {
-        await createChatTab(`https://gemini.google.com/app/${encodeURIComponent(conversationId)}`, policy.background === true, focus);
+        await createChatTab(providerConversationUrl(conversationId), policy.background === true, focus);
       }
     } catch {
       // A tab changed between the scan and action, or Chrome refused it. Report the exact failed
@@ -3840,11 +3889,16 @@ async function releaseTab(tab, expected = null, expectedDocument = null, expecte
 function conversationFromUrl(value) {
   try {
     const url = new URL(String(value || ''));
-    if (url.origin !== 'https://gemini.google.com') return null;
-    // Matches chatgpt-dom.js: a Project conversation is `/g/<project>/c/<id>`, while
-    // `/share/c/<id>` is a public snapshot the service worker must never bind a tab to.
-    const match = /^(?:\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(url.pathname);
-    return match ? match[1].toLowerCase() : null;
+    if (url.protocol !== 'https:') return null;
+    if (url.hostname === 'gemini.google.com') {
+      const match = /^(?:\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(url.pathname);
+      return match ? match[1].toLowerCase() : null;
+    }
+    if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') {
+      const match = /^\/(?:g\/[^/]+\/)?c\/([0-9a-f-]{8,64})(?:\/|$)/i.exec(url.pathname);
+      return match ? match[1].toLowerCase() : null;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -3860,16 +3914,16 @@ function conversationFromUrl(value) {
  * slugs do not have this shape, so they are correctly not Projects.
  */
 function projectFromUrl(value) {
-  return null; // Provider-native Projects are not interchangeable with local workspaces.
+  try {
+    const url = new URL(String(value || ''));
+    if (url.protocol !== 'https:' || (url.hostname !== 'chatgpt.com' && url.hostname !== 'chat.openai.com') || url.pathname.length > 512) return null;
+    const match = /^\/g\/(g-p-[0-9a-f]{32})(?:-[^/]*)?\//i.exec(url.pathname);
+    return match ? match[1].toLowerCase() : null;
+  } catch { return null; }
 }
 
 function isChatGptUrl(value) {
-  try {
-    const url = new URL(String(value || ''));
-    return url.origin === 'https://gemini.google.com';
-  } catch {
-    return false;
-  }
+  return providerForUrl(value) !== null;
 }
 
 /** Serializes every ownership transition and owned side effect for one browser tab. */
@@ -5292,7 +5346,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * isolated content script has its own one-instance guard because a newly loading page can
  * receive both its static manifest injection and this recovery injection.
  */
-const CHATGPT_TAB_URLS = ['https://gemini.google.com/*'];
+const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
 const PAGE_RECORDER_VERSION = 22;
 
 let deferredRecoveryWork = null;
@@ -5363,7 +5417,7 @@ function offerDeferredRevivalToTab(entry, tab) {
 
 function deferredRevivalUrl(entry) {
   if (!entry || !deferredRevivalId(entry.id) || !cleanConversationId(entry.conversationId)) return null;
-  const url = new URL(`https://gemini.google.com/app/${entry.conversationId}`);
+  const url = new URL(providerConversationUrl(entry.conversationId));
   url.searchParams.set('clf', entry.id);
   url.hash = `clf=${encodeURIComponent(entry.id)}`;
   return url.toString();
@@ -5391,7 +5445,8 @@ function deferredRevivalUrl(entry) {
 function successorChatBase(offered, source) {
   const project = typeof offered === 'string' && /^g-p-[0-9a-f]{32}$/.test(offered) ? offered : null;
   const conversation = cleanConversationId(source);
-  return project && conversation ? `https://gemini.google.com/app/${conversation}` : 'https://gemini.google.com/app';
+  const provider = providerForConversation(conversation, selectedProvider);
+  return project && conversation && provider === 'chatgpt' ? providerConversationUrl(conversation) : providerHome(provider);
 }
 
 async function placeSuccessorChat(raw, tabId) {
@@ -5417,7 +5472,8 @@ async function placeSuccessorChat(raw, tabId) {
     if (effort) query.push(`reasoning_effort=${encodeURIComponent(effort)}`);
     let created;
     try {
-      created = await createChatTab(`https://gemini.google.com/app?${query.join('&')}#${marker}`, true, false, raw.homeConversationId, tabId);
+      const provider = providerForConversation(raw.homeConversationId, selectedProvider);
+      created = await createChatTab(`${providerHome(provider)}?${query.join('&')}#${marker}`, true, false, raw.homeConversationId, tabId);
     } catch (error) {
       await failPlacement(`successor_tab_create_failed: ${placementError(error)}`);
       return;
@@ -5457,7 +5513,8 @@ async function placeSuccessorChat(raw, tabId) {
     }
     if (typeof tabId !== 'number') {
       const base = successorChatBase(raw.project, raw.homeConversationId);
-      const marker = `clf=${encodeURIComponent(id)}${base !== 'https://gemini.google.com/app' ? '&clf_project=1' : ''}`;
+      const provider = providerForConversation(raw.homeConversationId, selectedProvider);
+      const marker = `clf=${encodeURIComponent(id)}${base !== providerHome(provider) ? '&clf_project=1' : ''}`;
       const model = commandModelSlug(raw && raw.model);
       const reasoningEffort = commandReasoningEffort(raw && raw.reasoningEffort);
       const query = [marker];
@@ -5492,7 +5549,8 @@ async function placeSuccessorChat(raw, tabId) {
   // Both a query and a fragment, matching the app's commandUrl(): ChatGPT rewrites its own URL
   // during boot and which of the two survives has changed between builds.
   const base = successorChatBase(raw.project, raw.homeConversationId);
-  const marker = `clf=${encodeURIComponent(id)}${base !== 'https://gemini.google.com/app' ? '&clf_project=1' : ''}`;
+  const provider = providerForConversation(raw.homeConversationId, selectedProvider);
+  const marker = `clf=${encodeURIComponent(id)}${base !== providerHome(provider) ? '&clf_project=1' : ''}`;
   const model = commandModelSlug(raw && raw.model);
   const reasoningEffort = commandReasoningEffort(raw && raw.reasoningEffort);
   const query = [marker];
@@ -5501,7 +5559,7 @@ async function placeSuccessorChat(raw, tabId) {
   // A chat in the app's own tab group sits in the user's window (#128): its successor joins that
   // group without being selected, since selecting it would switch what the user is looking at.
   const grouped = await inAppGroup(home).catch(() => false);
-  const url = await geminiRouting.resolve(`${base}?${query.join('&')}#${marker}`, { sourceConversationId: raw.homeConversationId, sourceTabId: home.id });
+  const url = await resolveProviderUrl(`${base}?${query.join('&')}#${marker}`, { sourceConversationId: raw.homeConversationId, sourceTabId: home.id });
   const create = { url, windowId: home.windowId, active: !grouped && raw.active !== false };
   // Directly after the chat it continues, so a handoff reads as one piece of work instead of a
   // tab appended to the far end of a long strip.
@@ -5662,6 +5720,9 @@ function recoverDeferredRevivals() {
 
 async function restoreChatgptTab(id, current = () => true, documentId = null) {
   if (!current()) return false;
+  const page = await chrome.tabs.get(id).catch(() => null);
+  const provider = providerForUrl(page?.url || page?.pendingUrl);
+  if (!provider) return false;
   const target = { tabId: id, ...(documentId ? { documentIds: [documentId] } : {}) };
   try {
     // A failed helper round-trip requests the matching pair even if its recorder
@@ -5673,7 +5734,7 @@ async function restoreChatgptTab(id, current = () => true, documentId = null) {
       // still present. Request-id ownership depends on fiber.js, and re-executing it is
       // idempotent because the helper keeps one listener per protocol version.
       try {
-        // Gemini's native DOM adapter owns recording; no ChatGPT MAIN helpers.
+        if (provider === 'chatgpt') await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['usage.js', 'fiber.js'] });
       } catch {
         // The tab can navigate between the ping and repair. Static injection covers it.
       }
@@ -5690,15 +5751,18 @@ async function restoreChatgptTab(id, current = () => true, documentId = null) {
     // an extension reload, when the old isolated world (including its i18n helper) is invalidated.
     await chrome.scripting.executeScript({ target, files: ['i18n.js'] });
     if (!current()) return false;
-    await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js'] });
-    if (!current()) return false;
-    // Rebuild the isolated-world DOM adapter before the recorder that consumes it.
-    await chrome.scripting.executeScript({ target, files: ['gemini-dom.js'] });
+    if (provider === 'gemini') {
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js'] });
+      if (!current()) return false;
+      await chrome.scripting.executeScript({ target, files: ['gemini-dom.js'] });
+    } else {
+      await chrome.scripting.executeScript({ target, files: ['chatgpt-dom.js'] });
+    }
     if (!current()) return false;
     // Keep the React/Fiber reader in ChatGPT's own world, exactly like the static manifest
     // declaration. An older helper may still answer too; the nonce/version gate in
     // content.js makes those replies harmless, and a future version bump rejects them.
-    // Gemini's native DOM adapter owns recording; no ChatGPT MAIN helpers.
+    if (provider === 'chatgpt') await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['usage.js', 'fiber.js'] });
     if (!current()) return false;
     await chrome.scripting.executeScript({ target, files: ['content.js'] });
     if (!current()) return false;
@@ -5751,6 +5815,10 @@ async function replaceUsageObserver(tabId, attempt = 0) {
     if (attempt + 1 < USAGE_REPLACE_ATTEMPTS) setTimeout(() => { void replaceUsageObserver(tabId, attempt + 1); }, USAGE_REPLACE_RETRY_MS);
     return false;
   };
+  if (typeof chrome.tabs?.get === 'function') {
+    const page = await chrome.tabs.get(tabId).catch(() => null);
+    if (page && providerForUrl(page.url || page.pendingUrl) !== 'chatgpt') return true;
+  }
   let status = null;
   try { status = await tabReply(tabId, { type: 'clf-page-status' }); } catch { status = null; }
   if (status?.ok !== true || status.streaming !== false) return later();
@@ -5775,7 +5843,7 @@ async function restoreOpenChatgptTabs() {
     const id = tab && typeof tab.id === 'number' ? tab.id : null;
     if (id === null) continue;
     await restoreChatgptTab(id);
-    void replaceUsageObserver(id);
+    if (providerForUrl(tab.url || tab.pendingUrl) === 'chatgpt') void replaceUsageObserver(id);
   }
 }
 
@@ -5815,8 +5883,9 @@ async function drainWorkerArchive() {
   const next = await call('/worker-archive/next', { method: 'POST', body: '{}' });
   const conversationId = next.ok ? cleanConversationId(next.data?.conversationId) : null;
   if (!conversationId) return;
+  if (providerForConversation(conversationId) !== 'chatgpt') return;
   let outcome = 'deferred';
-  for (const tab of await chrome.tabs.query({ url: ['https://gemini.google.com/*'] })) {
+  for (const tab of await chrome.tabs.query({ url: ['https://chatgpt.com/*', 'https://chat.openai.com/*'] })) {
     const documentId = tab.id === undefined ? null : tabDocuments[String(tab.id)];
     if (!documentId) continue;
     let reply;
@@ -5866,8 +5935,9 @@ function signInStage(url) {
   try {
     const { protocol, hostname, pathname } = new URL(url);
     if (protocol !== 'https:') return null;
-    if (hostname === 'accounts.google.com') return 'auth';
+    if (hostname === 'accounts.google.com' || hostname === 'auth.openai.com') return 'auth';
     if (hostname === 'gemini.google.com') return /^\/(?:api\/)?auth\//.test(pathname) ? 'auth' : 'done';
+    if (hostname === 'chatgpt.com' || hostname === 'chat.openai.com') return /^\/(?:api\/)?auth\//.test(pathname) ? 'auth' : 'done';
   } catch { /* Not a URL this flow passes through. */ }
   return null;
 }
@@ -5988,7 +6058,7 @@ if (!globalThis.__cosBrowserWorker) {
         // The CoS browser asked for the login form, so go back to it, once.
         flows[key] = { ...flow, retried: true };
         await save();
-        await chrome.tabs.update(id, { url: 'https://gemini.google.com/app' });
+        await chrome.tabs.update(id, { url: providerHome(selectedProvider) });
       }
       // Otherwise keep watching: signing in from here passes through auth again.
     }).catch(() => undefined);
@@ -6012,7 +6082,7 @@ function reportPresence() {
   presenceFlight ??= (async () => {
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS }); } catch { /* Report presence without a login answer. */ }
-    const tab = tabs.find(candidate => !candidate.incognito && !candidate.discarded && candidate.status === 'complete' &&
+    const tab = tabs.find(candidate => providerForUrl(candidate.url) === selectedProvider && !candidate.incognito && !candidate.discarded && candidate.status === 'complete' &&
       typeof candidate.id === 'number' && signInStage(candidate.url || '') === 'done');
     const signedIn = tab ? await chatGptSignedIn(tab.id).catch(() => null) : null;
     await call('/browser/presence', { method: 'POST', body: JSON.stringify({ chatGptSignedIn: signedIn }) });

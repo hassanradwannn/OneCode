@@ -11,7 +11,6 @@ import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
 import { decorateJsonCode } from './json-code.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
 import { safeExternalLink } from '../shared/external-link.js';
-import { cosBrowserPolicy } from '../shared/cos-browser-sites.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
 import { createFilePanel } from './file-panel.js';
 import { renderAgentPlan } from './agent-plan.js';
@@ -38,6 +37,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled } from '../shared/chat-provider.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES } from '../shared/input.js';
@@ -766,8 +766,10 @@ function syncSessionSpinner(indicator: HTMLElement): void {
  * the row draws it with the same button and the same word as a blocked chat.
  */
 function unattributedBlocked(): boolean {
-  const multiAgent = deps.state()?.config.multiAgent;
-  return multiAgent?.strictChatAllowlist === true || multiAgent?.allowUnattributedCalls === false;
+  const config = deps.state()?.config;
+  if (!config) return true;
+  const provider = config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  return providerTrustValidationEnabled(config.multiAgent, provider) || config.multiAgent.allowUnattributedCalls === false;
 }
 
 function sessionBadges(summary: SessionSummary): Badge[] {
@@ -901,7 +903,9 @@ function sessionRow(summary: SessionSummary): HTMLElement {
     // Strict mode cannot trust an unattributed stream by definition. Do not offer an "Allow"
     // that the kernel will intentionally ignore; the Settings checkbox explains that
     // unattributed calls stay blocked until strict mode is turned off.
-    if (deps.state()?.config.multiAgent?.strictChatAllowlist !== true) {
+    const config = deps.state()?.config;
+    const selectedProvider = config?.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+    if (!config || !providerTrustValidationEnabled(config.multiAgent, selectedProvider)) {
       // The same decision as a chat's Block: may this activity use local tools? It has no
       // conversation to be stored against, so it moves the app-wide switch and nothing else.
       const blocked = unattributedBlocked();
@@ -919,7 +923,9 @@ function sessionRow(summary: SessionSummary): HTMLElement {
       summary.conversationId,
       ...committedResumeAncestorsFromSummary(summary, summary.conversationId)
     ];
-    const strictAllowlist = deps.state()?.config.multiAgent?.strictChatAllowlist === true;
+    const config = deps.state()?.config;
+    const provider = chatProviderForConversation(summary.conversationId, config?.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+    const strictAllowlist = config ? providerTrustValidationEnabled(config.multiAgent, provider) : false;
     // Mirror main's exact decision order for presentation: exact Block wins; in strict mode an
     // exact Trust wins before inherited lineage, then each committed predecessor is considered
     // nearest-first with Block ahead of Trust. An older policy hidden behind a nearer decision is
@@ -936,11 +942,13 @@ function sessionRow(summary: SessionSummary): HTMLElement {
       }
     }
     items.push(
-      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its title in Gemini stays the same."), run: () => startRename(summary) },
+      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its provider title stays the same."), run: () => startRename(summary) },
       { action: 'open', icon: 'i-out', label: () => t('Open in browser'), title: () => t("Open this chat in your browser"), run: () => void run(api.openSessionChat(summary.id)) },
-      { action: 'copy-link', icon: 'i-copy', label: () => t('Copy link'), title: () => t("Copy this chat's Gemini link"),
+      { action: 'copy-link', icon: 'i-copy', label: () => t('Copy link'), title: () => t("Copy this chat's provider link"),
         run: async () => {
-          const link = summary.conversationId && cosBrowserPolicy('gemini').conversationLink(summary.conversationId);
+          const current = deps.state()?.config;
+          const provider = chatProviderForConversation(summary.conversationId, current?.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+          const link = summary.conversationId ? chatProviderConversationUrl(provider, summary.conversationId) : null;
           if (link && await run(api.writeClipboard(link))) toast(t('Link copied'));
         } }
     );
@@ -5545,7 +5553,14 @@ export function chatSettingsPatch(current: Config): {
       maxWorkers: number('maWorkers', current.multiAgent.maxWorkers, 1, 8),
       globalMaxWorkers: number('globalMaWorkers', current.multiAgent.globalMaxWorkers ?? 0, 0, 64),
       allowUnattributedCalls: $<HTMLInputElement>('allowUnattributedCalls').checked,
+      // Save the checkbox into the provider currently painted in state. During a provider
+      // change this preserves the old provider first; the returned state then paints the new
+      // provider's independent value without requiring an app restart.
       strictChatAllowlist: $<HTMLInputElement>('strictChatAllowlist').checked,
+      strictChatAllowlistByProvider: {
+        ...(current.multiAgent.strictChatAllowlistByProvider ?? {}),
+        [current.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER]: $<HTMLInputElement>('strictChatAllowlist').checked
+      },
       recoverAgentTabs: $<HTMLInputElement>('recoverAgentTabs').checked,
       waitForSubAgents: $<HTMLInputElement>('waitForSubAgents').checked,
       autoWorktrees: $<HTMLInputElement>('autoWorktrees').checked,
@@ -5940,7 +5955,7 @@ function applyAutoCompactHint(config: Config): void {
  * expire by age.
  */
 const CHAT_INPUTS = [
-  'chatBrowser', 'cosBrowserMinimize', 'browserBridgePort',
+  'chatProvider', 'chatBrowser', 'cosBrowserMinimize', 'browserBridgePort',
   'goalIncludeToolCalls',
   'planBackend',
   'finishTool', 'finishLeadMinutes', 'rotateTurnMinutes', 'localAppUsage', 'defaultChatModel', 'defaultChatReasoning', 'workerModel', 'workerReasoning', 'autoSelectSkills', 'backgroundChats', 'backgroundPlacement', 'browserOnly', 'autoRefreshPlugins',
@@ -6048,10 +6063,15 @@ export function chatApply(state: AppState, previous?: Config): void {
   );
   applyChatChecked(
     $<HTMLInputElement>('strictChatAllowlist'),
-    config.multiAgent.strictChatAllowlist === true,
-    previous?.multiAgent.strictChatAllowlist
+    providerTrustValidationEnabled(config.multiAgent, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+    previous === undefined
+      ? undefined
+      : providerTrustValidationEnabled(previous.multiAgent, previous.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)
   );
-  $<HTMLInputElement>('allowUnattributedCalls').disabled = config.multiAgent.strictChatAllowlist === true;
+  $<HTMLInputElement>('allowUnattributedCalls').disabled = providerTrustValidationEnabled(
+    config.multiAgent,
+    config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER
+  );
   applyChatChecked(
     $<HTMLInputElement>('recoverAgentTabs'),
     config.multiAgent.recoverAgentTabs,

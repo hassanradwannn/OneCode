@@ -274,10 +274,10 @@
           <div class="plugins-content">
           <header class="plugin-page-head"><div><h1>Plugins</h1><p>Bring your favorite tools into the conversation.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="pluginsSearch" type="search" placeholder="Search plugins" aria-label="Search plugins" /></label><button class="btn plugin-add" id="pluginsAdd" type="button" aria-label="Add a plugin" title="Add a plugin"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
           <section class="plugin-connection" aria-labelledby="pluginsSetupTitle">
-            <div><h2 id="pluginsSetupTitle">Set up plugins before your first use</h2><p id="pluginsSetupHint">Add OneCode Plugins to Gemini once, so Gemini can use your installed plugins.</p><span id="pluginsConnectionStatus" role="status">Setup required · connect your plugins</span></div>
+            <div><h2 id="pluginsSetupTitle">Set up plugins before your first use</h2><p id="pluginsSetupHint">Add OneCode Plugins to your selected provider once, so it can use your installed plugins.</p><span id="pluginsConnectionStatus" role="status">Setup required · connect your plugins</span></div>
             <button class="btn btn-solid" id="pluginsSetupLink" type="button">Set up plugins</button>
           </section>
-          <div class="plugin-refresh-guide"><p>After installing, updating or changing enabled plugins, refresh <strong id="pluginsRefreshName" translate="no">OneCode Plugins</strong> in Gemini to make its tools available.</p><button class="btn" id="pluginsOpenGemini" type="button">Open Gemini plugins</button></div>
+          <div class="plugin-refresh-guide"><p>After installing, updating or changing enabled plugins, refresh <strong id="pluginsRefreshName" translate="no">OneCode Plugins</strong> in <span id="pluginsProviderName">your provider</span> to make its tools available.</p><button class="btn" id="pluginsOpenGemini" type="button">Open provider plugins</button></div>
           <div class="plugin-section-head"><h2>Installed <span id="pluginsCount" class="plugin-count">Loading…</span></h2><button class="btn" id="pluginsRefresh" type="button">Check local status</button></div>
           <div id="pluginsInstalled" aria-live="polite"></div>
           <div class="plugin-section-head"><h2>Explore plugins</h2><span class="muted">Made for your workflow</span></div>
@@ -561,7 +561,7 @@
                   <li><button type="button" data-rail-step="tunnel"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Tunnel</span></button></li>
                   <li><button type="button" data-rail-step="key"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">API key</span></button></li>
                   <li><button type="button" data-rail-step="connect"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Connect</span></button></li>
-                  <li><button type="button" data-rail-step="chatgpt"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Gemini</span></button></li>
+                  <li><button type="button" data-rail-step="chatgpt"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label" id="providerRailLabel">Gemini</span></button></li>
                   <li class="setup-rail-ready"><button type="button" data-rail-step="ready"><span class="setup-rail-mark" aria-hidden="true"><i class="ico ph ph-check"></i></span><span class="setup-rail-label">Ready</span></button></li>
                 </ol>
               </nav>
@@ -576,6 +576,7 @@
                 <div class="step-mark"><i class="ico tick ph ph-check" aria-hidden="true"></i></div>
                 <div class="step-body browser-setup">
                   <div class="browser-setup-header">
+                    <label class="setting"><span class="setting-text"><b>AI provider</b><em>New chats use this provider immediately. Existing Gemini and ChatGPT chats keep working with their original provider.</em></span><select id="setupChatProvider"><option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option></select></label>
                     <ol class="browser-phases" aria-label="Connect your Gemini">
                     <li id="browserPhaseExtension" aria-current="step"><span class="phase-number" aria-hidden="true" translate="no">A</span><span>Install the extension</span></li>
                     <li id="browserPhaseLocation"><span class="phase-number" aria-hidden="true" translate="no">B</span><span>Where Gemini runs</span></li>
@@ -602,7 +603,7 @@
                           <figure class="ext-figure" id="extensionPictureDev"></figure></div></li>
                         <li data-install-engine="chromium"><div><b id="extensionStepLoad">Click Load unpacked and choose the extension folder</b><button class="btn btn-solid setup-tunnel-open" id="bridgeFolder" type="button"><i class="ico ph ph-folder" aria-hidden="true"></i><span>Open extension folder</span></button>
                           <figure class="ext-figure" id="extensionPictureLoad"></figure></div></li>
-                        <li><div><b id="extensionStepChatGpt">Open Gemini in your browser</b><button class="btn btn-quiet" id="openChatGptBrowser" type="button"><span>Open Gemini</span><i class="ico ph ph-arrow-square-out" aria-hidden="true"></i></button></div></li>
+                        <li><div><b id="extensionStepChatGpt">Open Gemini in your browser</b><button class="btn btn-quiet" id="openChatGptBrowser" type="button"><span id="openProviderBrowserLabel">Open Gemini</span><i class="ico ph ph-arrow-square-out" aria-hidden="true"></i></button></div></li>
                       </ol>
                       <details class="extension-help"><summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Need help?</summary><div class="extension-meta"><p class="extension-folder" id="extensionPath"></p><button class="btn btn-quiet" id="bridgeDownload" type="button">Download extension ZIP</button><p id="bridgeState" class="muted"></p></div></details>
                     </div>
@@ -616,13 +617,13 @@
                     <div class="browser-stage-copy">
                       <h3 id="browserLocationTitle" tabindex="-1">Where should Gemini run?</h3>
                       <p class="step-lead">You can change this later in Settings.</p>
-                      <div class="browser-choice" role="radiogroup" aria-label="Gemini browser">
+                      <div class="browser-choice" role="radiogroup" aria-label="Provider browser">
                         <button class="browser-option" id="useExtensionBrowser" type="button" role="radio" data-browser-choice="extension"><img id="setupExternalIcon" src="./browser-icons/chrome.svg" alt="" /><b id="setupExternalChoice">Use Chrome</b><em id="setupExternalLabel"></em></button>
                       </div>
                       <p class="hint" id="embeddedBrowserHint" data-browser-variant="cos">Your saved embedded-browser setting is no longer supported for Google sign-in. Choose Use Chrome above. The setting changes only when you choose a full browser.</p>
                       <div data-browser-variant="cos" class="browser-action"><span class="status-pill" id="cosBrowserState" data-tone="off" role="status"></span></div>
-                      <div data-browser-variant="extension" class="browser-action"><button class="btn btn-solid" id="openSelectedChatGpt" type="button"><i class="ico ph ph-sign-in" aria-hidden="true"></i><span>Sign in to Gemini</span></button><span class="status-pill" id="externalBrowserState" data-tone="off" role="status"></span></div>
-                      <p class="hint">Use Gemini’s profile menu to add or switch Google accounts. New chats use the selected account; existing chats retain their original account.</p>
+                      <div data-browser-variant="extension" class="browser-action"><button class="btn btn-solid" id="openSelectedChatGpt" type="button"><i class="ico ph ph-sign-in" aria-hidden="true"></i><span id="signInProviderLabel">Sign in to Gemini</span></button><span class="status-pill" id="externalBrowserState" data-tone="off" role="status"></span></div>
+                      <p class="hint" id="providerAccountHint">Use Gemini’s profile menu to add or switch Google accounts. New chats use the selected account; existing chats retain their original account.</p>
                       <div id="browserConnectionLost" class="browser-connection-lost" role="status" hidden><p>Reconnect or update your browser extension to continue.</p><button id="browserReviewExtension" class="btn btn-quiet" type="button">Review extension</button></div>
                       <button class="btn step-back browser-back" id="browserBack" type="button"><i class="ico ph ph-arrow-left" aria-hidden="true"></i><span>Back</span></button>
                     </div>
@@ -806,11 +807,11 @@
                   <!-- Two columns of even weight: what to do and what to copy on the left; the
                        pictures and the reference notes on the right. -->
                   <div class="step-main">
-                    <h3>Add it in Gemini</h3>
-                    <p class="step-lead">Paste the MCP server URL below. Gemini reads the app name, description and tools from this service.</p>
+                    <h3 id="setupProviderConnectTitle">Add it in Gemini</h3>
+                    <p class="step-lead" id="setupProviderConnectLead">Paste the MCP server URL below. Gemini reads the app name, description and tools from this service.</p>
                     <div class="step-actions">
-                      <button class="btn btn-solid setup-tunnel-open" type="button" data-link="https://gemini.google.com/customize/connectors">
-                        <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i>Open Gemini Plugins
+                      <button class="btn btn-solid setup-tunnel-open" id="setupProviderPluginsOpen" type="button" data-link="https://gemini.google.com/customize/connectors">
+                        <i class="ico ph ph-arrow-square-out" aria-hidden="true"></i><span id="setupProviderPluginsOpenLabel">Open Gemini Plugins</span>
                       </button>
                     </div>
                     <div id="pluginMoves"></div>
@@ -1084,8 +1085,8 @@
 
                   <label class="setting">
                     <span class="setting-text">
-                      <b>Trust only selected chats</b>
-                      <em>Only chats you trust can use this computer's tools. Existing chats start untrusted; hover a chat in the sidebar and choose Trust (✓). Workers and resumed chats follow the chat they came from. Calls the app can't link to a chat are refused.</em>
+                      <b>Trust only selected chats for this provider</b>
+                      <em>This switch is saved separately for Gemini and ChatGPT. Only chats you trust can use this computer's tools. It applies to the selected provider. Existing chats start untrusted; hover a chat in the sidebar and choose Trust (✓). Workers and resumed chats follow the chat they came from. Calls the app can't link to a chat are refused.</em>
                     </span>
                     <input id="strictChatAllowlist" type="checkbox" />
                   </label>
@@ -1158,7 +1159,8 @@
                   </div>
                 <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Browser & history</h2><p>Manage background tabs, browser preferences, and history compaction.</p></div></header>
                 <div class="settings-surface pane">
-                  <label class="setting"><span class="setting-text"><b>Gemini browser</b><em>Choose a full browser for Google sign-in. Install the companion and sign in to Gemini in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their browser and account. A legacy embedded-browser setting must be changed explicitly here or in Setup.</em></span><select id="chatBrowser"><option value="chrome">Google Chrome / Chromium</option><option value="edge">Microsoft Edge</option><option value="brave">Brave Browser</option><option value="firefox">Mozilla Firefox</option><option value="cos" disabled hidden>Unsupported embedded browser — choose a full browser</option></select></label>
+                  <label class="setting"><span class="setting-text"><b>AI provider</b><em>Applies to new chats as soon as it is saved. Open chats retain their provider and remain functional.</em></span><select id="chatProvider"><option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option></select></label>
+                  <label class="setting"><span class="setting-text"><b id="providerBrowserTitle">Gemini browser</b><em id="providerBrowserHint">Choose a full browser for Google sign-in. Install the companion and sign in to Gemini in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their browser and account.</em></span><select id="chatBrowser"><option value="chrome">Google Chrome / Chromium</option><option value="edge">Microsoft Edge</option><option value="brave">Brave Browser</option><option value="firefox">Mozilla Firefox</option><option value="cos" disabled hidden>Unsupported embedded browser — choose a full browser</option></select></label>
                   <label class="setting" id="cosBrowserMinimizeRow" hidden><span class="setting-text"><b>Legacy embedded window preference</b><em>Retained for older profiles. Embedded Google sign-in is not supported.</em></span><select id="cosBrowserMinimize"><option value="taskbar" id="cosBrowserMinimizeTaskbar">Taskbar</option><option value="tray" id="cosBrowserMinimizeTray">Tray</option></select></label>
                   <div class="setting"><span class="setting-text"><b>Browser extension</b><em>Disconnect the browser extension from this app.</em></span><button class="btn" id="bridgeUnpair" type="button">Disconnect browser</button></div>
                   <label class="setting"><span class="setting-text"><b>Browser bridge port</b><em id="browserBridgePortHint">Auto uses the first available port. A fixed port must be available.</em></span><select id="browserBridgePort"><option value="auto">Auto</option><option value="8765">8765</option><option value="8766">8766</option><option value="8767">8767</option><option value="8768">8768</option><option value="8769">8769</option></select></label>

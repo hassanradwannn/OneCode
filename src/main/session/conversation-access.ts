@@ -4,14 +4,17 @@ import { committedResumeAncestorsFromSummary } from '../../shared/session.js';
 import { BLOCKED_CHAT_REFUSAL, isChatBlocked } from './blocked-chats.js';
 import { findSessionByConversation } from './store.js';
 import { isChatTrusted } from './trusted-chats.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderForConversation, providerTrustValidationEnabled } from '../../shared/chat-provider.js';
 
 export const STRICT_CHAT_REFUSAL =
   'CHAT_NOT_TRUSTED: strict chat allowlisting is enabled and this call is not currently allowed. No tool was run. ' +
   'For an attributed chat, ask the user to hover its row in the sidebar chat list and choose Trust (✓); if that row is blocked, choose Release there. ' +
   'For an app-created worker, use the owning prime row instead. Calls the app cannot link to a chat are refused in strict mode. Retry only after the user changes that policy.';
 
-export function strictChatAllowlistEnabled(): boolean {
-  return getConfig().multiAgent.strictChatAllowlist === true;
+export function strictChatAllowlistEnabled(conversationId?: string | null): boolean {
+  const config = getConfig();
+  const provider = chatProviderForConversation(conversationId, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  return providerTrustValidationEnabled(config.multiAgent, provider);
 }
 
 /** The one conversation-level policy decision used before any model-facing tool handler runs. */
@@ -40,7 +43,7 @@ async function trustedByExactProvenance(conversationId: string): Promise<boolean
 
 export async function conversationAccessRefusal(conversationId: string | null | undefined): Promise<string | null> {
   if (isChatBlocked(conversationId)) return BLOCKED_CHAT_REFUSAL;
-  if (!strictChatAllowlistEnabled()) return null;
+  if (!strictChatAllowlistEnabled(conversationId)) return null;
   if (!conversationId) return STRICT_CHAT_REFUSAL;
 
   // A worker is app-created on behalf of exactly one prime. Do not copy permission into the

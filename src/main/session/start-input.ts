@@ -3,11 +3,15 @@ import { connect, getStatus, onStatusChange } from '../connection.js';
 import { startBridge } from '../bridge.js';
 import { wakeBrowserUrl, resetBrowserStartupForTests } from '../browser-startup.js';
 import { getConfig } from '../config.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl } from '../../shared/chat-provider.js';
 import { enqueueInput, cancelInput, listInputs, noteInputStartupError, type InputArgs, type InputEntry } from './input.js';
 
 function wakeBrowser(entry: InputEntry, retry = false): Promise<void> {
   const marker = `cos-input=${encodeURIComponent(entry.id)}`;
-  return wakeBrowserUrl(entry.conversationId ? `https://gemini.google.com/app/${encodeURIComponent(entry.conversationId)}` : `https://gemini.google.com/app?${marker}#${marker}`, retry, getConfig().ui.backgroundChats === true);
+  const provider = chatProviderForConversation(entry.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const home = chatProviderHomeUrl(provider);
+  return wakeBrowserUrl(entry.conversationId ? chatProviderConversationUrl(provider, entry.conversationId)
+    : `${home}${home.includes('?') ? '&' : '?'}${marker}#${marker}`, retry, getConfig().ui.backgroundChats === true);
 }
 /**
  * Connection setup, not the browser, stopped this send (#882 VM test, 2026-10-04: a fresh install

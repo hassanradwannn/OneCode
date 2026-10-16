@@ -2,6 +2,7 @@ import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
 import { $, run, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderLabel } from '../shared/chat-provider.js';
 
 type ExternalBrowser = Exclude<ChatBrowser, 'cos'>;
 const icons = {
@@ -23,6 +24,8 @@ type Login = { done: boolean; signedIn: boolean; text(): string };
  */
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   proof: { signedIn: boolean | null } | null): Login {
+  const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  const providerName = chatProviderLabel(provider);
   if (where === 'cos') {
     return { done: false, signedIn: false, text: () => t('Choose a full browser to continue. Embedded Google sign-in is not supported.') };
   }
@@ -31,9 +34,9 @@ export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   // no tab, or the browser closed, the last answer stands in: a logout stays a logout.
   const liveAnswer = live ? state.bridge.externalExtension?.signedIn ?? null : null;
   const answer = liveAnswer !== null ? liveAnswer : proof?.signedIn ?? null;
-  if (answer === false) return { done: false, signedIn: false, text: () => t('Not signed in to Gemini in {0}.', [label]) };
-  if (answer === true) return { done: true, signedIn: true, text: () => live ? t('Signed in. Gemini is connected.') : t('Signed in.') };
-  return { done: false, signedIn: false, text: () => t('Open Gemini in {0} to check the sign-in.', [label]) };
+  if (answer === false) return { done: false, signedIn: false, text: () => `Not signed in to ${providerName} in ${label}.` };
+  if (answer === true) return { done: true, signedIn: true, text: () => live ? `Signed in. ${providerName} is connected.` : t('Signed in.') };
+  return { done: false, signedIn: false, text: () => `Open ${providerName} in ${label} to check the sign-in.` };
 }
 
 /** Presentation only. The bridge owns connection evidence; Settings owns where Gemini runs. */
@@ -62,14 +65,14 @@ export function initBrowserSetup(actions: {
    * labels for Developer mode and Load unpacked, and where they are on its page. Repainted on a
    * language change through ui(), like every other text.
    */
-  const paintInstallSteps = (label: string): void => {
+  const paintInstallSteps = (label: string, providerName: string): void => {
     // Firefox installs the signed add-on from this version's release: no Developer mode, no folder.
     const gecko = external === 'firefox';
     for (const step of $('browserExtensionStage').querySelectorAll<HTMLElement>('[data-install-engine]')) {
       step.hidden = step.dataset.installEngine !== (gecko ? 'gecko' : 'chromium');
     }
     $('browserExtensionStage').querySelector<HTMLElement>('.extension-help')!.hidden = gecko;
-    ui($('extensionStepChatGpt'), 'textContent', () => t('Open Gemini in {0}', [label]));
+    ui($('extensionStepChatGpt'), 'textContent', () => `Open ${providerName} in ${label}`);
     if (external === 'firefox') return;
     const chromium = external;
     ui($('extensionStepOpen'), 'textContent', () => t('Open the extensions page in {0}', [label]));
@@ -101,6 +104,9 @@ export function initBrowserSetup(actions: {
   const render = (state: AppState): { ready: boolean; choosingLocation: boolean } => {
     current = state;
     const browser = state.config.ui.chatBrowser ?? 'chrome';
+    const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+    const providerName = chatProviderLabel(provider);
+    const providerHost = provider === 'chatgpt' ? 'chatgpt.com' : 'gemini.google.com';
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;
       initialized = true;
@@ -148,12 +154,12 @@ export function initBrowserSetup(actions: {
     const address = `${external}://extensions`;
     $('setupExtensionAddress').textContent = address;
     const label = LABELS[external];
-    paintInstallSteps(label);
+    paintInstallSteps(label, providerName);
     ui($('setupExternalChoice'), 'textContent', () => t('Use {0}', [label]));
     ui($('setupExternalLabel'), 'textContent', () => t('Your existing browser profile and companion.'));
     ui($('embeddedBrowserHint'), 'textContent', () => t('Your saved embedded-browser setting is no longer supported for Google sign-in. Choose Use {0} above. The setting changes only when you choose a full browser.', [label]));
     ui($('extensionStatus'), 'textContent', () => ready ? (live ? t('Extension connected and up to date') : t('Extension installed and up to date'))
-      : blocked ? t('The extension may not open Gemini')
+      : blocked ? `The extension may not open ${providerName}`
       : outdated ? t('Update your extension')
       : live && !knownVersion ? t('Extension version could not be verified')
       : t('Waiting for the browser extension'));
@@ -161,7 +167,7 @@ export function initBrowserSetup(actions: {
     ui($('extensionSetupDetail'), 'textContent', () => ready ? ''
       : !state.secureStorage?.available && state.secureStorage ? t('Secure credential storage is unavailable, so the extension cannot pair safely.')
       : !state.bridge.running ? t('Browser bridge could not start: {0}', [state.bridge.error ?? t('Not connected yet')])
-      : blocked ? t('{0} keeps the extension off gemini.google.com. In the extension’s details, allow it on gemini.google.com (“Site access” in Chrome, Edge and Brave, “Permissions” in Firefox), then reload Gemini.', [label])
+      : blocked ? `${label} keeps the extension off ${providerHost}. In the extension’s details, allow it on ${providerHost} (Site access in Chrome, Edge and Brave, Permissions in Firefox), then reload ${providerName}.`
       : outdated || (live && !knownVersion) ? t('Load the extension from this app’s folder, then reload it in your browser.')
       : '');
     $('extensionSetupDetail').hidden = !$('extensionSetupDetail').textContent;
@@ -174,7 +180,7 @@ export function initBrowserSetup(actions: {
       const button = $('openSelectedChatGpt');
       button.dataset.signedIn = String(login.signedIn);
       button.querySelector('i')!.className = login.signedIn ? 'ico ph ph-user' : 'ico ph ph-sign-in';
-      ui(button.querySelector('span')!, 'textContent', () => login.signedIn ? t('Manage Gemini accounts') : t('Sign in to Gemini'));
+      ui(button.querySelector('span')!, 'textContent', () => login.signedIn ? `Manage ${providerName} accounts` : `Sign in to ${providerName}`);
     }
     // Done is a fact about the person's setup, not about which part of the step is on screen.
     return { ready: ready && login.done, choosingLocation: phase === 'location' };

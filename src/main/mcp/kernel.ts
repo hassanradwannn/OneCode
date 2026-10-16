@@ -837,7 +837,7 @@ async function dispatchTracked(
   // are timing-sensitive enough that needless awaits can change which terminal frame a poll sees.
   // Connection provenance is an admission fence, not just a handler error: a refused call
   // must not revive its worker or consume/receive input owned by the other connection.
-  const conversationPolicyRefusal = (strictChatAllowlistEnabled()
+  const conversationPolicyRefusal = (strictChatAllowlistEnabled(context.caller.conversationId)
     ? await conversationAccessRefusal(context.caller.conversationId)
     : isChatBlocked(context.caller.conversationId) ? BLOCKED_CHAT_REFUSAL : null) ??
     workerConnectionProfileRefusal(context.caller);
@@ -991,7 +991,7 @@ async function dispatchTracked(
   // evidence. A prior refusal is monotonic, while a new revoke must take effect before any
   // background result is acknowledged or the requested handler is entered.
   let preAckPolicyRefusal = conversationPolicyRefusal;
-  if (!preAckPolicyRefusal && strictChatAllowlistEnabled()) {
+  if (!preAckPolicyRefusal && strictChatAllowlistEnabled(context.caller.conversationId)) {
     preAckPolicyRefusal = await conversationAccessRefusal(context.caller.conversationId);
   }
   if (!nested && (requestId || context.caller.geminiBinding) && !preAckPolicyRefusal && !supersededConversation && !compacting) {
@@ -1001,13 +1001,13 @@ async function dispatchTracked(
     await acknowledgeBackgroundExecOutput(principal, startedAt, explicitPoll);
   }
   let admissionRefusal = preAckPolicyRefusal;
-  if (!admissionRefusal && strictChatAllowlistEnabled()) {
+  if (!admissionRefusal && strictChatAllowlistEnabled(context.caller.conversationId)) {
     admissionRefusal = await conversationAccessRefusal(context.caller.conversationId);
   }
   if (!admissionRefusal) {
     // Make the final policy decision with no intervening await before the handler is entered.
     // This is the revoke race's last fence. Only a final allow ends a prior refusal episode.
-    if (strictChatAllowlistEnabled()) {
+    if (strictChatAllowlistEnabled(context.caller.conversationId)) {
       admissionRefusal = await conversationAccessRefusal(context.caller.conversationId);
     }
     if (!admissionRefusal) clearUntrustedRefusalEpisode(context);
@@ -1085,7 +1085,7 @@ async function dispatchTracked(
   await reconcileAgentRequestOwners().catch(error => {
     logWarn(`Worker ownership recovery deferred after tool completion: ${error instanceof Error ? error.message : String(error)}`);
   });
-  const deliveryPolicyRefusal = (strictChatAllowlistEnabled()
+  const deliveryPolicyRefusal = (strictChatAllowlistEnabled(context.caller.conversationId)
     ? await conversationAccessRefusal(context.caller.conversationId)
     : isChatBlocked(context.caller.conversationId) ? BLOCKED_CHAT_REFUSAL : null) ??
     workerConnectionProfileRefusal(context.caller);

@@ -29,7 +29,7 @@ import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pending
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 import { browserWindowBounds, currentBrowserWorkArea } from './browser-window-layout.js';
@@ -819,9 +819,12 @@ const pendingReveals: Array<{ conversationId: string; settle: (shown: boolean) =
 /** Browsers whose extension can fetch a generated image's original for the image export (#889). */
 const imageExportBrowsers = new Map<string, number>();
 export function imageExportCapable(): boolean {
-  if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport) return false;
   const now = Date.now();
   return browserWakeConnected() && [...imageExportBrowsers.values()].some(at => now - at < OPENING_CUSTODY_MS);
+}
+
+function selectedChatProvider(): ChatProvider {
+  return getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
 }
 
 function revealCapable(): boolean {
@@ -2688,7 +2691,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route === '/plugin-refresh' && req.method === 'POST') {
     const raw = await readBody(req);
     const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh)
+    if (!chatProviderCapabilities(selectedChatProvider()).nativePluginRefresh)
       return json(res, body.action === 'pending' ? 200 : 409, body.action === 'pending' ? { requests: [] } :
         { ok: false, error: 'provider_refresh_requires_manual_action' }, origin);
     if (body.action === 'pending') return json(res, 200, { requests: await pendingPluginRefreshes(getConfig().ui.autoRefreshPlugins === true) }, origin);
@@ -2716,7 +2719,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route === '/project-create' && req.method === 'POST') {
     const raw = await readBody(req);
     const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects)
+    if (!chatProviderCapabilities(selectedChatProvider()).nativeProjects)
       return json(res, body.action === 'pending' ? 200 : 409, body.action === 'pending' ? { requests: [] } :
         { ok: false, error: 'provider_native_projects_unavailable' }, origin);
     if (body.action === 'pending') return json(res, 200, { requests: await pendingProjectCreates() }, origin);
@@ -2851,9 +2854,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Apps proven to be this install's connectors, so a renamed connector is still recognized.
         connectorApps: Object.fromEntries(Object.entries(connectorApps()).map(([surface, apps]) =>
           [surface, apps.map(({ appId, linkId, name }) => ({ appId, linkId, name }))])),
-        pluginRefreshRequests: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })) : [],
+        provider: selectedChatProvider(),
+        pluginRefreshRequests: chatProviderCapabilities(selectedChatProvider()).nativePluginRefresh ? (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })) : [],
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
-        projectCreateRequests: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects ? await pendingProjectCreates() : [],
+        projectCreateRequests: chatProviderCapabilities(selectedChatProvider()).nativeProjects ? await pendingProjectCreates() : [],
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // A message for the running turn goes in while a call runs: Gemini keeps that call's result (#1231).
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
@@ -3042,7 +3046,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // own page, which the page names; the root or another Project is never its destination.
     if (!target) {
       const entry = (await listInputs()).find(row => row.id === body.id);
-      const link = chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects && entry?.projectId && entry.purpose !== 'decision' && !entry.lifetime ? (await getProject(entry.projectId))?.chatgpt : undefined;
+      const link = chatProviderCapabilities(selectedChatProvider()).nativeProjects && entry?.projectId && entry.purpose !== 'decision' && !entry.lifetime ? (await getProject(entry.projectId))?.chatgpt : undefined;
       if (link && (link.state !== 'linked' || body.project !== link.id)) return json(res, 200, { input: null }, origin);
     }
     const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req));
@@ -4187,7 +4191,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
               already.token,
               getConfig().goal.includeToolCalls === true,
               getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
-              getConfig().compaction.handoffLength, 'gemini'
+              getConfig().compaction.handoffLength, chatProviderForConversation(id, selectedChatProvider())
             )
           : null;
       return json(
@@ -4231,7 +4235,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           opened.token,
           getConfig().goal.includeToolCalls === true,
           getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
-          getConfig().compaction.handoffLength, 'gemini'
+          getConfig().compaction.handoffLength, chatProviderForConversation(id, selectedChatProvider())
         ),
         job: resumeJobFor(sessionId)
       },
@@ -5948,7 +5952,7 @@ function retryUnclaimedBrowserInputs(): Promise<void> {
           latest.pickupRetryCount === 1 && latest.sendAuthorizedAt === undefined && latest.deliveredAt === undefined;
       };
       try {
-        await wakeBrowserUrl(`https://gemini.google.com/app/${encodeURIComponent(row.conversationId)}`, false,
+        await wakeBrowserUrl(chatUrl(row.conversationId), false,
           getConfig().ui.backgroundChats === true, { current: stillOwned });
       } catch (error) {
         logWarn(`recovered browser input ${row.id} remains queued because its chat could not be opened: ${error instanceof Error ? error.message : String(error)}`);
@@ -6715,9 +6719,9 @@ export function setBrowserOpener(open: ((url: string) => Promise<void>) | null):
   openInBrowser = open;
 }
 
-/** The one place this app writes a Gemini conversation URL. */
+/** The one place this app writes an existing provider conversation URL. */
 export function chatUrl(conversationId: string): string {
-  return `https://gemini.google.com/app/${encodeURIComponent(conversationId)}`;
+  return chatProviderConversationUrl(chatProviderForConversation(conversationId, selectedChatProvider()), conversationId);
 }
 
 /** Where the app opens a fresh worker/resume chat. The marker is an id, not a credential. */
@@ -6741,12 +6745,13 @@ export function commandUrl(
   //
   // A cold Project-home load can fail in Gemini's locked-chat loader. Enter through the
   // source chat and let its native Project link initialize the fresh Project composer.
-  const entry = normalizeProjectId(project) && conversationId(sourceConversationId);
+  const provider = chatProviderForConversation(sourceConversationId, selectedChatProvider());
+  const entry = provider === 'chatgpt' && normalizeProjectId(project) && conversationId(sourceConversationId);
   const marker = `clf=${encodeURIComponent(id)}${entry ? '&clf_project=1' : ''}`;
   const params = [marker];
   if (model) params.push(`model=${encodeURIComponent(model)}`);
   if (reasoningEffort) params.push(`reasoning_effort=${encodeURIComponent(reasoningEffort)}`);
-  const base = entry ? chatUrl(entry) : 'https://gemini.google.com/app';
+  const base = entry ? chatUrl(entry) : chatProviderHomeUrl(provider);
   return `${base}?${params.join('&')}#${marker}`;
 }
 

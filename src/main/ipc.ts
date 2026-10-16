@@ -1,5 +1,5 @@
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
 import { approvalCardView, requestApprovalAnswer } from './approval-wait.js';
@@ -218,6 +218,7 @@ const settingsPatch = z.object({
     autoContinue: z.boolean().optional(),
     defaultChatModel: z.string().trim().min(1).max(80).optional(),
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional(),
+    chatProvider: z.enum(CHAT_PROVIDERS).optional(),
     chatBrowser: z.enum(CHAT_BROWSERS).optional(),
     cosBrowserMinimize: z.enum(['taskbar', 'tray']).optional(),
     developerMode: z.boolean().optional(),
@@ -277,6 +278,7 @@ const settingsPatch = z.object({
     globalMaxWorkers: z.number().int().min(0).max(64).optional(),
     allowUnattributedCalls: z.boolean(),
     strictChatAllowlist: z.boolean().optional(),
+    strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional() }).optional(),
     recoverAgentTabs: z.boolean(),
     waitForSubAgents: z.boolean().optional(),
     autoWorktrees: z.boolean().optional(),
@@ -489,6 +491,18 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
         base.multiAgent.strictChatAllowlist ?? false,
         wanted.multiAgent.strictChatAllowlist ?? false
       ),
+      strictChatAllowlistByProvider: {
+        gemini: pick(
+          current.multiAgent.strictChatAllowlistByProvider?.gemini ?? current.multiAgent.strictChatAllowlist ?? false,
+          base.multiAgent.strictChatAllowlistByProvider?.gemini ?? base.multiAgent.strictChatAllowlist ?? false,
+          wanted.multiAgent.strictChatAllowlistByProvider?.gemini ?? wanted.multiAgent.strictChatAllowlist ?? false
+        ),
+        chatgpt: pick(
+          current.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? current.multiAgent.strictChatAllowlist ?? false,
+          base.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? base.multiAgent.strictChatAllowlist ?? false,
+          wanted.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? wanted.multiAgent.strictChatAllowlist ?? false
+        )
+      },
       recoverAgentTabs: pick(
         current.multiAgent.recoverAgentTabs,
         base.multiAgent.recoverAgentTabs,
@@ -568,6 +582,7 @@ function resolvedBinary(config: Config): string | null {
 
 async function buildState(): Promise<AppState> {
   const config = getConfig();
+  const provider = config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   return {
     config,
     status: getStatus(),
@@ -575,8 +590,8 @@ async function buildState(): Promise<AppState> {
       pluginRefreshPublications().map(({ surface, schemaId }) => [surface, schemaId])
     ),
     connectorRefresh: Object.fromEntries(Object.entries(await pluginRefreshStatuses()).map(([surface, status]) =>
-      [surface, chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? status : { ...status, state: 'manual' as const }])),
-    confirmedConnectorSchemas: chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh ? confirmedPluginSchemas() : {},
+      [surface, chatProviderCapabilities(provider).nativePluginRefresh ? status : { ...status, state: 'manual' as const }])),
+    confirmedConnectorSchemas: chatProviderCapabilities(provider).nativePluginRefresh ? confirmedPluginSchemas() : {},
     pluginRefreshUnreadable: await pluginRefreshUnreadable(),
     recordingStorageFull: recordingStorageFull(),
     platform: hostPlatformInfo(),
@@ -621,7 +636,7 @@ export async function openSessionChat(id: string): Promise<void> {
   const summary = await getSession(id);
   const conversationId = summary?.conversationId;
   if (!conversationId || !/^[0-9a-z-]{8,64}$/i.test(conversationId)) {
-    throw new Error('This session has no valid Gemini conversation');
+    throw new Error('This session has no valid provider conversation');
   }
   // The selected browser owns this explicit action. In particular, a connected companion in
   // Chrome/Edge must not override the user's choice to open the chat in the CoS browser.
@@ -779,6 +794,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (browserExtensionRequired(next)) await startBridge();
     else await stopBridge();
     if (before.ui.chatBrowser !== next.ui.chatBrowser) await syncCosBrowser();
+    if ((before.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) !== (next.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)) {
+      logInfo(`chat provider: new chats now use ${next.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER}; existing chats keep their provider`);
+      wakeBrowserWork();
+    }
     if (before.capabilities.screen !== next.capabilities.screen || before.capabilities.control !== next.capabilities.control || before.readOnly !== next.readOnly) wakeBrowserWork('browser-control');
     // Permissions and the second tunnel id both decide whether the optional Desktop
     // connector should be published. Without this, enabling desktop access or pasting its
@@ -860,7 +879,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // it saved as off). Either answer is kept, so the offer never comes back.
   handle('pluginRefresh:offer', async (payload) => {
     const { turnOn } = z.object({ turnOn: z.boolean() }).strict().parse(payload);
-    if (turnOn && !chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh)
+    if (turnOn && !chatProviderCapabilities(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).nativePluginRefresh)
       throw new Error('This provider requires updating its connector tools in the provider settings.');
     await updateConfig(config => ({ ...config, ui: { ...config.ui, autoRefreshPluginsAsked: true, ...(turnOn ? { autoRefreshPlugins: true } : {}) } }));
     if (turnOn) wakeBrowserWork();
@@ -988,7 +1007,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return project;
   });
   handle('projects:chatgpt-retry', async payload => {
-    if (!chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativeProjects) throw new Error('Native projects are unavailable for this provider. Local project folders remain available.');
+    if (!chatProviderCapabilities(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).nativeProjects) throw new Error('Native projects are unavailable for this provider. Local project folders remain available.');
     const { id } = z.object({ id: z.string().uuid() }).strict().parse(payload);
     const project = await retryProjectCreate(id);
     if (project) wakeBrowserWork();
@@ -1313,20 +1332,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (!ALLOWED_LINKS.has(url) && !safeExternalLink(url)) throw new Error('That link is not allowed');
     // Setup's Gemini and OpenAI pages open where the user is already signed in, unless the
     // user asked for their own browser instead.
-    if (!external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url)) await openInPreferredBrowser(url, { reveal: true });
+    if (!external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)) await openInPreferredBrowser(url, { reveal: true });
     else await shell.openExternal(url);
     return true;
   });
 
   // Setup's "Open Gemini" for Chrome, Edge or Brave: the chosen browser, where the extension is.
   handle('chatgpt:open', async () => {
-    await openInPreferredBrowser('https://gemini.google.com/app', { reveal: true });
+    await openInPreferredBrowser(chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER), { reveal: true });
     return true;
   });
 
   // Setup's button once Gemini is surely signed in: Gemini's own sign-out, where it runs. The
   // status follows from that browser's own answer, as it does for any sign-out.
   handle('chatgpt:signOut', async () => {
+    const provider = getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+    if (provider === 'chatgpt') {
+      await openInPreferredBrowser('https://chatgpt.com/auth/logout', { reveal: true });
+      return true;
+    }
     throw new Error('Use Gemini’s Google account menu in your browser to sign out. OneCode keeps no Google sign-in credentials.');
   });
 
@@ -1334,7 +1358,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('browser:setupOpen', async (payload) => {
     const { browser, page } = z.object({ browser: z.enum(['chrome', 'edge', 'brave', 'firefox']), page: z.enum(['extensions', 'chatgpt']) }).strict().parse(payload);
     if (page === 'chatgpt') {
-      await openInPreferredBrowser('https://gemini.google.com/app', { browser, reveal: true });
+      await openInPreferredBrowser(chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER), { browser, reveal: true });
       return true;
     }
     // Firefox installs the signed add-on from its release download; it asks before adding it.
@@ -1352,7 +1376,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   // Setup's first step: the CoS browser on screen, on Gemini's login when signed out.
   handle('cosBrowser:show', async () => {
-    if (getConfig().ui.chatBrowser !== 'cos') throw new Error('The CoS browser is not the selected Gemini browser');
+    if (getConfig().ui.chatBrowser !== 'cos') throw new Error('The CoS browser is not the selected provider browser');
     await (await loadCosBrowser()).showSignIn();
     return true;
   });
@@ -1570,7 +1594,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
 
   /**
-   * Blocks or releases the Gemini conversation this session is attached to.
+   * Blocks or releases the provider conversation this session is attached to.
    *
    * The renderer names a session, never a conversation, for the same reason `sessions:openChat`
    * does: the stored conversation id is re-read and validated here, so a renderer-supplied id
@@ -1589,8 +1613,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
         throw new Error('This session is being deleted; its block cannot be changed');
       }
       const currentConversationId = summary.conversationId;
-      if (!currentConversationId || !/^[0-9a-z-]{8,64}$/i.test(currentConversationId)) {
-        throw new Error('This session has no valid Gemini conversation');
+      if (!isChatProviderConversationId(currentConversationId)) {
+        throw new Error('This session has no valid provider conversation');
       }
       setChatsBlocked(
         blocked
@@ -1630,11 +1654,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
         throw new Error('This session is being deleted; its trust cannot be changed');
       }
       const currentConversationId = summary.conversationId;
-      if (!currentConversationId || !/^[0-9a-z-]{8,64}$/i.test(currentConversationId)) {
-        throw new Error('This session has no valid Gemini conversation');
+      if (!isChatProviderConversationId(currentConversationId)) {
+        throw new Error('This session has no valid provider conversation');
       }
       if (currentConversationId !== expectedConversationId) {
-        throw new Error('This session moved to another Gemini conversation; refresh the chat list before changing trust');
+        throw new Error('This session moved to another provider conversation; refresh the chat list before changing trust');
       }
       const workerOwner = workerPrimeOwner(currentConversationId);
       if (trusted && (workerOwner.owned || summary.origin?.kind === 'worker')) {
@@ -1963,8 +1987,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       if (!await startBridge()) throw new Error('The browser bridge could not start');
       signal.throwIfAborted();
       const marker = `cos-input=${encodeURIComponent(entry.id)}`;
-      await wakeBrowserUrl(entry.conversationId ? `https://gemini.google.com/app/${encodeURIComponent(entry.conversationId)}`
-        : `https://gemini.google.com/app?${entry.lifetime === 'temporary-planner' ? 'temporary-chat=true&' : ''}${marker}#${marker}`);
+      const provider: ChatProvider = chatProviderForConversation(entry.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+      const base = entry.conversationId ? chatUrl(entry.conversationId) : chatProviderHomeUrl(provider);
+      const separator = base.includes('?') ? '&' : '?';
+      await wakeBrowserUrl(entry.conversationId ? base
+        : `${base}${separator}${entry.lifetime === 'temporary-planner' ? 'temporary-chat=true&' : ''}${marker}#${marker}`);
     },
     bindHelper: async (conversationId, fromSessionId) => {
       const source = fromSessionId ? await getSession(fromSessionId) : null;
@@ -2052,7 +2079,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   configureChatModelDiscovery({ changed: () => push('chatModels:changed', getChatModels()), wake: async (nonce, allowOpen) => {
     if (!await startBridge()) throw new Error('The browser bridge could not start');
     if (allowOpen) {
-      await wakeBrowserUrl(`https://gemini.google.com/app?cos-model-catalog=${nonce}`, true, true);
+      const base = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+      await wakeBrowserUrl(`${base}${base.includes('?') ? '&' : '?'}cos-model-catalog=${nonce}`, true, true);
       // The approval prompt it describes comes with Gemini's first Core tool call, which needs a Core
       // tunnel. On a fresh install, discovery opened Gemini before any of that existed and the
       // reminder read "One last step" at step 0 of 6; Setup's last card keeps it until then.

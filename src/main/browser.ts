@@ -5,6 +5,7 @@ import { launchCommand, runCommand, runPowerShell } from './exec.js';
 import { getConfig } from './config.js';
 import type { ChatBrowser } from '../shared/types.js';
 import { browserWindowBounds } from './browser-window-layout.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderHomeUrl } from '../shared/chat-provider.js';
 
 type Exists = (candidate: string) => boolean;
 type Launch = typeof launchCommand;
@@ -35,8 +36,9 @@ export async function openBrowserSignIn(browser: ExternalChatBrowser,
     // No throwaway profile: it would have neither the person's extension nor their account.
     // Start a fresh Gemini login instead of transplanting an embedded OAuth URL/PKCE state.
     // Firefox takes neither Chromium's window-size switch nor its spelling of one.
+    const homeUrl = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     await (options.launch ?? launchCommand)(candidate,
-      browser === 'firefox' ? ['--new-window', 'https://gemini.google.com/app'] : ['--new-window', '--window-size=520,760', 'https://gemini.google.com/app'],
+      browser === 'firefox' ? ['--new-window', homeUrl] : ['--new-window', '--window-size=520,760', homeUrl],
       (platform === 'win32' ? path.win32 : path.posix).dirname(candidate));
     return candidate;
   }

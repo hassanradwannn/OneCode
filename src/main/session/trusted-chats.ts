@@ -7,6 +7,7 @@
  * provenance; no successor id is copied into this file merely because it resumed a trusted chat.
  */
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
+import { isChatProviderConversationId } from '../../shared/chat-provider.js';
 
 const MAX_TRUSTED_CHATS = 200;
 const TRUSTED_STATE = 'trusted-chats';
@@ -22,7 +23,7 @@ interface PersistedTrustedChats {
 }
 
 function validConversationId(value: unknown): value is string {
-  return typeof value === 'string' && /^[0-9a-z-]{8,64}$/i.test(value);
+  return isChatProviderConversationId(value);
 }
 
 function snapshot(values: ReadonlySet<string> = trusted): PersistedTrustedChats {
@@ -50,7 +51,7 @@ export function trustedChatIds(): string[] {
 export function setChatsTrusted(conversationIds: readonly string[], next: boolean): Promise<void> {
   const ids = [...new Set(conversationIds)];
   if (ids.length === 0 || ids.some((conversationId) => !validConversationId(conversationId))) {
-    throw new Error('Not a Gemini conversation id');
+    throw new Error('Not a provider conversation id');
   }
   const operation = mutationQueue.then(async () => {
     const updated = new Set(trusted);

@@ -12,7 +12,7 @@
  * extension does nothing" into a diagnosable mismatch.
  */
 
-export const APP_VERSION = '0.2.7';
+export const APP_VERSION = '0.2.8';
 
 /**
  * Standalone extension recovery must stay on the app's own release. Using GitHub's moving
@@ -71,4 +71,7 @@ export function extensionDownloadUrl(_version = APP_VERSION): string {
 // 15 — OneCode bridge identity. Old companions must request an explicit upgrade.
 // 16 — provider-native handoff receipts and document-scoped Markdown-save custody.
 // An older companion cannot complete this transaction and must reload explicitly.
-export const BRIDGE_PROTOCOL = 16;
+// 17 — `/status` selects the active chat provider and the companion routes new work to
+// Gemini or ChatGPT while retaining existing chats on their original provider. A 16
+// companion ignores that selection and silently opens Gemini, so it must be reloaded.
+export const BRIDGE_PROTOCOL = 17;

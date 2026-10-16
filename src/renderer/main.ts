@@ -1,5 +1,5 @@
 import { initBrowserSetup } from './setup-browser.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
@@ -726,6 +726,7 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
       ...previous.ui,
       defaultChatModel: $<HTMLSelectElement>('defaultChatModel').value || undefined,
       defaultChatReasoning: ($<HTMLSelectElement>('defaultChatReasoning').value || undefined) as Config['ui']['defaultChatReasoning'],
+      chatProvider: $<HTMLSelectElement>('chatProvider').value as ChatProvider,
       chatBrowser: $<HTMLSelectElement>('chatBrowser').value as ChatBrowser,
       cosBrowserMinimize: $<HTMLSelectElement>('cosBrowserMinimize').value === 'tray' ? 'tray' : 'taskbar',
       finishTool: $<HTMLInputElement>('finishTool').checked,
@@ -1644,6 +1645,10 @@ function apply(next: AppState): void {
     previousState?.config.tunnel.desktopTunnelId
   );
   applyValue($<HTMLInputElement>('binaryPath'), config.tunnel.binaryPath, previousState?.config.tunnel.binaryPath);
+  const provider = config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  const previousProvider = previousState?.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  applyValue($<HTMLSelectElement>('chatProvider'), provider, previousProvider);
+  applyValue($<HTMLSelectElement>('setupChatProvider'), provider, previousProvider);
   applyValue($<HTMLSelectElement>('chatBrowser'), config.ui.chatBrowser ?? 'chrome', previousState?.config.ui.chatBrowser ?? 'chrome');
   applyValue($<HTMLSelectElement>('cosBrowserMinimize'), config.ui.cosBrowserMinimize ?? 'taskbar', previousState?.config.ui.cosBrowserMinimize ?? 'taskbar');
   // Retain old values for data compatibility without offering unsupported embedded controls.
@@ -1666,7 +1671,7 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('autoContinue'), config.ui.autoContinue !== false, previousState?.config.ui.autoContinue);
   applyChecked($<HTMLInputElement>('browserOnly'), config.ui.browserOnly === true, previousState?.config.ui.browserOnly);
   applyChecked($<HTMLInputElement>('autoRefreshPlugins'), config.ui.autoRefreshPlugins === true, previousState?.config.ui.autoRefreshPlugins);
-  $('autoRefreshPluginsRow').hidden = !chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).nativePluginRefresh;
+  $('autoRefreshPluginsRow').hidden = !chatProviderCapabilities(provider).nativePluginRefresh;
   applyChecked($<HTMLInputElement>('autoSelectSkills'), config.ui.autoSelectSkills === true, previousState?.config.ui.autoSelectSkills);
   $('startAtLoginRow').hidden = next.loginStartupAvailable !== true;
   $<HTMLInputElement>('startAtLogin').disabled = next.loginStartupAvailable !== true;
@@ -1687,6 +1692,26 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('mcpPersistentUrls'), config.mcp?.persistentUrls === true, previousState?.config.mcp?.persistentUrls);
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
   geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
+  $('geminiSkillSetup').hidden = provider !== 'gemini';
+  const providerName = chatProviderLabel(provider);
+  ui($('providerRailLabel'), 'textContent', () => providerName);
+  ui($('browserLocationTitle'), 'textContent', () => `Where should ${providerName} run?`);
+  ui($('extensionStepChatGpt'), 'textContent', () => `Open ${providerName} in your browser`);
+  ui($('openProviderBrowserLabel'), 'textContent', () => `Open ${providerName}`);
+  ui($('signInProviderLabel'), 'textContent', () => `Sign in to ${providerName}`);
+  ui($('setupProviderConnectTitle'), 'textContent', () => `Add it in ${providerName}`);
+  ui($('setupProviderConnectLead'), 'textContent', () => `Paste the MCP server URL below. ${providerName} reads the app name, description and tools from this service.`);
+  ui($('setupProviderPluginsOpenLabel'), 'textContent', () => `Open ${providerName} Plugins`);
+  $<HTMLButtonElement>('setupProviderPluginsOpen').dataset.link = provider === 'chatgpt'
+    ? 'https://chatgpt.com/plugins'
+    : 'https://gemini.google.com/customize/connectors';
+  ui($('providerBrowserTitle'), 'textContent', () => `${providerName} browser`);
+  ui($('providerBrowserHint'), 'textContent', () => provider === 'gemini'
+    ? 'Choose a full browser for Google sign-in. Install the companion and sign in to Gemini in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their browser and account.'
+    : 'Choose the full browser where ChatGPT is signed in. The same companion supports ChatGPT and Gemini. New chats switch immediately; existing chats retain their provider, browser and account.');
+  ui($('providerAccountHint'), 'textContent', () => provider === 'gemini'
+    ? 'Use Gemini’s profile menu to add or switch Google accounts. New chats use the selected account; existing chats retain their original account.'
+    : 'Use ChatGPT’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
   $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);
@@ -1706,12 +1731,12 @@ function apply(next: AppState): void {
   );
   $('privacyScreenshotsSetting').hidden = !(next.platform?.desktopAutomation ?? true);
   if (next.platform?.family === 'macos') {
-    ui($('backgroundRunningCopy'), 'textContent', () => t("Leave it running while you use its plugins in Gemini. It stays available from the menu bar and Dock when you close the window."));
+    ui($('backgroundRunningCopy'), 'textContent', () => `Leave it running while you use its plugins in ${providerName}. It stays available from the menu bar and Dock when you close the window.`);
     ui($('minimizeToTrayCopy'), 'textContent', () => t("Hide the window to the menu bar when closed"));
     ui($('cosBrowserMinimizeTaskbar'), 'textContent', () => t("Dock"));
     ui($('cosBrowserMinimizeTray'), 'textContent', () => t("Menu bar"));
   } else {
-    ui($('backgroundRunningCopy'), 'textContent', () => t("Leave it running while you use its plugins in Gemini. It stays in the tray when you close the window."));
+    ui($('backgroundRunningCopy'), 'textContent', () => `Leave it running while you use its plugins in ${providerName}. It stays in the tray when you close the window.`);
     ui($('minimizeToTrayCopy'), 'textContent', () => t("Keep running in the tray when closed"));
     ui($('cosBrowserMinimizeTaskbar'), 'textContent', () => t("Taskbar"));
     ui($('cosBrowserMinimizeTray'), 'textContent', () => t("Tray"));
@@ -2632,6 +2657,11 @@ function chooseChatBrowser(browser: ChatBrowser): void {
   choice.value = browser;
   choice.dispatchEvent(new Event('change', { bubbles: true }));
 }
+$<HTMLSelectElement>('setupChatProvider').addEventListener('change', () => {
+  const choice = $<HTMLSelectElement>('chatProvider');
+  choice.value = $<HTMLSelectElement>('setupChatProvider').value;
+  choice.dispatchEvent(new Event('change', { bubbles: true }));
+});
 $('pickBinary').addEventListener('click', async () => {
   const next = await run(api.pickBinary());
   if (next) apply(next);

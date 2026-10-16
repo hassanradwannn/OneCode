@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extension_name__",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "__MSG_extension_description__",
   "default_locale": "en",
   "minimum_chrome_version": "125",
@@ -19,6 +19,8 @@
   ],
   "host_permissions": [
     "https://gemini.google.com/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
     "http://127.0.0.1:28765/*",
     "http://127.0.0.1:28766/*",
     "http://127.0.0.1:28767/*",
@@ -54,6 +56,24 @@
         "overlay.css"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["i18n.js", "chatgpt-dom.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["fiber.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["usage.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ],
   "icons": {

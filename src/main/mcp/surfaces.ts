@@ -1,4 +1,3 @@
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 /**
  * The model-facing surfaces this app publishes, and what each one is for.
  *
@@ -109,8 +108,9 @@ const CORE: SurfaceDefinition = {
     'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several Gemini conversations.',
   cardSummary: 'Files, patches and terminal.',
   required: true,
+  // A stable superset lets the user switch providers without reconnecting the MCP app.
+  // save_image performs a live ChatGPT-page capability check when it is called.
   tools: ['plugins', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'save_handoff', 'agents', 'session_finish', 'usage', 'exec']
-    .filter(name => name !== 'save_image' || chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport)
 };
 
 /**

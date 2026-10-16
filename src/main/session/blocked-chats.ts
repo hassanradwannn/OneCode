@@ -33,6 +33,7 @@
  */
 
 import { readDurable, writeDurableSoon } from '../durable.js';
+import { isChatProviderConversationId } from '../../shared/chat-provider.js';
 
 /**
  * A hand-curated list, so the ceiling only exists to keep a corrupt or hostile state file from
@@ -73,7 +74,7 @@ function snapshot(): PersistedBlocks {
 }
 
 function validConversationId(value: unknown): value is string {
-  return typeof value === 'string' && /^[0-9a-z-]{8,64}$/i.test(value);
+  return isChatProviderConversationId(value);
 }
 
 /**
@@ -128,7 +129,7 @@ export function chatBlockedAt(conversationId: string): number | null {
 export function setChatsBlocked(conversationIds: readonly string[], next: boolean): void {
   const ids = [...new Set(conversationIds)];
   if (ids.length === 0 || ids.some((conversationId) => !validConversationId(conversationId))) {
-    throw new Error('Not a Gemini conversation id');
+    throw new Error('Not a provider conversation id');
   }
   const additions = next ? ids.filter((conversationId) => !blocked.has(conversationId)) : [];
   if (next && blocked.size + additions.length > MAX_BLOCKED_CHATS) {

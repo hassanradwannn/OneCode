@@ -1,5 +1,4 @@
 import { toolDeclaration } from './tool-declarations.js';
-import { ACTIVE_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
 import { registerPlanTool } from './plan-tool.js';
 import { registerHandoffTool } from './handoff-tool.js';
 import { registerPluginBridge } from './plugin-bridge-tool.js';
@@ -476,7 +475,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
   // -------------------------------------------------------------- save_image
   //
   // Only an adapter with native original-file evidence may advertise image export.
-  if (exposedCaps.create && chatProviderCapabilities(ACTIVE_CHAT_PROVIDER).generatedImageExport) {
+  if (exposedCaps.create) {
     reg.register(
       'save_image',
       toolDeclaration('save_image', () => ({
