@@ -125,6 +125,15 @@ describe('Gemini routing through the real MCP endpoint and tool engines', () => 
     ]);
     expect(text(geminiResult)).toContain('chat A marker');
     expect(text(chatgptResult)).toContain('chat B marker');
+    // The HTTP header must reach the original request-id attribution owner.
+    const recorder = await import('../src/main/session/recorder.js');
+    const recorded = vi.spyOn(recorder, 'recordToolCall');
+    try {
+      const result = await rpc('tools/call', { name: 'read', arguments: { paths: ['/work/b/marker.txt'] } },
+        { 'x-request-id': 'wfr_chatgpt_provider_pair/relay' }, 'core', chatgptView);
+      expect(text(result)).toContain('chat B marker');
+      expect(recorded).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'wfr_chatgpt_provider_pair' }));
+    } finally { recorded.mockRestore(); }
     const missing = await rpc('tools/call', { name: 'read', arguments: { paths: ['/work/a/marker.txt'] } }, { 'x-request-id': 'wfr_spoofed' }, 'core', geminiView);
     expect(text(missing)).toContain('GEMINI_SESSION_BINDING_REQUIRED');
     const wrongPort = new URL(pair.providers.gemini.url); wrongPort.pathname = new URL(pair.providers.chatgpt.url).pathname;
