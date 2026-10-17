@@ -44,6 +44,9 @@ files:
 # Common real-filesystem resources. Platform-specific tunnel/rg/native notices are appended
 # below because their filenames and executable formats differ by OS.
 extraResources:
+  # Keep updater metadata in directory/prepackaged builds as well as full NSIS builds.
+  - from: resources/updater/app-update.yml
+    to: app-update.yml
   - from: resources/updater
     to: updater
   - from: LICENSE

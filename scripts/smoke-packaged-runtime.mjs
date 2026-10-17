@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import yaml from 'js-yaml';
 import { NODE_RUNTIME, RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
 import { assertWindowsPackageIsolation } from './verify-windows-package.mjs';
 import { normalizeArch, normalizePlatform, PLATFORM_INFO } from './packaging-targets.mjs';
@@ -110,6 +111,9 @@ if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository,
   throw new Error('Packaged Gemini skill differs from the public source asset');
 
 if (targetPlatform === 'win32') {
+  const update = yaml.load(readFileSync(required('app-update.yml'), 'utf8'));
+  if (update?.provider !== 'github' || update.owner !== 'hassanradwannn' || update.repo !== 'OneCode' ||
+      update.updaterCacheDirName !== 'onecode-updater') throw new Error('Packaged Windows update configuration is missing or incorrect');
   const isolation = assertWindowsPackageIsolation(resourcesDir);
   process.stdout.write(`Windows package isolation verified (${isolation.ownedFiles} app-owned text files).\n`);
   for (const file of ['node.exe', 'LICENSE', 'SHASUMS256.txt', 'runtime.json', 'node_modules/npm/LICENSE',
