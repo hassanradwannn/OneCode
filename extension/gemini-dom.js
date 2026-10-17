@@ -102,7 +102,14 @@ var CLF_DOM = (() => {
   }
   function setInputClaim(value) {
     inputClaim = value && typeof value.id === 'string' && typeof value.owner === 'string' ? { id: value.id, owner: value.owner } : null;
-    if (inputClaim) { commandClaim = null; goalClaim = null; }
+    if (inputClaim) {
+      commandClaim = null; goalClaim = null;
+      // A later authored input must not carry the completed opening's claim.
+      // Fresh preparation sets the matching opening explicitly after this call.
+      if (openingClaim && (openingClaim.id !== inputClaim.id || openingClaim.owner !== inputClaim.owner)) {
+        openingClaim = null; preparedOpening = null;
+      }
+    }
   }
   function setGoalClaim(value) {
     goalClaim = value && typeof value.token === 'string' && /^goal-[a-z0-9-]{1,80}$/.test(value.token) ? { token: value.token } : null;
@@ -1032,7 +1039,15 @@ var CLF_DOM = (() => {
     }
   }
   const pickerButton = () => unique(all('button[aria-label^="Open mode picker"]'));
-  const visibleModelSelection = () => { const picker = pickerButton(); return picker ? { model: compact(text(picker).replace(/arrow_drop_down|expand_more|keyboard_arrow_down/g, '')), reasoningEffort: null } : null; };
+  const visibleModelSelection = () => {
+    const picker = pickerButton();
+    if (!picker) return null;
+    const caption = compact(text(picker).replace(/arrow_drop_down|expand_more|keyboard_arrow_down/g, ''));
+    // The native compact header may keep only its arrow inside the button;
+    // its accessible label still states the selected model explicitly.
+    const accessible = /^Open mode picker, currently ([^\r\n]{1,96})$/.exec(picker.getAttribute('aria-label') || '')?.[1];
+    return { model: caption || compact(accessible || ''), reasoningEffort: null };
+  };
   const nativeModelRows = () => all('gem-menu-item[role="menuitem"][data-mode-id]').filter(node => shown(node) && !node.closest(TURN));
   function nativeModelMenu() {
     const rows = nativeModelRows().filter(node => enabled(node) && /^[0-9a-f]{16}$/i.test(node.getAttribute('data-mode-id') || '') &&

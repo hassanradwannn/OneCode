@@ -382,19 +382,26 @@ let ownCoreApp = null;
 function cleanOwnCoreApp(value) {
   return value && typeof value === 'object' && typeof value.appId === 'string' &&
     /^asdk_app_[A-Za-z0-9_-]{1,160}$/.test(value.appId) && typeof value.name === 'string' &&
-    /^OneCode(?: Core)?(?: \([\p{L}\p{N} ._-]{1,32}\))?$/u.test(value.name)
+    configuredConnectorName(value.name, 'core')
     ? { appId: value.appId, name: value.name } : null;
 }
 
-/** The app's names, or null for anything that is not three plain "Chat On Steroids …" strings. */
+/** Accept the app's current plain suffix and the older parenthesized suffix. */
+function configuredConnectorName(name, surface) {
+  const base = `OneCode ${surface[0].toUpperCase()}${surface.slice(1)}`;
+  if (name === base || (surface === 'core' && name === 'OneCode')) return true;
+  if (typeof name !== 'string' || !name.startsWith(base + ' ')) return false;
+  const suffix = name.slice(base.length + 1);
+  return /^(?:[\p{L}\p{N} ._-]{1,32}|\([\p{L}\p{N} ._-]{1,32}\))$/u.test(suffix) && suffix.trim() === suffix;
+}
+
+/** The exact three configured surface names; never a name-prefix enrollment. */
 function cleanConnectorNames(value) {
   if (!value || typeof value !== 'object') return null;
   const names = {};
   for (const [surface, word] of [['core', 'Core'], ['desktop', 'Desktop'], ['plugins', 'Plugins']]) {
     const name = value[surface];
-    const base = surface === 'core' ? 'OneCode' : `OneCode ${word}`;
-    if (typeof name !== 'string' || name.length > 120 || (name !== base &&
-        !(name.startsWith(base + ' (') && /^OneCode(?: Core| Desktop| Plugins)? \([\p{L}\p{N} ._-]{1,32}\)$/u.test(name)))) return null;
+    if (!configuredConnectorName(name, surface)) return null;
     names[surface] = name;
   }
   return names;

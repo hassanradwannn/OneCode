@@ -2750,8 +2750,8 @@ var CLF_DOM = (() => {
    * calls run there. Null until the app has said, which keeps the plain names. Every ask to the
    * page-world helper carries them, so it never judges traffic by names it was not told.
    */
-  const PLAIN_CONNECTORS = ['Chat On Steroids Core', 'Chat On Steroids Desktop', 'Chat On Steroids Plugins'];
-  const SUFFIXED_CONNECTOR = /^Chat On Steroids (Core|Desktop|Plugins) \([\p{L}\p{N} ._-]{1,32}\)$/u;
+  const PLAIN_CONNECTORS = ['OneCode Core', 'OneCode Desktop', 'OneCode Plugins'];
+  const SUFFIXED_CONNECTOR = /^OneCode (Core|Desktop|Plugins) (?:[\p{L}\p{N} ._-]{1,32}|\([\p{L}\p{N} ._-]{1,32}\))$/u;
   let ownConnectors = null;
   function setConnectorNames(names) {
     if (!names || typeof names !== 'object') return false;

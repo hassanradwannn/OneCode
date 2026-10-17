@@ -110,7 +110,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     `Host: ${host}. Roots: ${roots}`,
     `Current Core authority (informational; live guards decide): ${authority}; read-only=${ctx.readOnly ? 'on' : 'off'}; plans=${sessionTools ? 'on' : 'off'}; workers=${agentTools ? 'on' : 'off'}.`,
     ctx.readOnly ? 'The local tools are read-only.' : 'Use the tools listed in this conversation.',
-    ...(writable || executable ? [`This app has enabled ${[writable && 'file writing', executable && 'exec_command'].filter(Boolean).join(' and ')} within its approved folders. Availability in this Gemini message still requires the native connector tools to be exposed.`] : []),
+    ...(writable || executable ? [`This app has enabled ${[writable && 'file writing', executable && 'exec_command'].filter(Boolean).join(' and ')} within its approved folders. Availability in this message still requires the native connector tools to be exposed.`] : []),
     'Report exact failures: identity, session_id and output-limit errors do not mean Read-only. Never replay successful patches or commands to recover a terminal.',
     'An unavailable tool or missing/expired local binding means no local execution was authorized. Refresh through the companion and inspect the actual result; do not claim a command or edit ran without its result. A disconnected or delayed mutation may already have completed: never automatically repeat it to repair delivery or attribution.',
     'Use full project paths under an approved root, including intermediate folders. Virtual or absolute native paths work; linked projects also accept relative paths.',
