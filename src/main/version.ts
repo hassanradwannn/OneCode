@@ -74,4 +74,6 @@ export function extensionDownloadUrl(_version = APP_VERSION): string {
 // 17 — `/status` selects the active chat provider and the companion routes new work to
 // Gemini or ChatGPT while retaining existing chats on their original provider. A 16
 // companion ignores that selection and silently opens Gemini, so it must be reloaded.
-export const BRIDGE_PROTOCOL = 17;
+// 18 — model discovery requests name their provider independently of the new-chat default.
+// Older companions ignore that owner and can publish the other provider's models.
+export const BRIDGE_PROTOCOL = 18;

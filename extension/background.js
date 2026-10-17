@@ -157,7 +157,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 17;
+const BRIDGE_PROTOCOL = 18;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
