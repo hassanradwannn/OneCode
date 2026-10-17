@@ -32,6 +32,8 @@
   # Recreate the Start link after the final executable exists, including its AUMI.
   !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
     Delete "$newStartMenuLink"
+    # Electron Builder's macro reads the runtime variable, not its macro argument.
+    StrCpy $keepShortcuts "false"
     !insertmacro addStartMenuLink "false"
     ${IfNot} ${FileExists} "$newStartMenuLink"
       SetErrorLevel 2
