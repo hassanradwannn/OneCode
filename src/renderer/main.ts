@@ -1221,7 +1221,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   let tone: UpdateTone = 'work';
   // #1490: an installer that stopped silently left this start on the old version.
   if (update.notInstalled) {
-    lines.push(t("OneCode {0} did not install; this is still {1}. Choose Install to try again; Windows may ask for permission.", [displayReleaseVersion(update.notInstalled), displayReleaseVersion(update.current)]));
+    lines.push(t("OneCode {0} installation did not finish. Running {1}. Download the installer from GitHub to repair the installation.", [displayReleaseVersion(update.notInstalled), displayReleaseVersion(update.current)]));
     tone = 'bad';
   }
   if (update.latest && !(update.notInstalled === update.latest && update.stage === 'ready')) {

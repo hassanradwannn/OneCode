@@ -207,7 +207,7 @@ export async function restoreUpdateHandoff(): Promise<void> {
   const version = typeof note?.version === 'string' && /^\d+\.\d+\.\d+$/.test(note.version) ? note.version : null;
   if (version && (isNewer(version, APP_VERSION) || note?.status === 'failed')) {
     set({ notInstalled: version });
-    logWarn(`update: ${version} was handed to its installer, but this is still ${APP_VERSION}; it did not install`);
+    logWarn(`update: ${version} installation did not finish; running ${APP_VERSION}${note?.error ? ` (${note.error})` : ''}`);
   }
 }
 

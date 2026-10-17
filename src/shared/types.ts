@@ -801,9 +801,11 @@ export const RELEASES_PAGE = 'https://github.com/hassanradwannn/OneCode/releases
  * copies of a comparison are two chances to read a version difference the wrong way round.
  */
 export function isNewer(candidate: string, current: string): boolean {
-  const left = candidate.split('.').map(Number);
-  const right = current.split('.').map(Number);
-  for (let index = 0; index < 3; index += 1) {
+  // The shipped compatibility tag represents 0.2.8.5, not a release after 0.2.9.
+  const parts = (value: string) => (value === '0.2.805' ? '0.2.8.5' : value).split('.').map(Number);
+  const left = parts(candidate);
+  const right = parts(current);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const a = left[index] ?? 0;
     const b = right[index] ?? 0;
     if (a !== b) return a > b;
