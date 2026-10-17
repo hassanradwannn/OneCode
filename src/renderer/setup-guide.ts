@@ -1,3 +1,4 @@
+import { providerText } from './provider-text.js';
 import { el, icon } from './dom.js';
 import { currentLanguage, onLanguageChange, t, ui, type Language } from './i18n.js';
 import { quoted } from './extension-pictures.js';
@@ -47,7 +48,7 @@ const guides: Record<string, Array<Page | Still>> = {
   tunnel: [
     { scene: 'tunnel-create', spots: [
       { key: 'name', text: () => t('Name it') },
-      { key: 'workspace', text: () => t('Pick your Gemini workspace') },
+      { key: 'workspace', text: () => providerText('Pick your Gemini workspace') },
       { key: 'create', text: labels => t('Click {0}', [quoted(labels.create!)]) }
     ] },
     { scene: 'tunnel-id', spots: [{ key: 'copy', text: () => t('Copy the tunnel ID') }] }

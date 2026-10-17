@@ -1,4 +1,4 @@
-import { t } from './i18n.js';
+import { providerText } from './provider-text.js';
 import type { SurfaceStatus } from '../shared/types.js';
 
 /**
@@ -10,5 +10,5 @@ import type { SurfaceStatus } from '../shared/types.js';
  */
 export function chatgptNameLine(surface: Pick<SurfaceStatus, 'connectorName' | 'chatgptName'>): string | null {
   const name = surface.chatgptName;
-  return typeof name === 'string' && name && name !== surface.connectorName ? t('In Gemini: {0}', [name]) : null;
+  return typeof name === 'string' && name && name !== surface.connectorName ? providerText('In Gemini: {0}', [name]) : null;
 }

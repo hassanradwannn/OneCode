@@ -1,5 +1,6 @@
-import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
-import { ui } from './i18n.js';
+import type { ChatProvider } from '../shared/chat-provider.js';
+import { providerCopy } from '../shared/provider-copy.js';
+import { t, ui } from './i18n.js';
 
 /** Both selectors enter the same durable settings queue exactly once. */
 export function initProviderSettings(save: () => void | Promise<void>): void {
@@ -15,14 +16,24 @@ export function initProviderCopy(): (provider: ChatProvider) => void {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (!node.data.includes('Gemini') || node.data.includes('ChatGPT') ||
-        node.parentElement?.closest('script, style, option, code, [translate="no"], #geminiSkillSetup, #composerProviderLabel, [data-provider-only="gemini"]')) continue;
+    if (!/Gemini|ChatGPT/.test(node.data) ||
+        node.parentElement?.closest('script, style, option, code, [translate="no"], #chatProvider, #setupChatProvider, #composerProviderLabel')) continue;
     copy.push({ node, source: node.data });
   }
+  const attributes: Array<{ node: Element; property: 'title' | 'placeholder' | 'aria-label'; source: string }> = [];
+  for (const node of document.querySelectorAll('[title],[placeholder],[aria-label]')) {
+    if (node.closest('[translate="no"], #chatProvider, #setupChatProvider')) continue;
+    for (const property of ['title', 'placeholder', 'aria-label'] as const) {
+      const source = node.getAttribute(property);
+      if (source && /Gemini|ChatGPT/.test(source)) attributes.push({ node, property, source });
+    }
+  }
   return provider => {
-    const label = chatProviderLabel(provider);
     for (const { node, source } of copy) {
-      if (node.isConnected) ui(node, 'textContent', () => source.replaceAll('Gemini', label));
+      if (node.isConnected) ui(node, 'textContent', () => providerCopy(t(source), provider));
+    }
+    for (const { node, property, source } of attributes) {
+      if (node.isConnected) ui(node, property, () => providerCopy(t(source), provider));
     }
     for (const element of document.querySelectorAll<HTMLElement>('[data-provider-only]')) {
       element.hidden = element.dataset.providerOnly !== provider;

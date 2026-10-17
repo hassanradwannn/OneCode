@@ -1,5 +1,15 @@
 # OneCode — set up on another Windows PC
 
+## Version 0.3.0
+
+Shared OneCode controls use **provider** or **agent** wording. Choose the actual service in **AI provider**; browser destinations, account checks and tool routing remain provider-specific. Existing chats keep their original provider.
+
+Use **Settings → General → Check for updates**, then **Install when done**. The app waits for active work before restarting. The matching Companion reloads when its chats are idle. If an older 0.2.9 install reports a missing `resources/app-update.yml`, install the current release manually once.
+
+For multiple computers, set **Name for this computer** before adding each device's MCP URL. Both MCP identity fields publish the configured full name. OneCode accepts a unique native title-cased/dash-to-space presentation only after selecting and verifying its real menu token. Different-device and ambiguous duplicate names are refused. Existing native connectors are not renamed by this update.
+
+The Companion dismisses the recognized English response-comparison question through its separate **Skip / I prefer this option** footer. The question and both numbered options must be present. A thinking **Skip**, isolated button, hidden control or unknown layout is left untouched.
+
 Share **OneCode-Setup-x64.exe**, its distributor-provided SHA256, and this guide. The installer includes the desktop application, companion extension, Cloudflare/search programs, native libraries, and a private Node.js/npm runtime for npm MCP plugins. Your friend does not need this source checkout, your folders, a separate Node installation, or your Google account. The recommended Tailscale connection uses a separate Tailscale installation and the recipient's own account; neither is bundled.
 
 ## Requirements and limits

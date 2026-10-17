@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "Kết nối ChatGPT với Chat On Steroids và điều khiển các tab trình duyệt ở chế độ nền bằng DOM, ảnh chụp màn hình và công cụ dành cho nhà phát triển."
+    "message": "Kết nối Nhà cung cấp với Chat On Steroids và điều khiển các tab trình duyệt ở chế độ nền bằng DOM, ảnh chụp màn hình và công cụ dành cho nhà phát triển."
   },
   "extension_name": {
     "message": "Tiện ích trình duyệt Chat On Steroids"
@@ -771,7 +771,7 @@
     "message": "ID cuộc trò chuyện"
   },
   "popup_chatgpt_tab": {
-    "message": "tab ChatGPT"
+    "message": "tab $1"
   },
   "popup_confirmed": {
     "message": "đã xác nhận"
@@ -879,7 +879,7 @@
     "message": "không có bản ghi"
   },
   "popup_overwrite_chatgpt": {
-    "message": "Ghi đè ChatGPT"
+    "message": "Ghi đè $1"
   },
   "popup_owner_confirmed": {
     "message": "Đã xác nhận chủ sở hữu"
@@ -945,7 +945,7 @@
     "message": "Đã tìm thấy ID yêu cầu"
   },
   "popup_section_augment_chatgpt": {
-    "message": "Mở rộng ChatGPT"
+    "message": "Mở rộng $1"
   },
   "popup_section_session_capture": {
     "message": "Ghi phiên"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Hãy chắc rằng Chat On Steroids đang mở trên máy tính này. Tiện ích sẽ tự kết nối."
+  },
+  "popup_provider": {
+    "message": "Nhà cung cấp"
   }
 }

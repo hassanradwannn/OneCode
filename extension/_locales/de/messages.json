@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "Verbindet ChatGPT mit Chat On Steroids und steuert Browser-Tabs im Hintergrund über DOM, Screenshots und Entwicklertools."
+    "message": "Verbindet Anbieter mit Chat On Steroids und steuert Browser-Tabs im Hintergrund über DOM, Screenshots und Entwicklertools."
   },
   "extension_name": {
     "message": "Chat On Steroids Browser-Erweiterung"
@@ -771,7 +771,7 @@
     "message": "Chat-ID"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT-Tab"
+    "message": "$1-Tab"
   },
   "popup_confirmed": {
     "message": "bestätigt"
@@ -879,7 +879,7 @@
     "message": "kein Eintrag"
   },
   "popup_overwrite_chatgpt": {
-    "message": "ChatGPT überschreiben"
+    "message": "$1 überschreiben"
   },
   "popup_owner_confirmed": {
     "message": "Zuständigkeit bestätigt"
@@ -945,7 +945,7 @@
     "message": "Request-ID gefunden"
   },
   "popup_section_augment_chatgpt": {
-    "message": "ChatGPT erweitern"
+    "message": "$1 erweitern"
   },
   "popup_section_session_capture": {
     "message": "Sitzungsaufzeichnung"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Stelle sicher, dass Chat On Steroids auf diesem Computer geöffnet ist. Die Browser-Erweiterung verbindet sich dann von selbst."
+  },
+  "popup_provider": {
+    "message": "Anbieter"
   }
 }

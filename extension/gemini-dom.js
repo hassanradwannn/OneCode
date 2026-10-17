@@ -428,9 +428,16 @@ var CLF_DOM = (() => {
       } };
   }
   let ownNames = [], ownApps = [];
+  const connectorAliases = new Map();
+  const connectorDisplayKey = value => compact(value).toLowerCase().replace(/-+/g, ' ').replace(/\s+/g, ' ');
+  const nativeConnectorName = name => {
+    const alias = connectorAliases.get(name);
+    return alias?.route === location.href ? alias.name : name;
+  };
   function setConnectorNames(names) {
     const next = [names?.core, names?.desktop, names?.plugins].filter(name => typeof name === 'string' && name.length > 0 && name.length <= 160);
     if (!next.length) return false;
+    if (JSON.stringify(ownNames) !== JSON.stringify([...new Set(next)])) connectorAliases.clear();
     ownNames = [...new Set(next)]; return true;
   }
   const connectorNames = () => [...ownNames];
@@ -497,10 +504,13 @@ var CLF_DOM = (() => {
   }
   function confirmedMention(name, box = composer()) {
     if (!box) return false;
-    if (provenMention(box)?.name === name) return true;
+    if (provenMention(box)?.name === nativeConnectorName(name)) return true;
     return all(MENTION, box).some(node => compact(text(node)).replace(/^@/, '') === compact(name) || node.getAttribute('data-mention-name') === name);
   }
   async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null) {
+    const requestedName = name;
+    const sameName = candidate => candidate === requestedName || ownNames.includes(requestedName) &&
+      connectorDisplayKey(candidate) === connectorDisplayKey(requestedName);
     const refused = reason => { explain?.(reason); return false; };
     if (!name || !current()) return refused('connector-preparation-revoked');
     const box = composer();
@@ -579,12 +589,12 @@ var CLF_DOM = (() => {
     if (compact(blockText(box)) !== '@') return refused('connector-selector-text-unconfirmed');
     const choices = await waitFor(() => {
       const native = all('button.at-mentions-v2-item[role="menuitem"][aria-label]')
-        .filter(node => shown(node) && node.getAttribute('aria-label') === name);
+        .filter(node => shown(node) && sameName(node.getAttribute('aria-label')));
       const candidates = native.length ? native : all('[role="option"],[role="menuitem"],mat-option').filter(node => shown(node) &&
-        (node.getAttribute('aria-label') === name || compact(text(node)).replace(/^@/, '') === name));
+        (sameName(node.getAttribute('aria-label') || '') || sameName(compact(text(node)).replace(/^@/, ''))));
       // A provider dropdown may use buttons rather than ARIA options; only outside transcript/editor.
       if (!candidates.length) candidates.push(...all('[role="listbox"] button,.cdk-overlay-pane button').filter(node =>
-        shown(node) && !node.closest(`${TURN},${BOX}`) && compact(text(node)).replace(/^@/, '') === name));
+        shown(node) && !node.closest(`${TURN},${BOX}`) && sameName(compact(text(node)).replace(/^@/, ''))));
       return candidates.length === 1 ? candidates[0] : null;
     }, selectionCurrent);
     if (!choices) {
@@ -605,6 +615,7 @@ var CLF_DOM = (() => {
       return refused('connector-menu-unavailable');
     }
     if (!selectionCurrent() || !choices.isConnected) return refused(revokedReason());
+    name = choices.getAttribute('aria-label') || compact(text(choices)).replace(/^@/, '');
     all('strong', box).forEach(node => beforeStrong.add(node));
     awaitingToken = true;
     choices.scrollIntoView?.({ block: 'nearest' }); ownEdit(() => choices.click());
@@ -629,6 +640,7 @@ var CLF_DOM = (() => {
     if (!taskReady) return refused(restoreCurrent() ? 'connector-task-restore-unconfirmed' : revokedReason());
     snapshot();
     if (!current() || !confirmedMention(name, box) || compact(composerAuthoredText()) !== compact(restoredText)) return false;
+    if (ownNames.includes(requestedName)) connectorAliases.set(requestedName, { name, route });
     return onReady ? await onReady(box, selectionCurrent, () => { handedOff = true; }) : true;
     } finally {
       // Never overwrite a foreign edit. This also removes a raw app-owned '@'
@@ -811,7 +823,7 @@ var CLF_DOM = (() => {
     if (beforeSend && await beforeSend(current) !== true) return refused('not-authorized');
     if (!await waitDraftReady('after-authorization')) return refused('draft-changed');
     const button = sendButton();
-    if (connector && provenMention(box)) outgoingMention = { name: connector, expected: submitted, conversationId: id, priorIds: prior };
+    if (connector && provenMention(box)) outgoingMention = { name: provenMention(box).name, expected: submitted, conversationId: id, priorIds: prior };
     cancelApprovalReplyProofs('new-send'); button.click();
     const accepted = await waitFor(() => {
       const now = conversationId();
@@ -884,10 +896,12 @@ var CLF_DOM = (() => {
       if (!card.allow || approvalClicks.has(card.node) || !card.node.isConnected || conversationId() !== id) continue;
       const binding = await bindingFor(id, () => conversationId() === id && card.node.isConnected);
       const ownedNames = Array.isArray(binding?.connector_names) ? binding.connector_names : [binding?.connector_name];
+      const matches = ownedNames.filter(name => nativeConnectorName(name) === card.connector);
+      const configuredName = matches.length === 1 ? matches[0] : null;
       const perConnector = binding?.enabled_tools_by_connector;
-      const enabledTools = perConnector && Object.prototype.hasOwnProperty.call(perConnector, card.connector) ? perConnector[card.connector] :
-        card.connector === binding?.connector_name ? binding?.enabled_tools : null;
-      if (!binding || binding.auto_approve !== true || !ownedNames.includes(card.connector) ||
+      const enabledTools = configuredName && perConnector && Object.prototype.hasOwnProperty.call(perConnector, configuredName) ? perConnector[configuredName] :
+        configuredName === binding?.connector_name ? binding?.enabled_tools : null;
+      if (!binding || binding.auto_approve !== true || !configuredName ||
         !Array.isArray(enabledTools) || !enabledTools.includes(card.machineTool || card.tool)) continue;
       const outcome = clickApprovalCard(card, 'allow');
       approvalObservations.push({ at: Date.now(), conversationId: id, tool: card.tool, outcome });

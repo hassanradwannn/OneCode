@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "Connecte ChatGPT à Chat On Steroids et contrôle les onglets du navigateur en arrière-plan via le DOM, les captures d’écran et les outils de développement."
+    "message": "Connecte Fournisseur à Chat On Steroids et contrôle les onglets du navigateur en arrière-plan via le DOM, les captures d’écran et les outils de développement."
   },
   "extension_name": {
     "message": "Extension de navigateur Chat On Steroids"
@@ -771,7 +771,7 @@
     "message": "ID de chat"
   },
   "popup_chatgpt_tab": {
-    "message": "Onglet ChatGPT"
+    "message": "Onglet $1"
   },
   "popup_confirmed": {
     "message": "confirmé"
@@ -879,7 +879,7 @@
     "message": "aucun enregistrement"
   },
   "popup_overwrite_chatgpt": {
-    "message": "Remplacer ChatGPT"
+    "message": "Remplacer $1"
   },
   "popup_owner_confirmed": {
     "message": "Propriétaire confirmé"
@@ -945,7 +945,7 @@
     "message": "ID de requête trouvé"
   },
   "popup_section_augment_chatgpt": {
-    "message": "Enrichir ChatGPT"
+    "message": "Enrichir $1"
   },
   "popup_section_session_capture": {
     "message": "Capture de session"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Vérifiez que Chat On Steroids est ouvert sur cet ordinateur. L’extension se connecte d’elle-même."
+  },
+  "popup_provider": {
+    "message": "Fournisseur"
   }
 }

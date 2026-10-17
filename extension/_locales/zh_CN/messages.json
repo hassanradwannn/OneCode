@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "将 ChatGPT 连接到 Chat On Steroids，并通过 DOM、截图和开发者工具在后台控制浏览器标签页。"
+    "message": "将 提供方 连接到 Chat On Steroids，并通过 DOM、截图和开发者工具在后台控制浏览器标签页。"
   },
   "extension_name": {
     "message": "Chat On Steroids 浏览器扩展"
@@ -771,7 +771,7 @@
     "message": "聊天 ID"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT 标签页"
+    "message": "$1 标签页"
   },
   "popup_confirmed": {
     "message": "已确认"
@@ -879,7 +879,7 @@
     "message": "无记录"
   },
   "popup_overwrite_chatgpt": {
-    "message": "覆盖 ChatGPT"
+    "message": "覆盖 $1"
   },
   "popup_owner_confirmed": {
     "message": "已确认所有者"
@@ -945,7 +945,7 @@
     "message": "已找到请求 ID"
   },
   "popup_section_augment_chatgpt": {
-    "message": "增强 ChatGPT"
+    "message": "增强 $1"
   },
   "popup_section_session_capture": {
     "message": "会话捕获"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "请确认 Chat On Steroids 已在这台电脑上打开。扩展会自动连接。"
+  },
+  "popup_provider": {
+    "message": "提供方"
   }
 }

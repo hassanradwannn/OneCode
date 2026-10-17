@@ -4,7 +4,7 @@ import { chatModelDisplayLabel, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel } fr
 import type { Config } from '../shared/types.js';
 import type { ReasoningEffort } from '../shared/session.js';
 import { $, el, icon, run } from './dom.js';
-import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+import { type ChatProvider } from '../shared/chat-provider.js';
 let activeProvider: ChatProvider = 'gemini';
 let settingsProvider: ChatProvider = 'gemini';
 const catalogs: Partial<Record<ChatProvider, ChatModelCatalog>> = {};
@@ -168,7 +168,7 @@ function options(select: HTMLSelectElement, choices: Array<{ id: string; label: 
     if (unverified) {
       ui(badge, 'textContent', () => t('Unverified'));
       // Workers and the Goal helper both fall back to Gemini's current model (#499); say so.
-      ui(badge, 'title', () => t("This {0} account doesn't offer this model, so its current model is used.", [chatProviderLabel(activeProvider)]));
+      ui(badge, 'title', () => t("This {0} account doesn't offer this model, so its current model is used.", [t("provider")]));
     }
   }
 }
@@ -296,9 +296,9 @@ function paintComposerChoices(): void {
       return;
     }
     if (title) ui(title, 'textContent', () => catalog.state === 'pending' ? t("Loading models…") : t("Models unavailable"));
-    if (subtitle) ui(subtitle, 'textContent', () => catalog.state === 'pending' ? t("Reading your {0} account", [chatProviderLabel(activeProvider)]) : t("Reload models"));
+    if (subtitle) ui(subtitle, 'textContent', () => catalog.state === 'pending' ? t("Reading your {0} account", [t("provider")]) : t("Reload models"));
     // An exact model was asked for and no list can confirm it. Automatic is offered, never assumed.
-    const use = el('button', 'btn', () => t("Use {0}’s current model", [chatProviderLabel(activeProvider)])) as HTMLButtonElement;
+    const use = el('button', 'btn', () => t("Use {0}’s current model", [t("provider")])) as HTMLButtonElement;
     use.type = 'button';
     use.dataset.useCurrentModel = '';
     use.addEventListener('click', chooseAutomatic);
@@ -361,7 +361,7 @@ function paintComposerChoices(): void {
       // An unknown saved model has no effort to keep. Clearing its stale
       // effort alone leaves Send unconfirmed; choosing current is full-model
       // consent, distinct from keeping an observed model's native effort.
-      const use = el('button', 'btn power-single', () => t('Use {0}’s current model', [chatProviderLabel(activeProvider)])) as HTMLButtonElement;
+      const use = el('button', 'btn power-single', () => t('Use {0}’s current model', [t("provider")])) as HTMLButtonElement;
       use.type = 'button'; use.dataset.keepMenu = 'true'; use.dataset.useCurrentModel = '';
       use.addEventListener('click', event => { event.stopPropagation(); chooseAutomatic(); });
       powers.append(use);
@@ -482,15 +482,15 @@ function paintComposerLabel(): void {
 function paintStatus(): void {
   for (const id of ['composerModelToggle', 'composerModel']) {
     const node = document.getElementById(id);
-    if (node) ui(node, 'aria-label', () => t('{0} model', [chatProviderLabel(activeProvider)]));
+    if (node) ui(node, 'aria-label', () => t('{0} model', [t("provider")]));
   }
   paintComposerChoices();
   const error = () => catalog.error?.startsWith('Model discovery timed out. ')
     ? t('Model discovery timed out. {0}', [t(catalog.error.slice('Model discovery timed out. '.length))]) : t(catalog.error ?? '');
   const message = () => catalog.state === 'pending' ? t(catalog.waiting ?? "Reading your account’s model choices…")
     : catalog.error ? (catalog.models.length ? t('Refresh failed. Previously observed choices remain available. {0}', [error()]) : error())
-    : catalog.state === 'ready' ? t("Available in your {0} account · checked {1}", [chatProviderLabel(activeProvider), new Date(catalog.observedAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })])
-    : t("Connect to {0} to load your models.", [chatProviderLabel(activeProvider)]);
+    : catalog.state === 'ready' ? t("Available in your {0} account · checked {1}", [t("provider"), new Date(catalog.observedAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })])
+    : t("Connect to {0} to load your models.", [t("provider")]);
   for (const id of ['chatModelStatus', 'composerModelStatus']) {
     const node = document.getElementById(id);
     if (node) {
@@ -505,8 +505,8 @@ function paintStatus(): void {
       button.disabled = false;
       if (id === 'refreshComposerModels') {
         button.hidden = false;
-        ui(button, 'title', () => catalog.state === 'pending' ? t("Reading {0} models", [chatProviderLabel(activeProvider)]) : t("Reload {0} models", [chatProviderLabel(activeProvider)]));
-        ui(button, 'aria-label', () => catalog.state === 'pending' ? t('Reading {0} models', [chatProviderLabel(activeProvider)]) : t('Reload {0} models', [chatProviderLabel(activeProvider)]));
+        ui(button, 'title', () => catalog.state === 'pending' ? t("Reading {0} models", [t("provider")]) : t("Reload {0} models", [t("provider")]));
+        ui(button, 'aria-label', () => catalog.state === 'pending' ? t('Reading {0} models', [t("provider")]) : t('Reload {0} models', [t("provider")]));
       }
     }
   }

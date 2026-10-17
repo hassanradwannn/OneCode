@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "ChatGPT'yi Chat On Steroids'a bağlar ve tarayıcı sekmelerini DOM, ekran görüntüleri ve geliştirici araçlarıyla arka planda denetler."
+    "message": "Sağlayıcı'yi Chat On Steroids'a bağlar ve tarayıcı sekmelerini DOM, ekran görüntüleri ve geliştirici araçlarıyla arka planda denetler."
   },
   "extension_name": {
     "message": "Chat On Steroids tarayıcı uzantısı"
@@ -771,7 +771,7 @@
     "message": "Sohbet kimliği"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT sekmesi"
+    "message": "$1 sekmesi"
   },
   "popup_confirmed": {
     "message": "doğrulandı"
@@ -879,7 +879,7 @@
     "message": "kayıt yok"
   },
   "popup_overwrite_chatgpt": {
-    "message": "ChatGPT görünümünü değiştir"
+    "message": "$1 görünümünü değiştir"
   },
   "popup_owner_confirmed": {
     "message": "Sahibi doğrulandı"
@@ -945,7 +945,7 @@
     "message": "İstek kimliği bulundu"
   },
   "popup_section_augment_chatgpt": {
-    "message": "ChatGPT görünümünü genişlet"
+    "message": "$1 görünümünü genişlet"
   },
   "popup_section_session_capture": {
     "message": "Oturum kaydı"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Chat On Steroids'in bu bilgisayarda açık olduğundan emin olun. Eklenti kendiliğinden bağlanır."
+  },
+  "popup_provider": {
+    "message": "Sağlayıcı"
   }
 }

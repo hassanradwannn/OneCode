@@ -1,3 +1,4 @@
+import { providerText } from './provider-text.js';
 import { hasProviderDirective, resolvedCapture, withoutProviderDirectives } from '../shared/content-reference.js';
 import { initChatSearch, type ChatSearch } from './chat-search.js';
 import { initChatFind } from './chat-find.js';
@@ -37,7 +38,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderLabel, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled } from '../shared/chat-provider.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES } from '../shared/input.js';
@@ -193,10 +194,10 @@ function projectMenuItems(id: string): RowMenuItem[] {
     // Only when its native Gemini Project could not be created; otherwise nothing about it shows.
     ...(link?.state === 'failed' || link?.state === 'uncertain' ? [{
       action: 'chatgpt-retry', icon: 'i-retry', disabled: retryingChatgptProject.has(id),
-      label: () => t('Retry Gemini Project'),
+      label: () => providerText('Retry Gemini Project'),
       title: () => link.state === 'uncertain'
-        ? t('Gemini may already have created it; retrying can leave a second Project')
-        : t('Create this project in Gemini again'),
+        ? providerText('Gemini may already have created it; retrying can leave a second Project')
+        : providerText('Create this project in Gemini again'),
       run: () => void retryChatgptProject(id)
     } satisfies RowMenuItem] : []),
     {
@@ -896,7 +897,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   const items: RowMenuItem[] = [];
   const remove: RowMenuItem = {
     action: 'remove', icon: 'i-trash', danger: true, separated: true, label: () => t('Remove'),
-    title: () => t("Remove this chat and its saved history from the app. The chat stays in Gemini."),
+    title: () => providerText("Remove this chat and its saved history from the app. The chat stays in Gemini."),
     run: () => void deleteSession(summary.id)
   };
   if (summary.conversationId === null) {
@@ -1081,7 +1082,7 @@ function renameField(summary: SessionSummary): HTMLInputElement {
   field.dir = 'auto';
   field.value = renaming!.value;
   ui(field, 'aria-label', () => t("Name for this chat"));
-  ui(field, 'placeholder', () => t("Leave empty to use Gemini's title"));
+  ui(field, 'placeholder', () => providerText("Leave empty to use Gemini's title"));
   const own = (): boolean => renaming?.id === summary.id;
   // The row selects on click and starts a drag on pointer down; typing in its name does neither.
   for (const type of ['click', 'dblclick', 'pointerdown', 'mousedown']) field.addEventListener(type, (event) => event.stopPropagation());
@@ -1635,14 +1636,14 @@ function paintGoalProgress(): void {
   if (draft && (!off || finishDraft) && (finishDraft || !['saving', 'failed'].includes(phase))) { phase = draft.stage; text = draft.text; error = draft.error ?? undefined; }
   else if (wait && !['saving', 'failed'].includes(phase)) { phase = 'settling'; text = ''; error = undefined; }
   const labels: Record<string, string> = { saving: t("Saving task…"), saved: t("Task saved · waiting for the next completed answer"),
-    preparing: t("Preparing the opening message…"), generating: t("Generating the opening message…"), ready: t("Message ready · awaiting Gemini delivery"),
+    preparing: t("Preparing the opening message…"), generating: t("Generating the opening message…"), ready: providerText("Message ready · awaiting Gemini delivery"),
     sending: t("Preparing a continuation…"), answering: t("Generating a continuation…"), queued: t("Opening message queued"),
-    browser: t("Sending opening message to Gemini…"), sent: t("Opening message sent"), tool: t('Opening message delivered to the active turn'),
+    browser: providerText("Sending opening message to Gemini…"), sent: t("Opening message sent"), tool: t('Opening message delivered to the active turn'),
     failed: t("Task could not continue"), cancelled: t("Opening message cancelled"), paused: t("Automation paused · task text preserved"), 'no-reply': t("Goal reached") };
   if (phase === 'retrying') { text = ''; error = undefined; }
   labels.retrying = t("Provider busy · retry {0}{1}", [progress?.attempt ?? '', progress?.retryAt ? t(' at {0}', [new Date(progress.retryAt).toLocaleTimeString(currentLanguage())]) : '']);
   const mode = $<HTMLSelectElement>('chatAutomation').value === 'loop' ? t('Loop') : t('Goal');
-  labels.settling = `${mode} · ${wait?.reason === 'native-busy' ? t('Gemini resumed work · waiting before retry') : wait?.reason === 'silence' ? t('Waiting before recovery reload') : wait?.reason === 'quiet' ? t('Waiting for tool inactivity') :
+  labels.settling = `${mode} · ${wait?.reason === 'native-busy' ? providerText('Gemini resumed work · waiting before retry') : wait?.reason === 'silence' ? t('Waiting before recovery reload') : wait?.reason === 'quiet' ? t('Waiting for tool inactivity') :
     wait?.reason === 'workers' ? t('Waiting for this chat’s sub-agents') : wait?.reason === 'tools' ? t('Waiting for running tools') : wait?.reason === 'listening' ? t('Waiting for activity after recovery') : wait?.reason === 'closed' ? t('Paused until this chat is open in the browser') : t('Answer settling')}`;
   // The dock already describes this same silence/listening deadline. Keep the
   // Loop/Goal task controls, but do not present its shared wait as another action.
@@ -2098,7 +2099,7 @@ async function refreshSessionControls(): Promise<void> {
   paintAutomationSwitch();
   $<HTMLButtonElement>('compactSession').disabled = !!controls.blocked || !!controls.job?.busy;
   $('cancelCompaction').hidden = !controls.job?.busy;
-  ui($('sessionControlStatus'), 'textContent', () => controls.blocked === 'worker' ? t("This sub-agent is managed by its prime.") : controls.blocked === 'blocked' ? t("This chat is blocked.") : controls.job?.busy ? t("Compaction is running in Gemini.") : '');
+  ui($('sessionControlStatus'), 'textContent', () => controls.blocked === 'worker' ? t("This sub-agent is managed by its prime.") : controls.blocked === 'blocked' ? t("This chat is blocked.") : controls.job?.busy ? providerText("Compaction is running in Gemini.") : '');
 }
 
 async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: number): Promise<boolean> {
@@ -2700,7 +2701,7 @@ function nativePromptCards(root: ParentNode): Array<{ group: Element; anchor: st
     card.append(list);
     const instruction = document.createElement('p');
     const explanation = document.createElement('em');
-    explanation.textContent = t('Answer this prompt in Gemini');
+    explanation.textContent = providerText('Answer this prompt in Gemini');
     instruction.append(explanation);
     card.append(instruction);
     cards.push({ group, anchor, card, options });
@@ -2918,11 +2919,11 @@ function approvalCardPanel(sessionId: string): HTMLElement {
     deny.disabled = pending;
     allow.disabled = pending || !next.allow;
     const outcome = next.answer?.outcome;
-    if (pending) say(() => t('Sending your answer to Gemini…'));
-    else if (outcome === 'card_changed') say(() => t('Gemini showed a different card by then. Nothing was pressed; answer the new one.'));
-    else if (outcome === 'unavailable') say(() => t('Gemini no longer offered that choice. Nothing was pressed.'));
+    if (pending) say(() => providerText('Sending your answer to Gemini…'));
+    else if (outcome === 'card_changed') say(() => providerText('Gemini showed a different card by then. Nothing was pressed; answer the new one.'));
+    else if (outcome === 'unavailable') say(() => providerText('Gemini no longer offered that choice. Nothing was pressed.'));
     else if (outcome === 'expired') say(() => t('The chat’s page did not take your answer in time. Nothing was pressed; open it in the browser to answer there.'));
-    else if (!next.allow) say(() => t('Gemini does not allow it in this chat. You can only deny it.'));
+    else if (!next.allow) say(() => providerText('Gemini does not allow it in this chat. You can only deny it.'));
     else status.hidden = true;
   };
   const refresh = async (): Promise<ApprovalCardView | null> => {
@@ -2938,10 +2939,10 @@ function approvalCardPanel(sessionId: string): HTMLElement {
     if (!reply.ok || !reply.data.ok) {
       await refresh();
       if (!card || (reply.ok && !reply.data.ok && reply.data.error === 'card_changed'))
-        say(() => t('Gemini showed a different card by then. Nothing was pressed; answer the new one.'));
+        say(() => providerText('Gemini showed a different card by then. Nothing was pressed; answer the new one.'));
       return;
     }
-    say(() => t('Sending your answer to Gemini…'));
+    say(() => providerText('Sending your answer to Gemini…'));
     // The page takes the answer on its next poll (every 2 s while the card stands).
     for (let attempt = 0; attempt < 40 && panel.isConnected; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -3452,15 +3453,15 @@ function paintMessageReaction(box: HTMLElement, value: unknown): void {
   const badge = existing ?? el('span', 'message-reaction');
   badge.textContent = reaction;
   badge.setAttribute('role', 'img');
-  ui(badge, 'aria-label', () => t("Gemini reacted with {0}", [reaction]));
+  ui(badge, 'aria-label', () => providerText("Gemini reacted with {0}", [reaction]));
   if (!existing) box.append(badge);
 }
 
 /** The approval row in the interface language. Literal `t()` calls keep the catalog audit able to see each key. */
 function approvalRowText(text: string): string {
   // The recorded English stays as it was written; since 2.1.38 the row offers the answer itself.
-  if (text === APPROVAL_WAITING_TEXT) return t('Gemini is waiting for you to allow or deny a tool call in this chat. Nothing continues until you answer it, here or in the browser.');
-  if (text === APPROVAL_ANSWERED_TEXT) return t('The tool approval Gemini asked for in this chat was answered.');
+  if (text === APPROVAL_WAITING_TEXT) return providerText('Gemini is waiting for you to allow or deny a tool call in this chat. Nothing continues until you answer it, here or in the browser.');
+  if (text === APPROVAL_ANSWERED_TEXT) return providerText('The tool approval Gemini asked for in this chat was answered.');
   return text;
 }
 
@@ -3528,13 +3529,13 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     }
     case 'assistant_message': {
       const box = el('div', 'said');
-      box.append(el('b', '', () => event.final ? 'Gemini' : t("Gemini (partial)")));
+      box.append(el('b', '', () => event.final ? 'Gemini' : providerText("Gemini (partial)")));
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references));
       return box;
     }
     case 'native_image': {
       const box = el('div', 'said native-image');
-      box.append(el('b', '', () => t("Gemini generated image")));
+      box.append(el('b', '', () => providerText("Gemini generated image")));
       const frame = el('div', 'generated-image-frame');
       const width = event.width ?? event.previewWidth ?? 1;
       const height = event.height ?? event.previewHeight ?? 1;
@@ -3568,7 +3569,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
           }
           const image = document.createElement('img');
           image.src = data;
-          image.alt = t("Gemini generated image");
+          image.alt = providerText("Gemini generated image");
           frame.replaceChildren(image);
         })();
       }
@@ -3604,7 +3605,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     case 'turn_end': {
       if (stoppedTurnEnd(event, context?.history ?? events)) {
         const line = el('p', 'meta is-progress thinking-line turn-stopped');
-        line.append(icon('i-check-circle', 'ico thinking-ico'), el('span', '', () => t("Stopped. Gemini no longer shows this turn running.")));
+        line.append(icon('i-check-circle', 'ico thinking-ico'), el('span', '', () => providerText("Stopped. Gemini no longer shows this turn running.")));
         return line;
       }
       const line = el(
@@ -3767,7 +3768,7 @@ function eventRow(event: SessionEvent): HTMLElement {
       el(
         'p',
         'meta',
-        () => t("From a chat that Compact & Resume had already replaced — Gemini kept running its stopped turn there. Refused by design; nothing to repair.")
+        () => providerText("From a chat that Compact & Resume had already replaced — Gemini kept running its stopped turn there. Refused by design; nothing to repair.")
       )
     );
   }
@@ -4039,8 +4040,8 @@ function compactionState(block: CompactionBlock): { text: string; tone: Compacti
   if (block.brief?.final) {
     return { text: t("Summary written — saving the handoff…"), tone: 'wait' };
   }
-  if (block.brief) return { text: t("Gemini is writing the summary…"), tone: 'wait' };
-  return { text: t("Summary requested — waiting for Gemini…"), tone: 'wait' };
+  if (block.brief) return { text: providerText("Gemini is writing the summary…"), tone: 'wait' };
+  return { text: providerText("Summary requested — waiting for Gemini…"), tone: 'wait' };
 }
 
 function compactionRow(block: CompactionBlock, previous?: HTMLElement, latest = true): HTMLElement {
@@ -4460,7 +4461,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   const composerProvider = chatProviderForConversation(summary?.conversationId, currentConfig?.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   if (currentConfig) applyChatModels(currentConfig, undefined, composerProvider);
   const composerLabel = document.querySelector('label[for="chatInput"]');
-  if (composerLabel) ui(composerLabel, 'textContent', () => t('Message {0}', [chatProviderLabel(composerProvider)]));
+  if (composerLabel) ui(composerLabel, 'textContent', () => t('Message {0}', [t("agent")]));
   applyComposerSessionModel(selectedId ? `${selectedId}:${selectionGeneration}` : null, composerSessionSelection(summary) ?? null,
     acceptedAutomaticModel(summary, pendingComposerInputs));
   const config = deps.state()?.config;
@@ -5321,7 +5322,7 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad'; working?:
   const selected = sessions.find((entry) => entry.id === selectedId) ?? null;
   if (selected && selected.conversationId === null) {
     return {
-      text: t("Work this app could not place in a chat — driven from another device, or with no Gemini tab open"),
+      text: providerText("Work this app could not place in a chat — driven from another device, or with no Gemini tab open"),
       tone: ''
     };
   }
@@ -5947,7 +5948,7 @@ function wireGoal(save: () => Promise<void>): void {
 function applyAutoCompactHint(config: Config): void {
   ui($('autoCompactHint'), 'textContent', () => config.compaction.auto
     ? t("Interrupts an active answer at this many tokens, writes a handoff, and opens a fresh chat.")
-    : t("Off — only the Compact & resume button in the Gemini tab compacts."));
+    : providerText("Off — only the Compact & resume button in the Gemini tab compacts."));
 }
 
 /**
@@ -6188,7 +6189,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   if (!visibleInputIds.has(entry.id)) row.classList.add('is-entering');
   visibleInputIds.add(entry.id);
   if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
-  const status = () => entry.error ? t(entry.error) : held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? t("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? t("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued"));
+  const status = () => entry.error ? t(entry.error) : held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued"));
   const files = el('div', 'message-attachments');
   if (entry.attachments?.length) files.append(...entry.attachments.map(file => attachmentCard(file)));
   for (const image of entry.images ?? []) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; files.append(preview); }
@@ -6359,7 +6360,7 @@ async function refreshInputQueue(): Promise<void> {
     if (entry.recovery) ui(card, 'aria-label', () => t('Automatic Continue'));
     const label = el('span', 'queue-label', entry.recovery ? () => `${t('Automatic Continue')} · ${entry.text}` : entry.text);
     ui(label, 'title', () => `${entry.recovery
-      ? t('Resumes without a final answer. If Gemini is still generating, the silent turn is stopped before Continue is sent.')
+      ? providerText('Resumes without a final answer. If Gemini is still generating, the silent turn is stopped before Continue is sent.')
       : entry.state === 'queued' ? (entry.mode === 'after-turn' ? t("After the next completed answer") : t("At Session finish or after a completed answer")) : t("Awaiting receipt")} · ${entry.text}`);
     label.dir = 'auto';
     card.append(icon(entry.recovery ? 'i-pulse' : 'i-clock'), label);
@@ -7389,7 +7390,7 @@ export function initChat(next: Deps): void {
   $('swarmReset').addEventListener('click', async () => {
     // Permanent, like removing recorded images: ask first. A misclick used to end running
     // workers and delete every worker history at once.
-    if (!window.confirm(t('Clear all workers? Running workers stop, and their saved histories are removed for good. Their chats stay in Gemini.'))) return;
+    if (!window.confirm(providerText('Clear all workers? Running workers stop, and their saved histories are removed for good. Their chats stay in Gemini.'))) return;
     const state = await run(api.resetSwarm());
     if (state) {
       paintSwarm(state);

@@ -146,7 +146,7 @@ it.each([null, { model: 'Gemini Flash', observedAt: 2 }, { model: 'legacy-unavai
   input.value = 'Preserve this exact Goal first phase and its staged attachments';
   expect(composerSendModel()).toBeNull(); expect(doc.getElementById('composerModelLabel')!.textContent).toBe('Select model');
   const current = doc.querySelector<HTMLButtonElement>('#composerPowerChoices [data-use-current-model]');
-  expect(current).not.toBeNull(); expect(current!.textContent).toBe('Use Gemini’s current model');
+  expect(current).not.toBeNull(); expect(current!.textContent).toBe('Use provider’s current model');
   current!.click();
   expect(composerSendModel()).toEqual({ model: null, reasoningEffort: null }); expect(confirmedComposerModel()).toBeNull();
   expect(await ensureComposerModel()).toEqual({ model: null, reasoningEffort: null });
@@ -613,7 +613,7 @@ it('uses observed account choices, preserves unverified defaults, and clears inc
   expect(dom.window.document.getElementById('workerModelVerification')!.textContent).toBe('Unverified');
   // The badge says what runs instead, not just that something is wrong.
   expect(dom.window.document.getElementById('workerModelVerification')!.title)
-    .toBe("This Gemini account doesn't offer this model, so its current model is used.");
+    .toBe("This provider account doesn't offer this model, so its current model is used.");
   expect(dom.window.document.getElementById('helperModelVerification')!.hasAttribute('hidden')).toBe(true);
   // This saved helper default resolves to the account's exact observed model.
   expect(select('helperModel').value).toBe('gpt-6-thinking');
@@ -651,7 +651,7 @@ it('offers only observed models, prefers supported GPT-6 High, and replaces a re
   const reload = dom.window.document.getElementById('refreshComposerModels')!;
   expect(reload.querySelector('.ico.ph-arrow-clockwise')).not.toBeNull();
   expect(reload.textContent).toBe('');
-  expect(reload.getAttribute('aria-label')).toBe('Reload Gemini models');
+  expect(reload.getAttribute('aria-label')).toBe('Reload provider models');
   const slider = dom.window.document.querySelector<HTMLInputElement>('#composerPowerChoices input')!;
   expect(slider.max).toBe('1');
   expect(slider.getAttribute('aria-valuetext')).toBe('High');

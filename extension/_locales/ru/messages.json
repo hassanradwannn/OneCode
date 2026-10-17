@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "Подключает ChatGPT к Chat On Steroids и управляет вкладками браузера в фоне через DOM, скриншоты и инструменты разработчика."
+    "message": "Подключает Провайдер к Chat On Steroids и управляет вкладками браузера в фоне через DOM, скриншоты и инструменты разработчика."
   },
   "extension_name": {
     "message": "Расширение браузера Chat On Steroids"
@@ -771,7 +771,7 @@
     "message": "ID чата"
   },
   "popup_chatgpt_tab": {
-    "message": "Вкладка ChatGPT"
+    "message": "Вкладка $1"
   },
   "popup_confirmed": {
     "message": "подтверждено"
@@ -879,7 +879,7 @@
     "message": "нет записи"
   },
   "popup_overwrite_chatgpt": {
-    "message": "Перезаписывать ChatGPT"
+    "message": "Перезаписывать $1"
   },
   "popup_owner_confirmed": {
     "message": "Владелец подтверждён"
@@ -945,7 +945,7 @@
     "message": "ID запроса найден"
   },
   "popup_section_augment_chatgpt": {
-    "message": "Дополнять ChatGPT"
+    "message": "Дополнять $1"
   },
   "popup_section_session_capture": {
     "message": "Запись сессии"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Убедитесь, что Chat On Steroids открыт на этом компьютере. Расширение подключится само."
+  },
+  "popup_provider": {
+    "message": "Провайдер"
   }
 }

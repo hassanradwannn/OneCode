@@ -1,3 +1,4 @@
+import { providerText } from './provider-text.js';
 import { el } from './dom.js';
 import { t, ui } from './i18n.js';
 
@@ -6,11 +7,11 @@ const screenshot = new URL('./setup-images/tool-approval.jpg', import.meta.url).
 
 function notice(): HTMLElement {
   const card = el('section', 'tool-approval-notice');
-  card.append(el('h3', '', () => t('One last step in Gemini')),
+  card.append(el('h3', '', () => providerText('One last step in Gemini')),
     el('p', 'tool-approval-lead', () => t('If the first tool call pauses, check its approval prompt.')));
   const image = document.createElement('img'); image.src = screenshot; image.width = 690; image.height = 226;
-  ui(image, 'aria-label', () => t('Example of a Gemini tool approval prompt'));
-  image.alt = t('Example of a Gemini tool approval prompt');
+  ui(image, 'aria-label', () => providerText('Example of a Gemini tool approval prompt'));
+  image.alt = providerText('Example of a Gemini tool approval prompt');
   card.append(image,
     el('p', '', () => t('Review the action, then allow it, always for this plugin.')),
     el('p', 'muted tool-approval-footnote', () => t('This is separate from the plugin’s permissions, and this reminder does not approve a tool call.')));
@@ -20,7 +21,7 @@ function notice(): HTMLElement {
 /** Presentation subscribes to an existing successful opening; it never opens a browser. */
 export function initToolApprovalNotice(subscribe?: (listener: () => void) => () => void): void {
   const dialog = document.createElement('dialog'); dialog.className = 'tool-approval-dialog';
-  ui(dialog, 'aria-label', () => t('Gemini tool approval'));
+  ui(dialog, 'aria-label', () => providerText('Gemini tool approval'));
   const close = el('button', 'btn btn-solid', () => t('Got it')) as HTMLButtonElement; close.type = 'button';
   close.addEventListener('click', () => dialog.close());
   dialog.append(notice(), close); document.body.append(dialog);

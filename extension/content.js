@@ -5337,7 +5337,12 @@
     }
   }
 
+  let lastFeedbackCheck = 0;
   function paint() {
+    if (alive && Date.now() - lastFeedbackCheck >= 1000) {
+      lastFeedbackCheck = Date.now();
+      CLF_DOM.dismissComparisonPreference?.();
+    }
     // The canonical stream is now the only app-owned activity presentation. Restore rows
     // touched by older code/candidate builds, then leave unmatched provider rows native.
     unpaint();

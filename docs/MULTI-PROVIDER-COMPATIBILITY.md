@@ -1,5 +1,13 @@
 # Multi-provider compatibility audit
 
+## 0.3.0 changes and acceptance
+
+- Provider selection is an identity/routing decision; generic provider/agent UI wording cannot change URLs, conversation identities, trust scopes or model catalogs. User-provided connector names, filenames and interpolation arguments are preserved.
+- Browser sign-in reads native rendered account controls on the page's own provider. A signed-out composer does not prove account authentication; hidden or contradictory controls remain unknown.
+- MCP `serverInfo.name` and `serverInfo.title` both publish the configured connector name. Native title-casing/dash-to-space selection must yield exactly one full-name candidate and a verified token; a duplicate, another suffix or another surface is refused. Approval policy uses only the alias proven by that selection, under the same route and enabled-tool list.
+- Response-comparison dismissal requires the exact recognized English question, explanatory copy, both numbered options and an isolated two-button footer. It never selects an arbitrary Skip or the answer's thinking control. Unknown layouts remain manual.
+- Focused regressions and ordinary provider tool acceptance are distinct from long-duration Goal/Loop/Plan or compaction acceptance. Current ChatGPT transports that omit request IDs still limit exact local per-chat attribution.
+
 This is the release checklist for every browser AI provider added to OneCode. It records the
 provider mismatches found while adding ChatGPT beside Gemini in v0.2.8. Keep it current when a new
 provider is designed, implemented, tested, or removed.

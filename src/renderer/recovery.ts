@@ -1,3 +1,4 @@
+import { providerText } from './provider-text.js';
 import type { RecoveryCountdown } from '../shared/recovery.js';
 import { el, icon } from './dom.js';
 import { t, ui } from './i18n.js';
@@ -20,8 +21,8 @@ export function renderRecoveryCountdowns(host: HTMLElement, countdowns: readonly
           return t('{0} · next: {1}', [reason, next]);
         }
         if (countdown.kind === 'compaction') return countdown.phase === 'waiting'
-          ? t('Compact & Resume · waiting for this turn to end') : t('Compact & Resume · asking Gemini for the handoff');
-        return countdown.kind === 'provider-limit' ? t('Gemini history temporarily rate-limited') :
+          ? t('Compact & Resume · waiting for this turn to end') : providerText('Compact & Resume · asking Gemini for the handoff');
+        return countdown.kind === 'provider-limit' ? providerText('Gemini history temporarily rate-limited') :
         countdown.kind === 'unattributed' ? t('Unattributed call') :
         countdown.kind === 'unattributed-wait' ? t('Unattributed activity · awaiting attribution') :
         countdown.kind === 'assistant-error' ? t('Interrupted response') :
@@ -32,7 +33,7 @@ export function renderRecoveryCountdowns(host: HTMLElement, countdowns: readonly
       });
       ui(row, 'title', () => countdown.kind === 'compaction'
         ? countdown.phase === 'waiting' ? t('The handoff request is sent as soon as this turn ends.')
-          : t('OneCode is sending Gemini the request to write the brief for a new chat.')
+          : providerText('OneCode is sending Gemini the request to write the brief for a new chat.')
         : countdown.kind === 'provider-limit'
         ? t('Automatic recovery is paused during the history rate-limit wait. Reloading earlier can prolong the limit.')
         : countdown.kind === 'pickup-stopped'
@@ -40,14 +41,14 @@ export function renderRecoveryCountdowns(host: HTMLElement, countdowns: readonly
         : countdown.kind === 'native-busy' || countdown.generating
         ? t('Delivery was deferred because the turn is still marked generating. This is the remaining extra wait, not a new reload timer. Fresh work or a final answer cancels recovery.')
         : countdown.next === 'continue'
-        ? t('New activity, a final answer or your Stop cancels automatic Continue. Stop is used only if Gemini is still generating.')
+        ? providerText('New activity, a final answer or your Stop cancels automatic Continue. Stop is used only if Gemini is still generating.')
         : countdown.kind === 'unattributed-wait'
         ? t('An attributed MCP call clears this chat. The five-minute window starts with the first unattributed call.')
         : countdown.kind === 'unattributed'
         ? t('This chat is a possible source. An attributed MCP call cancels its reload.')
         : countdown.kind === 'silence' ? t('New activity cancels this countdown.')
         : countdown.kind === 'assistant-error'
-        ? t("Gemini's page lost this answer's live stream. The answer may still be running: the reload reconnects the page without stopping it.")
+        ? providerText("Gemini's page lost this answer's live stream. The answer may still be running: the reload reconnects the page without stopping it.")
         : t('New activity cancels recovery. The countdown shows the next check or delivery attempt.'));
       const timer = el('span', 'recovery-countdown');
       timer.setAttribute('role', 'timer');

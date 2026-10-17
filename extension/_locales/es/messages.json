@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "Conecta ChatGPT con Chat On Steroids y controla pestañas del navegador en segundo plano mediante DOM, capturas de pantalla y herramientas para desarrolladores."
+    "message": "Conecta Proveedor con Chat On Steroids y controla pestañas del navegador en segundo plano mediante DOM, capturas de pantalla y herramientas para desarrolladores."
   },
   "extension_name": {
     "message": "Extensión de navegador de Chat On Steroids"
@@ -771,7 +771,7 @@
     "message": "ID del chat"
   },
   "popup_chatgpt_tab": {
-    "message": "Pestaña de ChatGPT"
+    "message": "Pestaña de $1"
   },
   "popup_confirmed": {
     "message": "confirmado"
@@ -879,7 +879,7 @@
     "message": "sin registro"
   },
   "popup_overwrite_chatgpt": {
-    "message": "Sustituir la vista de ChatGPT"
+    "message": "Sustituir la vista de $1"
   },
   "popup_owner_confirmed": {
     "message": "Propietario confirmado"
@@ -945,7 +945,7 @@
     "message": "ID de solicitud encontrado"
   },
   "popup_section_augment_chatgpt": {
-    "message": "Ampliar ChatGPT"
+    "message": "Ampliar $1"
   },
   "popup_section_session_capture": {
     "message": "Registro de la sesión"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Asegúrate de que Chat On Steroids esté abierto en este ordenador. La extensión se conecta sola."
+  },
+  "popup_provider": {
+    "message": "Proveedor"
   }
 }

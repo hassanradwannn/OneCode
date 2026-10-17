@@ -4394,6 +4394,7 @@ const HANDLERS = {
       compatible: found ? found.compatible !== false : null,
       appVersion: found ? found.version : null,
       appProtocol: found ? found.bridge : null,
+      provider: selectedProvider,
       extensionVersion: chrome.runtime.getManifest().version,
       extensionProtocol: BRIDGE_PROTOCOL,
       signInOffer: ready ? offer : null,
@@ -4516,6 +4517,7 @@ const HANDLERS = {
     return {
       tab,
       isChat,
+      provider: providerForUrl(active?.url),
       url: isChat ? String((active && active.url) || '') : null,
       conversationId,
       bound: bound !== null,
@@ -5980,10 +5982,26 @@ async function askChatGptSignedIn(tabId) {
   // older native page is suspended. A missing read is unknown, never sign-in
   // evidence; a late result cannot amend this bounded observation.
   const frames = await browserReply(() => chrome.scripting.executeScript({ target: { tabId }, func: () => {
-    // A visible writable Gemini composer is native account evidence. No private APIs.
+    // Read only rendered account controls on this page's actual provider. ChatGPT also
+    // offers a signed-out composer, so its composer alone cannot prove an account.
+    const visible = node => {
+      if (!node?.isConnected || node.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+      for (let current = node; current; current = current.parentElement) {
+        const style = getComputedStyle(current);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      }
+      return true;
+    };
+    if (location.hostname === 'chatgpt.com' || location.hostname === 'chat.openai.com') {
+      const login = [...document.querySelectorAll('a[href*="/auth/login"], button[data-testid="login-button"], button[data-testid="signup-button"]')].some(visible);
+      const account = [...document.querySelectorAll('[data-testid="accounts-profile-button"], [data-testid="profile-button"], button[aria-label="Open profile menu"], button[aria-label="Open account menu"]')].some(visible);
+      if (login) return account ? null : false;
+      return account ? true : null;
+    }
+    if (location.hostname !== 'gemini.google.com') return null;
     const box = document.querySelector('rich-textarea [contenteditable="true"][role="textbox"]');
-    if (box && !box.closest('[hidden],[aria-hidden="true"]')) return true;
-    return [...document.querySelectorAll('a,button')].some(node => /^Sign in$/i.test(node.textContent.trim())) ? false : null;
+    if (box && visible(box) && box.getAttribute('aria-disabled') !== 'true') return true;
+    return [...document.querySelectorAll('a,button')].some(node => visible(node) && /^Sign in$/i.test(node.textContent.trim())) ? false : null;
   } }));
   const frame = frames?.[0];
   return typeof frame?.result === 'boolean' ? frame.result : null;

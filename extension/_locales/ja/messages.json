@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "ChatGPT を Chat On Steroids に接続し、DOM、スクリーンショット、開発者ツールを使ってバックグラウンドでブラウザータブを操作します。"
+    "message": "プロバイダー を Chat On Steroids に接続し、DOM、スクリーンショット、開発者ツールを使ってバックグラウンドでブラウザータブを操作します。"
   },
   "extension_name": {
     "message": "Chat On Steroids ブラウザー拡張機能"
@@ -771,7 +771,7 @@
     "message": "チャット ID"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT タブ"
+    "message": "$1 タブ"
   },
   "popup_confirmed": {
     "message": "確認済み"
@@ -879,7 +879,7 @@
     "message": "記録なし"
   },
   "popup_overwrite_chatgpt": {
-    "message": "ChatGPT の表示を置き換え"
+    "message": "$1 の表示を置き換え"
   },
   "popup_owner_confirmed": {
     "message": "帰属を確認済み"
@@ -945,7 +945,7 @@
     "message": "リクエスト ID を検出"
   },
   "popup_section_augment_chatgpt": {
-    "message": "ChatGPT の表示を拡張"
+    "message": "$1 の表示を拡張"
   },
   "popup_section_session_capture": {
     "message": "セッションの取得"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "このコンピューターで Chat On Steroids が開いていることを確認してください。拡張機能は自動的に接続します。"
+  },
+  "popup_provider": {
+    "message": "プロバイダー"
   }
 }

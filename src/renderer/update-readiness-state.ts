@@ -1,3 +1,4 @@
+import { providerText } from './provider-text.js';
 import { displayReleaseVersion } from '../shared/release-version.js';
 import type { AppState } from '../shared/types.js';
 import { isNewer } from '../shared/types.js';
@@ -43,7 +44,7 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
       nextStep: extensionReady ? undefined : extensionOlder
         ? t("Let active chats finish, then reload the browser extension in your browser.")
         : appOlder ? t('Choose Update all to check for updates and update the app.')
-        : t("Open Gemini with the browser extension enabled, then choose Review setup.") }
+        : providerText("Open Gemini with the browser extension enabled, then choose Review setup.") }
   ];
   const surfaces = status.surfaces ?? [];
   if (!surfaces.some(surface => surface.id === 'core')) {
@@ -62,32 +63,32 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
     const functional = connected && sameSchema && refresh?.responding === true;
     const surfaceFailed = surface.state === 'error' || connectionFailed;
     const detail = disabled ? t('Not enabled') : noTools ? t('No tools published') : !connected ? t('Not connected')
-      : !sameSchema ? t('Not verified in Gemini')
+      : !sameSchema ? providerText('Not verified in Gemini')
       : functional && !verified && refresh?.state === 'unknown' ? t('Tool call succeeded; full tool definitions not verified')
-      : refresh?.state === 'manual' ? t('Manual refresh required in Gemini')
+      : refresh?.state === 'manual' ? providerText('Manual refresh required in Gemini')
       : refresh?.state === 'failed' ? t(refresh.failure !== 'confirmation' ? "Plugin check failed" : "Plugin refresh failed")
       : refresh?.state === 'refreshing' ? t('Waiting for refresh confirmation')
-      : refresh?.state === 'pending' ? t('Refresh needed in Gemini')
-      : refresh?.state !== 'current' ? t('Not verified in Gemini')
-      : surface.lastRequestAt == null ? t('Waiting for a Gemini connection') : t('Verified in Gemini');
+      : refresh?.state === 'pending' ? providerText('Refresh needed in Gemini')
+      : refresh?.state !== 'current' ? providerText('Not verified in Gemini')
+      : surface.lastRequestAt == null ? providerText('Waiting for a Gemini connection') : providerText('Verified in Gemini');
     const connectionDetail = surface.detail || status.detail;
     const reason = off ? undefined : !connected ? (surfaceFailed || status.state === 'disconnected') && connectionDetail ? t(connectionDetail) : undefined
       : sameSchema && refresh?.state === 'failed' ? refresh.failure === 'inspection'
-        ? t("Could not inspect the installed plugin in Gemini.")
+        ? providerText("Could not inspect the installed plugin in Gemini.")
         : refresh.failure === 'migration' ? t("Could not verify the saved plugin against the current tool definitions.")
-        : refresh.failure === 'confirmation' ? t("Could not confirm the plugin's current tool definitions in Gemini.") : undefined : undefined;
+        : refresh.failure === 'confirmation' ? providerText("Could not confirm the plugin's current tool definitions in Gemini.") : undefined : undefined;
     const nextStep = off || verified ? undefined : !connected
       ? t('Choose Review setup to check the connection, then choose Update all to retry.')
       : sameSchema && refresh?.state === 'manual'
-        ? t("In Gemini's plugin settings, refresh or recreate this plugin, then choose Update all to recheck.")
+        ? providerText("In Gemini's plugin settings, refresh or recreate this plugin, then choose Update all to recheck.")
       : sameSchema && refresh?.state === 'failed' && refresh.failure === 'migration'
-        ? t("In Gemini, refresh this existing plugin, then choose Update all to recheck. If Refresh is unavailable, save a Diagnostics report from Activity.")
+        ? providerText("In Gemini, refresh this existing plugin, then choose Update all to recheck. If Refresh is unavailable, save a Diagnostics report from Activity.")
       : sameSchema && refresh?.state === 'failed'
-        ? t("Open this plugin's settings in Gemini, then choose Update all to recheck. If the check still fails, save a Diagnostics report from Activity.")
+        ? providerText("Open this plugin's settings in Gemini, then choose Update all to recheck. If the check still fails, save a Diagnostics report from Activity.")
       : sameSchema && refresh?.state === 'refreshing'
-        ? t("Wait for confirmation. If it does not arrive, open this plugin in Gemini and choose Update all to recheck.")
+        ? providerText("Wait for confirmation. If it does not arrive, open this plugin in Gemini and choose Update all to recheck.")
       : sameSchema && refresh?.state === 'current'
-        ? t("Run a tool through this plugin in Gemini to confirm this connection.")
+        ? providerText("Run a tool through this plugin in Gemini to confirm this connection.")
       : t("Choose Update all to check the installed plugin's tool definitions.");
     const row: ReadinessRow = { id: surface.id, label: surface.connectorName, reason, nextStep,
       schemaUnchecked: !off && functional && !verified,

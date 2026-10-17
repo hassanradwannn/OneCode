@@ -1,10 +1,11 @@
+import { providerText } from './provider-text.js';
 import { ui, t } from './i18n.js';
 import type { AppState } from '../shared/types.js';
 import type { SettingsPatch } from '../preload/index.js';
 import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
 import { $, disclosureChevron, el, run, toast } from './dom.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 
 let snapshot: PluginSnapshot = { plugins: [], catalog: [], schemaRevision: 0 };
 let epoch = 0;
@@ -60,7 +61,7 @@ function pluginsConnectorName(): string {
   return appState?.status.surfaces.find(item => item.id === 'plugins')?.connectorName ?? 'OneCode Plugins';
 }
 function provider(): ChatProvider { return appState?.config.ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER; }
-function providerName(): string { return chatProviderLabel(provider()); }
+function providerName(): string { return t("the provider"); }
 function providerPluginsUrl(): string {
   return provider() === 'chatgpt' ? 'https://chatgpt.com/plugins' : 'https://gemini.google.com/customize/connectors';
 }
@@ -107,7 +108,7 @@ function showConnection(): void {
   let key: HTMLInputElement | null = null;
   if (config.tunnel.kind === 'openai') {
     body.append(button(() => t("Open Tunnels"), async () => { await run(window.api.openLink('https://platform.openai.com/settings/organization/tunnels')); }));
-    tunnel = field(body, () => t("Plugins tunnel ID"), config.tunnel.pluginsTunnelId ?? '', false, () => t("Create a dedicated tunnel in the same workspace you use in Gemini."));
+    tunnel = field(body, () => t("Plugins tunnel ID"), config.tunnel.pluginsTunnelId ?? '', false, () => providerText("Create a dedicated tunnel in the same workspace you use in Gemini."));
     tunnel.id = 'pluginsTunnelId'; tunnel.spellcheck = false; tunnel.autocomplete = 'off';
     const shared = el('p', 'hint is-required'); shared.id = 'pluginsTunnelIdShared'; shared.setAttribute('role', 'status');
     tunnel.closest('label')!.after(shared);
@@ -201,7 +202,7 @@ function renderCatalog(parent: HTMLElement, query = ''): void {
 }
 function renderPluginTools(parent: HTMLElement, plugin: PluginView): void {
     const published = plugin.tools.filter(tool => tool.published).length;
-    const publication = plugin.tools.some(tool => tool.published !== undefined) ? t(" · {0} available in Gemini", [published]) : '';
+    const publication = plugin.tools.some(tool => tool.published !== undefined) ? providerText(" · {0} available in Gemini", [published]) : '';
     parent.replaceChildren();
     if (plugin.status === 'needs-auth' || plugin.status === 'authenticating') {
       const auth = el('div', 'plugin-auth');
@@ -211,14 +212,14 @@ function renderPluginTools(parent: HTMLElement, plugin: PluginView): void {
         : button(() => t("Sign in"), async () => { await mutate(window.api.pluginsAuthenticate(plugin.id), false); }, true));
       parent.append(auth);
     }
-    parent.append(el('h3', '', () => t("Tools")), el('p', 'plugin-tools-summary', () => t("{0}/{1} enabled{2} · This plugin only · Refresh Gemini after changes", [plugin.tools.filter(tool => tool.enabled).length, plugin.tools.length, publication])));
+    parent.append(el('h3', '', () => t("Tools")), el('p', 'plugin-tools-summary', () => providerText("{0}/{1} enabled{2} · This plugin only · Refresh Gemini after changes", [plugin.tools.filter(tool => tool.enabled).length, plugin.tools.length, publication])));
     if (plugin.error) parent.append(el('p', 'plugin-error', plugin.error));
     const tools = el('div', 'plugin-tools');
     for (const tool of plugin.tools) {
       const row = el('label', 'plugin-tool'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = tool.enabled; checkbox.disabled = !plugin.enabled;
       checkbox.addEventListener('change', async () => { checkbox.disabled = true; if (!await mutate(window.api.pluginsSetToolEnabled(plugin.id, tool.name, checkbox.checked))) { checkbox.checked = tool.enabled; checkbox.disabled = !plugin.enabled; } });
       const text = el('span'); text.append(el('b', '', tool.name), el('small', 'muted', tool.description || tool.exposedName));
-      if (tool.enabled && tool.published === false) text.append(el('small', 'muted', () => tool.exposureError ?? t("Not available in Gemini. Check this plugin’s connection.")));
+      if (tool.enabled && tool.published === false) text.append(el('small', 'muted', () => tool.exposureError ?? providerText("Not available in Gemini. Check this plugin’s connection.")));
       row.append(checkbox, text); tools.append(row);
     }
     parent.append(tools);
@@ -275,7 +276,7 @@ function showConfigure(plugin: PluginView): void {
   }, true));
 }
 function showCatalog(): void {
-  const { body } = dialog(() => t("Add a plugin")); body.append(el('p', 'muted', () => t("Independent integrations, one shared plugin in Gemini. Review each plugin’s access and setup before installing.")));
+  const { body } = dialog(() => t("Add a plugin")); body.append(el('p', 'muted', () => providerText("Independent integrations, one shared plugin in Gemini. Review each plugin’s access and setup before installing.")));
   const grid = el('div', 'plugin-catalog'); grid.dataset.pluginCatalog = ''; renderCatalog(grid);
   body.append(grid, el('h3', '', () => t("Bring your own server"))); const custom = el('div', 'plugin-actions');
   custom.append(button(() => t("Import MCPB bundle"), async () => { const path = await run(window.api.pluginsImportBundle()); if (path) showCustom('mcpb', path); }), button(() => t("npm / Python / executable"), () => showCustom('npm')), button(() => t("Remote MCP URL"), () => showCustom('remote')), button(() => t("GitHub repository"), () => showCustom('github')));

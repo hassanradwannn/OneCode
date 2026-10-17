@@ -62,6 +62,17 @@ function stage(name, state, meta) {
 
 // -------------------------------------------------------------------- pipeline
 
+function popupProviderLabel(info, status) {
+  return t('popup_provider', 'Provider');
+}
+
+function paintProvider(info, status) {
+  const name = popupProviderLabel(info, status);
+  $('providerTabLabel').textContent = t('popup_chatgpt_tab', '$1 tab', name);
+  $('providerAugmentLabel').textContent = t('popup_section_augment_chatgpt', 'Augment $1', name);
+  $('providerOverwriteLabel').textContent = t('popup_overwrite_chatgpt', 'Overwrite $1', name);
+}
+
 /** How the app describes what it placed a call on, in its own words. */
 const ATTRIBUTION = {
   request_id: t('popup_attribution_exact_request_id', 'exact request id'),
@@ -127,7 +138,7 @@ function pipeline(info, ready) {
           'popup_pipeline_extension_blocked',
           'The extension is not accepting this tab’s observations ($1). Reload the Gemini tab.',
           page.blocked
-        )
+        ).replaceAll('Gemini', popupProviderLabel(info))
       ]
     };
   }
@@ -276,7 +287,7 @@ function paintAlert(status, info) {
       'popup_version_mismatch_help',
       "App v$1 (protocol $2); extension v$3 (protocol $4). Open your browser's Extensions page, enable Developer mode, then Update / Reload this extension. If the mismatch remains, use Open extension folder in OneCode and load that folder. Reload Gemini tabs when their active work is finished.",
       [status.appVersion || '?', status.appProtocol ?? '?', status.extensionVersion || '?', status.extensionProtocol ?? '?']
-    )
+    ).replaceAll('Gemini', popupProviderLabel(info, status))
     : pairError && pairError.message
       ? pairError.message
       : pairError && pairError.error === 'secure_storage_unavailable'
@@ -389,6 +400,7 @@ async function refresh() {
     chrome.runtime.sendMessage({ type: 'tabStatus' }).catch(() => null)
   ]);
   latest = { status, tab: info };
+  paintProvider(info, status);
 
   const ready = paintHeader(status);
   const isChat = Boolean(info && info.isChat);

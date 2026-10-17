@@ -2,7 +2,7 @@ import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
 import { $, run, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderLabel } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
 
 type ExternalBrowser = Exclude<ChatBrowser, 'cos'>;
 const icons = {
@@ -25,7 +25,7 @@ type Login = { done: boolean; signedIn: boolean; text(): string };
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   proof: { signedIn: boolean | null; provider?: 'gemini' | 'chatgpt' } | null): Login {
   const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
-  const providerName = chatProviderLabel(provider);
+  const providerName = 'the provider';
   if (where === 'cos') {
     return { done: false, signedIn: false, text: () => t('Choose a full browser to continue. Embedded Google sign-in is not supported.') };
   }
@@ -106,7 +106,7 @@ export function initBrowserSetup(actions: {
     current = state;
     const browser = state.config.ui.chatBrowser ?? 'chrome';
     const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
-    const providerName = chatProviderLabel(provider);
+    const providerName = 'the provider';
     const providerHost = provider === 'chatgpt' ? 'chatgpt.com' : 'gemini.google.com';
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;

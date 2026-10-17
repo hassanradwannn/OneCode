@@ -3470,6 +3470,45 @@ var CLF_DOM = (() => {
       toggle.click(); check();
     });
   }
+  const dismissedComparisons = new WeakSet();
+  /** The feedback footer owns this Skip. A reasoning row never does. */
+  function dismissComparisonPreference() {
+    return safe(() => {
+      if (location.hostname !== 'chatgpt.com' && location.hostname !== 'chat.openai.com') return false;
+      const visible = node => node?.isConnected && node.getClientRects().length > 0 &&
+        !node.closest('[hidden],[aria-hidden="true"],[inert]') && getComputedStyle(node).visibility !== 'hidden';
+      const label = node => (node.getAttribute('aria-label') || node.textContent || '').replace(/\s+/g, ' ').trim();
+      const buttons = [...document.querySelectorAll('button')];
+      for (const prefer of buttons.filter(node => visible(node) && /^I prefer this option$/i.test(label(node)))) {
+        // Find the isolated footer, containing only the preference and Skip controls.
+        // The answer's Skip-thinking button may coexist elsewhere in the comparison.
+        let footer = prefer.parentElement, skip = null;
+        for (let depth = 0; footer && depth < 4; depth++, footer = footer.parentElement) {
+          const actions = [...footer.querySelectorAll('button')].filter(visible);
+          const skips = actions.filter(node => /^Skip$/i.test(label(node)));
+          if (actions.length === 2 && actions.includes(prefer) && skips.length === 1) { skip = skips[0]; break; }
+          if (actions.length > 2) break;
+        }
+        if (!skip || skip.disabled || dismissedComparisons.has(skip) ||
+            skip.closest('[data-message-author-role], [data-turn-key], section[data-testid^="conversation-turn"], [data-testid*="thinking"], [data-testid*="reasoning"], [data-testid*="thought"], .clf-stream')) continue;
+        let panel = footer;
+        for (let depth = 0; panel && depth < 8; depth++, panel = panel.parentElement) {
+          const heading = [...panel.querySelectorAll('h1,h2,h3,[role="heading"]')].some(node => visible(node) && /^Which option do you prefer\?$/i.test(label(node)));
+          if (!heading) continue;
+          const content = (panel.textContent || '').replace(/\s+/g, ' ');
+          const choices = [...panel.querySelectorAll('button')].filter(visible);
+          if (!/Improve your experience by letting us know which option is better/i.test(content) ||
+              !choices.some(node => /^Option 1$/i.test(label(node))) || !choices.some(node => /^Option 2$/i.test(label(node)))) break;
+          if (!visible(skip) || !footer.contains(prefer) || !footer.contains(skip)) break;
+          dismissedComparisons.add(skip);
+          skip.click();
+          return true;
+        }
+      }
+      return false;
+    }, false);
+  }
+
   return {
     TURN_SELECTOR: TURN,
     provider: 'chatgpt',
@@ -3545,6 +3584,7 @@ var CLF_DOM = (() => {
       if (button) button.click();
     },
     conversationId,
+    dismissComparisonPreference,
     conversationFromPath,
     conversationTitle,
     turns,

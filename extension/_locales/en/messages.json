@@ -738,7 +738,7 @@
     "message": "OneCode Companion"
   },
   "extension_description": {
-    "message": "Connects Gemini to the separate OneCode desktop workspace."
+    "message": "Connects Provider to the separate OneCode desktop workspace."
   },
   "extension_name": {
     "message": "OneCode Companion"
@@ -771,7 +771,7 @@
     "message": "Chat ID"
   },
   "popup_chatgpt_tab": {
-    "message": "Gemini tab"
+    "message": "$1 tab"
   },
   "popup_confirmed": {
     "message": "confirmed"
@@ -879,7 +879,7 @@
     "message": "no record"
   },
   "popup_overwrite_chatgpt": {
-    "message": "Overwrite Gemini"
+    "message": "Overwrite $1"
   },
   "popup_owner_confirmed": {
     "message": "Owner confirmed"
@@ -945,7 +945,7 @@
     "message": "Request ID found"
   },
   "popup_section_augment_chatgpt": {
-    "message": "Augment Gemini"
+    "message": "Augment $1"
   },
   "popup_section_session_capture": {
     "message": "Session capture"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "Make sure OneCode is open on this computer. The extension connects on its own."
+  },
+  "popup_provider": {
+    "message": "Provider"
   }
 }

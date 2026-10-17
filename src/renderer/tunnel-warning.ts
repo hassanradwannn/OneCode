@@ -1,4 +1,5 @@
-import { t, ui } from './i18n.js';
+import { providerText } from './provider-text.js';
+import { ui } from './i18n.js';
 import { connectorsSharingTunnel, type ConnectorTunnelIds } from '../shared/tunnel-ids.js';
 import type { SurfaceId } from '../shared/types.js';
 
@@ -12,7 +13,7 @@ export function paintSharedTunnel(note: HTMLElement, tunnel: ConnectorTunnelIds,
   const others = connectorsSharingTunnel(tunnel, surface);
   note.hidden = others.length === 0;
   const names = others.map(id => CONNECTOR[id]).join(', ');
-  ui(note, 'textContent', () => others.length ? t(
+  ui(note, 'textContent', () => others.length ? providerText(
     "This tunnel ID is also set for {0}. Each plugin needs its own tunnel; otherwise Gemini sends some calls to the wrong plugin and they fail with UNKNOWN_TOOL.",
     [names]
   ) : '');

@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "ChatGPT를 Chat On Steroids에 연결하고 DOM, 스크린샷, 개발자 도구로 백그라운드에서 브라우저 탭을 제어합니다."
+    "message": "제공업체를 Chat On Steroids에 연결하고 DOM, 스크린샷, 개발자 도구로 백그라운드에서 브라우저 탭을 제어합니다."
   },
   "extension_name": {
     "message": "Chat On Steroids 브라우저 확장 프로그램"
@@ -771,7 +771,7 @@
     "message": "대화 ID"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT 탭"
+    "message": "$1 탭"
   },
   "popup_confirmed": {
     "message": "확인됨"
@@ -879,7 +879,7 @@
     "message": "기록 없음"
   },
   "popup_overwrite_chatgpt": {
-    "message": "ChatGPT 덮어쓰기"
+    "message": "$1 덮어쓰기"
   },
   "popup_owner_confirmed": {
     "message": "소유자 확인됨"
@@ -945,7 +945,7 @@
     "message": "요청 ID 확인됨"
   },
   "popup_section_augment_chatgpt": {
-    "message": "ChatGPT 확장"
+    "message": "$1 확장"
   },
   "popup_section_session_capture": {
     "message": "세션 캡처"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "이 컴퓨터에서 Chat On Steroids가 열려 있는지 확인하세요. 확장 프로그램은 자동으로 연결됩니다."
+  },
+  "popup_provider": {
+    "message": "제공업체"
   }
 }

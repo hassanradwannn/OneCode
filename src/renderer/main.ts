@@ -2,7 +2,7 @@ import { displayReleaseVersion } from '../shared/release-version.js';
 import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
@@ -1706,10 +1706,10 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
   geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
   $('geminiSkillSetup').hidden = provider !== 'gemini';
-  const providerName = chatProviderLabel(provider);
+  const providerName = 'the provider';
   paintProviderCopy(provider);
   paintProviderGuide(provider);
-  ui($('providerRailLabel'), 'textContent', () => providerName);
+  ui($('providerRailLabel'), 'textContent', () => 'Provider');
   ui($('browserLocationTitle'), 'textContent', () => `Where should ${providerName} run?`);
   ui($('extensionStepChatGpt'), 'textContent', () => `Open ${providerName} in your browser`);
   ui($('openProviderBrowserLabel'), 'textContent', () => `Open ${providerName}`);
@@ -1720,16 +1720,10 @@ function apply(next: AppState): void {
   $<HTMLButtonElement>('setupProviderPluginsOpen').dataset.link = provider === 'chatgpt'
     ? 'https://chatgpt.com/plugins'
     : 'https://gemini.google.com/customize/connectors';
-  ui($('providerBrowserTitle'), 'textContent', () => `${providerName} browser`);
-  ui($('providerBrowserHint'), 'textContent', () => provider === 'gemini'
-    ? 'Choose a full browser for Google sign-in. Install the companion and sign in to Gemini in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their browser and account.'
-    : 'Choose the full browser where ChatGPT is signed in. The same companion supports ChatGPT and Gemini. New chats switch immediately; existing chats retain their provider, browser and account.');
-  ui($('providerAccountHint'), 'textContent', () => provider === 'gemini'
-    ? 'Use Gemini’s profile menu to add or switch Google accounts. New chats use the selected account; existing chats retain their original account.'
-    : 'Use ChatGPT’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
-  ui($('providerWorkspaceHelp'), 'textContent', () => provider === 'gemini'
-    ? 'Your Google Workspace administrator may control custom connected apps. If Gemini offers no way to add a custom MCP server, ask the administrator about its availability and share the exact Core HTTPS URL shown here.'
-    : 'Your ChatGPT workspace administrator may control custom MCP plugins. If Add custom MCP server is unavailable, ask the workspace administrator to enable it or create the plugin using the exact Core HTTPS URL shown here.');
+  ui($('providerBrowserTitle'), 'textContent', () => 'Provider browser');
+  ui($('providerBrowserHint'), 'textContent', () => 'Choose the browser where your provider is signed in. Install the companion in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their provider, browser and account.');
+  ui($('providerAccountHint'), 'textContent', () => 'Use the provider’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
+  ui($('providerWorkspaceHelp'), 'textContent', () => 'Your workspace administrator may control custom MCP connections. If adding a server is unavailable, ask the administrator to enable it or create the connection using the exact Core HTTPS URL shown here.');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
   $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);

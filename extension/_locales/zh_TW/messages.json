@@ -738,7 +738,7 @@
     "message": "Chat On Steroids"
   },
   "extension_description": {
-    "message": "將 ChatGPT 連線至 Chat On Steroids，並透過 DOM、截圖與開發者工具在背景控制瀏覽器分頁。"
+    "message": "將 供應商 連線至 Chat On Steroids，並透過 DOM、截圖與開發者工具在背景控制瀏覽器分頁。"
   },
   "extension_name": {
     "message": "Chat On Steroids 瀏覽器擴充功能"
@@ -771,7 +771,7 @@
     "message": "聊天 ID"
   },
   "popup_chatgpt_tab": {
-    "message": "ChatGPT 分頁"
+    "message": "$1 分頁"
   },
   "popup_confirmed": {
     "message": "已確認"
@@ -879,7 +879,7 @@
     "message": "無記錄"
   },
   "popup_overwrite_chatgpt": {
-    "message": "覆寫 ChatGPT"
+    "message": "覆寫 $1"
   },
   "popup_owner_confirmed": {
     "message": "已確認擁有者"
@@ -945,7 +945,7 @@
     "message": "已找到請求 ID"
   },
   "popup_section_augment_chatgpt": {
-    "message": "增強 ChatGPT"
+    "message": "增強 $1"
   },
   "popup_section_session_capture": {
     "message": "工作階段擷取"
@@ -1168,5 +1168,8 @@
   },
   "popup_app_not_running_help": {
     "message": "請確認 Chat On Steroids 已在這台電腦上開啟。擴充功能會自動連線。"
+  },
+  "popup_provider": {
+    "message": "供應商"
   }
 }
