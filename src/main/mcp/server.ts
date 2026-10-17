@@ -235,13 +235,14 @@ interface SurfaceExposure {
  * preserve Core-only feature exposure solely because the other connector was queried first.
  * Monotonicity therefore has to be per surface, which is the same boundary ChatGPT caches.
  */
-const surfaceExposure = new Map<SurfaceId, SurfaceExposure>();
+const surfaceExposure = new Map<string, SurfaceExposure>();
 
-function exposureFor(surface: SurfaceId): SurfaceExposure {
-  let state = surfaceExposure.get(surface);
+function exposureFor(surface: SurfaceId, provider: ChatProvider): SurfaceExposure {
+  const key = `${provider}:${surface}`;
+  let state = surfaceExposure.get(key);
   if (!state) {
     state = { pluginTools: false, finishTool: false, caps: null, sessionTools: false, agentTools: false, find: null };
-    surfaceExposure.set(surface, state);
+    surfaceExposure.set(key, state);
   }
   return state;
 }
@@ -293,10 +294,10 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
   // previously exposed tools remain registered, and their handlers return the clear
   // TOOL_DISABLED result while the live capability is off. A fresh app/server start
   // resets the surface to the permissions that are enabled at that point.
-  forgetExposedSurface();
+  for (const id of SURFACE_IDS) surfaceExposure.delete(`${provider}:${id}`);
   const stableContext = (surface: SurfaceId): ToolContext => {
     const live = getContext();
-    const exposed = exposureFor(surface);
+    const exposed = exposureFor(surface, provider);
     if (exposed.find === null) exposed.find = !live.caps.command && live.caps.search;
     if (exposed.caps === null) {
       exposed.caps = { ...live.caps };

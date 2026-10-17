@@ -110,21 +110,34 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
     } catch { return { addresses: [], error: true }; }
   }));
   signal.throwIfAborted();
-  const addresses = [...new Set(answers.flatMap(answer => answer.addresses))].slice(0, 4);
+  // Keep both families represented: four A answers must not crowd out working IPv6.
+  const addresses: string[] = [];
+  for (let index = 0; index < 4; index++) for (const answer of answers) {
+    const address = answer.addresses[index];
+    if (address && !addresses.includes(address) && addresses.length < 4) addresses.push(address);
+  }
   if (!addresses.length) return { state: answers.some(answer => answer.error) ? 'dns-error' : 'dns-pending' };
   const metadata = new URL(endpoint.origin + METADATA + endpoint.pathname);
-  let failure: TailscalePublicFailure = 'tls-error';
-  for (const address of addresses) {
-    if (bounded.aborted) break;
+  const failures = new Set<TailscalePublicFailure>();
+  const pending = new AbortController();
+  const probeSignal = AbortSignal.any([bounded, pending.signal]);
+  try {
+    // A dead ingress must not hold a healthy one behind its socket timeout.
+    await Promise.any(addresses.map(async address => {
     try {
-      const response = await deps.read(metadata, { signal: bounded, accept: 'application/json', address });
+      const response = await deps.read(metadata, { signal: probeSignal, accept: 'application/json', address });
       signal.throwIfAborted();
-      if (bounded.aborted) break;
-      if (response.status !== 200) { failure = 'http-error'; continue; }
-      if (!object(response.json) || response.json.resource !== endpoint.href) { failure = 'metadata-error'; continue; }
-      return { state: 'ready' };
-    } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failure = 'metadata-error'; }
-  }
-  signal.throwIfAborted();
-  return { state: failure };
+      probeSignal.throwIfAborted();
+      if (response.status !== 200) failures.add('http-error');
+      else if (!object(response.json) || response.json.resource !== endpoint.href) failures.add('metadata-error');
+      else return;
+    } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
+    throw new Error('Ingress did not verify');
+    }));
+    signal.throwIfAborted();
+    return { state: 'ready' };
+  } catch {
+    signal.throwIfAborted();
+    return { state: failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : 'tls-error' };
+  } finally { pending.abort(); }
 }

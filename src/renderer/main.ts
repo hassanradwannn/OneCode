@@ -1265,6 +1265,12 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
 function paintUpdate(next: AppState): void {
+  const checkButton = $<HTMLButtonElement>('checkForUpdates');
+  const checking = next.update.stage === 'checking' || next.update.stage === 'downloading' || checkButton.getAttribute('aria-busy') === 'true';
+  checkButton.disabled = checking;
+  ui(checkButton, 'textContent', () => checking ? t('Checking…') : t('Check for updates'));
+  ui($('settingsUpdateStatus'), 'textContent', () => updateSummary(next)?.text ?? t('OneCode {0}', [displayReleaseVersion(next.update.current)]));
+  $('settingsInstallUpdateRow').hidden = next.update.stage !== 'ready' || !next.update.latest;
   const summary = updateSummary(next);
   const notice = $('updateNotice');
   const line = $('updateLine');
@@ -2616,6 +2622,14 @@ $('updateGet').addEventListener('click', () => void run(api.downloadUpdate()));
 initUpdateReadiness();
 $('updateReviewSetup').addEventListener('click', () => showTab('setup'));
 const updateAllButton = $<HTMLButtonElement>('updateAll');
+const checkForUpdatesButton = $<HTMLButtonElement>('checkForUpdates');
+checkForUpdatesButton.addEventListener('click', async () => {
+  if (checkForUpdatesButton.disabled) return;
+  checkForUpdatesButton.setAttribute('aria-busy', 'true');
+  if (state) paintUpdate(state);
+  try { await run(api.checkForUpdates()); }
+  finally { checkForUpdatesButton.removeAttribute('aria-busy'); if (state) paintUpdate(state); }
+});
 updateAllButton.addEventListener('click', async () => {
   if (updateAllButton.disabled) return;
   updateAllButton.disabled = true;
@@ -2657,6 +2671,7 @@ function installUpdate(): void {
 
 $('updateInstall').addEventListener('click', installUpdate);
 $('installUpdate').addEventListener('click', installUpdate);
+$('settingsInstallUpdate').addEventListener('click', installUpdate);
 $('cancelUpdateInstall').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('cancelUpdateInstallNotice').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('connectionPopoverToggle').addEventListener('click', () => void toggleConnection());

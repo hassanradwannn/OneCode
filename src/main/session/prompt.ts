@@ -2,6 +2,7 @@ import path from 'node:path';
 import { readFileStream } from '../codex/filesystem.js';
 import { effectiveCapabilities, getConfig } from '../config.js';
 import { currentCoreInstructions } from '../mcp/instructions.js';
+import { withMcpProvider } from '../mcp/provider-context.js';
 import { geminiBindingsEnabled } from '../gemini/bindings.js';
 import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER } from '../../shared/chat-provider.js';
 import { getSession } from './store.js';
@@ -148,7 +149,7 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = compact ? geminiOpeningInstructions() : await currentCoreInstructions(library);
+  const core = compact ? geminiOpeningInstructions() : await withMcpProvider(provider, () => currentCoreInstructions(library));
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
   const agents = await projectInstructions(scope);

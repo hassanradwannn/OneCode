@@ -42,6 +42,9 @@ function registration(target) {
 function processes(executable) {
   return JSON.parse(ps(`ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name='OneCode.exe'" | Where-Object {$_.ExecutablePath -eq ${quote(executable)}} | Select-Object ProcessId,ParentProcessId) -Compress`));
 }
+function shortcuts(executable) {
+  ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\OneCode.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'OneCode.lnk';if(-not(Test-Path -LiteralPath $menu)){throw 'OneCode Start-menu shortcut is missing'};foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);if(-not[string]::Equals($link.TargetPath,${quote(executable)},[StringComparison]::OrdinalIgnoreCase)){throw 'OneCode shortcut points outside the installed app'};if(-not[string]::Equals($link.IconLocation,${quote(executable + ',0')},[StringComparison]::OrdinalIgnoreCase)){throw 'OneCode shortcut icon points outside the installed app'}}}`);
+}
 function execute(file, args, elevate) {
   if (elevate) {
     // Only an explicit handoff can reach this permission prompt.
@@ -85,6 +88,8 @@ async function run(note, dependencies = {}) {
     const installed = dependencies.version ? dependencies.version() : ps(`(Get-Item -LiteralPath ${quote(record.executable)}).VersionInfo.ProductVersion`);
     if (installed !== record.fileVersion) throw new Error(`Installed version ${installed} differs from ${record.fileVersion}`);
     log(`installed version ${installed}; sha256 ${crypto.createHash('sha256').update(fs.readFileSync(record.executable)).digest('hex')}`);
+    (dependencies.shortcuts || shortcuts)(record.executable);
+    log('installed shortcuts verified');
     persist('relaunching');
     if (!listing(record.executable).length) {
       const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: true });

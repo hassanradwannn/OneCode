@@ -79,6 +79,16 @@ beforeEach(async () => {
   initConfigPath(directory); initDurableStore(directory); initSessionStore(directory);
   await saveConfig({ ...defaultConfig(), roots: [{ name: 'work', path: directory }] });
 });
+it('does not give ChatGPT the Gemini credential instructions when both provider servers are active', async () => {
+  await initGeminiBindings(directory);
+  const config = getConfig();
+  await saveConfig({...config, ui:{...config.ui,chatProvider:'chatgpt'}});
+  const prompt = await prepareSessionPrompt('Read the approved marker');
+  expect(prompt).not.toContain('conversation_id and session_key');
+  expect(prompt).not.toContain('GEMINI_LOCAL_SESSION');
+  expect(prompt).not.toContain('@gemini-code');
+  expect(prompt).toContain('exec_command');
+});
 
 it('uses compact Gemini setup by default without depending on an installed web skill', async () => {
   await initGeminiBindings(directory);

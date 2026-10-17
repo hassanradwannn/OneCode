@@ -27,6 +27,25 @@
   # Chromium's sandbox needs read and execute access through the app tree.
   # Add one inheritable grant to the final directory without resetting other ACLs.
   !insertmacro grantSandboxReadAccess
+  # Windows link tracking follows the old executable into NSIS's temporary
+  # old-install folder. keepShortcuts would preserve that now-broken target.
+  # Recreate the Start link after the final executable exists, including its AUMI.
+  !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
+    Delete "$newStartMenuLink"
+    !insertmacro addStartMenuLink "false"
+    ${IfNot} ${FileExists} "$newStartMenuLink"
+      SetErrorLevel 2
+      Abort "Windows could not recreate the OneCode Start-menu shortcut."
+    ${EndIf}
+    StrCpy $launchLink "$newStartMenuLink"
+  !endif
+  !ifndef DO_NOT_CREATE_DESKTOP_SHORTCUT
+    ${IfNot} ${isNoDesktopShortcut}
+    ${AndIf} ${FileExists} "$newDesktopLink"
+      Delete "$newDesktopLink"
+      !insertmacro addDesktopLink "false"
+    ${EndIf}
+  !endif
   # Older OneCode updaters delegate restart to --force-run. Keep a separate bounded
   # observer alive after NSIS exits, because ExecShellAsUser can silently fail.
   # New bootstraps omit --force-run and own their own checked restart.

@@ -187,6 +187,13 @@
               <div><h1 id="generalTitle">General</h1><p>How the app behaves day to day. Changes apply immediately.</p></div>
             </header>
             <section class="appearance-section">
+              <header class="settings-section-head"><div><h2>Updates</h2><p>Check GitHub for the latest OneCode release.</p></div></header>
+              <div class="settings-surface pane appearance-settings-card">
+                <div class="setting"><span class="setting-text"><b>OneCode updates</b><em id="settingsUpdateStatus" role="status" aria-live="polite"></em></span><button class="btn" id="checkForUpdates" type="button">Check for updates</button></div>
+                <div class="setting" id="settingsInstallUpdateRow" hidden><span class="setting-text"><b>Update ready</b><em>Install the verified download and restart when active work finishes.</em></span><button class="btn btn-solid" id="settingsInstallUpdate" type="button">Install when done</button></div>
+              </div>
+            </section>
+            <section class="appearance-section">
               <header class="settings-section-head"><div><h2>Chats</h2><p>What you see while Gemini answers, and what your messages carry.</p></div></header>
               <div class="settings-surface pane appearance-settings-card">
                 <label class="setting"><span class="setting-text"><b>Follow new output</b><em>Stay at the end of the chat while answers grow, here and on Gemini. Scrolling up pauses it.</em></span><input id="followOutput" type="checkbox" /></label>

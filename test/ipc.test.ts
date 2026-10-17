@@ -1446,6 +1446,19 @@ describe('every link the window offers', () => {
  * press that closed the window and installed nothing would be worse than no button at all.
  */
 describe('installing a downloaded update on request', () => {
+  it('manually checks for updates without using the freshness cache, installing or changing settings', async () => {
+    const updater = await import('../src/main/update.js');
+    const checked = vi.spyOn(updater, 'checkForUpdates').mockResolvedValue(undefined);
+    const stale = vi.spyOn(updater, 'checkForUpdatesIfStale').mockResolvedValue(undefined);
+    const before = structuredClone(getConfig()), quits = quitToInstallCalls;
+    try {
+      expect(await handlers.get('update:check')!(null, undefined)).toEqual({ok:true,data:true});
+      expect(checked).toHaveBeenCalledTimes(1);
+      expect(stale).not.toHaveBeenCalled();
+      expect(quitToInstallCalls).toBe(quits);
+      expect(getConfig()).toEqual(before);
+    } finally { checked.mockRestore(); stale.mockRestore(); }
+  });
   it('reports the failed app check after requesting the running connectors without quitting or changing settings', async () => {
     const updater = await import('../src/main/update.js');
     const connections = await import('../src/main/connection.js');

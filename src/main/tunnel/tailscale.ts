@@ -335,12 +335,11 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
         } else {
           failedSince ??= deps.now(); failures++;
           if (deps.now() - failedSince >= deps.retryWindowMs) {
-            check.publicIngress = { state: 'retry-required', checkedAt: Date.now() };
-            report('tunnel-unavailable', `${details[result.state]} Automatic public checks have paused. Click Connect to retry; the saved route and URL were retained.`, publicUrl);
-            delay = undefined;
+            report('tunnel-unavailable', `${details[result.state]} OneCode will keep checking automatically; the saved route and URL were retained.`, publicUrl);
+            delay = deps.watchMs;
           } else {
             report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
-            delay = Math.min(60_000, deps.watchMs * 2 ** Math.min(failures - 1, 3));
+            delay = Math.max(1, Math.round(Math.min(deps.watchMs, deps.watchMs / 3 * 2 ** Math.min(failures - 1, 2))));
           }
         }
       } catch (error) {

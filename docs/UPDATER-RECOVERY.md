@@ -55,3 +55,9 @@ runtime smoke are required. Prepublication integration uses the actual installed
 digest, registration, staging, explicit UI install and installer behavior remain real.
 This fixture is not evidence of a public GitHub network download. Public metadata and
 asset hashes are verified separately after publication.
+
+## 0.2.9 shortcut and provider repair
+
+Windows link tracking can follow the old executable into NSIS's temporary old-install directory. The upstream keepShortcuts path then preserves that dead target. The installer now recreates Start-menu links after final installation with the app identity and icon, and refreshes existing Desktop links. The bootstrap checks shortcut targets before success. Acceptance must exit the updated app and launch it through the Start-menu link.
+
+Version 0.2.9 returns to matching package, companion, release tag and manifest versions. Existing 0.2.805 installations must install this release manually once because SemVer orders 805 above 9. Subsequent normal versions can update through the app. Windows ProductVersion is 0.2.9.0.

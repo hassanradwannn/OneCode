@@ -11,8 +11,9 @@ app.whenReady().then(async () => {
       status:{state:'connected',detail:'',health:null,surfaces:[{id:'core',connectorName:'OneCode Core',description:'Core',cardSummary:'Local tools',optional:false,available:true,tools:['read'],state:'live',detail:'',localUrl:null,publicUrl:null,lastRequestAt:1,lastToolCallAt:1}]},
       connectorSchemas:{core:'fixture'},connectorRefresh:{core:{schemaId:'fixture',state:'current'}},
       bridge:{running:true,paired:true,present:true,extensionVersion:'${version}',externalExtension:{present:true,version:'${version}',signedIn:null}},update:{current:'${version}',latest:null,stage:'idle',checkedAt:1,error:null}};
-    const ok=data=>Promise.resolve({ok:true,data});let listener=()=>{};window.saves=[];window.fixtureState=state;
+    const ok=data=>Promise.resolve({ok:true,data});let listener=()=>{};window.saves=[];window.fixtureState=state;window.manualUpdateChecks=0;window.updateInstalls=0;
     window.api=new Proxy({getState:()=>ok(state),getLog:()=>ok([]),listProjects:()=>ok([]),listSessions:()=>ok({sessions:[],activeId:null,pressure:[]}),listInputs:()=>ok([]),runningTools:()=>ok([]),listPausedHelpers:()=>ok([]),getSwarm:()=>ok({running:false,agents:[],pendingReports:0}),getChatModels:()=>ok({state:'unknown',models:[],requestedAt:null,observedAt:null}),
+      checkForUpdates:()=>{window.manualUpdateChecks++;return ok(true)},installUpdate:()=>{window.updateInstalls++;return ok('restarting')},
       onStateChanged:fn=>{listener=fn;return()=>{}},saveSettings:patch=>{window.saves.push(patch.ui.chatProvider);Object.assign(state.config,patch);return ok(structuredClone(state))}},
       {get:(target,key)=>key in target?target[key]:String(key).startsWith('on')?()=>()=>{}:()=>ok(null)});`;
   const server=http.createServer((request,response)=>{
@@ -31,6 +32,9 @@ app.whenReady().then(async () => {
     const js=expression=>win.webContents.executeJavaScript(expression);
     const until=async expression=>{const end=Date.now()+10000;while(Date.now()<end){if(await js(expression))return;await new Promise(resolve=>setTimeout(resolve,40));}throw Error('Timeout '+expression+'; errors '+errors.join(';'));};
     await win.loadURL('http://127.0.0.1:'+server.address().port);await until(`document.getElementById('providerBrowserTitle').textContent==='Gemini browser'`);
+    await js(`document.querySelector('#tabs [data-tab="general"]').click();document.getElementById('checkForUpdates').click()`);
+    await until(`window.manualUpdateChecks===1 && !document.getElementById('checkForUpdates').disabled`);
+    assert.equal(await js('window.updateInstalls'),0);
     await js(`document.getElementById('chatProvider').value='chatgpt';document.getElementById('chatProvider').dispatchEvent(new Event('change',{bubbles:true}))`);
     await until(`document.getElementById('providerBrowserTitle').textContent==='ChatGPT browser'`);
     assert.deepEqual(await js('window.saves'),['chatgpt']);

@@ -1,6 +1,6 @@
 {
   "name": "onecode",
-  "version": "0.2.805",
+  "version": "0.2.9",
   "description": "Desktop workspace for Gemini and ChatGPT with local MCP tools and durable chats.",
   "license": "MIT",
   "author": "OneCode contributors",
@@ -95,5 +95,5 @@
   "bugs": {
     "url": "https://github.com/hassanradwannn/OneCode/issues"
   },
-  "shortVersionWindows": "0.2.8.5"
+  "shortVersionWindows": "0.2.9.0"
 }

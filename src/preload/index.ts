@@ -268,6 +268,8 @@ const api = {
   downloadUpdate: () => call<boolean>('update:download'),
   /** Settings opened: re-check for an update if the last answer is older than ten minutes. */
   refreshUpdate: () => call<boolean>('update:refresh'),
+  /** Explicit check bypasses the Settings freshness cache. Never requests installation. */
+  checkForUpdates: () => call<boolean>('update:check'),
 
   // Sessions, compaction and the browser bridge. Everything here is read-only or a
   // named action; there is still no channel that takes a path or a command.

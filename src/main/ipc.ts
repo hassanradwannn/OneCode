@@ -160,7 +160,7 @@ import { loadCosBrowser, syncCosBrowser } from './cos-browser/selection.js';
 import { onConnectorProofChange } from './connector-proof.js';
 import { opensInCosBrowser } from '../shared/cos-browser-sites.js';
 import { openInPreferredBrowser } from './browser.js';
-import { cancelUpdateInstall, checkForUpdatesIfStale, configureUpdateInstall, manualDownloadUrl, onUpdateChange, requestUpdateInstall, updateStatus } from './update.js';
+import { cancelUpdateInstall, checkForUpdates, checkForUpdatesIfStale, configureUpdateInstall, manualDownloadUrl, onUpdateChange, requestUpdateInstall, updateStatus } from './update.js';
 import { updateAll } from './update-all.js';
 import {
   getMacOSDesktopAccess,
@@ -1321,6 +1321,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // reaches the window through the ordinary state push; this returns before the check does.
   handle('update:refresh', async () => {
     void checkForUpdatesIfStale();
+    return true;
+  });
+  handle('update:check', async () => {
+    await checkForUpdates();
     return true;
   });
 
