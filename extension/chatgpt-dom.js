@@ -3472,6 +3472,8 @@ var CLF_DOM = (() => {
   }
   return {
     TURN_SELECTOR: TURN,
+    provider: 'chatgpt',
+    isAppHomePath: pathname => pathname === '/' || pathname === '',
     AUTHORED_SELECTOR: '[data-message-author-role="assistant"], .markdown, [data-content-search-unit-key], [data-markdown-text-style="assistant-message"]',
     turnIdOf,
     messageIdOf,
