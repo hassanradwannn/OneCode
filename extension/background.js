@@ -3374,7 +3374,7 @@ async function maintainOnce() {
     ? await chrome.permissions.contains({ origins: [selectedOrigin] }).catch(() => undefined) : undefined;
   if (intent !== connectionEpoch || !token || disconnected) return;
   const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: selectedProvider === 'chatgpt',
-    chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
+    provider: selectedProvider, chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { await activeTabs?.revoke(); return; }
@@ -6085,7 +6085,7 @@ function reportPresence() {
     const tab = tabs.find(candidate => providerForUrl(candidate.url) === selectedProvider && !candidate.incognito && !candidate.discarded && candidate.status === 'complete' &&
       typeof candidate.id === 'number' && signInStage(candidate.url || '') === 'done');
     const signedIn = tab ? await chatGptSignedIn(tab.id).catch(() => null) : null;
-    await call('/browser/presence', { method: 'POST', body: JSON.stringify({ chatGptSignedIn: signedIn }) });
+    await call('/browser/presence', { method: 'POST', body: JSON.stringify({ provider: selectedProvider, chatGptSignedIn: signedIn }) });
   })().catch(() => undefined).finally(() => { presenceFlight = null; });
   return presenceFlight;
 }

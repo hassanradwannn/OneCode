@@ -4,6 +4,8 @@ import { chatModelDisplayLabel, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel } fr
 import type { Config } from '../shared/types.js';
 import type { ReasoningEffort } from '../shared/session.js';
 import { $, el, icon, run } from './dom.js';
+import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+let activeProvider: ChatProvider = 'gemini';
 
 let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
 let generation = 0;
@@ -164,7 +166,7 @@ function options(select: HTMLSelectElement, choices: Array<{ id: string; label: 
     if (unverified) {
       ui(badge, 'textContent', () => t('Unverified'));
       // Workers and the Goal helper both fall back to Gemini's current model (#499); say so.
-      ui(badge, 'title', () => t("This Gemini account doesn't offer this model, so Gemini's current model is used."));
+      ui(badge, 'title', () => t("This {0} account doesn't offer this model, so its current model is used.", [chatProviderLabel(activeProvider)]));
     }
   }
 }
@@ -292,9 +294,9 @@ function paintComposerChoices(): void {
       return;
     }
     if (title) ui(title, 'textContent', () => catalog.state === 'pending' ? t("Loading models…") : t("Models unavailable"));
-    if (subtitle) ui(subtitle, 'textContent', () => catalog.state === 'pending' ? t("Reading your Gemini account") : t("Reload models"));
+    if (subtitle) ui(subtitle, 'textContent', () => catalog.state === 'pending' ? t("Reading your {0} account", [chatProviderLabel(activeProvider)]) : t("Reload models"));
     // An exact model was asked for and no list can confirm it. Automatic is offered, never assumed.
-    const use = el('button', 'btn', () => t("Use Gemini’s current model")) as HTMLButtonElement;
+    const use = el('button', 'btn', () => t("Use {0}’s current model", [chatProviderLabel(activeProvider)])) as HTMLButtonElement;
     use.type = 'button';
     use.dataset.useCurrentModel = '';
     use.addEventListener('click', chooseAutomatic);
@@ -357,7 +359,7 @@ function paintComposerChoices(): void {
       // An unknown saved model has no effort to keep. Clearing its stale
       // effort alone leaves Send unconfirmed; choosing current is full-model
       // consent, distinct from keeping an observed model's native effort.
-      const use = el('button', 'btn power-single', () => t('Use Gemini’s current model')) as HTMLButtonElement;
+      const use = el('button', 'btn power-single', () => t('Use {0}’s current model', [chatProviderLabel(activeProvider)])) as HTMLButtonElement;
       use.type = 'button'; use.dataset.keepMenu = 'true'; use.dataset.useCurrentModel = '';
       use.addEventListener('click', event => { event.stopPropagation(); chooseAutomatic(); });
       powers.append(use);
@@ -481,8 +483,8 @@ function paintStatus(): void {
     ? t('Model discovery timed out. {0}', [t(catalog.error.slice('Model discovery timed out. '.length))]) : t(catalog.error ?? '');
   const message = () => catalog.state === 'pending' ? t(catalog.waiting ?? "Reading your account’s model choices…")
     : catalog.error ? (catalog.models.length ? t('Refresh failed. Previously observed choices remain available. {0}', [error()]) : error())
-    : catalog.state === 'ready' ? t("Available in your Gemini account · checked {0}", [new Date(catalog.observedAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })])
-    : t("Connect to Gemini to load your models.");
+    : catalog.state === 'ready' ? t("Available in your {0} account · checked {1}", [chatProviderLabel(activeProvider), new Date(catalog.observedAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })])
+    : t("Connect to {0} to load your models.", [chatProviderLabel(activeProvider)]);
   for (const id of ['chatModelStatus', 'composerModelStatus']) {
     const node = document.getElementById(id);
     if (node) {
@@ -497,8 +499,8 @@ function paintStatus(): void {
       button.disabled = false;
       if (id === 'refreshComposerModels') {
         button.hidden = false;
-        ui(button, 'title', () => catalog.state === 'pending' ? t("Reading Gemini models") : t("Reload Gemini models"));
-        ui(button, 'aria-label', () => catalog.state === 'pending' ? t('Reading Gemini models') : t('Reload Gemini models'));
+        ui(button, 'title', () => catalog.state === 'pending' ? t("Reading {0} models", [chatProviderLabel(activeProvider)]) : t("Reload {0} models", [chatProviderLabel(activeProvider)]));
+        ui(button, 'aria-label', () => catalog.state === 'pending' ? t('Reading {0} models', [chatProviderLabel(activeProvider)]) : t('Reload {0} models', [chatProviderLabel(activeProvider)]));
       }
     }
   }
@@ -540,6 +542,10 @@ export async function ensureComposerModel(refresh = false): Promise<SendModel | 
 }
 
 export function applyChatModels(config: Config, previous?: Config): void {
+  const provider = config.ui.chatProvider ?? 'gemini';
+  const providerChanged = provider !== activeProvider;
+  activeProvider = provider;
+  if (providerChanged) { catalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] }; ++generation; }
   // Preserve configured values even before an observation arrives; unrelated saves must not erase them.
   const chosen = (id: string, value: string, prior?: string) => {
     const select = document.getElementById(id) as HTMLSelectElement | null;
@@ -550,7 +556,7 @@ export function applyChatModels(config: Config, previous?: Config): void {
   paintPair('workerModel', 'workerReasoning', chosen('workerModel', config.multiAgent.defaultModel ?? '', previous?.multiAgent.defaultModel), chosen('workerReasoning', config.multiAgent.defaultReasoning ?? '', previous?.multiAgent.defaultReasoning));
   paintPair('helperModel', 'helperReasoning', chosen('helperModel', config.goal.helperModel ?? DEFAULT_HELPER_CHAT_MODEL, previous?.goal.helperModel ?? DEFAULT_HELPER_CHAT_MODEL), chosen('helperReasoning', config.goal.helperReasoning ?? 'high', previous?.goal.helperReasoning ?? 'high'));
   paintComposerContext();
-  if (catalogSubscribed && catalog.state !== 'unknown') return;
+  if (catalogSubscribed && catalog.state !== 'unknown' && !providerChanged) return;
   const requested = ++generation;
   void window.api.getChatModels().then(result => {
     if (requested !== generation || !result?.ok || !result.data) return;

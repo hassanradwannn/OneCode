@@ -3,6 +3,7 @@ import { currentLanguage, onLanguageChange, t, ui, type Language } from './i18n.
 import { quoted } from './extension-pictures.js';
 import pages from './setup-images/pages/manifest.json';
 import { initToolApprovalNotice } from './tool-approval.js';
+import type { ChatProvider } from '../shared/chat-provider.js';
 
 /** One place to click: a few words, and where it is on the picture as percentages of its size. */
 type Spot = { text: () => string; box: [number, number, number, number]; pin?: 'top-left' | 'bottom-left' | 'outside-left' };
@@ -69,6 +70,18 @@ const guides: Record<string, Array<Page | Still>> = {
     { src: new URL('./setup-images/gemini-oauth.png', import.meta.url).href, spots: [
       { text: 'Leave Client ID and Client secret empty for this app', box: [22, 15, 64, 39] },
       { text: 'Review the tool list and finish connecting. The companion selects this app and approves its enabled tools automatically.', box: [22, 61, 64, 30] }
+    ] }
+  ],
+  'chatgpt-plugin': [
+    { scene: 'plugin-add', spots: [
+      { key: 'add', text: labels => t('Click {0}', [quoted(labels.add!)]) },
+      { key: 'item', text: labels => t('Choose {0}', [quoted(labels.item!)]) }
+    ] },
+    { scene: 'plugin-new', spots: [
+      { key: 'name', text: () => t('Copy the connector name shown below. The name in this example is illustrative.') },
+      { key: 'connection', text: () => t('Choose Server URL and paste the HTTPS MCP server URL from OneCode.') },
+      { key: 'auth', text: () => t('Choose No authentication for this secret OneCode URL.') },
+      { key: 'create', text: () => t('Review the notice, then choose Create as a plugin.') }
     ] }
   ]
 };
@@ -170,7 +183,8 @@ function guide(host: HTMLElement, shots: Shot[], enlarge: (shot: Shot, first: nu
 }
 
 /** Pictures sit small beside their moves; each opens full size, pins and all, in one dialog. */
-export function initSetupGuide(): void {
+export function initSetupGuide(): (provider: ChatProvider) => void {
+  let provider: ChatProvider = 'gemini';
   initToolApprovalNotice(window.api?.onToolApprovalNotice);
   const dialog = document.createElement('dialog');
   dialog.className = 'setup-image-dialog';
@@ -201,10 +215,12 @@ export function initSetupGuide(): void {
       host.replaceChildren();
       const slot = host.dataset.movesInto ? document.getElementById(host.dataset.movesInto) : null;
       slot?.querySelector(':scope > .guide-moves')?.remove();
-      const pictures = shots(host.dataset.setupGuide!);
+      const group = host.dataset.setupGuide === 'plugin' && provider === 'chatgpt' ? 'chatgpt-plugin' : host.dataset.setupGuide!;
+      const pictures = shots(group);
       if (pictures.length) guide(host, pictures, enlarge);
     }
   };
   build();
   onLanguageChange(build);
+  return next => { if (provider !== next) { provider = next; if (dialog.open) dialog.close(); build(); } };
 }

@@ -14,9 +14,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { logWarn } from './logger.js';
+import type { ChatProvider } from '../shared/chat-provider.js';
 
 /** The last answer Gemini gave there, kept as yes (`signedInAt`), no (`signedOutAt`) or neither. */
-type Proof = { browserId: string; version: string; installedAt: number; signedInAt: number | null; signedOutAt: number | null };
+type Proof = { browserId: string; version: string; installedAt: number; signedInAt: number | null; signedOutAt: number | null; provider?: ChatProvider };
 
 let filePath = '';
 let proof: Proof | null = null;
@@ -38,7 +39,8 @@ export async function loadBrowserProof(): Promise<void> {
         typeof value.version === 'string' && value.version.length <= 32 && time(value.installedAt) !== null) {
       const signedInAt = time(value.signedInAt);
       proof = { browserId: value.browserId, version: value.version, installedAt: time(value.installedAt)!, signedInAt,
-        signedOutAt: signedInAt === null ? time(value.signedOutAt) : null };
+        signedOutAt: signedInAt === null ? time(value.signedOutAt) : null,
+        ...(value.provider === 'chatgpt' ? { provider: 'chatgpt' as const } : {}) };
     }
   } catch (error) {
     // Missing on a first run; anything unreadable is only lost evidence, never a wrong answer.
@@ -66,7 +68,8 @@ export function noteExternalInstalled(browserId: string, version: string, at = D
   if (proof && proof.browserId === browserId && proof.version === version) return false;
   // Another instance (another browser or profile) proves nothing about the old one's login.
   const same = proof?.browserId === browserId;
-  proof = { browserId, version, installedAt: at, signedInAt: same ? proof!.signedInAt : null, signedOutAt: same ? proof!.signedOutAt : null };
+  proof = { browserId, version, installedAt: at, signedInAt: same ? proof!.signedInAt : null, signedOutAt: same ? proof!.signedOutAt : null,
+    ...(same && proof?.provider ? { provider: proof.provider } : {}) };
   persist();
   return true;
 }
@@ -75,9 +78,10 @@ export function noteExternalInstalled(browserId: string, version: string, at = D
  * Gemini's own answer in that browser. A signed-out answer replaces the lasting login and stays,
  * so a logout reads as one after the live answer expires, until a new sign-in is seen.
  */
-export function noteExternalSignedIn(browserId: string, signedIn: boolean, at = Date.now()): boolean {
+export function noteExternalSignedIn(browserId: string, signedIn: boolean, at = Date.now(), provider: ChatProvider = 'gemini'): boolean {
   if (!proof || proof.browserId !== browserId) return false;
-  const known = proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null;
+  const known = (proof.provider ?? 'gemini') !== provider ? null : proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null;
+  proof.provider = provider;
   if (signedIn) { proof.signedInAt = at; proof.signedOutAt = null; }
   else { proof.signedOutAt = at; proof.signedInAt = null; }
   // Refreshing the time of the same answer is not news; only a change is worth a write.
@@ -87,9 +91,10 @@ export function noteExternalSignedIn(browserId: string, signedIn: boolean, at = 
 }
 
 /** The lasting evidence for the person's own browser, or null. `signedIn` null: never answered. */
-export function externalBrowserProof(): { browserId: string; version: string; signedIn: boolean | null } | null {
+export function externalBrowserProof(): { browserId: string; version: string; signedIn: boolean | null; provider?: ChatProvider } | null {
   return proof && { browserId: proof.browserId, version: proof.version,
-    signedIn: proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null };
+    signedIn: proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null,
+    ...(proof.provider === 'chatgpt' ? { provider: proof.provider } : {}) };
 }
 
 /** For tests: wait for the file to settle. */

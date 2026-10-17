@@ -852,7 +852,7 @@
                   <details class="setup-optional step-wide" id="workspaceMemberHelp">
                     <summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini workspace without admin rights <span class="tag is-optional">optional</span></summary>
                     <div class="field workspace-member-help">
-                      <p class="hint">Your Google Workspace administrator may control custom connected apps. If Gemini offers no way to add a custom MCP server, ask the administrator about its availability and share the exact Core HTTPS URL shown here.</p>
+                      <p class="hint" id="providerWorkspaceHelp">Your Google Workspace administrator may control custom connected apps. If Gemini offers no way to add a custom MCP server, ask the administrator about its availability and share the exact Core HTTPS URL shown here.</p>
                       <p class="hint">Tailscale uses your own Tailscale account and device. Your tailnet administrator may need to allow Funnel. No Gemini model API key is required for this connection.</p>
                       <p class="hint">Tailscale retains the hostname and app paths across ordinary restarts. Renaming the device or changing tailnets can change that address. A Cloudflare quick tunnel gets a new hostname on every connection; update Gemini when the URL changes.</p>
                       <p class="hint">Anyone who can use the plugin can use this computer within the permissions you chose. Where the workspace allows it, ask the admin to make the plugin available only to you.</p>
@@ -888,7 +888,7 @@
               </li>
             </ol>
 
-            <details class="advanced" id="geminiSkillSetup" open>
+            <details class="advanced" id="geminiSkillSetup" data-provider-only="gemini" open>
               <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini skill — optional</summary>
               <div class="field">
                 <p>OneCode includes reusable guidance for Gemini, named <b translate="no">gemini-code</b>. Core tools work without this skill: the app selects Core and provides current tool instructions automatically.</p>

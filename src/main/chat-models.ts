@@ -6,6 +6,10 @@ import { z } from 'zod';
 import { logInfo } from './logger.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
 import { readDurable, writeDurableSoon } from './durable.js';
+import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+let activeProvider: ChatProvider = 'gemini';
+const catalogKey = () => activeProvider === 'gemini' ? 'chat-models' : 'chat-models-chatgpt';
+const providerText = (text: string) => text.replaceAll('Gemini', chatProviderLabel(activeProvider));
 const observation = z.object({
   nonce: z.string().uuid(),
   error: z.enum(['picker_unavailable', 'picker_close_failed', 'model_unconfirmed', 'power_unknown', 'power_unconfirmed', 'power_changed', 'restore_failed', 'inspection_failed']).optional(),
@@ -45,11 +49,20 @@ let launch: { nonce: string; allowOpen: boolean; work: Promise<void> } | null = 
 let changed = (): void => {};
 let wake: ((nonce: string, allowOpen: boolean) => Promise<void>) | null = null;
 export async function restoreChatModels(): Promise<void> {
-  const saved = z.object({ observedAt: z.number().finite().positive(), models: observation.shape.models.unwrap() }).strict().safeParse(await readDurable('chat-models'));
-  if (!saved.success || request || catalog.state !== 'unknown') return;
+  const provider = activeProvider;
+  const saved = z.object({ observedAt: z.number().finite().positive(), models: observation.shape.models.unwrap() }).strict().safeParse(await readDurable(catalogKey()));
+  if (provider !== activeProvider || !saved.success || request || catalog.state !== 'unknown') return;
   const models = saved.data.models;
   if (new Set(models.map(model => model.id)).size !== models.length || models.some(model => new Set(model.efforts).size !== model.efforts.length)) return;
   catalog = { state: 'ready', requestedAt: null, observedAt: saved.data.observedAt, models };
+}
+/** A provider switch retires its discovery nonce; a late old observation cannot populate the new picker. */
+export async function setChatModelProvider(provider: ChatProvider): Promise<void> {
+  if (provider === activeProvider) return;
+  clearCatalog();
+  activeProvider = provider;
+  await restoreChatModels();
+  changed(); wakeBrowserWork();
 }
 function failed(error: string): void {
   catalog = { ...catalog, state: catalog.models.length ? 'ready' : 'unavailable', waiting: undefined, error };
@@ -67,7 +80,9 @@ function expire(): void {
   }
 }
 export function getChatModels(): ChatModelCatalog {
-  expire(); return structuredClone(catalog);
+  expire(); return structuredClone({ ...catalog,
+    ...(catalog.error ? { error: providerText(catalog.error) } : {}),
+    ...(catalog.waiting ? { waiting: providerText(catalog.waiting) } : {}) });
 }
 export function requestChatModels(allowOpen = true): ChatModelCatalog {
   expire();
@@ -167,13 +182,14 @@ export function observeChatModels(raw: unknown): boolean {
     : 'Gemini model choices could not be confirmed. Check the native picker in the selected browser, then retry.';
   if (models) {
     catalog = { ...catalog, state: 'ready', models, observedAt: Date.now(), waiting: undefined, error: undefined };
-    writeDurableSoon('chat-models', { observedAt: catalog.observedAt, models });
+    writeDurableSoon(catalogKey(), { observedAt: catalog.observedAt, models });
   } else failed(error);
   request = null;
   if (deadline) clearTimeout(deadline); deadline = null;
   changed(); wakeBrowserWork(); return true;
 }
-export function resetChatModelsForTests(): void {
+function clearCatalog(): void {
   if (deadline) clearTimeout(deadline); deadline = null; launch = null;
   request = null; lastProblem = null; unofferedAsked.clear(); catalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
 }
+export function resetChatModelsForTests(): void { clearCatalog(); activeProvider = 'gemini'; }

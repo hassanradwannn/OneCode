@@ -1,3 +1,6 @@
+import { displayReleaseVersion } from '../shared/release-version.js';
+import { initProviderCopy, initProviderSettings } from './provider-settings.js';
+import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
@@ -110,8 +113,9 @@ const settingsSearch = initSettingsSearch({
   open: tab => showTab(tab),
   shown: () => document.querySelector<HTMLElement>('.app')!.dataset.screen === 'settings'
 });
-initSetupGuide();
+const paintProviderGuide = initSetupGuide();
 const geminiSkillSetup = initGeminiSkillSetup(api);
+const paintProviderCopy = initProviderCopy();
 const browserSetup = initBrowserSetup({
   choose: async browser => {
     chooseChatBrowser(browser);
@@ -174,6 +178,9 @@ let state: AppState | null = null;
 let updateAllError: string | null = null;
 /** Guards against saving while we are writing values into the controls. */
 let applying = false;
+function providerT(source: string, args: readonly unknown[] = []): string {
+  return providerCopy(t(source), state?.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, args);
+}
 
 /**
  * Applies persisted form state without erasing a value the user is currently editing.
@@ -548,7 +555,7 @@ function buildGroups(): void {
   const enabled = document.createElement('input');
   enabled.type = 'checkbox';
   enabled.id = 'homeMaEnabled';
-  ui(enabled, 'title', () => t("Expose or hide the sub-agent tools in Gemini"));
+  ui(enabled, 'title', () => providerT("Expose or hide the sub-agent tools in Gemini"));
   // The only multi-agent exposure control there is. Chat settings used to carry a second
   // checkbox for the same flag, which this one had to mirror by hand.
   enabled.addEventListener('change', () => void save());
@@ -807,9 +814,9 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     if (previous.multiAgent.enabled && !patch.multiAgent.enabled) {
       // A cached snapshot keeps offering the `agents` tool until the connector is
       // reloaded. Say so plainly rather than letting it look sticky.
-      toast(t("Multi-agent off. Refresh the Core plugin in Gemini (then start a new chat) to drop the agents tool."));
+      toast(providerT("Multi-agent off. Refresh the Core plugin in Gemini (then start a new chat) to drop the agents tool."));
     } else if (toolSurfaceChanged) {
-      toast(t("Tools changed. Start a new Gemini conversation to guarantee the new tool list is loaded."));
+      toast(providerT("Tools changed. Start a new Gemini conversation to guarantee the new tool list is loaded."));
     }
   } else {
     await refresh();
@@ -966,11 +973,11 @@ function paintAccess(next: AppState): void {
     (access.screen !== 'granted' || access.accessibility !== 'granted');
   const note = $('accessNote');
   const text = () => level === 'read'
-    ? t("Gemini can only read files. Choose another option so it can edit files and run commands.")
+    ? providerT("Gemini can only read files. Choose another option so it can edit files and run commands.")
     : level === 'custom'
       ? accessWorks(next)
         ? t("Custom permissions, set in Workspace.")
-        : t("These permissions keep Gemini from editing files or running commands. Choose an option above, or change them in Workspace.")
+        : providerT("These permissions keep Gemini from editing files or running commands. Choose an option above, or change them in Workspace.")
       : macConsent
         ? t("On macOS, desktop control also needs Screen Recording and Accessibility in System Settings.")
         : '';
@@ -1214,7 +1221,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   let tone: UpdateTone = 'work';
   // #1490: an installer that stopped silently left this start on the old version.
   if (update.notInstalled) {
-    lines.push(t("OneCode {0} did not install; this is still {1}. Choose Install to try again; Windows may ask for permission.", [update.notInstalled, update.current]));
+    lines.push(t("OneCode {0} did not install; this is still {1}. Choose Install to try again; Windows may ask for permission.", [displayReleaseVersion(update.notInstalled), displayReleaseVersion(update.current)]));
     tone = 'bad';
   }
   if (update.latest && !(update.notInstalled === update.latest && update.stage === 'ready')) {
@@ -1226,13 +1233,13 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
         ? t("Checking for the latest update…")
         : update.stage === 'ready'
         ? update.installRequested
-          ? t("OneCode {0} will install when work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first. You can cancel this restart.", [update.latest])
-          : t("OneCode {0} is downloaded and ready. Choose Install when done to restart after your work finishes.", [update.latest])
+          ? t("OneCode {0} will install when work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first. You can cancel this restart.", [displayReleaseVersion(update.latest!)])
+          : t("OneCode {0} is downloaded and ready. Choose Install when done to restart after your work finishes.", [displayReleaseVersion(update.latest!)])
         : update.stage === 'downloading'
-          ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [update.latest, String(update.downloadPercent ?? 0)])
+          ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [displayReleaseVersion(update.latest), String(update.downloadPercent ?? 0)])
           : update.stage === 'failed'
-            ? t("OneCode {0} could not be downloaded: {1}.", [update.latest, update.error ? updateErrorText(update.error) : t("the download stopped")])
-            : t("OneCode {0} is out. This installation has to be updated by hand.", [update.latest])
+            ? t("OneCode {0} could not be downloaded: {1}.", [displayReleaseVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
+            : t("OneCode {0} is out. This installation has to be updated by hand.", [displayReleaseVersion(update.latest!)])
     );
     if (update.stage === 'failed' || update.notInstalled) tone = 'bad';
   } else if (update.stage === 'failed') {
@@ -1242,17 +1249,17 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     lines.push(t("Checking for a newer version…"));
   } else if (!stale && !repairExtension && !missing && !update.notInstalled) {
     const extension = bridge.present && bridge.extensionVersion ? t(" · extension {0}", [bridge.extensionVersion]) : '';
-    lines.push(t("Up to date! OneCode {0}{1}", [update.current, extension]));
+    lines.push(t("Up to date! OneCode {0}{1}", [displayReleaseVersion(update.current), extension]));
     tone = 'ok';
   }
   if (stale || repairExtension) {
     lines.push(
       (stale ? t("Update your browser extension: {0} → {1}. ", [stale, update.current]) : '') +
-        t("Reload the extension from this app’s folder, then refresh Gemini.")
+        providerT("Reload the extension from this app’s folder, then refresh Gemini.")
     );
     tone = 'bad';
   }
-  if (missing) { lines.push(t("Browser extension not connected. Open Gemini and check the extension in Setup to load models and send messages.")); tone = 'bad'; }
+  if (missing) { lines.push(providerT("Browser extension not connected. Open Gemini and check the extension in Setup to load models and send messages.")); tone = 'bad'; }
   return { text: lines.join(' '), tone, notice: Boolean(update.latest || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t("Check extension") : null };
 }
 
@@ -1591,8 +1598,8 @@ function apply(next: AppState): void {
   $('readOnlyBtn').setAttribute('aria-pressed', String(config.readOnly));
   // The lock reads like a state; the title says which way a click goes and what it changes.
   ui($('readOnlyBtn'), 'title', () => config.readOnly
-    ? t('Read-only is on: Gemini can only look. Click to allow changes again.')
-    : t('Switch to read-only: Gemini can still look at files and the screen, but can’t create, edit, move or delete files, run programs or control this computer.'));
+    ? providerT('Read-only is on: Gemini can only look. Click to allow changes again.')
+    : providerT('Switch to read-only: Gemini can still look at files and the screen, but can’t create, edit, move or delete files, run programs or control this computer.'));
   for (const input of document.querySelectorAll<HTMLInputElement>('[data-cap]')) {
     const cap = input.dataset.cap as Capability;
     const supported = (next.platform?.desktopAutomation ?? true) || !DESKTOP_CAPABILITIES.includes(cap) || cap === 'screen' || cap === 'control';
@@ -1694,6 +1701,8 @@ function apply(next: AppState): void {
   geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
   $('geminiSkillSetup').hidden = provider !== 'gemini';
   const providerName = chatProviderLabel(provider);
+  paintProviderCopy(provider);
+  paintProviderGuide(provider);
   ui($('providerRailLabel'), 'textContent', () => providerName);
   ui($('browserLocationTitle'), 'textContent', () => `Where should ${providerName} run?`);
   ui($('extensionStepChatGpt'), 'textContent', () => `Open ${providerName} in your browser`);
@@ -1712,6 +1721,9 @@ function apply(next: AppState): void {
   ui($('providerAccountHint'), 'textContent', () => provider === 'gemini'
     ? 'Use Gemini’s profile menu to add or switch Google accounts. New chats use the selected account; existing chats retain their original account.'
     : 'Use ChatGPT’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
+  ui($('providerWorkspaceHelp'), 'textContent', () => provider === 'gemini'
+    ? 'Your Google Workspace administrator may control custom connected apps. If Gemini offers no way to add a custom MCP server, ask the administrator about its availability and share the exact Core HTTPS URL shown here.'
+    : 'Your ChatGPT workspace administrator may control custom MCP plugins. If Add custom MCP server is unavailable, ask the workspace administrator to enable it or create the plugin using the exact Core HTTPS URL shown here.');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
   $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);
@@ -1845,10 +1857,10 @@ function apply(next: AppState): void {
   );
   ui(chatgptNote, 'textContent', () => reachedAt === null
       ? unverified.length < surfaces.filter(surface => surface.available).length
-        ? t("The plugin is in your Gemini. It runs the first time a chat asks for it.")
+        ? providerT("The plugin is in your Gemini. It runs the first time a chat asks for it.")
         : ''
       : ranAt === null
-        ? t("Gemini connected {0} but has never run a tool. Check that the CoS app is enabled in Gemini → Plugins.", [ago(reachedAt)])
+        ? providerT("Gemini connected {0} but has never run a tool. Check that the CoS app is enabled in Gemini → Plugins.", [ago(reachedAt)])
         : unverified.length > 0
           ? // One connector working is not the whole setup. Naming the missing one is the
             // difference between "something is off" and knowing what to go and create.
@@ -1857,7 +1869,7 @@ function apply(next: AppState): void {
               : "Gemini ran a tool {0}, but {1} have never been called — create them in Gemini to use them.",
             [ago(ranAt), new Intl.ListFormat(currentLanguage(), { type: 'conjunction' })
               .format(unverified.map((surface) => `“${surface.chatgptName || surface.connectorName}”`))])
-          : t("Gemini ran a tool {0} — the whole chain works.", [ago(ranAt)]));
+          : providerT("Gemini ran a tool {0} — the whole chain works.", [ago(ranAt)]));
 
   const cards = $('connectorCards');
   cards.replaceChildren(...connectorCards(next));
@@ -2040,7 +2052,7 @@ function connectorCards(next: AppState): HTMLElement[] {
         el('p', 'hint', () => t("Anyone with this URL can use your enabled tools. Do not share it."))
       );
     } else if (config.tunnel.kind === 'tailscale' && !tailscalePublicReady(next)) {
-      card.append(el('p', 'hint', () => t('Wait for public HTTPS verification before connecting this URL in Gemini.')));
+      card.append(el('p', 'hint', () => providerT('Wait for public HTTPS verification before connecting this URL in Gemini.')));
     } else if (config.tunnel.kind === 'openai') {
       card.append(
         el(
@@ -2061,14 +2073,14 @@ function connectorCards(next: AppState): HTMLElement[] {
       card.append(
         lastRequestAt === null
           ? pluginCreated(surface)
-            ? el('p', 'hint', () => t("Added in Gemini. Its tools have not run yet."))
-            : el('p', 'hint is-warn', () => t("Not created in Gemini yet — Gemini has never called this plugin."))
+            ? el('p', 'hint', () => providerT("Added in Gemini. Its tools have not run yet."))
+            : el('p', 'hint is-warn', () => providerT("Not created in Gemini yet — Gemini has never called this plugin."))
           : el(
               'p',
               'hint',
               () => lastToolCallAt === null
-                ? t("Gemini connected {0} but has not run one of its tools yet.", [ago(lastRequestAt)])
-                : t("Gemini ran one of its tools {0}.", [ago(lastToolCallAt)])
+                ? providerT("Gemini connected {0} but has not run one of its tools yet.", [ago(lastRequestAt)])
+                : providerT("Gemini ran one of its tools {0}.", [ago(lastToolCallAt)])
             )
       );
     }
@@ -2110,7 +2122,7 @@ function facts(next: AppState): HTMLElement[] {
     if (status.lastRequestAt !== null) {
       rows.push([
         'Gemini ran a tool',
-        () => status.lastToolCallAt === null ? t("never — check the app in Gemini → Plugins") : ago(status.lastToolCallAt),
+        () => status.lastToolCallAt === null ? providerT("never — check the app in Gemini → Plugins") : ago(status.lastToolCallAt),
         status.lastToolCallAt === null
       ]);
     }
@@ -2208,8 +2220,8 @@ function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, all
   ui($('readyLead'), 'textContent', () => !allSet
     ? t('Finish the steps still open below.')
     : limited
-      ? t("Gemini can now read your folders. Ask it anything in a new chat.")
-      : t('Gemini can now work in your folders. Ask it anything in a new chat.'));
+      ? providerT("Gemini can now read your folders. Ask it anything in a new chat.")
+      : providerT('Gemini can now work in your folders. Ask it anything in a new chat.'));
   // Limited access still ends setup, but never quietly: what is missing, and the way back to change it.
   $('readyLimited').hidden = !limited;
   $('readyStart').hidden = !allSet;
@@ -2223,7 +2235,7 @@ function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, all
     // Limited access is done but says what it leaves out.
     const label = () => narrowed
       ? t(access === 'read' ? 'Gemini can only read files' : "Gemini can't edit files or run commands")
-      : t(cosBrowser && check.cos ? check.cos : check.done);
+      : providerT(cosBrowser && check.cos ? check.cos : check.done);
     if (passed) {
       row.append(icon(narrowed ? 'i-warning' : 'i-check-circle'), el('span', '', label));
     } else {
@@ -2657,11 +2669,7 @@ function chooseChatBrowser(browser: ChatBrowser): void {
   choice.value = browser;
   choice.dispatchEvent(new Event('change', { bubbles: true }));
 }
-$<HTMLSelectElement>('setupChatProvider').addEventListener('change', () => {
-  const choice = $<HTMLSelectElement>('chatProvider');
-  choice.value = $<HTMLSelectElement>('setupChatProvider').value;
-  choice.dispatchEvent(new Event('change', { bubbles: true }));
-});
+initProviderSettings(save);
 $('pickBinary').addEventListener('click', async () => {
   const next = await run(api.pickBinary());
   if (next) apply(next);
@@ -2771,7 +2779,8 @@ for (const id of [
   'tunnelKind',
   'tunnelId',
   'desktopTunnelId',
-  'connectorSuffix'
+  'connectorSuffix', 'chatBrowser', 'cosBrowserMinimize', 'backgroundChats', 'backgroundPlacement',
+  'autoRefreshPlugins', 'autoSelectSkills', 'autoContinue', 'browserOnly', 'browserBridgePort'
 ]) {
   $(id).addEventListener('change', () => void save());
 }

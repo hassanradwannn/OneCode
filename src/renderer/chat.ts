@@ -5955,10 +5955,9 @@ function applyAutoCompactHint(config: Config): void {
  * expire by age.
  */
 const CHAT_INPUTS = [
-  'chatProvider', 'chatBrowser', 'cosBrowserMinimize', 'browserBridgePort',
   'goalIncludeToolCalls',
   'planBackend',
-  'finishTool', 'finishLeadMinutes', 'rotateTurnMinutes', 'localAppUsage', 'defaultChatModel', 'defaultChatReasoning', 'workerModel', 'workerReasoning', 'autoSelectSkills', 'backgroundChats', 'backgroundPlacement', 'browserOnly', 'autoRefreshPlugins',
+  'finishTool', 'finishLeadMinutes', 'rotateTurnMinutes', 'localAppUsage', 'defaultChatModel', 'defaultChatReasoning', 'workerModel', 'workerReasoning',
   'goalBackend',
   'loopBackend',
   'helperModel', 'helperReasoning',
@@ -5972,7 +5971,6 @@ const CHAT_INPUTS = [
   'autoWorktrees',
   'endSleepingWorkerProcesses',
   'archiveWorkerChats',
-  'autoContinue',
   'goalProvider',
   'goalBaseUrl',
   'goalCustomModel',

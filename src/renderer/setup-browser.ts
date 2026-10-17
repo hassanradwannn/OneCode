@@ -23,7 +23,7 @@ type Login = { done: boolean; signedIn: boolean; text(): string };
  * the status never claims a sign-out it did not see.
  */
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
-  proof: { signedIn: boolean | null } | null): Login {
+  proof: { signedIn: boolean | null; provider?: 'gemini' | 'chatgpt' } | null): Login {
   const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   const providerName = chatProviderLabel(provider);
   if (where === 'cos') {
@@ -32,8 +32,9 @@ export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   const label = LABELS[where];
   // Gemini's own answer while a tab is open there wins, so signing in or out shows at once. With
   // no tab, or the browser closed, the last answer stands in: a logout stays a logout.
-  const liveAnswer = live ? state.bridge.externalExtension?.signedIn ?? null : null;
-  const answer = liveAnswer !== null ? liveAnswer : proof?.signedIn ?? null;
+  const observation = state.bridge.externalExtension;
+  const liveAnswer = live && (observation?.provider ?? 'gemini') === provider ? observation?.signedIn ?? null : null;
+  const answer = liveAnswer !== null ? liveAnswer : (proof?.provider ?? 'gemini') === provider ? proof?.signedIn ?? null : null;
   if (answer === false) return { done: false, signedIn: false, text: () => `Not signed in to ${providerName} in ${label}.` };
   if (answer === true) return { done: true, signedIn: true, text: () => live ? `Signed in. ${providerName} is connected.` : t('Signed in.') };
   return { done: false, signedIn: false, text: () => `Open ${providerName} in ${label} to check the sign-in.` };
@@ -122,7 +123,7 @@ export function initBrowserSetup(actions: {
     const outdated = state.bridge.extensionUpdateRequired === true || knownVersion && isNewer(state.update.current, shownVersion!);
     // The browser keeps the extension off Gemini (site access "On click", a revoked Firefox
     // permission): it can pair, but nothing could ever run on a Gemini page.
-    const blocked = live && observation?.chatgptAccess === false;
+    const blocked = live && (observation?.provider ?? 'gemini') === provider && observation?.chatgptAccess === false;
     ready = state.bridge.running && state.bridge.paired && (live || proof !== null) && knownVersion && !outdated && !blocked;
     const cos = browser === 'cos';
     // A legacy setting must expose its explicit replacement even without an external

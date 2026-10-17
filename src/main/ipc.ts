@@ -25,7 +25,7 @@ import { committedResumeAncestorsFromSummary, DEFAULT_RECORDING_STORAGE_GIB, REA
 import { safeExternalLink } from '../shared/external-link.js';
 import { wakeBrowserWork } from './browser-wake.js';
 import { refreshKeepAwake } from './keep-awake.js';
-import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery } from './chat-models.js';
+import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery, setChatModelProvider } from './chat-models.js';
 import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish.js';
 import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
 import { validateInputImages } from './session/input-images.js';
@@ -404,6 +404,7 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       autoContinue: pick(current.ui.autoContinue, base.ui.autoContinue, wanted.ui.autoContinue),
       defaultChatModel: pick(current.ui.defaultChatModel, base.ui.defaultChatModel, wanted.ui.defaultChatModel),
       defaultChatReasoning: pick(current.ui.defaultChatReasoning, base.ui.defaultChatReasoning, wanted.ui.defaultChatReasoning),
+      chatProvider: pick(current.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, base.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, wanted.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
       chatBrowser: pick(current.ui.chatBrowser, base.ui.chatBrowser, wanted.ui.chatBrowser),
       cosBrowserMinimize: pick(current.ui.cosBrowserMinimize, base.ui.cosBrowserMinimize, wanted.ui.cosBrowserMinimize),
       developerMode: pick(current.ui.developerMode, base.ui.developerMode, wanted.ui.developerMode),
@@ -795,6 +796,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     else await stopBridge();
     if (before.ui.chatBrowser !== next.ui.chatBrowser) await syncCosBrowser();
     if ((before.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) !== (next.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)) {
+      await setChatModelProvider(next.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
       logInfo(`chat provider: new chats now use ${next.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER}; existing chats keep their provider`);
       wakeBrowserWork();
     }

@@ -27,7 +27,7 @@ import {
 import { setSystemProxyResolver } from './tunnel/index.js';
 import { configureAppProxy, refreshAppProxy } from './app-proxy.js';
 import { openSessionChat, registerIpc } from './ipc.js';
-import { getChatModels, restoreChatModels, startChatModelDiscovery } from './chat-models.js';
+import { getChatModels, restoreChatModels, setChatModelProvider, startChatModelDiscovery } from './chat-models.js';
 import { flushLogBeforeExit, initLogFile, logError, logInfo, logWarn, snapshotLogOnCrash } from './logger.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { workspaceTerminalsExited } from './workspace-terminal.js';
@@ -103,7 +103,7 @@ import {
 import { runShutdownSequence } from './shutdown.js';
 import { startAgentRuntimeGc, stopAgentRuntimeGc } from './runtime-gc.js';
 import { restoreManagedWorktrees } from './worktrees/index.js';
-import { applyStagedUpdate, ELEVATION_ANSWER_MS, startUpdateChecks } from './update.js';
+import { applyStagedUpdate, UPDATE_HANDOFF_MS, startUpdateChecks } from './update.js';
 import { resumeUpdateRefresh } from './update-all.js';
 import { UI_BASE_ZOOM, windowLayoutForDisplays, windowPlacementWasMaximized, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { openInPreferredBrowser } from './browser.js';
@@ -451,9 +451,10 @@ void app.whenReady().then(async () => {
   // Bundled pet packages: the packaged app's resources, or the repository's pets/ folder in dev.
   try { await initPetLibrary(userData, app.isPackaged ? path.join(process.resourcesPath, 'pets') : path.join(app.getAppPath(), 'pets')); }
   catch (error) { logWarn(`Pet library unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-  await restoreChatModels();
   if (windowActivation.isDisabled()) return;
   await loadConfig();
+  await setChatModelProvider(getConfig().ui.chatProvider ?? 'gemini');
+  await restoreChatModels();
   setRecordingStorageLimit(getConfig().sessions.storageLimitGiB ?? DEFAULT_RECORDING_STORAGE_GIB);
   await loadConnectorProof();
   await loadWorkerArchive();
@@ -771,7 +772,7 @@ app.on('will-quit', (event) => {
       // release's published SHA-256, and applying it cannot fail loudly - see update.ts.
       // An install folder that needs an administrator waits here for Windows' permission prompt
       // (#1492); exiting earlier would end that prompt with the app. Other handoffs take moments.
-      { name: 'update handoff', budgetMs: ELEVATION_ANSWER_MS + 5_000, run: () => [applyStagedUpdate()] }
+      { name: 'update handoff', budgetMs: UPDATE_HANDOFF_MS, run: () => [applyStagedUpdate()] }
     ],
     {
       info: logInfo,

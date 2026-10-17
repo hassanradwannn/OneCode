@@ -1,6 +1,7 @@
 appId: io.onecode.desktop
 productName: OneCode
 copyright: MIT licensed
+buildVersion: 0.2.8.5
 
 # OneCode's download engine uses this cache/feed; installation remains owned by
 # OneCode's explicit Update and restart action.
@@ -43,6 +44,8 @@ files:
 # Common real-filesystem resources. Platform-specific tunnel/rg/native notices are appended
 # below because their filenames and executable formats differ by OS.
 extraResources:
+  - from: resources/updater
+    to: updater
   - from: LICENSE
     to: LICENSE
   - from: THIRD-PARTY-NOTICES.txt

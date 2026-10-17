@@ -8,6 +8,10 @@ resources/skills/*
 !resources/skills/gemini-code/
 resources/skills/gemini-code/*
 !resources/skills/gemini-code/SKILL.md
+!resources/updater/
+resources/updater/*
+!resources/updater/windows-update-helper.cjs
+!resources/updater/legacy-relaunch.ps1
 *.log
 .env*
 *.private.*

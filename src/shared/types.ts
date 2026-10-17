@@ -633,9 +633,10 @@ export interface BridgeStatus {
    * Null until one has spoken to this app process; Setup's first step waits for it.
    */
   externalExtension?: {
+    provider?: import('./chat-provider.js').ChatProvider;
     present: boolean; version: string | null; lastSeenAt: number | null; signedIn?: boolean | null;
     /** Kept across restarts: the version last seen there, and whether Gemini last answered signed in. */
-    proof?: { version: string; signedIn: boolean | null } | null;
+    proof?: { version: string; signedIn: boolean | null; provider?: import('./chat-provider.js').ChatProvider } | null;
     /** `gecko`: Firefox's signed add-on, which Firefox updates itself. */
     engine?: 'gecko';
     /** false: that browser may not open chatgpt.com, so no content script can run there. */

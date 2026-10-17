@@ -115,6 +115,10 @@ if (targetPlatform === 'win32') {
   for (const file of ['node.exe', 'LICENSE', 'SHASUMS256.txt', 'runtime.json', 'node_modules/npm/LICENSE',
     'node_modules/npm/package.json', 'node_modules/npm/bin/npm-cli.js', 'node_modules/npm/bin/npx-cli.js']) required(`node/${file}`);
   required('WINDOWS-SETUP.md');
+  for (const file of ['windows-update-helper.cjs', 'legacy-relaunch.ps1']) {
+    if (!readFileSync(required(`updater/${file}`)).equals(readFileSync(path.join(repository, 'resources/updater', file))))
+      throw new Error(`Packaged updater differs from source: ${file}`);
+  }
   const node = JSON.parse(readFileSync(path.join(resourcesDir, 'node/runtime.json'), 'utf8'));
   if (node.version !== NODE_RUNTIME.version || node.arch !== targetArch || node.platform !== 'win32' ||
       node.sha256 !== NODE_RUNTIME.targets[targetArch].sha256) throw new Error('Packaged Node runtime does not match its official target pin');

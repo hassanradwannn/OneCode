@@ -27,4 +27,12 @@
   # Chromium's sandbox needs read and execute access through the app tree.
   # Add one inheritable grant to the final directory without resetting other ACLs.
   !insertmacro grantSandboxReadAccess
+  # Older OneCode updaters delegate restart to --force-run. Keep a separate bounded
+  # observer alive after NSIS exits, because ExecShellAsUser can silently fail.
+  # New bootstraps omit --force-run and own their own checked restart.
+  ${If} ${isForceRun}
+  ${AndIf} ${Silent}
+    System::Call 'kernel32::GetCurrentProcessId() i .r1'
+    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\resources\updater\legacy-relaunch.ps1" -Executable "$INSTDIR\${APP_EXECUTABLE_FILENAME}" -InstallerPid $1'
+  ${EndIf}
 !macroend

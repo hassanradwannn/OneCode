@@ -36,9 +36,9 @@
  * wrong.
  */
 
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -50,6 +50,7 @@ import { isNewer, type UpdateStatus } from '../shared/types.js';
 import { downloadWindowsUpdate } from './update-download.js';
 import { currentWindowsInstallTarget } from './update-registration.js';
 import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
+import { startWindowsUpdate } from './update-bootstrap.js';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
@@ -198,11 +199,13 @@ const handoffNote = () => path.join(app.getPath('userData'), 'updates', 'handoff
  */
 export async function restoreUpdateHandoff(): Promise<void> {
   if (!UPDATES_ENABLED) return;
-  let note: { version?: unknown } | null = null;
+  let note: { version?: unknown; schema?: number; status?: string; error?: string; at?: number } | null = null;
   try { note = JSON.parse(await readFile(handoffNote(), 'utf8')); } catch { return; }
+  // The external bootstrap owns its live handoff. Starting the successor must not erase it.
+  if (note?.schema === 1 && note.status !== 'failed' && typeof note.at === 'number' && Date.now() - note.at < 15 * 60_000) return;
   await rm(handoffNote(), { force: true }).catch(() => undefined);
   const version = typeof note?.version === 'string' && /^\d+\.\d+\.\d+$/.test(note.version) ? note.version : null;
-  if (version && isNewer(version, APP_VERSION)) {
+  if (version && (isNewer(version, APP_VERSION) || note?.status === 'failed')) {
     set({ notInstalled: version });
     logWarn(`update: ${version} was handed to its installer, but this is still ${APP_VERSION}; it did not install`);
   }
@@ -615,28 +618,7 @@ export function setInstallFolderAccessForTests(probe: (folder: string) => Promis
   installFolderAccess = probe;
 }
 
-/**
- * Starts the installer through Windows' permission prompt and resolves once Windows has an answer:
- * true when the elevated installer started. Detached, PowerShell gets no console and runs nothing;
- * attached, it ends with this app, so the handoff waits here. The installer Windows starts is not
- * this app's child and outlives it (#1492, measured on the Windows VM 2026-10-15). Unanswered after
- * ten minutes, the prompt is withdrawn so a hidden, quitting app cannot hold the next start.
- */
-/** How long the quitting app waits for an answer to Windows' permission prompt. */
-export const ELEVATION_ANSWER_MS = 10 * 60_000;
-
-function startElevated(file: string, args: string[]): Promise<boolean> {
-  const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
-  return new Promise(resolve => {
-    const prompt = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
-      `Start-Process -FilePath ${quoted(file)} -ArgumentList ${args.map(quoted).join(',')} -Verb RunAs`],
-      { stdio: 'ignore', windowsHide: true });
-    const timer = setTimeout(() => { prompt.kill(); resolve(false); }, ELEVATION_ANSWER_MS);
-    const settle = (started: boolean) => { clearTimeout(timer); resolve(started); };
-    prompt.on('error', (err: Error) => { logWarn(`update: the permission prompt did not start: ${err.message}`); settle(false); });
-    prompt.on('exit', (code: number | null) => settle(code === 0));
-  });
-}
+export const UPDATE_HANDOFF_MS = 30_000;
 
 export async function applyStagedUpdate(): Promise<void> {
   if (!UPDATES_ENABLED) return;
@@ -655,22 +637,9 @@ export async function applyStagedUpdate(): Promise<void> {
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
       if (!ready.target || await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
       // NSIS /D must be the final, unquoted argument. It names only the verified current install.
-      const args = ['/S', '--updated', '--force-run', `/D=${ready.target}`];
       const elevate = process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
-      await writeFile(handoffNote(), JSON.stringify({ version: ready.version, at: Date.now() })).catch(() => undefined);
-      if (elevate) {
-        logInfo(`update: the install folder needs an administrator; Windows asks for permission to install ${ready.version}`);
-        if (!(await startElevated(ready.file, args))) {
-          logWarn(`update: Windows did not give permission, so ${ready.version} was not installed; the next start says so`);
-          return;
-        }
-      } else {
-        const installer = spawn(ready.file, args, { detached: true, stdio: 'ignore', windowsHide: true });
-        // An installer that cannot start reports it asynchronously, and an unhandled 'error' on a
-        // child process would take the quit down with it.
-        installer.on('error', (err: Error) => logWarn(`the ${ready.version} installer did not start: ${err.message}`));
-        installer.unref();
-      }
+      await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
+        executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
     } else {
       const next = `${ready.target}.new`;
       await copyFile(ready.file, next);
