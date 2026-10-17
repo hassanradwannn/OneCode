@@ -1464,9 +1464,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { id, expectedTurnId } = sessionIdArg.extend({ expectedTurnId: z.string().min(1).max(256) }).parse(payload);
     return requestSessionFinishGoal(id, expectedTurnId);
   });
-  handle('chatModels:get', async () => getChatModels());
+  handle('chatModels:get', async payload => getChatModels(z.enum(CHAT_PROVIDERS).optional().parse(payload)));
   handle('browser:preferences', async (payload) => requestBrowserPreferences(payload));
-  handle('chatModels:request', async () => startChatModelDiscovery());
+  handle('chatModels:request', async payload => startChatModelDiscovery(true, z.enum(CHAT_PROVIDERS).optional().parse(payload)));
   handle('sessions:controls', async (payload) => sessionControlsFor(sessionIdArg.parse(payload).id));
   // #1032: the user keeps this answer from being reloaded; false once the browser claimed it.
   handle('sessions:cancelRecovery', async (payload) => cancelAssistantRecovery(sessionIdArg.parse(payload).id));
@@ -2082,10 +2082,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       return drafted;
     }, publish);
   });
-  configureChatModelDiscovery({ changed: () => push('chatModels:changed', getChatModels()), wake: async (nonce, allowOpen) => {
+  configureChatModelDiscovery({ changed: catalog => push('chatModels:changed', catalog), wake: async (nonce, allowOpen, provider) => {
     if (!await startBridge()) throw new Error('The browser bridge could not start');
     if (allowOpen) {
-      const base = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+      const base = chatProviderHomeUrl(provider);
       await wakeBrowserUrl(`${base}${base.includes('?') ? '&' : '?'}cos-model-catalog=${nonce}`, true, true);
       // The approval prompt it describes comes with Gemini's first Core tool call, which needs a Core
       // tunnel. On a fresh install, discovery opened Gemini before any of that existed and the

@@ -315,10 +315,10 @@ const api = {
   stopSessionTurn: (id: string, expectedTurnId: string) => call<SessionControlsView>('sessions:stopTurn', { id, expectedTurnId }),
   releaseSessionFinish: (id: string, expectedTurnId: string) => call<SessionControlsView>('sessions:releaseFinish', { id, expectedTurnId }),
   generateFinishGoal: (id: string, expectedTurnId: string) => call<string>('sessions:generateFinishGoal', { id, expectedTurnId }),
-  getChatModels: () => call<ChatModelCatalog>('chatModels:get'),
+  getChatModels: (provider?: import('../shared/chat-provider.js').ChatProvider) => call<ChatModelCatalog>('chatModels:get', provider),
   browserPreferences: (patch: Partial<BrowserPreferences> = {}) => call<BrowserPreferences>('browser:preferences', patch),
   companionDiagnostics: () => call<CompanionDiagnostics | null>('bridge:diagnostics'),
-  requestChatModels: () => call<ChatModelCatalog>('chatModels:request'),
+  requestChatModels: (provider?: import('../shared/chat-provider.js').ChatProvider) => call<ChatModelCatalog>('chatModels:request', provider),
   onToolApprovalNotice: (listener: () => void): (() => void) => {
     const wrapped = (): void => listener();
     ipcRenderer.on('setup:toolApprovalNotice', wrapped);

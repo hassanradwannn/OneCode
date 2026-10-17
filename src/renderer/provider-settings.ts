@@ -16,7 +16,7 @@ export function initProviderCopy(): (provider: ChatProvider) => void {
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
     if (!node.data.includes('Gemini') || node.data.includes('ChatGPT') ||
-        node.parentElement?.closest('script, style, option, code, [translate="no"], #geminiSkillSetup, [data-provider-only="gemini"]')) continue;
+        node.parentElement?.closest('script, style, option, code, [translate="no"], #geminiSkillSetup, #composerProviderLabel, [data-provider-only="gemini"]')) continue;
     copy.push({ node, source: node.data });
   }
   return provider => {

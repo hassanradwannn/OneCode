@@ -1,7 +1,7 @@
 appId: io.onecode.desktop
 productName: OneCode
 copyright: MIT licensed
-buildVersion: 0.2.9.0
+buildVersion: 0.2.905.0
 
 # OneCode's download engine uses this cache/feed; installation remains owned by
 # OneCode's explicit Update and restart action.

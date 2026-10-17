@@ -6,6 +6,8 @@ import type { ReasoningEffort } from '../shared/session.js';
 import { $, el, icon, run } from './dom.js';
 import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 let activeProvider: ChatProvider = 'gemini';
+let settingsProvider: ChatProvider = 'gemini';
+const catalogs: Partial<Record<ChatProvider, ChatModelCatalog>> = {};
 
 let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
 let generation = 0;
@@ -200,14 +202,14 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
   const model = document.getElementById(modelId) as HTMLSelectElement | null;
   const effort = document.getElementById(effortId) as HTMLSelectElement | null;
   if (!model || !effort) return;
-  const models = modelId === 'composerModel' ? composerModels() : catalog.models;
+  const models = modelId === 'composerModel' ? composerModels() : (catalogs[settingsProvider] ?? (settingsProvider === activeProvider ? catalog : { models: [] })).models;
   // No saved sub-agent default starts workers on Gemini's current model. The select says so as
   // Automatic instead of naming a model nothing would use; a model picked there still gets its
   // preferred effort.
   const automaticModel = allowEmpty || modelId === 'workerModel';
   let nextModel = modelValue ?? model.value;
   let nextEffort = effortValue ?? effort.value;
-  const observed = observedModel(nextModel);
+  const observed = resolveChatModel(models, nextModel);
   if (modelId !== 'composerModel' && observed?.id !== nextModel && observed?.aliases?.includes(nextModel)) {
     // A saved execution alias is an exact lane request. The family effort union
     // cannot prove which efforts that alias supports. Retain both requested values
@@ -478,6 +480,10 @@ function paintComposerLabel(): void {
 }
 
 function paintStatus(): void {
+  for (const id of ['composerModelToggle', 'composerModel']) {
+    const node = document.getElementById(id);
+    if (node) ui(node, 'aria-label', () => t('{0} model', [chatProviderLabel(activeProvider)]));
+  }
   paintComposerChoices();
   const error = () => catalog.error?.startsWith('Model discovery timed out. ')
     ? t('Model discovery timed out. {0}', [t(catalog.error.slice('Model discovery timed out. '.length))]) : t(catalog.error ?? '');
@@ -515,9 +521,10 @@ function discoverModels(): Promise<void> {
   catalog = { ...catalog, state: 'pending', requestedAt: Date.now(), error: undefined };
   paintStatus();
   const work = (async () => {
-    const result = await run(window.api.requestChatModels()).catch(() => null);
+    const result = await run(window.api.requestChatModels(activeProvider)).catch(() => null);
     if (requested !== generation) return;
     catalog = result ?? { ...catalog, state: 'unavailable', error: t("Model discovery could not start.") };
+    catalogs[activeProvider] = catalog;
     for (const [modelId, effortId, allowEmpty] of pairs) paintPair(modelId, effortId, undefined, undefined, allowEmpty);
     paintComposerContext(); paintStatus();
   })();
@@ -541,11 +548,11 @@ export async function ensureComposerModel(refresh = false): Promise<SendModel | 
   return catalog.state === 'ready' && !catalog.error ? composerSendModel() : automaticApplies() ? { ...AUTOMATIC } : null;
 }
 
-export function applyChatModels(config: Config, previous?: Config): void {
-  const provider = config.ui.chatProvider ?? 'gemini';
+export function applyChatModels(config: Config, previous?: Config, provider: ChatProvider = config.ui?.chatProvider ?? 'gemini'): void {
+  settingsProvider = config.ui?.chatProvider ?? 'gemini';
   const providerChanged = provider !== activeProvider;
   activeProvider = provider;
-  if (providerChanged) { catalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] }; ++generation; }
+  if (providerChanged) { catalog = catalogs[provider] ?? { state: 'unknown', requestedAt: null, observedAt: null, models: [] }; ++generation; }
   // Preserve configured values even before an observation arrives; unrelated saves must not erase them.
   const chosen = (id: string, value: string, prior?: string) => {
     const select = document.getElementById(id) as HTMLSelectElement | null;
@@ -558,9 +565,9 @@ export function applyChatModels(config: Config, previous?: Config): void {
   paintComposerContext();
   if (catalogSubscribed && catalog.state !== 'unknown' && !providerChanged) return;
   const requested = ++generation;
-  void window.api.getChatModels().then(result => {
+  void window.api.getChatModels(provider).then(result => {
     if (requested !== generation || !result?.ok || !result.data) return;
-    catalog = result.data;
+    catalog = result.data; catalogs[provider] = result.data;
     for (const [modelId, effortId, allowEmpty] of pairs) paintPair(modelId, effortId, undefined, undefined, allowEmpty);
     paintComposerContext();
     paintStatus();
@@ -573,6 +580,8 @@ export function initChatModels(onPaint?: () => void): void {
     catalogSubscribed = true;
     window.api.onChatModelsChanged(value => {
       // A current push supersedes every older startup/read/refresh response.
+      const provider = value.provider ?? activeProvider; catalogs[provider] = value;
+      if (provider !== activeProvider) return;
       ++generation; catalog = value;
       for (const [modelId, effortId, allowEmpty] of pairs) paintPair(modelId, effortId, undefined, undefined, allowEmpty);
       paintComposerContext(); paintStatus();

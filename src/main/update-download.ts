@@ -1,4 +1,6 @@
 /** Download engine only. The existing update owner verifies and installs its result. */
+import { APP_VERSION } from './version.js';
+import { isNewer } from '../shared/types.js';
 import { CancellationToken, NsisUpdater, type UpdateInfo } from 'electron-updater';
 
 export const UPDATE_REPOSITORY = 'hassanradwannn/OneCode';
@@ -28,6 +30,10 @@ export async function downloadWindowsUpdate(version: string, name: string,
     channel: windowsUpdateChannel(process.arch) });
   // This engine must never own shutdown or install. In particular its normal-quit hook is off.
   configureWindowsDownloadEngine(updater);
+  if (!isNewer(version, APP_VERSION)) throw new Error('Refusing an older OneCode release');
+  // The update owner compares display releases, including shipped compatibility tags.
+  // Permit the downloader's numeric downgrade only after that forward-version check.
+  updater.allowDowngrade = true;
   updater.logger = null;
   updater.on('error', () => undefined); // rejection is reported once by the update owner
   const cancellation = new CancellationToken();

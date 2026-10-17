@@ -7,12 +7,14 @@ const models = [{ id: 'gpt-example', label: 'GPT Example', efforts: ['none', 'me
 beforeEach(() => { resetChatModelsForTests(); saved.value = null; saved.chatgpt = null; vi.useFakeTimers(); });
 afterEach(() => vi.useRealTimers());
 describe('durable observed Gemini model catalog', () => {
-  it('keeps provider catalogs separate and rejects a retired discovery nonce after switching', async () => {
+  it('keeps provider catalogs and concurrent discovery nonces separate after switching', async () => {
     requestChatModels(); observeChatModels({ nonce: pendingChatModelRequest()!.nonce, models });
     requestChatModels(); const old = pendingChatModelRequest()!;
     await setChatModelProvider('chatgpt');
     expect(getChatModels().models).toEqual([]);
-    expect(observeChatModels({ nonce: old.nonce, models })).toBe(false);
+    expect(observeChatModels({ nonce: old.nonce, models })).toBe(true);
+    expect(getChatModels('gemini').models).toEqual(models);
+    expect(getChatModels('chatgpt').models).toEqual([]);
     requestChatModels(); const chatgptModels = [{ id: 'chatgpt-native', label: 'ChatGPT native', efforts: ['high'] }];
     observeChatModels({ nonce: pendingChatModelRequest()!.nonce, models: chatgptModels });
     await setChatModelProvider('gemini'); expect(getChatModels().models).toEqual(models);
@@ -80,7 +82,7 @@ describe('durable observed Gemini model catalog', () => {
     // browser startup owner, not the catalog nonce, decides whether it is absent.
     await startChatModelDiscovery();
     expect(pendingChatModelRequest()).toEqual(pending);
-    expect(wake.mock.calls).toEqual([[pending.nonce, true], [pending.nonce, true]]);
+    expect(wake.mock.calls).toEqual([[pending.nonce, true, 'gemini'], [pending.nonce, true, 'gemini']]);
   });
   it('promotes a pending passive observation once when the user explicitly refreshes', async () => {
     const wake = vi.fn(async () => {}); configureChatModelDiscovery({ wake, changed: () => {} });
@@ -88,7 +90,7 @@ describe('durable observed Gemini model catalog', () => {
     const passive = pendingChatModelRequest()!;
     await Promise.all([startChatModelDiscovery(), startChatModelDiscovery()]);
     expect(pendingChatModelRequest()).toEqual({ ...passive, allowOpen: true });
-    expect(wake.mock.calls).toEqual([[passive.nonce, false], [passive.nonce, true]]);
+    expect(wake.mock.calls).toEqual([[passive.nonce, false, 'gemini'], [passive.nonce, true, 'gemini']]);
   });
   it('serializes explicit promotion behind an in-flight passive wake without duplicate opening', async () => {
     let release!: () => void;
@@ -99,7 +101,7 @@ describe('durable observed Gemini model catalog', () => {
     const first = startChatModelDiscovery(), second = startChatModelDiscovery();
     expect(wake).toHaveBeenCalledTimes(1);
     release(); await passive; await Promise.resolve();
-    expect(wake.mock.calls).toEqual([[nonce, false], [nonce, true]]);
+    expect(wake.mock.calls).toEqual([[nonce, false, 'gemini'], [nonce, true, 'gemini']]);
     release(); await Promise.all([first, second]);
     expect(pendingChatModelRequest()).toMatchObject({ nonce, allowOpen: true });
   });
@@ -108,7 +110,7 @@ describe('durable observed Gemini model catalog', () => {
     await startChatModelDiscovery(false);
     const request = pendingChatModelRequest()!;
     expect(request.allowOpen).toBe(false);
-    expect(wake).toHaveBeenCalledWith(request.nonce, false);
+    expect(wake).toHaveBeenCalledWith(request.nonce, false, 'gemini');
     observeChatModels({ nonce: request.nonce, models });
     await startChatModelDiscovery(false); await startChatModelDiscovery(false);
     expect(wake).toHaveBeenCalledTimes(1);
@@ -207,4 +209,19 @@ describe('a saved choice the stored catalog does not offer', () => {
     refreshForUnoffered('goal helper 6');
     expect(pendingChatModelRequest()).toBeNull();
   });
+});
+
+it('keeps both provider discoveries live and prioritizes an explicit refresh over passive discovery', async () => {
+  const wake = vi.fn(async () => {}); configureChatModelDiscovery({wake, changed: () => {}});
+  await startChatModelDiscovery(false, 'gemini');
+  const gemini = pendingChatModelRequest()!;
+  await startChatModelDiscovery(true, 'chatgpt');
+  const chatgpt = pendingChatModelRequest()!;
+  expect(gemini.provider).toBe('gemini'); expect(chatgpt.provider).toBe('chatgpt');
+  expect(wake).toHaveBeenCalledWith(chatgpt.nonce, true, 'chatgpt');
+  expect(observeChatModels({nonce: gemini.nonce, models})).toBe(true);
+  expect(getChatModels('chatgpt').models).toEqual([]);
+  expect(observeChatModels({nonce: chatgpt.nonce, models: [{id:'gpt-6',label:'GPT-6',efforts:['high']}]})).toBe(true);
+  expect(getChatModels('gemini').models).toEqual(models);
+  expect(getChatModels('chatgpt').models[0]!.id).toBe('gpt-6');
 });

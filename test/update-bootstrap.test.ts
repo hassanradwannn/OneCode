@@ -72,3 +72,9 @@ it('leaves a failed diagnostic and never executes changed staged bytes', async (
   expect(execute).not.toHaveBeenCalled();
   expect(JSON.parse(await readFile(options.note, 'utf8'))).toMatchObject({ status: 'failed', version: '0.2.805' });
 });
+
+it('keeps 0.2.9.5 compatible with the three-part handoff written by installed 0.2.9', async () => {
+  const options = await fixture(); options.version = '0.2.905';
+  await startWindowsUpdate(options);
+  expect(JSON.parse(await readFile(options.note, 'utf8'))).toMatchObject({version:'0.2.905',fileVersion:'0.2.905.0'});
+});

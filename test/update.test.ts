@@ -254,6 +254,9 @@ describe('finding a newer release', () => {
     expect(isNewer('0.2.805', '0.2.9')).toBe(false);
     expect(isNewer('0.2.9', '0.2.805')).toBe(true);
     expect(isNewer('0.2.805', '0.2.8')).toBe(true);
+    expect(isNewer('0.2.905', '0.2.9')).toBe(true);
+    expect(isNewer('0.2.10', '0.2.905')).toBe(true);
+    expect(isNewer('0.2.905', '0.2.10')).toBe(false);
     expect(isNewer('2.0.9', '2.0.10')).toBe(false);
     expect(isNewer('2.0.2', '2.0.2')).toBe(false);
     expect(isNewer('1.9.9', '2.0.0')).toBe(false);

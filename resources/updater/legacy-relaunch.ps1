@@ -16,7 +16,7 @@ try {
   if((Get-Item -LiteralPath $Executable).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Redirected executable'}
   for($node=Get-Item -LiteralPath $target;$node;$node=$node.Parent){if($node.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Redirected install path'}}
   $version=(Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion
-  if($version -ne '0.2.9.0'){throw "Unexpected installed version $version"}
+  if($version -ne '0.2.905.0'){throw "Unexpected installed version $version"}
   Start-Sleep -Seconds 3
   $live=@(Get-CimInstance Win32_Process -Filter "Name='OneCode.exe'" | Where-Object {$_.ExecutablePath -eq $Executable})
   if(-not $live.Count){

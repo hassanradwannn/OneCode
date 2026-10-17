@@ -66,6 +66,7 @@ export function chatModelDisplayLabel(label: string, effort: ReasoningEffort, ef
   return `${label} · ${effortLabel}`;
 }
 export type ChatModelCatalog = {
+  provider?: import('./chat-provider.js').ChatProvider;
   state: 'unknown' | 'pending' | 'ready' | 'unavailable';
   requestedAt: number | null;
   observedAt: number | null;

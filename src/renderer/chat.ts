@@ -37,7 +37,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderLabel, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled } from '../shared/chat-provider.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES } from '../shared/input.js';
@@ -4456,6 +4456,11 @@ function paintDetail(followBottom = historyBefore === null): void {
   paintStateLine();
   paintBackgroundProcesses();
   const summary = sessions.find((s) => s.id === selectedId) ?? null;
+  const currentConfig = deps.state()?.config;
+  const composerProvider = chatProviderForConversation(summary?.conversationId, currentConfig?.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  if (currentConfig) applyChatModels(currentConfig, undefined, composerProvider);
+  const composerLabel = document.querySelector('label[for="chatInput"]');
+  if (composerLabel) ui(composerLabel, 'textContent', () => t('Message {0}', [chatProviderLabel(composerProvider)]));
   applyComposerSessionModel(selectedId ? `${selectedId}:${selectionGeneration}` : null, composerSessionSelection(summary) ?? null,
     acceptedAutomaticModel(summary, pendingComposerInputs));
   const config = deps.state()?.config;
@@ -6022,7 +6027,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   if (bridgePresent !== bridge.present) { bridgePresent = bridge.present; paintPendingInputs(); }
   if (visible && selectedId) void refreshSessionControls();
   paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel());
-  applyChatModels(config, previous);
+  applyChatModels(config, previous, chatProviderForConversation(openChatSummary()?.conversationId, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER));
 
   applyChatChecked($<HTMLInputElement>('autoCompact'), config.compaction.auto, previous?.compaction.auto);
   applyChatValue(

@@ -2796,7 +2796,7 @@ function catalogTabNonce(tab) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
     const nonce = url.searchParams.get('cos-model-catalog');
-    const home = selectedProvider === 'chatgpt'
+    const home = providerForUrl(url.href) === 'chatgpt'
       ? url.origin === 'https://chatgpt.com' && url.pathname === '/'
       : url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname);
     return home && /^[a-f0-9-]{36}$/i.test(nonce || '') ? nonce : null;
@@ -2804,10 +2804,10 @@ function catalogTabNonce(tab) {
 }
 
 /** Discovery borrows native app composers, never setup pages or command-owned openings. */
-function catalogCandidateTab(tab) {
+function catalogCandidateTab(tab, provider = selectedProvider) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
-    if (selectedProvider === 'chatgpt') {
+    if (provider === 'chatgpt') {
       if (url.origin !== 'https://chatgpt.com' || !/^(?:\/(?:g\/[^/]+\/)?c\/[0-9a-f-]{8,64})?\/?$/i.test(url.pathname)) return false;
     } else if (url.origin !== 'https://gemini.google.com' || !/^(?:\/u\/\d+)?\/app(?:\/[0-9a-f]{16})?\/?$/i.test(url.pathname)) return false;
   } catch { return false; }
@@ -2836,7 +2836,7 @@ function inspectRequestedModels(request) {
     // catalog refresh can arrive in the same maintenance pass that created that tab; borrowing
     // its still-loading composer races the bootstrap that owns it. Keep command-owned openings
     // out of discovery until their command custody is released.
-    const observed = (await chrome.tabs.query({ url: CHATGPT_TAB_URLS })).filter(catalogCandidateTab);
+    const observed = (await chrome.tabs.query({ url: CHATGPT_TAB_URLS })).filter(tab => catalogCandidateTab(tab, provider));
     const owner = (await chrome.storage.session.get('modelCatalogOwner')).modelCatalogOwner;
     if (wanted && !current()) return;
     if (wanted && owner?.nonce === wanted.nonce && owner.opening) { await waiting('opening'); return; }
@@ -2867,7 +2867,7 @@ function inspectRequestedModels(request) {
       if (!current() || wanted.allowOpen === false || owner?.nonce === wanted.nonce || (tabs.length && !bypassBusy)) return;
       await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, opening: true } });
       if (!current()) return;
-      tab = await createChatTab(`${providerHome(selectedProvider)}?cos-model-catalog=${wanted.nonce}`, true);
+      tab = await createChatTab(`${providerHome(provider)}?cos-model-catalog=${wanted.nonce}`, true);
       await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, tab: tab.id } });
       await chrome.tabs.update(tab.id, { autoDiscardable: false });
       await waiting('opening');

@@ -1,3 +1,4 @@
+import { displayReleaseVersion } from './release-version.js';
 import type { ReasoningEffort, RecordingStorageLimitGiB } from './session.js';
 import type { PluginRefreshStatus } from './plugin-refresh.js';
 import { WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_INPUT_METHODS } from './windows-computer.js';
@@ -802,7 +803,7 @@ export const RELEASES_PAGE = 'https://github.com/hassanradwannn/OneCode/releases
  */
 export function isNewer(candidate: string, current: string): boolean {
   // The shipped compatibility tag represents 0.2.8.5, not a release after 0.2.9.
-  const parts = (value: string) => (value === '0.2.805' ? '0.2.8.5' : value).split('.').map(Number);
+  const parts = (value: string) => displayReleaseVersion(value).split('.').map(Number);
   const left = parts(candidate);
   const right = parts(current);
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
