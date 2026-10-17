@@ -1,7 +1,6 @@
 {
   "name": "onecode",
   "version": "0.2.905",
-  "shortVersionWindows": "0.2.905.0",
   "description": "Desktop workspace for Gemini and ChatGPT with local MCP tools and durable chats.",
   "license": "MIT",
   "author": "OneCode contributors",
@@ -11,17 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "verify": "npm run verify:ci",
-    "verify:ci": "npm run rg && npm run verify:privacy && npm run verify:notices && npm run typecheck && node -e \"require('electron')\" && vitest run --exclude test/mcp-shutdown.test.ts --exclude test/computer.test.ts && vitest run --maxWorkers=1 test/computer.test.ts test/mcp-shutdown.test.ts",
-    "verify:notices": "node scripts/generate-third-party-notices.mjs --check && node scripts/package-native-sources.mjs --check",
-    "verify:privacy": "node scripts/verify-public-history.mjs",
-    "verify:ui": "node scripts/verify-ui.mjs",
-    "verify:tunnel-current": "node scripts/verify-current-tunnel.mjs",
-    "hooks:install": "node scripts/install-git-hooks.mjs",
     "icon": "node scripts/make-icon.mjs",
-    "extension:firefox:stage": "node scripts/stage-firefox-extension.mjs",
     "tunnel": "node scripts/fetch-tunnel-client.mjs",
     "rg": "node scripts/fetch-ripgrep.mjs",
     "packaging:prepare": "node scripts/prepare-packaging-native.mjs",
@@ -46,7 +35,7 @@
     "dist:dir:linux:x64": "node scripts/package.mjs --platform linux --arch x64 --dir",
     "dist:dir:linux:arm64": "node scripts/package.mjs --platform linux --arch arm64 --dir",
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
-    "test:kill": "node scripts/kill-stray-vitest.mjs"
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",
@@ -97,5 +86,14 @@
     "@anthropic-ai/mcpb": {
       "tmp": "0.2.7"
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hassanradwannn/OneCode.git"
+  },
+  "homepage": "https://github.com/hassanradwannn/OneCode",
+  "bugs": {
+    "url": "https://github.com/hassanradwannn/OneCode/issues"
+  },
+  "shortVersionWindows": "0.2.905.0"
 }
