@@ -2085,7 +2085,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
   const activityExpiry = sessionActivityExpiresAt(session);
   const stopping = commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId);
   const activeTurnId = session.browserRecoveryDismissedAt === undefined && session.activeTurnId &&
-    (stopping || runningToolCalls(id) > 0 || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
+    (stopping || runningToolProgress(id) !== null || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
       live?.activeTurnId === session.activeTurnId)) ? session.activeTurnId : null;
   const finishHeld = !blocked && await sessionFinishHeld(sessionId, activeTurnId, id);
   const draft = goalViewFor(id) ?? goalOutcomeFor(id);
@@ -2875,7 +2875,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // A message for the running turn goes in while a call runs: Gemini keeps that call's result (#1231).
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
-        inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || runningToolCalls(input.conversationId) === 0) &&
+        inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || runningToolProgress(input.conversationId) === null) &&
             (!input.conversationId || !tunnelRouteSettling()) &&
             !inputHeldElsewhere(input, browser)),
           ...inputRows.filter(row => row.lifetime === 'temporary-planner' && ['sent', 'cancelled', 'failed'].includes(row.state))
@@ -3048,8 +3048,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     if (body.authorize === true) return json(res, 200, { ok: await authorizeBrowserInput(body.id, body.owner, target) }, origin);
     // A message for the running turn may go in while a call runs, exactly as /status offers it;
-    // claimBrowserInput still requires that same turn. Everything else waits for the call.
-    if (target && runningToolCalls(target) > 0 &&
+    // claimBrowserInput still requires that same turn. Anonymous safety debt
+    // cannot establish which chat owns a call or block another authored send.
+    if (target && runningToolProgress(target) !== null &&
         !(await pendingBrowserInputs()).some(row => row.id === body.id && row.conversationId === target && row.directTurn))
       return json(res, 200, { input: null }, origin);
     // As /status: an existing chat waits until a new tunnel-client has taken over its route (#1220).
@@ -3539,7 +3540,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const summary = await getSession(live.sessionId);
     const activityExpiry = summary ? sessionActivityExpiresAt(summary) : undefined;
     const hasActivityDeadline = activityExpiry !== undefined;
-    const activityCurrent = runningToolCalls(id) > 0 || (activityExpiry !== null && activityExpiry !== undefined && activityExpiry > Date.now());
+    const activityCurrent = runningToolProgress(id) !== null || (activityExpiry !== null && activityExpiry !== undefined && activityExpiry > Date.now());
     // A worker this app put to sleep for silence has no turn to hand back. Its open turn is one
     // the app already judged dead; a reloaded page adopting it counts as generating and refuses
     // the wake until the ten-minute stall closes it — past the wake's own three-minute deadline.
@@ -3798,6 +3799,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // REQUEST_ID_GRACE_MS to file its history cannot change the workspace and must not add
         // a cross-chat 15-second tax to the machine-settle barrier.
         pendingTools: runningToolCalls(live.conversationId),
+        // Ordinary input must not inherit another chat's anonymous safety debt.
+        pendingInputTools: runningToolProgress(live.conversationId)?.count ?? 0,
         progress: conversationProgress(live.conversationId),
         // Diagnostic only. A finished unattributed call is still being placed into durable
         // history; unknown ownership is conservatively projected onto every chat until that
@@ -7268,7 +7271,7 @@ export function sessionInputActivity(summary: SessionSummary): InputActivity {
     liveConversations().some(row => row.sessionId === summary.id && row.conversationId === id && !!row.activeTurnId);
   return { exact, model: grant?.sessionId === summary.id && (grant.turnId === summary.activeTurnId || mcpWindow) ? grant.model : 'unknown',
     ...(exact && (summary.activeTurnId || (mcpWindow && grant?.turnId)) ? { turnId: summary.activeTurnId || grant!.turnId! } : {}),
-    possible: exact || !!silenceHeldByCalls(id, grant?.sessionId === summary.id ? grant : undefined) ||
+    possible: exact || silenceHeldByCalls(id, grant?.sessionId === summary.id ? grant : undefined) === 'own' ||
     (expiry !== undefined && expiry !== null && expiry > Date.now()) };
 }
 export function sessionActivityExpiresAt(summary: SessionSummary): number | null | undefined {

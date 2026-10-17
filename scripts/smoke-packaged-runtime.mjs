@@ -111,6 +111,23 @@ if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository,
   throw new Error('Packaged Gemini skill differs from the public source asset');
 
 if (targetPlatform === 'win32') {
+  if (process.platform === 'win32') {
+    // Installation confirmation reads Windows version resources, not app.asar.
+    // Check the executable and any completed installer so stale builder overrides
+    // cannot ship a new product version with an old FileVersion.
+    const expectedWindows = expectedVersion.split('.').concat('0').slice(0, 4).join('.');
+    const installer = path.join(releaseDir, `OneCode-Setup-${targetArch}.exe`);
+    for (const file of [appExecutable, ...(process.argv.includes('--check-installer') ? [installer] : [])]) {
+      const literal = file.replaceAll("'", "''");
+      const command = `$ErrorActionPreference='Stop'; (Get-Item -LiteralPath '${literal}').VersionInfo | Select-Object FileVersion,ProductVersion | ConvertTo-Json -Compress`;
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true });
+      if (result.status !== 0) throw new Error(`Cannot inspect Windows version resources: ${path.basename(file)}`);
+      const version = JSON.parse(result.stdout.trim());
+      const normalized = value => String(value).split('.').concat('0').slice(0, 4).join('.');
+      if (normalized(version.FileVersion) !== expectedWindows || normalized(version.ProductVersion) !== expectedWindows)
+        throw new Error(`Windows version resources differ from ${expectedVersion}: ${path.basename(file)}`);
+    }
+  }
   const update = yaml.load(readFileSync(required('app-update.yml'), 'utf8'));
   if (update?.provider !== 'github' || update.owner !== 'hassanradwannn' || update.repo !== 'OneCode' ||
       update.updaterCacheDirName !== 'onecode-updater') throw new Error('Packaged Windows update configuration is missing or incorrect');

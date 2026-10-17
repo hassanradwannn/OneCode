@@ -62,5 +62,5 @@ for (const arch of arches) {
   // unpacked artifact immediately so missing transitive runtime modules (for example when the
   // checkout's node_modules was linked to another tree) fail this same packaging command instead
   // of producing an installer that crashes before the first BrowserWindow exists.
-  run(node, ['scripts/smoke-packaged-runtime.mjs', ...targetArgs]);
+  run(node, ['scripts/smoke-packaged-runtime.mjs', ...targetArgs, ...(!dirOnly && platform === 'win32' ? ['--check-installer'] : [])]);
 }

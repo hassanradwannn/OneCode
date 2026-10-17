@@ -773,6 +773,7 @@
   let job = null;
   /** Local tool calls the app still has running. Only ever a hint from /activity. */
   let pendingTools = 0;
+  let pendingInputTools = 0;
   let operationProgress = null;
   let pressedAt = 0;
   let localError = '';
@@ -1954,6 +1955,7 @@
     since = 0;
     job = null;
     pendingTools = 0;
+    pendingInputTools = 0;
     operationProgress = null;
     // An SPA move into another identified chat leaves this document facing a full transcript
     // it has never seen, exactly as a reload does. Until the app has said which of those user
@@ -7216,6 +7218,7 @@
       job = data.job || null;
       operationProgress = data.progress || null;
       pendingTools = Number.isFinite(Number(data.pendingTools)) ? Number(data.pendingTools) : 0;
+      pendingInputTools = Number.isFinite(Number(data.pendingInputTools)) ? Number(data.pendingInputTools) : pendingTools;
       // The durable response can arrive after boot's empty/refused activity
       // reply. Until this document has owned a turn, exact question proof may
       // still restore it through this same feed, even after native completion.
@@ -13056,7 +13059,7 @@
   async function acceptDesktopInput(message) {
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
-    if (desktopInputBusy || modelCatalogBusy || !alive || (generating && !message.directTurn && !silencePickup) || (pendingTools > 0 && !message.directTurn) || goalBusy || job?.busy) return false;
+    if (desktopInputBusy || modelCatalogBusy || !alive || (generating && !message.directTurn && !silencePickup) || (pendingInputTools > 0 && !message.directTurn) || goalBusy || job?.busy) return false;
     const target = message.conversationId || null;
     const forEpoch = epoch;
     const sourceTurn = turnId;
@@ -13166,7 +13169,7 @@
       // Keep the input queued until this same document exposes its composer again.
       const composer = await waitPageView(() => (message.directTurn || !CLF_DOM.generating()) &&
         (message.directTurn ? CLF_DOM.composerVisible() && CLF_DOM.composer() : writableComposer()),
-        () => onTarget() && (message.directTurn || ((silencePickup || !generating) && pendingTools === 0)), 15000);
+        () => onTarget() && (message.directTurn || ((silencePickup || !generating) && pendingInputTools === 0)), 15000);
       if (!composer && onTarget() && CLF_DOM.generating() && await confirmedProviderTerminal() && onTarget() && CLF_DOM.generating()) {
         // Only after readiness expires, re-prove the exact terminal: a Retry or
         // new user turn must never become authority to reload the page.
@@ -13803,7 +13806,7 @@
     const marker = new URL(location.href).searchParams;
     const hashMarker = new URLSearchParams(location.hash.slice(1));
     const commandMarked = marker.has('clf') || hashMarker.has('clf');
-    return alive && !generating && !CLF_DOM.generating() && pendingTools === 0 && !desktopInputBusy &&
+    return alive && !generating && !CLF_DOM.generating() && pendingInputTools === 0 && !desktopInputBusy &&
       !modelCatalogBusy && !pluginRefreshBusy && !desktopDecision && !commandAttempt && !commandJournalGate && !commandMarked &&
       queue.length === 0 && !flushWork && CLF_DOM.composerVisible() && !CLF_DOM.hasComposerAttachments() &&
       !(CLF_DOM.composer()?.textContent || '').trim() &&
@@ -13819,7 +13822,7 @@
     document.addEventListener('keydown', interrupt, true);
     const current = () => alive && !interrupted && epoch >= startEpoch && epoch <= startEpoch + (startConversation ? 1 : 0) &&
       (!CLF_DOM.conversationId() || CLF_DOM.conversationId() === startConversation) &&
-      !generating && !CLF_DOM.generating() && pendingTools === 0 &&
+      !generating && !CLF_DOM.generating() && pendingInputTools === 0 &&
       !(CLF_DOM.composer()?.textContent || '').trim() && !CLF_DOM.hasComposerAttachments();
     const failure = () => ({ ready: false, fallback: current(), preSend: true, url: location.href });
     desktopInputBusy = true;

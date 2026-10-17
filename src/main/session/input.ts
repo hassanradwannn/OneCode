@@ -20,7 +20,7 @@ import { wakeBrowserWork } from '../browser-wake.js';
 import { logInfo, logWarn } from '../logger.js';
 import { noteChatOrigin } from './recorder.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel, isProModel } from '../../shared/chat-models.js';
-import { inFlightToolCalls } from '../mcp/call-context.js';
+import { inFlightToolCalls, runningToolProgress } from '../mcp/call-context.js';
 import { automaticFinishEnabled, goalDrivingMode, consumeGoalReplyForInputNow } from '../goal.js';
 import { finishInstruction } from '../../shared/finish.js';
 import { CONVERSATION_DELETED } from '../../shared/chat-error.js';
@@ -220,7 +220,9 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   const settled = (terminal && ((end.outcome === 'completed' && !activity.possible && !activity.exact) ||
     (end.outcome === 'failed' && end.reason === 'thinking_failed'))) ||
     (!astra && !!completed && !activity.possible && !activity.exact);
-  const executing = inFlightToolCalls(session.conversationId) > 0;
+  // Ordinary authored input follows this chat's actual work. Anonymous calls
+  // remain in the global safety barrier, but cannot serialize unrelated chats.
+  const executing = runningToolProgress(session.conversationId) !== null;
   return { canInject, injectionTurnId, directTurn, queueAtFinish: astra && canInject && getConfig().ui.finishTool === true,
     // An adopted idle chat may have no recorded turn boundary. Explicit input can
     // use its native composer; queued checkpoints still require `settled` below.

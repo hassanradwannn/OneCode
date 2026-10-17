@@ -7,7 +7,7 @@ A desktop workspace for AI providers and local tools on Windows. Work with files
 ## What's new in 0.3.0
 
 - Shared settings and the Companion use provider/agent wording. Provider names remain in the selector and service-specific connection instructions.
-- Existing chats retain their provider, model choices and trust settings. Different providers can work in parallel through independent local MCP endpoints.
+- Existing chats retain their provider, model choices and trust settings. Different providers use independent local MCP endpoints. Ordinary input in separate chats also runs independently when a call has no proven chat identifier; global update and compaction safety checks remain conservative.
 - Sign-in detection reads the selected provider's rendered account controls. A signed-out page's composer does not count as an authenticated account.
 - Custom device connector names are published exactly in MCP metadata. Native connector selection accepts a unique title-cased, dash-to-space presentation of that full name and refuses ambiguous or different-device matches.
 - The Companion dismisses the recognized English response-comparison feedback question. It requires the question, both options and a separate two-button feedback footer; thinking controls and unknown layouts are left untouched.

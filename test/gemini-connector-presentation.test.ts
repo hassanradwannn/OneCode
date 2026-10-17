@@ -7,9 +7,6 @@ let document: Document;
 let api: any;
 let box: HTMLElement;
 const id = 'ea972ba88cc341c6';
-const key = 'scratch-only-placeholder-key-for-regression-test';
-const frame = '\n\n[[GEMINI_LOCAL_SESSION]]\n' + JSON.stringify({ conversation_id: id, session_key: key }) + '\n[[/GEMINI_LOCAL_SESSION]]';
-const warmup = '[[GEMINI_LOCAL_WARMUP]] Initialize this local workspace conversation. Reply READY only. Do not call tools.';
 
 beforeEach(() => {
   vi.useFakeTimers();
