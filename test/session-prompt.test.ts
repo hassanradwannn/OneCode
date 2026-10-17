@@ -1,16 +1,53 @@
-import { beforeEach, afterEach, expect, it } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { defaultConfig, getConfig, initConfigPath, saveConfig } from '../src/main/config.js';
 import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
 import { addProject, assignSessionProject } from '../src/main/projects.js';
 import { createSession, initSessionStore, rebindSession, resetSessionStoreForTests } from '../src/main/session/store.js';
-import { fitSessionPrompt, prepareSessionPrompt } from '../src/main/session/prompt.js';
+import { fitSessionPrompt, prepareSessionPrompt, prepareSkillFollowup } from '../src/main/session/prompt.js';
+import { pluginManager } from '../src/main/plugins/manager.js';
+import { PLUGIN_DISCOVERY_INSTRUCTIONS } from '../src/main/mcp/plugin-discovery.js';
+import { SKILL_DISCOVERY_INSTRUCTIONS } from '../src/main/skill-library.js';
 import { initGeminiBindings, resetGeminiBindingsForTests } from '../src/main/gemini/bindings.js';
 import { MAX_CHATGPT_MESSAGE_CHARS, prependUserPrompt, userPromptText } from '../src/shared/user-prompt.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
 let directory: string;
+
+it.each(['chatgpt', 'gemini'] as const)('guides %s openings and existing-chat turns to live local discovery after installation', async provider => {
+  const config = getConfig();
+  await saveConfig({ ...config, ui: { ...config.ui, chatProvider: provider } });
+  if (provider === 'gemini') await initGeminiBindings(directory);
+  const tools = vi.spyOn(pluginManager, 'tools').mockReturnValue([]);
+  try {
+    const authored = 'Can you use my newly installed plugin?';
+    expect(await prepareSkillFollowup(authored, authored)).not.toContain(PLUGIN_DISCOVERY_INSTRUCTIONS);
+    tools.mockReturnValue([{ name: 'read_graph', description: 'Read stored knowledge', inputSchema: { type: 'object' } }]);
+    for (const prepared of [await prepareSessionPrompt(authored), await prepareSkillFollowup(authored, authored)]) {
+      expect(prepared).toContain(PLUGIN_DISCOVERY_INSTRUCTIONS);
+      expect(userPromptText(prepared)).toBe(authored);
+      expect(prepared).not.toContain('session_key');
+    }
+    tools.mockReturnValue([]);
+    expect(await prepareSkillFollowup(authored, authored)).not.toContain(PLUGIN_DISCOVERY_INSTRUCTIONS);
+  } finally { tools.mockRestore(); }
+});
+
+it.each(['chatgpt', 'gemini'] as const)('keeps live skill discovery in %s existing chats without stale catalog bodies', async provider => {
+  const config = getConfig();
+  await saveConfig({ ...config, ui: { ...config.ui, chatProvider: provider } });
+  if (provider === 'gemini') await initGeminiBindings(directory);
+  const authored = 'Use my newly installed skill when it fits this task.';
+  for (const prepared of [await prepareSessionPrompt(authored), await prepareSkillFollowup(authored, authored)]) {
+    expect(prepared).toContain(SKILL_DISCOVERY_INSTRUCTIONS);
+    expect(userPromptText(prepared)).toBe(authored);
+    expect(prepared).not.toContain('session_key');
+  }
+  // Turning Read files off cannot add instructions to use an unavailable read tool.
+  await saveConfig({ ...getConfig(), capabilities: { ...getConfig().capabilities, read: false } });
+  expect(await prepareSkillFollowup(authored, authored)).not.toContain(SKILL_DISCOVERY_INSTRUCTIONS);
+});
 /**
  * The frame as Gemini's composer hands it back.
  *
@@ -102,7 +139,7 @@ it('uses compact Gemini setup by default without depending on an installed web s
   expect(prompt).not.toContain('@gemini-code');
   expect(prompt).not.toContain('# Installed skills');
   expect(prompt).not.toContain('Keep emitted text within 40,000');
-  expect(prompt.length).toBeLessThan(500);
+  expect(prompt.length).toBeLessThan(1000);
   const { currentCoreInstructions } = await import('../src/main/mcp/instructions.js');
   expect((await currentCoreInstructions()).length).toBeGreaterThan(10_000);
 });

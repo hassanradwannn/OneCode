@@ -12,11 +12,12 @@
 
 import { CODING_INSTRUCTIONS } from './coding-instructions.js';
 import { skillCatalogInstructions } from '../skills.js';
-import { listSkillLibrary, skillLibraryInstructions } from '../skill-library.js';
+import { listSkillLibrary, skillLibraryInstructions, SKILL_DISCOVERY_INSTRUCTIONS } from '../skill-library.js';
 import type { SkillLibrary } from '../../shared/skills.js';
 import { withManagedSkills } from '../skill-access.js';
 import { canAddCodeMode, CODE_MODE_INSTRUCTIONS } from './code-mode-tool.js';
 import { pluginManager } from '../plugins/manager.js';
+import { PLUGIN_DISCOVERY_INSTRUCTIONS } from './plugin-discovery.js';
 import { effectiveCapabilities, getConfig, MAX_MCP_INSTRUCTIONS_CHARS } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
 import type { ToolContext } from './kernel.js';
@@ -101,12 +102,14 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
   const lines = [
     CODING_INSTRUCTIONS,
     skills,
+    ...(caps.read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
     '',
     '# Local tools',
     `Use the connected tools as needed: ${surfaceDefinition('core').connectorName} for files, terminal, plans and workers` +
     `; ${surfaceDefinition('desktop').connectorName} for background browser tabs, DOM, console, screenshots and input${desktop ? ', native windows and clipboard' : ''}` +
     `; Core plugins action=list then action=call for enabled external apps and services (the separate ${surfaceDefinition('plugins').connectorName} connector also exposes their native tools).`,
     'For external MCPs, discover with plugins {action:"list",query:"optional literal search"}; then call plugins {action:"call",name:"exact_listed_name",arguments:{...}} using the returned inputSchema. Use arguments, not args. No separate @Plugins mention is needed. This bridge does not install, enable, sign in or import another app\'s MCP settings. Live plugin admission and this chat\'s binding, Block and Trust still apply.',
+    PLUGIN_DISCOVERY_INSTRUCTIONS,
     `Host: ${host}. Roots: ${roots}`,
     `Current Core authority (informational; live guards decide): ${authority}; read-only=${ctx.readOnly ? 'on' : 'off'}; plans=${sessionTools ? 'on' : 'off'}; workers=${agentTools ? 'on' : 'off'}.`,
     ctx.readOnly ? 'The local tools are read-only.' : 'Use the tools listed in this conversation.',

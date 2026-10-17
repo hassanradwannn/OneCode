@@ -143,11 +143,12 @@ it('refuses cached calls after tool disable, name collision, plugin disable and 
   expect(await calls()).toEqual([]);
 });
 
-it('keeps fresh no-plugin/read-only discovery conservative and refuses a cached call after live read-only', async () => {
-  expect((await rpc('tools/list', {})).result.tools.some((tool: any) => tool.name === 'plugins')).toBe(false);
+it('keeps discovery stable before installation and during read-only while refusing execution', async () => {
+  expect((await rpc('tools/list', {})).result.tools.some((tool: any) => tool.name === 'plugins')).toBe(true);
+  expect(JSON.parse(text(await call({ action: 'list' })))).toMatchObject({ tools: [], total: 0 });
   await endpoint.stop(); await install(); getConfig().readOnly = true;
   endpoint = await startMcpServer(() => ({ roots: [], caps: effectiveCapabilities(getConfig()), readOnly: getConfig().readOnly, sessionTools: false, agentTools: false }));
-  expect((await rpc('tools/list', {})).result.tools.some((tool: any) => tool.name === 'plugins')).toBe(false);
+  expect((await rpc('tools/list', {})).result.tools.some((tool: any) => tool.name === 'plugins')).toBe(true);
   getConfig().readOnly = false;
   expect((await rpc('tools/list', {})).result.tools.some((tool: any) => tool.name === 'plugins')).toBe(true);
   getConfig().readOnly = true;

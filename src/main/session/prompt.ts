@@ -10,7 +10,9 @@ import { getSessionProject, projectWorkspace } from '../projects.js';
 import { resolvePath } from '../sandbox.js';
 import { MAX_BROWSER_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
 import { selectedSkillInstructions, type SelectedSkill } from './skill-prompt.js';
-import { listSkillLibrary, SKILL_CATALOG_PATH } from '../skill-library.js';
+import { listSkillLibrary, SKILL_DISCOVERY_INSTRUCTIONS } from '../skill-library.js';
+import { pluginManager } from '../plugins/manager.js';
+import { PLUGIN_DISCOVERY_INSTRUCTIONS } from '../mcp/plugin-discovery.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
 
 type PromptScope = { sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
@@ -30,8 +32,9 @@ function geminiOpeningInstructions(): string {
   const config = getConfig();
   return [
     config.mcp.useGeminiWebSkill === true ? '@gemini-code' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
+    ...(pluginManager.tools().length ? [PLUGIN_DISCOVERY_INSTRUCTIONS] : []),
     `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
-    `Local skills: read ${SKILL_CATALOG_PATH}, then the chosen SKILL.md.`,
+    ...(effectiveCapabilities(config).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
   ].join('\n\n');
 }
@@ -157,10 +160,14 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   return fitSessionPrompt(text, core, agents, budget, skills, scope.workingDirectory, compact);
 }
 
-/** Explicit follow-up selection adds Skills only, never repeats opening setup. */
+/** Follow-ups retain live discovery guidance without repeating opening setup or a stale catalog. */
 export async function prepareSkillFollowup(text: string, authored: string, budget = limits, scope: PromptScope = {}): Promise<string> {
   const folder = await promptFolder(scope);
   const skills = await selectedSkillInstructions(authored, { projectPath: folder?.real ?? null }, undefined, scope.autoSkills);
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
-  return skills.length ? fitSessionPrompt(text, '', null, budget, skills) : text;
+  const discovery = [
+    ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
+    ...(pluginManager.tools().length ? [PLUGIN_DISCOVERY_INSTRUCTIONS] : [])
+  ].join('\n\n');
+  return skills.length || discovery ? fitSessionPrompt(text, discovery, null, budget, skills) : text;
 }
