@@ -1,0 +1,39 @@
+name: Publish verified native sources
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  native-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Verify release is a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+      - name: Fetch and verify reviewed sources
+        run: node scripts/package-native-sources.mjs
+      - name: Attach archive and checksum to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          cd release
+          sha256sum OneCode-Native-Sources.tar.gz > OneCode-Native-Sources.tar.gz.sha256
+          gh release upload "$RELEASE_TAG" OneCode-Native-Sources.tar.gz OneCode-Native-Sources.tar.gz.sha256
