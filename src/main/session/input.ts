@@ -10,7 +10,7 @@ import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, validateGeminiBindingReceiptEvidence, validateGeminiBindingEvidence, type GeminiBindingEvidence, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities } from '../../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -176,6 +176,8 @@ type InputDeliveryHooks = {
   changed: () => void;
 };
 let deliveryHooks: InputDeliveryHooks | null = null;
+const geminiInput = (conversationId: string | null | undefined): boolean =>
+  geminiBindingsEnabled() && chatProviderForConversation(conversationId) === 'gemini';
 /** Installed once by IPC before bridge/MCP startup; avoids a Goal/input import cycle. */
 export function configureInputDelivery(hooks: InputDeliveryHooks): void { deliveryHooks = hooks; }
 /** One delivery policy for composer presentation, admission and the final send fence. */
@@ -190,7 +192,7 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // It is not evidence of Gemini's native mid-generation Send behavior.
   // The inherited native mid-generation composer path was measured on ChatGPT.
   // Gemini corrections use an actual tool response, not an assumed native Send API.
-  const directTurn = !geminiBindingsEnabled() && !stopped && activity.exact && end?.kind === 'turn_start' &&
+  const directTurn = !geminiInput(session.conversationId) && !stopped && activity.exact && end?.kind === 'turn_start' &&
     !!end.turnId && end.turnId === session.activeTurnId && !!selection?.model &&
     activity.model !== 'pro' && activity.model !== 'unknown' &&
     !isProModel(selection.model, selection.reasoningEffort)
@@ -207,7 +209,7 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // A native completed boundary can precede final-message attribution. A soft
   // display/recovery timer alone must not strand a new explicit Gemini follow-up.
   // This does not settle automation; native Send still rechecks actual readiness.
-  const idleCandidate = geminiBindingsEnabled() && !session.activeTurnId && !activity.exact &&
+  const idleCandidate = geminiInput(session.conversationId) && !session.activeTurnId && !activity.exact &&
     terminal && end.outcome === 'completed' && (session.lastToolCallAt ?? 0) <= end.time;
   const [latestQuestion] = idleCandidate ? await readRecentEvents(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true }) : [];
   const explicitNativeIdle = idleCandidate && (!latestQuestion || (latestQuestion.kind === 'user_message' &&
@@ -705,7 +707,7 @@ function append(current: InputEntry[], entry: InputEntry, stackDirect = false): 
  */
 function composerOnlyText(entry: Pick<InputEntry, 'images' | 'attachments' | 'attachmentDelivery' | 'toolImages'> & Parameters<typeof manualInput>[0],
   session: Pick<SessionSummary, 'conversationId' | 'selectedModel'> | null | undefined): boolean {
-  if (geminiBindingsEnabled()) return false;
+  if (geminiInput(session?.conversationId)) return false;
   const selection = session?.selectedModel;
   return manualInput(entry) && !entry.images?.length && !entry.attachments?.length && !entry.toolImages?.length &&
     !!session?.conversationId && selection?.conversationId === session.conversationId && !!selection.model &&
@@ -1137,12 +1139,12 @@ export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): P
     const policy = await sessionInputPolicy(row.sessionId!);
     const session = await getSession(row.sessionId!);
     if (!session?.conversationId || session.conversationId !== row.conversationId) return false;
-    const toolTurn = geminiBindingsEnabled() && policy.canInject && session.activeTurnId &&
+    const toolTurn = geminiInput(session.conversationId) && policy.canInject && session.activeTurnId &&
       policy.injectionTurnId === session.activeTurnId && row.queuedTurn?.turnId === session.activeTurnId &&
       row.queuedTurn.conversationId === session.conversationId ? session.activeTurnId : null;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
     if (!policy.directTurn && !toolTurn && !idle) return false;
-    if (geminiBindingsEnabled() && !intent) return false;
+    if (geminiInput(session.conversationId) && !intent) return false;
     if (intent && (intent.delivery === 'tool' ? !toolTurn || intent.turnId !== toolTurn
       : intent.delivery === 'direct' ? !policy.directTurn || intent.turnId !== policy.directTurn.id
       : !idle || intent.turnId !== null)) return false;
@@ -1875,7 +1877,7 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
 }
 /** A later exact call proves receipt of an earlier tool response, never of a queued task. */
 function toolInputScopeMatches(entry: InputEntry, binding?: GeminiBindingEvidence): boolean {
-  if (!geminiBindingsEnabled()) return true;
+  if (!geminiInput(entry.conversationId)) return true;
   const offer = entry.toolGeminiOffer, turn = binding?.inputTurn, held = offer?.inputTurn;
   return !!turn && offer?.bindingId === binding?.bindingId && held?.inputId === turn.inputId &&
     held.messageId === turn.messageId && held.historySeq === turn.historySeq && held.turnId === turn.turnId;
@@ -1888,7 +1890,7 @@ function toolInputReceipt(entry: InputEntry, sessionId: string, conversationId: 
 }
 /** Commit incoming receipt evidence before a handler decides whether user work remains. */
 async function toolInputCaller(sessionId: string, conversationId: string, requestId: string | null | undefined, binding?: GeminiBindingEvidence): Promise<boolean> {
-  if (!geminiBindingsEnabled()) return !!requestId;
+  if (!geminiInput(conversationId)) return !!requestId;
   if (!binding?.inputTurn || binding.sessionId !== sessionId || binding.conversationId !== conversationId) return false;
   try { await validateGeminiBindingEvidence(binding); return true; } catch { return false; }
 }

@@ -1,0 +1,243 @@
+import { beforeEach, afterEach, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { defaultConfig, getConfig, initConfigPath, saveConfig } from '../src/main/config.js';
+import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
+import { addProject, assignSessionProject } from '../src/main/projects.js';
+import { createSession, initSessionStore, rebindSession, resetSessionStoreForTests } from '../src/main/session/store.js';
+import { fitSessionPrompt, prepareSessionPrompt } from '../src/main/session/prompt.js';
+import { initGeminiBindings, resetGeminiBindingsForTests } from '../src/main/gemini/bindings.js';
+import { MAX_CHATGPT_MESSAGE_CHARS, prependUserPrompt, userPromptText } from '../src/shared/user-prompt.js';
+import { makeTempDir, removeTempDir } from './helpers.js';
+
+let directory: string;
+/**
+ * The frame as Gemini's composer hands it back.
+ *
+ * The editor treats what it is given as Markdown source and escapes it on readback — a
+ * backslash before ASCII punctuation, and one before a newline for a hard line break. The frame
+ * is punctuation and newlines almost entirely, so an escaped readback matched none of it, and
+ * the declared instruction length stopped matching too because escaping adds characters.
+ *
+ * Reported as #374 with a screenshot of both halves of the consequence: the app showed the
+ * internal instructions as a message of their own, ending in `[[/COS_CONTEXT]]\\`, beside the
+ * authored prompt — and the page kept the whole frame visible, so Gemini titled the
+ * conversation `[[COS_CONTEXT:19518]]You are a coding...`.
+ */
+it('reads a frame the page escaped, and keeps an authored backslash literal', () => {
+  const instructions = 'You are a coding agent.\nKeep task work there.';
+  const framed = prependUserPrompt('write me a plugin\n\nsecond line', instructions);
+  expect(userPromptText(framed)).toBe('write me a plugin\n\nsecond line');
+
+  // Exactly what the composer does: every ASCII punctuation mark and every newline.
+  const escaped = framed.replace(/([!-/:-@[-`{-~])/g, '\\$1').replace(/\n/g, '\\\n');
+  expect(escaped).toContain('\\[\\[COS\\_CONTEXT\\:');
+  expect(userPromptText(escaped)).toBe('write me a plugin\n\nsecond line');
+
+  // The tolerant read is a second attempt, never the first: a prompt that really contains a
+  // backslash keeps it, because the exact frame around it parses.
+  const literal = prependUserPrompt('use \\[ in the regex', instructions);
+  expect(userPromptText(literal)).toBe('use \\[ in the regex');
+
+  // And text that is not a frame at all stays unrecognised, escaped or not.
+  expect(userPromptText('\\[\\[COS\\_CONTEXT\\:9\\]\\]\\\nnot a frame')).toBeNull();
+});
+
+it('reduces AGENTS to 5000 before shortening every selected skill under char and byte limits', () => {
+  const agents = { directory: '/work', text: 'A'.repeat(30_000), truncated: false };
+  const skills = [{ id: 'first', text: 'FIRST\n' + '🐱漢字'.repeat(20_000) }, { id: 'second', text: 'SECOND\n' + 'z'.repeat(60_000) }];
+  const task = 'Exact user request';
+  for (const budget of [{ maxChars: 25_000, maxBytes: Infinity }, { maxChars: 96_000, maxBytes: 30_000 }]) {
+    const result = fitSessionPrompt(task, 'CORE_UNCHANGED', agents, budget, skills);
+    expect(result).toContain('CORE_UNCHANGED');
+    expect(userPromptText(result)).toBe(task);
+    expect(result).toContain('A'.repeat(5000));
+    expect(result).not.toContain('A'.repeat(5001));
+    expect(result).toContain('FIRST'); expect(result).toContain('SECOND');
+    expect(result).toContain('Read /skills/first/SKILL.md');
+    expect(result).toContain('Read /skills/second/SKILL.md');
+    expect(result.length).toBeLessThanOrEqual(budget.maxChars);
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(budget.maxBytes);
+    expect(Buffer.from(result).toString()).toBe(result);
+  }
+});
+
+it('keeps a shorter AGENTS complete and trims skills in followups without dropping their wrappers', () => {
+  const skills = [{ id: 'large', text: 'START\n' + 's'.repeat(120_000) }];
+  const agents = { directory: '/work', text: 'Short project instructions', truncated: false };
+  const result = fitSessionPrompt('Task', 'Core', agents, { maxChars: 2000, maxBytes: 2500 }, skills);
+  expect(result).toContain(agents.text);
+  expect(result).toContain('START');
+  expect(result).toContain('</SKILL_INSTRUCTIONS>');
+  expect(result).toContain('Read /skills/large/SKILL.md');
+  const followup = fitSessionPrompt('Task', '', null, { maxChars: 2000, maxBytes: 2500 }, skills);
+  expect(followup).toContain('START');
+  expect(userPromptText(followup)).toBe('Task');
+});
+beforeEach(async () => {
+  directory = await makeTempDir('cos-session-prompt-');
+  initConfigPath(directory); initDurableStore(directory); initSessionStore(directory);
+  await saveConfig({ ...defaultConfig(), roots: [{ name: 'work', path: directory }] });
+});
+
+it('uses compact Gemini setup by default without depending on an installed web skill', async () => {
+  await initGeminiBindings(directory);
+  const config = getConfig();
+  await saveConfig({ ...config, mcp: { ...config.mcp, instructions: 'CURRENT_STANDING_RULE' } });
+  const prompt = await prepareSessionPrompt('hi');
+  expect(userPromptText(prompt)).toBe('hi');
+  expect(prompt).toContain('CURRENT_STANDING_RULE');
+  expect(prompt).not.toContain('conversation_id and session_key');
+  expect(prompt).toContain('Approved roots: /work');
+  expect(prompt).not.toContain('@gemini-code');
+  expect(prompt).not.toContain('# Installed skills');
+  expect(prompt).not.toContain('Keep emitted text within 40,000');
+  expect(prompt.length).toBeLessThan(500);
+  const { currentCoreInstructions } = await import('../src/main/mcp/instructions.js');
+  expect((await currentCoreInstructions()).length).toBeGreaterThan(10_000);
+});
+
+it('adds an explicit native-skill reference while retaining current workspace and standing guidance', async () => {
+  const full = await prepareSessionPrompt('Read the project');
+  expect(full).toContain('You are a coding agent working with the user through OneCode.');
+  await fs.mkdir(path.join(directory, 'native-skill-project'));
+  await fs.writeFile(path.join(directory, 'native-skill-project', 'AGENTS.md'), 'CURRENT_PROJECT_RULE');
+  const project = await addProject(path.join(directory, 'native-skill-project'));
+  const config = getConfig();
+  await saveConfig({ ...config, mcp: { ...config.mcp, useGeminiWebSkill: true, instructions: 'CURRENT_USER_GUIDANCE' } });
+  const compact = await prepareSessionPrompt('Read the project', { projectId: project.id });
+  expect(compact).toMatch(/^\[\[COS_CONTEXT:\d+\]\]\n@gemini-code\n/);
+  expect(compact).not.toContain('You are a coding agent working with the user through OneCode.');
+  expect(compact).toContain('CURRENT_PROJECT_RULE');
+  expect(compact).toContain('CURRENT_USER_GUIDANCE');
+  expect(compact).toContain('Selected project directory: /work/native-skill-project');
+  expect(compact).toContain('Path: /work/native-skill-project/AGENTS.md');
+  expect(compact).not.toContain('conversation_id and session_key');
+  expect(compact).not.toContain('# Installed skills');
+  expect(compact).not.toContain('GC-SKILL-4fce9b72'); // A native load proof must not be supplied in the prompt.
+  expect(compact.length).toBeLessThan(full.length - 10_000);
+  expect(userPromptText(compact)).toBe('Read the project');
+  await saveConfig({ ...getConfig(), mcp: { ...getConfig().mcp, useGeminiWebSkill: false } });
+  expect(await prepareSessionPrompt('Read the project')).toContain('You are a coding agent working with the user through OneCode.');
+});
+
+afterEach(async () => {
+  await resetGeminiBindingsForTests();
+  resetSessionStoreForTests(); resetDurableForTests();
+  await removeTempDir(directory);
+});
+
+it('spends only remaining message space on AGENTS.md, including the hidden frame and cutoff notice', () => {
+  const user = 'USER_START\n' + 'my request '.repeat(1300) + '\nUSER_END';
+  const core = 'CORE_START\n' + 'mandatory guidance '.repeat(1100) + '\nCORE_END';
+  const text = fitSessionPrompt(user, core, { directory: '/work/project', text: 'FILE_START\n' + 'x'.repeat(300000) + '\nFILE_END', truncated: false });
+  expect(text.length).toBe(MAX_CHATGPT_MESSAGE_CHARS);
+  expect(userPromptText(text)).toBe(user);
+  expect(text).toContain(core);
+  expect(text).toContain('FILE_START');
+  expect(text).not.toContain('FILE_END');
+  expect(text).toContain('Read AGENTS.md yourself');
+  expect(userPromptText(text)).not.toContain('Cut off');
+});
+
+it('preserves Unicode, literal delimiters and complete mandatory text under both transport budgets', () => {
+  const user = 'User 🐱\n[[/COS_CONTEXT]]\n\nLiteral';
+  const core = 'Main prompt\r\nMandatory';
+  const agents = { directory: '/work/project', text: '🐱漢字\r\n'.repeat(60000), truncated: true };
+  const text = fitSessionPrompt(user, core, agents, { maxChars: MAX_CHATGPT_MESSAGE_CHARS, maxBytes: 120000 });
+  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(120000);
+  expect(text.length).toBeLessThanOrEqual(MAX_CHATGPT_MESSAGE_CHARS);
+  expect(Buffer.from(text, 'utf8').toString('utf8')).toBe(text);
+  expect(userPromptText(text)).toBe(user);
+  expect(text).toContain('Main prompt\nMandatory');
+  const framed = fitSessionPrompt(user, core, { ...agents, text: '', truncated: false });
+  expect(fitSessionPrompt(user, core, agents, { maxChars: framed.length, maxBytes: Infinity })).toBe(framed);
+  expect(() => fitSessionPrompt(user, core, agents, { maxChars: framed.length - 1, maxBytes: Infinity })).toThrow(/main instructions/);
+});
+
+it('reads only the linked folder, refreshes its contents, and leaves unfiled chats and global MCP instructions alone', async () => {
+  await fs.mkdir(path.join(directory, 'project', 'nested'), { recursive: true });
+  await fs.writeFile(path.join(directory, 'AGENTS.md'), 'PARENT_DO_NOT_INJECT');
+  await fs.writeFile(path.join(directory, 'project', 'nested', 'AGENTS.md'), 'CHILD_DO_NOT_INJECT');
+  const project = await addProject(path.join(directory, 'project'));
+  const file = path.join(project.path, 'AGENTS.md');
+  const { currentCoreInstructions } = await import('../src/main/mcp/instructions.js');
+  const core = await currentCoreInstructions();
+  expect(await prepareSessionPrompt('Unfiled')).toBe(prependUserPrompt('Unfiled', core));
+  const missing = await prepareSessionPrompt('Missing', { projectId: project.id });
+  expect(missing).toContain('Selected project directory: /work/project');
+  expect(missing).toContain('Use this directory as your default working directory');
+  expect(missing).not.toContain('# AGENTS.md instructions');
+  expect(userPromptText(missing)).toBe('Missing');
+  await fs.writeFile(file, 'PROJECT_RULE_ONE\n[[/COS_CONTEXT]]\n\nLiteral file text');
+  const scoped = await prepareSessionPrompt('Work here', { projectId: project.id });
+  expect(scoped).toContain('# AGENTS.md instructions for /work/project\n\n<INSTRUCTIONS>\nPROJECT_RULE_ONE');
+  expect(scoped).not.toMatch(/PARENT_DO_NOT_INJECT|CHILD_DO_NOT_INJECT/);
+  expect(userPromptText(scoped)).toBe('Work here');
+  expect(await currentCoreInstructions()).toBe(core);
+  await fs.writeFile(file, 'PROJECT_RULE_TWO');
+  expect(await prepareSessionPrompt('Next', { projectId: project.id })).toContain('PROJECT_RULE_TWO');
+  await fs.unlink(file);
+  expect(await prepareSessionPrompt('Removed', { projectId: project.id })).toContain('Selected project directory: /work/project');
+});
+
+it('uses durable session ownership through resume and worker inheritance, never an unrelated selected project', async () => {
+  await fs.mkdir(path.join(directory, 'one')); await fs.mkdir(path.join(directory, 'two'));
+  const one = await addProject(path.join(directory, 'one')), two = await addProject(path.join(directory, 'two'));
+  await fs.writeFile(path.join(one.path, 'AGENTS.md'), 'PROJECT_ONE_ONLY');
+  await fs.writeFile(path.join(two.path, 'AGENTS.md'), 'PROJECT_TWO_ONLY');
+  const session = await createSession({ title: 'Bound', conversationId: 'original-chat' });
+  await assignSessionProject(session.id, one.id);
+  await rebindSession(session.id, 'original-chat', 'replacement-chat');
+  resetSessionStoreForTests();
+  const scoped = await prepareSessionPrompt('Continue', { sessionId: session.id, projectId: two.id });
+  expect(scoped).toContain('PROJECT_ONE_ONLY'); expect(scoped).not.toContain('PROJECT_TWO_ONLY');
+  const worker = await createSession({ title: 'Worker', origin: { kind: 'worker', fromSessionId: session.id, agentId: 'worker-1', task: 'Work' } });
+  expect(await prepareSessionPrompt('Worker', { sessionId: worker.id })).toContain('PROJECT_ONE_ONLY');
+  const unfiled = await createSession({ title: 'Unfiled' });
+  expect(await prepareSessionPrompt('Ordinary chat', { sessionId: unfiled.id, projectId: two.id })).not.toContain('PROJECT_TWO_ONLY');
+});
+
+it('uses the allocated worker checkout as the only working directory while retaining source project AGENTS.md', async () => {
+  const sourcePath = path.join(directory, 'source');
+  await fs.mkdir(sourcePath);
+  const project = await addProject(sourcePath);
+  await fs.writeFile(path.join(sourcePath, 'AGENTS.md'), 'SOURCE_PROJECT_INSTRUCTIONS_ONLY');
+  const prime = await createSession({ title: 'Prime', conversationId: 'prime-chat' });
+  await assignSessionProject(prime.id, project.id);
+  const checkout = '/work/.chat-on-steroids-worktrees/owned/tree';
+
+  const managed = await prepareSessionPrompt('Only edit the checkout', { sessionId: prime.id, workingDirectory: checkout });
+  expect(managed).toContain(`Worker working directory (allocated Git worktree): ${checkout}`);
+  expect(managed).toContain('SOURCE_PROJECT_INSTRUCTIONS_ONLY');
+  expect(managed).toContain('# Source project AGENTS.md instructions (reference only; not a working directory)');
+  expect(managed).not.toContain(`Selected project directory:`);
+  expect(managed).not.toContain(`AGENTS.md instructions for /work/source`);
+  expect(managed).not.toContain(`Use this directory as your default working directory and keep task work there`);
+  expect(userPromptText(managed)).toBe('Only edit the checkout');
+
+  const ordinary = await prepareSessionPrompt('Original project remains valid', { sessionId: prime.id });
+  expect(ordinary).toContain('Selected project directory: /work/source');
+  expect(ordinary).not.toContain('Worker working directory');
+});
+
+it('bounds a large file and refuses invalid file types and revoked access without injecting their contents', async () => {
+  const project = await addProject(directory);
+  const file = path.join(directory, 'AGENTS.md');
+  await fs.writeFile(file, 'LARGE_HEAD\n' + 'x'.repeat(2_000_000) + 'LARGE_TAIL');
+  const text = await prepareSessionPrompt('User message', { projectId: project.id });
+  expect(text.length).toBeLessThanOrEqual(MAX_CHATGPT_MESSAGE_CHARS);
+  expect(text).toContain('LARGE_HEAD'); expect(text).not.toContain('LARGE_TAIL');
+  await fs.writeFile(file, Buffer.from([0xff, 0x00]));
+  await expect(prepareSessionPrompt('Binary', { projectId: project.id })).rejects.toThrow(/AGENTS.md safely/);
+  await fs.unlink(file); await fs.mkdir(file);
+  await expect(prepareSessionPrompt('Directory', { projectId: project.id })).rejects.toThrow(/AGENTS.md safely/);
+  await fs.rmdir(file); await fs.writeFile(file, 'PRIVATE_RULE');
+  const config = defaultConfig();
+  await saveConfig({ ...config, roots: [{ name: 'work', path: directory }], capabilities: { ...config.capabilities, read: false } });
+  const noRead = await prepareSessionPrompt('No read', { projectId: project.id });
+  expect(noRead).not.toContain('PRIVATE_RULE');
+  expect(noRead).toContain('Selected project directory: /work');
+  await saveConfig(defaultConfig());
+  await expect(prepareSessionPrompt('Revoked', { projectId: project.id })).rejects.toThrow();
+});

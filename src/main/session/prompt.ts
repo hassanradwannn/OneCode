@@ -3,6 +3,8 @@ import { readFileStream } from '../codex/filesystem.js';
 import { effectiveCapabilities, getConfig } from '../config.js';
 import { currentCoreInstructions } from '../mcp/instructions.js';
 import { geminiBindingsEnabled } from '../gemini/bindings.js';
+import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER } from '../../shared/chat-provider.js';
+import { getSession } from './store.js';
 import { getSessionProject, projectWorkspace } from '../projects.js';
 import { resolvePath } from '../sandbox.js';
 import { MAX_BROWSER_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
@@ -139,7 +141,10 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   // Automatic routing has already frozen its decision from the app's published Skill catalog at
   // admission, so those Skills come from that catalog: only the selected body is read below. Every
   // other Skill the chat can use is still listed, exactly as without routing.
-  const compact = geminiBindingsEnabled() || getConfig().mcp.useGeminiWebSkill === true;
+  const config = getConfig();
+  const session = scope.sessionId ? await getSession(scope.sessionId) : null;
+  const provider = chatProviderForConversation(session?.conversationId, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const compact = provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);

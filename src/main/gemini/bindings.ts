@@ -10,6 +10,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { mcpProvider } from '../mcp/provider-context.js';
 
 const CONVERSATION = /^[a-f0-9]{16}$/;
 const KEY = /^sk-gemini-session-[A-Za-z0-9_-]{43}$/;
@@ -143,7 +144,7 @@ export async function initGeminiBindings(userDataDir: string): Promise<void> {
 }
 
 /** True also while a failed initialization is quarantined: callers must not fall back. */
-export function geminiBindingsEnabled(): boolean { return ledgerPath !== ''; }
+export function geminiBindingsEnabled(): boolean { return ledgerPath !== '' && mcpProvider() === 'gemini'; }
 
 async function persist(next: Map<string, BindingRow>): Promise<void> {
   if (!ready || !ledgerPath) fail('GEMINI_BINDING_STATE_UNAVAILABLE');

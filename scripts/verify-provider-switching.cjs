@@ -38,7 +38,19 @@ app.whenReady().then(async () => {
     assert.equal(check.provider,'chatgpt');assert.equal(check.setup,'chatgpt');assert.equal(check.skillHidden,true);assert.equal(check.refreshHidden,false);
     assert.match(check.browserHint,/ChatGPT/);assert.match(check.step,/ChatGPT/);assert.equal(check.link,'https://chatgpt.com/plugins');assert.match(check.guide,/Server URL/);assert.doesNotMatch(check.guide,/Gemini Connected/);
     await js(`document.querySelector('#tabs [data-tab="setup"]').click()`);
-    fs.writeFileSync(path.join(output,'chatgpt-setup.png'),(await win.webContents.capturePage()).toPNG());
+    for (const width of [1280, 920, 720]) {
+      win.setSize(width, 1000);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const layout = await js(`(() => {
+        const header = document.querySelector('.browser-setup-header');
+        const rect = element => { const r = element.getBoundingClientRect(); return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}; };
+        return {setting:rect(header.querySelector('.setting')), phases:rect(header.querySelector('.browser-phases')), title:rect(header.querySelector('h3'))};
+      })()`);
+      assert.ok(layout.setting.height > 0, 'Provider selector is visible');
+      assert.ok(layout.phases.y >= layout.setting.bottom, `Provider selector overlaps setup phases at ${width}px`);
+      if (layout.title.height > 0) assert.ok(layout.title.y >= layout.phases.bottom, `Setup heading overlaps phases at ${width}px`);
+    }
+    win.setSize(1280, 1000);
     await js(`document.getElementById('setupChatProvider').value='gemini';document.getElementById('setupChatProvider').dispatchEvent(new Event('change',{bubbles:true}))`);
     await until(`document.getElementById('providerBrowserTitle').textContent==='Gemini browser'`);
     assert.deepEqual(await js('window.saves'),['chatgpt','gemini']);assert.equal(await js(`document.getElementById('geminiSkillSetup').hidden`),false);

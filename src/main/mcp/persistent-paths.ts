@@ -9,14 +9,15 @@
  * surface keeps its token, stored only in the OS-backed secret store. Without that store the
  * tokens keep rotating; turning the option off forgets them, so a leaked URL can be replaced.
  */
-import { clearSecret, getSecret, setSecret } from '../secrets.js';
+import { clearSecret, getSecret, setSecret, type SecretKey } from '../secrets.js';
 import { SURFACE_IDS, type SurfaceId } from './surfaces.js';
+import type { ChatProvider } from '../../shared/chat-provider.js';
 
 export type SurfaceTokens = Partial<Record<SurfaceId, string>>;
 
 /** The shape `startMcpServer` mints: 32 random bytes, base64url. */
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
-const key = (id: SurfaceId) => `mcp:path:${id}` as const;
+const key = (id: SurfaceId, provider: ChatProvider): SecretKey => provider === 'gemini' ? `mcp:path:${id}` : `mcp:path:chatgpt:${id}`;
 
 /** The token at the end of one surface URL, or null. */
 export function surfaceTokenOf(url: string, id: SurfaceId): string | null {
@@ -26,21 +27,21 @@ export function surfaceTokenOf(url: string, id: SurfaceId): string | null {
   } catch { return null; }
 }
 
-export async function loadSurfaceTokens(): Promise<SurfaceTokens> {
+export async function loadSurfaceTokens(provider: ChatProvider = 'gemini'): Promise<SurfaceTokens> {
   const tokens: SurfaceTokens = {};
   for (const id of SURFACE_IDS) {
-    const value = await getSecret(key(id)).catch(() => null);
+    const value = await getSecret(key(id, provider)).catch(() => null);
     if (value && TOKEN.test(value)) tokens[id] = value;
   }
   return tokens;
 }
 
 /** Stores the running endpoint's tokens; false when the secret store refused (they keep rotating). */
-export async function rememberSurfaceTokens(urls: Record<SurfaceId, string>): Promise<boolean> {
+export async function rememberSurfaceTokens(urls: Record<SurfaceId, string>, provider: ChatProvider = 'gemini'): Promise<boolean> {
   try {
     for (const id of SURFACE_IDS) {
       const token = surfaceTokenOf(urls[id], id);
-      if (token) await setSecret(key(id), token);
+      if (token) await setSecret(key(id, provider), token);
     }
     return true;
   } catch {
@@ -49,5 +50,6 @@ export async function rememberSurfaceTokens(urls: Record<SurfaceId, string>): Pr
 }
 
 export async function forgetSurfaceTokens(): Promise<void> {
-  for (const id of SURFACE_IDS) await clearSecret(key(id)).catch(() => undefined);
+  for (const provider of ['gemini', 'chatgpt'] as const)
+    for (const id of SURFACE_IDS) await clearSecret(key(id, provider)).catch(() => undefined);
 }

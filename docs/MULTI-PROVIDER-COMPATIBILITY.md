@@ -186,3 +186,7 @@ rg -n "nativeProjects|nativePluginRefresh|generatedImageExport|receipt:|handoff:
 
 Review every match. A provider-specific adapter match can be correct; an unguarded shared-path match
 is a release blocker.
+
+## Concurrent provider MCP servers (0.2.8.5)
+
+Gemini and ChatGPT have separate loopback servers and secret URLs. Each server retains its provider identity for its lifetime. A small path-only gateway forwards each secret URL to its provider server, allowing both to share the existing Cloudflare or Tailscale transport while serving concurrent chats. Selecting a new default does not stop either listener. Add each provider's URL from its own setup page to that provider. Gemini routing capabilities remain required only on the Gemini server. The optional OpenAI Secure MCP Tunnel transport still publishes its configured single URL; use Cloudflare or Tailscale for concurrent providers.

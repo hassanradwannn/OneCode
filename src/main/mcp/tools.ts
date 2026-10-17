@@ -30,13 +30,14 @@ import { toVirtualPath } from '../sandbox.js';
 import { logWarn } from '../logger.js';
 import { withManagedSkills } from '../skill-access.js';
 import { geminiRoutingSchemaJson } from '../gemini/routing-schema.js';
+import { mcpProvider } from './provider-context.js';
 
 export function buildServer(ctx: ToolContext, surface: SurfaceId, observe?: (connectorName: string, version: string, instructions: string, tools: PluginToolSchema[]) => void, liveContext: () => ToolContext = () => ctx): McpServer {
   if (surface === 'core') ctx = withManagedSkills(ctx);
   const definition = surfaceDefinition(surface);
   const instructions = serverInstructions(ctx, surface);
   const server = new McpServer(
-    { name: definition.serverName, title: definition.connectorName, version: APP_VERSION },
+    { name: mcpProvider() === 'chatgpt' ? `${definition.serverName}-chatgpt` : definition.serverName, title: definition.connectorName, version: APP_VERSION },
     { capabilities: { tools: {} }, instructions }
   );
 

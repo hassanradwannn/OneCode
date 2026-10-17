@@ -31,6 +31,8 @@ import { SURFACE_IDS, configuredConnectorName, surfaceDefinition, type SurfaceId
 import { authenticateGeminiBinding, geminiBindingsEnabled, GeminiBindingError, stripGeminiRoutingArgs,
   type GeminiBindingEvidence } from '../gemini/bindings.js';
 import { pluginManager } from '../plugins/manager.js';
+import type { ChatProvider } from '../../shared/chat-provider.js';
+import { withMcpProvider } from './provider-context.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -264,7 +266,7 @@ export function forgetExposedSurface(): void {
   surfaceExposure.clear();
 }
 
-export async function startMcpServer(getContext: () => ToolContext, kept: Partial<Record<SurfaceId, string>> = {}): Promise<McpEndpoint> {
+export async function startMcpServer(getContext: () => ToolContext, kept: Partial<Record<SurfaceId, string>> = {}, provider: ChatProvider = 'gemini'): Promise<McpEndpoint> {
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts, unless the
   // user opted into keeping it (`mcp.persistentUrls`, see persistent-paths.ts): then the
@@ -333,7 +335,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
     handler: toNodeHandler(
-      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id, undefined, () => stableContext(surface.id))),
+      createMcpHandler(() => withMcpProvider(provider, () => buildServer(stableContext(surface.id), surface.id, undefined, () => stableContext(surface.id)))),
       { onerror: (error) => logError(`MCP handler error (${surface.id}): ${error.message}`) }
     )
   }));
@@ -433,7 +435,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // it; see inbound.ts for why it cannot be taken from the MCP call context.
     // A Gemini client may send arbitrary/reused RPC ids and no request header. Never
     // convert a claimed header into browser proof when local capability routing is active.
-    const requestId = geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
+    const requestId = provider === 'gemini' && geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
     const dispatch = (body?: unknown, geminiBinding?: GeminiBindingEvidence): void => {
       if (stopping || res.destroyed) {
         if (!res.destroyed) {
@@ -453,7 +455,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
       };
       res.once('finish', release);
       res.once('close', release);
-      withInboundRequestId(requestId, () => void route.handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding);
+      withMcpProvider(provider, () => withInboundRequestId(requestId, () => void route.handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       void readBoundedJsonBody(req).then(async (parsed) => {
@@ -467,7 +469,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
           return;
         }
         const message = parsed.body as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: { name?: unknown; arguments?: unknown } } | undefined;
-        if (geminiBindingsEnabled() && message?.method === 'tools/call') {
+        if (provider === 'gemini' && geminiBindingsEnabled() && message?.method === 'tools/call') {
           try {
             const binding = await authenticateGeminiBinding(message.params?.arguments);
             const body = { ...message, params: { ...message.params, arguments: stripGeminiRoutingArgs(message.params?.arguments) } };
@@ -538,7 +540,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     port: address.port,
     url: urls.core,
     urls,
-    publication: (surface, observe) => { void buildServer(stableContext(surface), surface, observe).close(); },
+    publication: (surface, observe) => withMcpProvider(provider, () => { void buildServer(stableContext(surface), surface, observe).close(); }),
     stop: (options = {}) => {
       if (!stopping) {
         // Publish the admission fence before closing any sockets or receiving late bodies.

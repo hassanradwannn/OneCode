@@ -13,7 +13,7 @@ import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
 import { prewarmComputerHelper } from './computer/index.js';
 import { effectiveCapabilities, getConfig } from './config.js';
 import { logError, logInfo, logWarn } from './logger.js';
-import { lastRequestAt, startMcpServer, tunnelProbeHeaders, type McpEndpoint } from './mcp/server.js';
+import { lastRequestAt, tunnelProbeHeaders, type McpEndpoint } from './mcp/server.js';
 import { lastToolCallAt } from './mcp/tools.js';
 import { SURFACE_LIST, configuredConnectorName, liveConnectorName, surfaceIsUseful, desktopToolNames, type SurfaceId } from './mcp/surfaces.js';
 import { getSecret } from './secrets.js';
@@ -23,8 +23,10 @@ import { tunnelRouteSettlingUntil } from './tunnel/route-settle.js';
 import { desktopAutomationSupported } from './platform.js';
 import { publishPluginSurface, unpublishPluginSurface, pluginRefreshPublications } from './plugin-refresh.js';
 import { pluginManager } from './plugins/manager.js';
+import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
+import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
 
-let endpoint: McpEndpoint | null = null;
+let endpoint: ProviderEndpoints | null = null;
 /** Retain custody while draining so final shutdown can bound that same stop. */
 let drainingEndpoint: McpEndpoint | null = null;
 let pendingDisconnect: Promise<void> | null = null;
@@ -211,6 +213,8 @@ export function getStatus(): ConnectionStatus {
   // checkboxes, which change without any connection event to recompute them.
   return {
     ...status,
+    localUrl: endpoint?.url ?? null,
+    publicUrl: endpoint && getConfig().tunnel.kind !== 'openai' ? siblingPublicUrl(status.publicUrl, endpoint.url) : status.publicUrl,
     lastRequestAt: lastRequestAt(),
     lastToolCallAt: lastToolCallAt(),
     routeSettlingUntil: tunnelRouteSettlingUntil(),
@@ -257,7 +261,7 @@ function describeSurfaces(): SurfaceStatus[] {
       optional: !surface.required,
       available,
       localUrl: endpoint?.urls[surface.id] ?? null,
-      publicUrl: running ? (previous?.publicUrl ?? null) : null,
+      publicUrl: running ? (config.tunnel.kind !== 'openai' ? siblingPublicUrl(status.publicUrl, endpoint?.urls[surface.id] ?? null) : previous?.publicUrl ?? null) : null,
       tools: toolsFor(surface.id),
       state: available && running ? (previous?.state ?? 'off') : 'off',
       detail: available ? (running ? (previous?.detail ?? '') : '') : desktopUnavailableDetail(surface.id),
@@ -419,8 +423,11 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
     setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null, tailscale: null });
     // Opt-in stable URLs for a tunnel of the user's own (#924): the stored tokens, else fresh ones.
     const keepUrls = config.tunnel.kind === 'tailscale' || getConfig().mcp?.persistentUrls === true;
-    const kept = keepUrls ? await loadSurfaceTokens().catch(() => ({})) : {};
-    const startedEndpoint = await startMcpServer(() => {
+    const kept = keepUrls ? {
+      gemini: await loadSurfaceTokens('gemini').catch(() => ({})),
+      chatgpt: await loadSurfaceTokens('chatgpt').catch(() => ({}))
+    } : {};
+    const startedEndpoint = await startProviderMcpServers(() => {
       const live = getConfig();
       return {
         setupProfileId,
@@ -429,8 +436,9 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
         readOnly: live.readOnly,
         privacyScreenshots: live.ui.privacyScreenshots
       };
-    }, kept);
-    if (keepUrls && !(await rememberSurfaceTokens(startedEndpoint.urls))) {
+    }, kept, () => getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+    if (keepUrls && !(await Promise.all(['gemini', 'chatgpt'].map(provider =>
+      rememberSurfaceTokens(startedEndpoint.providers[provider as 'gemini' | 'chatgpt'].urls, provider as 'gemini' | 'chatgpt')))).every(Boolean)) {
       if (config.tunnel.kind === 'tailscale') {
         await startedEndpoint.stop();
         throw new TunnelError('OneCode Funnel requires securely saved connector URLs. Restore secure storage before connecting. No Funnel route was changed.');
@@ -722,7 +730,8 @@ async function disconnectResources(endpointForceAfterMs?: number): Promise<void>
 
 /** Keeps the running connector URLs from now on (the option was just turned on); false if it could not. */
 export async function rememberRunningSurfaceTokens(): Promise<boolean> {
-  return endpoint ? rememberSurfaceTokens(endpoint.urls) : true;
+  return endpoint ? (await Promise.all(['gemini', 'chatgpt'].map(provider =>
+    rememberSurfaceTokens(endpoint!.providers[provider as 'gemini' | 'chatgpt'].urls, provider as 'gemini' | 'chatgpt')))).every(Boolean) : true;
 }
 
 export function connect(current?: () => boolean): Promise<void> {

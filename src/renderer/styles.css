@@ -1887,18 +1887,20 @@ details.connector[open] > summary::before { rotate: 90deg; }
 .browser-stage .step-lead { max-width: 45ch; margin-top: 10px; line-height: 1.6; }
 .browser-stage h3:focus { outline: none; }
 .browser-setup-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px; }
-.browser-setup-header .browser-phases { grid-column: 1; grid-row: 1; margin: 0; }
-.browser-setup-header h3 { grid-column: 1; grid-row: 2; margin: 0; }
+.browser-setup-header > .setting { grid-column: 1 / -1; grid-row: 1; min-width: 0; margin: 0; }
+.browser-setup-header .browser-phases { grid-column: 1; grid-row: 2; flex-wrap: wrap; margin: 0; }
+.browser-setup-header .browser-phases li { flex-shrink: 0; }
+.browser-setup-header h3 { grid-column: 1; grid-row: 3; margin: 0; }
 .browser-picker { display: contents; }
-.browser-picker .step-lead { grid-column: 2; grid-row: 1; margin: 0; max-width: none; text-align: center; }
-.browser-picker .browser-segments { grid-column: 2; grid-row: 2; }
+.browser-picker .step-lead { grid-column: 2; grid-row: 2; margin: 0; max-width: none; text-align: center; }
+.browser-picker .browser-segments { grid-column: 2; grid-row: 3; }
 .browser-setup:has(#browserExtensionStage[hidden]) .browser-picker,
 .browser-setup:has(#browserExtensionStage[hidden]) #browserExtensionTitle { display: none; }
 .browser-setup:has(#browserExtensionStage[hidden]) .browser-setup-header { margin-bottom: 20px; }
 @media (max-width: 760px) {
   .browser-setup-header { grid-template-columns: minmax(0, 1fr); }
-  .browser-picker .step-lead { grid-column: 1; grid-row: 3; }
-  .browser-picker .browser-segments { grid-column: 1; grid-row: 4; }
+  .browser-picker .step-lead { grid-column: 1; grid-row: 4; }
+  .browser-picker .browser-segments { grid-column: 1; grid-row: 5; }
 }
 .browser-segments { display: flex; flex-wrap: wrap; gap: 6px; }
 .browser-segments button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--soft); font: inherit; font-size: calc(13px * var(--text-scale, 1)); cursor: pointer; }

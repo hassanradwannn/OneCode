@@ -26,6 +26,7 @@ import { rawPromises as fs } from '../rawfs.js';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 import { z } from 'zod';
+import { mcpProvider } from './provider-context.js';
 import { DEFAULT_READ_BYTES, MAX_READ_BYTES, formatBytes } from '../fsops.js';
 import { BinaryReadError, listDirectoryLevel, readTextFile, statInfo, walkFiles } from '../codex/read-backend.js';
 import {
@@ -475,7 +476,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
   // -------------------------------------------------------------- save_image
   //
   // Only an adapter with native original-file evidence may advertise image export.
-  if (exposedCaps.create) {
+  if (exposedCaps.create && mcpProvider() === 'chatgpt') {
     reg.register(
       'save_image',
       toolDeclaration('save_image', () => ({
