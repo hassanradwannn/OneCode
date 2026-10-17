@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { getConfig } from '../config.js';
+import { FINISH_RELEASE_TEXT } from '../../shared/provider-copy.js';
 import { currentCall } from '../mcp/call-context.js';
 import { getSession } from './store.js';
 import { onSessionChange, recordProgress } from './recorder.js';
@@ -210,9 +211,7 @@ export async function releaseSessionFinish(sessionId: string, expectedTurnId: st
   if (await finishReleased(sessionId, expectedTurnId, session.conversationId)) return;
   const latest = await getSession(sessionId);
   if (latest?.activeTurnId !== expectedTurnId || latest.conversationId !== session.conversationId) throw new Error('The active turn changed; refresh before ending it');
-  const message = reason === 'stop'
-    ? 'Stop requested. The finish hold was released; Gemini has not yet confirmed that generation stopped.'
-    : 'Finish hold released. Gemini may finish its answer; generation has not been stopped.';
+  const message = FINISH_RELEASE_TEXT[reason];
   const receipt = await recordProgress(sessionId, `finish-release:${expectedTurnId}`, message,
     undefined, expectedTurnId, { state: 'released', conversationId: session.conversationId });
   if (!receipt) throw new Error('End turn could not be saved; this turn remains held');

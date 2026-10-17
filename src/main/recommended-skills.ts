@@ -16,6 +16,14 @@ export async function listRecommendedSkills(): Promise<RecommendedSkillEntry[]> 
 export async function installRecommendedSkill(id: string): Promise<ManagedSkill[]> {
   const skill = RECOMMENDED_SKILLS.find(entry => entry.id === id);
   if (!skill) throw new Error('Unknown recommended skill');
+  if (id === 'cua-driver') {
+    const { pluginManager } = await import('./plugins/manager.js');
+    const existing = pluginManager.snapshot().plugins.find(plugin => plugin.catalogId === 'computer-use');
+    if (!existing) await pluginManager.install({ catalogId: 'computer-use' });
+    const { installCuaSkill } = await import('./plugins/cua-driver.js');
+    await installCuaSkill();
+    return listManagedSkills();
+  }
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'cos-recommended-skill-'));
   try {
     const folder = path.join(temporary, skill.id);

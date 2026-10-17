@@ -186,6 +186,12 @@ export function resolveGithub(source: PluginSource): PluginSource {
 }
 
 export async function installSource(source: PluginSource, dir: string): Promise<InstalledLaunch> {
+  if (source.kind === 'cua') {
+    const { cuaLaunch, installCuaSkill } = await import('./cua-driver.js');
+    const launch = await cuaLaunch(dir, true);
+    await installCuaSkill();
+    return launch;
+  }
   // Pins belong to the recipe's single package-resolution transaction, never a
   // repair step that mutates a published installation after dependency resolution.
   const dependencies: string[] = [];

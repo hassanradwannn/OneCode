@@ -3,6 +3,19 @@ import type { PluginCatalogEntry, PluginSource } from '../../shared/plugins.js';
 /** Reviewed upstream recipes; versions are pinned until an explicit update. Icons are original CoS artwork. */
 export const pluginCatalog: PluginCatalogEntry[] = [
   {
+    id: 'computer-use', name: 'Computer use',
+    description: 'Control native apps and capture screenshots with CUA Driver. Reuses your existing local daemon.',
+    icon: 'computer-use', color: '#6ca8e2', source: { kind: 'cua', version: '0.36.0' },
+    homepage: 'https://github.com/trycua/cua/tree/main/libs/cua-driver', license: 'MIT', fields: [],
+    tools: ['start_session', 'list_windows', 'get_window_state', 'click', 'type_text', 'press_key'],
+    instructions: [
+      'Install to connect to CUA Driver already on this device. If missing, OneCode downloads the pinned official installer from trycua/cua and verifies its checksum before running it.',
+      'The official Computer use skill is downloaded into your Skills library. Existing driver installations and edited skills are preserved.',
+      'Complete any native operating-system accessibility or screen-capture setup requested by CUA Driver. Its permissions and consent remain in force.',
+      'Agents discover the live Computer use tools through Core plugins and read the cua-driver skill from the local Skills catalog. Disabling this plugin disconnects OneCode without stopping the shared daemon.'
+    ]
+  },
+  {
     id: 'blender',
     name: 'Blender MCP',
     description: 'Create and inspect 3D scenes through the community Blender addon.',

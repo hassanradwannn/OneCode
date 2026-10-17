@@ -1,4 +1,4 @@
-provider: github
 owner: hassanradwannn
 repo: OneCode
+provider: github
 updaterCacheDirName: onecode-updater

@@ -1,5 +1,5 @@
 export type PluginSource = {
-  kind: 'npm' | 'python' | 'command' | 'remote' | 'mcpb' | 'github';
+  kind: 'npm' | 'python' | 'command' | 'remote' | 'mcpb' | 'github' | 'cua';
   package?: string;
   version?: string;
   /** Reviewed exact Python dependency pins, resolved together with the server package. */

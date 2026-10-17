@@ -393,10 +393,13 @@ var CLF_DOM = (() => {
       id: nativeId(node, node.tagName === 'USER-QUERY' ? 'user' : 'assistant') })).filter(turn => turn.id);
   }, []);
   const messageNode = turn => turn.role === 'user' ? turn.node.querySelector('.query-text,[id^="user-query-content-"]') || turn.node :
-    turn.node.querySelector('message-content,.model-response-text,.markdown') || turn.node;
+    turn.node.querySelector('message-content') || turn.node.querySelector('.model-response-text .markdown,.markdown');
   function messagesIn(turn, index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id) return [];
     const node = messageNode(turn), id = turn.id;
+    // Connector status/approval shells are not assistant prose. Never ingest the whole
+    // response container while its actual message-content has not mounted yet.
+    if (!node) return [];
     if (seen.has(id)) return [];
     seen.add(id);
     const copy = turn.role === 'assistant' ? node.cloneNode(true) : null;

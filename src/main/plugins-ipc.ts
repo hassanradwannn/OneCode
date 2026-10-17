@@ -8,7 +8,7 @@ import { MAX_PLUGIN_LONGEST_CALL_SECONDS } from '../shared/plugins.js';
 
 const values = z.record(z.string().min(1).max(128), z.string().max(16_384)).refine(value => Object.keys(value).length <= 64, 'At most 64 configuration fields');
 const source = z.object({
-  kind: z.enum(['npm', 'python', 'command', 'remote', 'mcpb', 'github']),
+  kind: z.enum(['npm', 'python', 'command', 'remote', 'mcpb', 'github', 'cua']),
   package: z.string().max(256).optional(), version: z.string().max(128).optional(),
   dependencies: z.array(z.object({ package: z.string().min(1).max(256), version: z.string().min(1).max(128) }).strict()).max(16).optional(),
   command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(128).optional(),

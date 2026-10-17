@@ -15894,6 +15894,32 @@ describe('independent prime browser transports', () => {
 });
 
 describe('app requests to stop one exact active turn', () => {
+  it.each(['chatgpt', 'gemini'] as const)('immediately sleeps a %s worker on its durable native Stop, preserving its chat', async provider => {
+    getConfig().ui.chatProvider = provider;
+    const conversationId = provider === 'gemini' ? 'a4444444bbbbcccc' : 'e4444444-aaaa-4bbb-8ccc-222222222222';
+    const prime = provider === 'gemini' ? 'a5555555bbbbcccc' : PRIME_CHAT;
+    spawn({ workers: [{ task: 'work until stopped' }], caller: { conversationId: prime } });
+    expect(bindConversation('worker-1', conversationId)).toBe(true);
+    const sessionId = await active(conversationId);
+    const stopped = { kind: 'turn_end', time: Date.now(), turnId: 'stop-turn-one', outcome: 'stopped' };
+    expect((await request('POST', '/events', { body: { conversationId, events: [stopped] } })).status).toBe(200);
+    expect(agentInfoForOwnedConversation(conversationId)).toMatchObject({ state: 'sleeping', revivable: true, conversationId });
+    expect((await getSession(sessionId))?.activeTurnId).toBeNull();
+    const reports = (await readEvents(sessionId)).filter(event => event.kind === 'agent_message');
+    await request('POST', '/events', { body: { conversationId, events: [stopped] } });
+    expect((await readEvents(sessionId)).filter(event => event.kind === 'agent_message')).toHaveLength(reports.length);
+  });
+  it('does not sleep a worker when a stopped observation belongs to an older turn', async () => {
+    const conversationId = 'e4444444-aaaa-4bbb-8ccc-333333333333';
+    spawn({ workers: [{ task: 'keep working on the current turn' }], caller: { conversationId: PRIME_CHAT } });
+    expect(bindConversation('worker-1', conversationId)).toBe(true);
+    await active(conversationId);
+    await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'turn_start', time: Date.now() + 1, turnId: 'newer-turn' },
+      { kind: 'turn_end', time: Date.now(), turnId: 'stop-turn-one', outcome: 'stopped' }
+    ] } });
+    expect(agentInfoForOwnedConversation(conversationId)?.state).toBe('active');
+  });
   it('does not present a persisted unfinished turn as live after recorder restart', async () => {
     const { sessionControlsFor } = await import('../src/main/bridge.js');
     const sessionId = await active('e5555555-aaaa-4bbb-8ccc-111111111111');

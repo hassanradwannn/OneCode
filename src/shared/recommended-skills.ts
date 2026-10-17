@@ -20,6 +20,9 @@ function skill(id: string, name: string, description: string, body: string): Rec
 }
 
 export const RECOMMENDED_SKILLS: readonly RecommendedSkill[] = [
+  skill('cua-driver', 'Computer use',
+    'Install CUA Driver, connect its shared local daemon, and download its official computer-use skill.',
+    '# Computer use\n\nInstalling this recommendation sets up the Computer use plugin and downloads the complete official CUA Driver skill from trycua/cua.'),
   skill('code-review', 'Code review',
     'Review a change for correctness, safety and clarity before it is merged, and report only findings that matter.',
     `

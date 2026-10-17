@@ -206,6 +206,7 @@ import { ownCoreHint,
   reactivateSilentCeilingRunForTerminal,
   persistCriticalSwarmNow,
   stageWorkerConversationFinish,
+  stageWorkerConversationStop,
   workerConversationGone,
   workerRevivalDeliveredSince,
   type WorkerRevival
@@ -1908,11 +1909,21 @@ async function reconcileWorkerFinish(id: string, sessionId: string, observations
     worker = agentInfoForOwnedConversation(id);
   }
   if (!worker || (!retainedTerminalText && !['active', 'detached', 'invited'].includes(worker.state))) return true;
-  const finalText = retainedTerminalText ?? await workerFinalAcrossBatches(sessionId, id, observations);
+  // A stopped turn has no completed final to reconcile. Use the durable current boundary,
+  // not an ACK for the click or a historical stop delivered after a newer task started.
+  const stopObserved = observations?.some(entry => entry.kind === 'turn_end' && entry.outcome === 'stopped');
+  const boundary = stopObserved ? (await readRecentEvents(sessionId, 1, {
+    kinds: ['turn_start', 'turn_end', 'user_message']
+  }))[0] : null;
+  const summary = stopObserved ? await getSession(sessionId) : null;
+  const stopped = boundary?.kind === 'turn_end' && boundary.outcome === 'stopped' &&
+    summary?.conversationId === id && summary.activeTurnId === null &&
+    observations?.some(entry => entry.kind === 'turn_end' && entry.outcome === 'stopped' && entry.turnId === boundary.turnId);
+  const finalText = stopped ? null : retainedTerminalText ?? await workerFinalAcrossBatches(sessionId, id, observations);
   const current = agentInfoForOwnedConversation(id);
-  if (!finalText || !current || current.runId !== worker.runId || current.state !== worker.state ||
+  if ((!stopped && !finalText) || !current || current.runId !== worker.runId || current.state !== worker.state ||
       current.sleptAt !== worker.sleptAt || current.lastRevivalCommandId !== worker.lastRevivalCommandId) return true;
-  const staged = stageWorkerConversationFinish(id, finalText);
+  const staged = stopped ? stageWorkerConversationStop(id) : stageWorkerConversationFinish(id, finalText!);
   if (!staged?.report) return true;
   try {
     if (!(await persistCriticalSwarmNow())) {
@@ -1927,7 +1938,8 @@ async function reconcileWorkerFinish(id: string, sessionId: string, observations
   staged.commit();
   await recordAgentMessage(staged.report, 'sent', id);
   if (staged.info.runId) {
-    await wakeQueuedStoppedWorkers([worker.id], staged.info.runId);
+    // Explicit Stop must stay stopped. A new prime message may wake this same worker later.
+    if (!stopped) await wakeQueuedStoppedWorkers([worker.id], staged.info.runId);
     releaseQuiescentRun({}, staged.info.runId);
   }
   return true;

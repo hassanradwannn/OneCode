@@ -58,6 +58,16 @@ function turn(role: 'user' | 'assistant', text: string, nativeId: string) {
   content.className = role === 'user' ? 'query-text' : 'markdown'; content.textContent = text;
   element.append(content); document.querySelector('main')!.prepend(element); return element;
 }
+it('reads assistant prose only from native message content, never a connecting/approval shell', () => {
+  const shell = document.createElement('model-response'); shell.id = 'response-shell';
+  shell.innerHTML = '<div class="response-container-header">Connecting to OneCode Core Desktop</div><remy-confirmation-card><span>OneCode Core Desktop</span><button>Allow</button></remy-confirmation-card>';
+  document.querySelector('main')!.prepend(shell);
+  expect(api.messages()).toEqual([]);
+  const content = document.createElement('message-content'); content.textContent = 'Connecting to OneCode Core Desktop is the phrase you asked me to quote.';
+  const outer = document.createElement('structured-content-container'); outer.className = 'model-response-text';
+  outer.append(document.createTextNode('OneCode Core Desktop'), content); shell.append(outer);
+  expect(api.messages().map((message: any) => message.text)).toEqual(['Connecting to OneCode Core Desktop is the phrase you asked me to quote.']);
+});
 function card(tool = 'append session note', connector = 'OneCode') {
   const element = document.createElement('remy-confirmation-card');
   const title = document.createElement('span'); title.dataset.testId = 'header'; title.textContent = connector;

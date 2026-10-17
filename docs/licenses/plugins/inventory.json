@@ -1,5 +1,16 @@
 [
   {
+    "id": "computer-use",
+    "name": "Computer use — CUA Driver",
+    "version": "0.36.0",
+    "license": "MIT; separately installed upstream software, not bundled",
+    "repository": "https://github.com/trycua/cua/tree/075add55cf938f4e351b74539efa18d4976696ae/libs/cua-driver",
+    "terms": "https://github.com/trycua/cua/blob/075add55cf938f4e351b74539efa18d4976696ae/LICENSE.md",
+    "notices": [],
+    "checkedOn": "2026-10-18",
+    "bundledWithApp": false
+  },
+  {
     "id": "memory",
     "package": "@modelcontextprotocol/server-memory",
     "version": "2026.8.31",

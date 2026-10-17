@@ -92,6 +92,10 @@ Core always exposes local plugin discovery through `plugins` with `action: list`
 
 Local skills are provider-independent files and metadata. The virtual `/skills/.catalog.json` read reflects the live library within the caller's validated scope. Reading a skill body and freezing a selected revision are separate actions. A provider's optional native skill installation is an adapter feature, separate from OneCode's local skill library.
 
+Computer use is a reviewed CUA Driver recipe in the ordinary plugin manager. It discovers existing official installations outside a stale desktop PATH and connects an MCP proxy to the daemon's explicit reported endpoint. It never replaces an existing driver or changes its permission mode. An explicit install downloads a checksum-pinned upstream installer only when the driver is absent, then imports the complete upstream skill through the normal GitHub skill owner. Driver binaries and skill files are not vendored into this repository. Disconnecting OneCode closes its proxy, preserving the shared daemon. Installing the Computer use recommendation follows this same plugin setup.
+
+A native stopped-turn observation reconciles a worker through the existing durable finish barrier immediately. It frees the slot while preserving the chat and unread queue, reports that work may be incomplete, and does not automatically wake queued work after an explicit Stop. An ACK for a stop click alone is not proof that the provider stopped; a historical stop cannot close a newer turn.
+
 Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Future work includes receiving native generated images and other model outputs in OneCode, including Gemini image generation. This requires real media export, ingestion and validation; it is not implemented by changing tool descriptions.
 
 ## Reading and validation

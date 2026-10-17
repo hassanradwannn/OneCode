@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { initProviderCopy, initProviderSettings } from '../src/renderer/provider-settings.js';
-import { providerCopy } from '../src/shared/provider-copy.js';
+import { FINISH_RELEASE_TEXT, neutralProgressCopy, providerCopy } from '../src/shared/provider-copy.js';
+
+it('uses neutral stop/finish status in new and saved chats without changing user text', () => {
+  expect(FINISH_RELEASE_TEXT.stop).toContain('the provider has not yet confirmed');
+  expect(neutralProgressCopy('Stop requested. The finish hold was released; Gemini has not yet confirmed that generation stopped.')).toBe(FINISH_RELEASE_TEXT.stop);
+  expect(neutralProgressCopy('Finish hold released. Gemini may finish its answer; generation has not been stopped.')).toBe(FINISH_RELEASE_TEXT.end);
+  expect(neutralProgressCopy('My Gemini project is stopped.')).toBe('My Gemini project is stopped.');
+});
 afterEach(() => { document.body.replaceChildren(); });
 it('keeps names and paths inserted into neutral authored templates byte-for-byte', () => {
   expect(providerCopy('Open {0} in Gemini', 'chatgpt', ['My ChatGPT folder'])).toBe('Open My ChatGPT folder in provider');

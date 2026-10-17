@@ -231,7 +231,7 @@ export class PluginManager {
         typeof p.enabled !== 'boolean' ||
         !p.source ||
         (p.source.auth !== undefined && (p.source.auth !== 'oauth' || p.source.kind !== 'remote')) ||
-        !['command', 'npm', 'python', 'mcpb', 'remote'].includes(p.source.kind) ||
+        !['command', 'npm', 'python', 'mcpb', 'remote', 'cua'].includes(p.source.kind) ||
         !p.launch ||
         typeof p.launch.command !== 'string' ||
         !Array.isArray(p.launch.args) ||
@@ -703,6 +703,12 @@ export class PluginManager {
         );
       } else {
         let launch = { command: row.launch.command, args: row.launch.args, env: {} as Record<string, string> };
+        if (row.source.kind === 'cua') {
+          const { cuaLaunch } = await import('./cua-driver.js');
+          const current = await cuaLaunch(row.directory);
+          signal.throwIfAborted();
+          launch = { command: current.command, args: current.args, env: {} };
+        }
         if (row.launch.manifest) {
           const manifest = vAny.McpbManifestSchema.parse(row.launch.manifest);
           const missing = Object.entries(manifest.user_config ?? {})

@@ -203535,6 +203535,12 @@ Optional plugin catalog — separate installations and hosted services
 Reviewed package licenses and hosted-service references follow. External server code is not bundled with CoS; custom installations and updates retain their own notices.
 
 ================================================================================
+Computer use — CUA Driver
+License: MIT; separately installed upstream software, not bundled
+Source: https://github.com/trycua/cua/tree/075add55cf938f4e351b74539efa18d4976696ae/libs/cua-driver
+Service terms: https://github.com/trycua/cua/blob/075add55cf938f4e351b74539efa18d4976696ae/LICENSE.md
+
+================================================================================
 @modelcontextprotocol/server-memory@2026.8.31
 License: MIT AND Apache-2.0 (upstream transitional terms; documentation CC-BY-4.0)
 Source: https://github.com/modelcontextprotocol/servers/tree/main/src/memory

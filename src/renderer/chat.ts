@@ -1,4 +1,5 @@
 import { providerText } from './provider-text.js';
+import { neutralProgressCopy } from '../shared/provider-copy.js';
 import { hasProviderDirective, resolvedCapture, withoutProviderDirectives } from '../shared/content-reference.js';
 import { initChatSearch, type ChatSearch } from './chat-search.js';
 import { initChatFind } from './chat-find.js';
@@ -3580,7 +3581,11 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       return box;
     }
     case 'progress': {
-      if (!event.progressId?.startsWith(APPROVAL_PROGRESS_PREFIX)) return el('p', 'meta is-progress', event.message.text);
+      if (!event.progressId?.startsWith(APPROVAL_PROGRESS_PREFIX)) {
+        const copy = neutralProgressCopy(event.message.text);
+        return el('p', 'meta is-progress', copy !== event.message.text || event.progressId?.startsWith('finish-release:')
+          ? () => providerText(copy) : copy);
+      }
       // Gemini's own tool approval card stands in this chat's page (approval-wait.ts). The app
       // writes the English source; only the user can answer the card, so the row opens the page.
       const waiting = event.message.text === APPROVAL_WAITING_TEXT;

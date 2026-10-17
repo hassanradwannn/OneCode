@@ -31,16 +31,16 @@ app.whenReady().then(async () => {
     const errors=[]; win.webContents.on('console-message',details=>{if(details.level==='error')errors.push(details.message)});
     const js=expression=>win.webContents.executeJavaScript(expression);
     const until=async expression=>{const end=Date.now()+10000;while(Date.now()<end){if(await js(expression))return;await new Promise(resolve=>setTimeout(resolve,40));}throw Error('Timeout '+expression+'; errors '+errors.join(';'));};
-    await win.loadURL('http://127.0.0.1:'+server.address().port);await until(`document.getElementById('providerBrowserTitle').textContent==='Gemini browser'`);
+    await win.loadURL('http://127.0.0.1:'+server.address().port);await until(`document.getElementById('providerBrowserTitle').textContent==='Provider browser'`);
     await js(`document.querySelector('#tabs [data-tab="general"]').click();document.getElementById('checkForUpdates').click()`);
     await until(`window.manualUpdateChecks===1 && !document.getElementById('checkForUpdates').disabled`);
     assert.equal(await js('window.updateInstalls'),0);
     await js(`document.getElementById('chatProvider').value='chatgpt';document.getElementById('chatProvider').dispatchEvent(new Event('change',{bubbles:true}))`);
-    await until(`document.getElementById('providerBrowserTitle').textContent==='ChatGPT browser'`);
+    await until(`fixtureState.config.ui.chatProvider==='chatgpt' && document.getElementById('providerBrowserTitle').textContent==='Provider browser'`);
     assert.deepEqual(await js('window.saves'),['chatgpt']);
     const check=await js(`({provider:fixtureState.config.ui.chatProvider,setup:document.getElementById('setupChatProvider').value,skillHidden:document.getElementById('geminiSkillSetup').hidden,browserHint:document.getElementById('providerBrowserHint').textContent,step:document.getElementById('extensionStepChatGpt').textContent,link:document.getElementById('setupProviderPluginsOpen').dataset.link,guide:document.getElementById('pluginMoves').textContent,refreshHidden:document.getElementById('autoRefreshPluginsRow').hidden})`);
     assert.equal(check.provider,'chatgpt');assert.equal(check.setup,'chatgpt');assert.equal(check.skillHidden,true);assert.equal(check.refreshHidden,false);
-    assert.match(check.browserHint,/ChatGPT/);assert.match(check.step,/ChatGPT/);assert.equal(check.link,'https://chatgpt.com/plugins');assert.match(check.guide,/Server URL/);assert.doesNotMatch(check.guide,/Gemini Connected/);
+    assert.match(check.browserHint,/provider is signed in/);assert.doesNotMatch(check.browserHint,/Gemini|ChatGPT/);assert.equal(check.step,'Open the provider in Brave');assert.equal(check.link,'https://chatgpt.com/plugins');assert.match(check.guide,/Server URL/);assert.doesNotMatch(check.guide,/Gemini Connected/);
     await js(`document.querySelector('#tabs [data-tab="setup"]').click()`);
     for (const width of [1280, 920, 720]) {
       win.setSize(width, 1000);
@@ -56,7 +56,7 @@ app.whenReady().then(async () => {
     }
     win.setSize(1280, 1000);
     await js(`document.getElementById('setupChatProvider').value='gemini';document.getElementById('setupChatProvider').dispatchEvent(new Event('change',{bubbles:true}))`);
-    await until(`document.getElementById('providerBrowserTitle').textContent==='Gemini browser'`);
+    await until(`fixtureState.config.ui.chatProvider==='gemini' && document.getElementById('providerBrowserTitle').textContent==='Provider browser'`);
     assert.deepEqual(await js('window.saves'),['chatgpt','gemini']);assert.equal(await js(`document.getElementById('geminiSkillSetup').hidden`),false);
     await js(`document.getElementById('chatBrowser').value='chrome';document.getElementById('chatBrowser').dispatchEvent(new Event('change',{bubbles:true}))`);
     await until(`fixtureState.config.ui.chatBrowser==='chrome'`);

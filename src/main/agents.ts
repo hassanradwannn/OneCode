@@ -3298,6 +3298,13 @@ export function stageWorkerConversationFinish(conversationId: string, result: st
   return stageFinish(agent, result, acknowledged);
 }
 
+/** A native Stop frees the slot without claiming queued instructions were completed or read. */
+export function stageWorkerConversationStop(conversationId: string): StagedFinish | null {
+  const agent = agentForConversationId(conversationId);
+  if (!agent || agent.info.role !== 'worker' || !canStageFinish(agent)) return null;
+  return stageFinish(agent, 'Stopped by the user. The provider confirmed that this turn is no longer running; the task may be incomplete.');
+}
+
 /**
  * Ends a worker that never got off the ground, definitively.
  *
