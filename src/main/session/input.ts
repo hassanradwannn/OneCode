@@ -7,10 +7,11 @@ import { z } from 'zod';
 import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, type InputImage, type QueuedInputNowIntent } from '../../shared/input.js';
 import type { SessionSummary } from '../../shared/session.js';
 import { getConfig } from '../config.js';
-import { geminiBindingsEnabled, validateGeminiBindingReceiptEvidence, validateGeminiBindingEvidence, type GeminiBindingEvidence, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
+import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
+import { chatgptBindingInstructions, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -61,6 +62,8 @@ const entrySchema = inputArgs.extend({
   opening: z.literal(true).optional(),
   /** An explicit retry can keep its unbound local chat instead of reserving another. */
   requestedSessionId: inputArgs.shape.sessionId.optional(),
+  /** Provider captured at local admission; changing the new-chat selector cannot retarget queued work. */
+  chatProvider: z.enum(CHAT_PROVIDERS).optional(),
   /** Frozen automatic routing decision. Empty means routing ran and deliberately chose none. */
   autoSkills: z.array(z.object({ id: z.string().regex(SKILL_ID_PATTERN), revision: z.string().regex(/^[0-9a-f]{64}$/i) }).strict()).max(1).optional(),
   /** Frozen image projection; authored attachment IDs remain the replay identity. */
@@ -94,7 +97,7 @@ const entrySchema = inputArgs.extend({
   /** Tool-result corrections remain inside their original generation in history. */
   toolTurnId: z.string().min(1).max(256).optional(),
   /** Local offer evidence only, never a Google request/generation identifier. */
-  toolGeminiOffer: z.object({ bindingId: z.string().min(1).max(64), startedAt: z.number().nonnegative(),
+  toolGeminiOffer: z.object({ attribution: z.enum(['gemini_session_capability', 'chatgpt_session_capability']).optional(), bindingId: z.string().min(1).max(64), startedAt: z.number().nonnegative(),
     inputTurn: z.object({ inputId: z.string().uuid(), messageId: z.string().min(1).max(256),
       historySeq: z.number().int().positive(), turnId: z.string().min(1).max(256) }).optional() }).optional(),
   /** Explicit live Steer may not borrow a retained MCP window after native turn end. */
@@ -171,7 +174,7 @@ type InputDeliveryHooks = {
   /** Trust an exact CoS composer opening under the same session-policy fence as Trust IPC. */
   trustOpening?: (sessionId: string, conversationId: string) => Promise<boolean>;
   recordDelivered?: (entry: Readonly<InputEntry>, anchorCommitted: (seq: number) => void) => Promise<boolean>;
-  prepareText?: (entry: Readonly<InputEntry>, limits: PromptLimits, authored: string) => string | Promise<string>;
+  prepareText?: (entry: Readonly<InputEntry>, limits: PromptLimits, authored: string, routingInstructions?: string) => string | Promise<string>;
   applyAutomation: (conversationId: string, automation: NonNullable<InputArgs['automation']>, phase: 'before-send' | 'after-send', objective?: string, loopAfterTurn?: boolean) => Promise<void>;
   changed: () => void;
 };
@@ -657,9 +660,12 @@ async function prepare(entry: InputEntry, suffix = ''): Promise<InputEntry> {
       ? `Original user request:\n${entry.objective}\n\nOpening instruction:\n${entry.text}\n\nFollow the complete original request, including all constraints, throughout this task.`
       : entry.text;
   const mandatoryOverhead = `${TOOL_INPUT_HEADER}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
+  const routing = !entry.deliveryText && entry.state === 'browser' && entry.requiresAuthorization && entry.owner && entry.claimedBrowser && entry.offeredAt &&
+    chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'chatgpt'
+    ? chatgptBindingInstructions({ kind: 'input', input: { id: entry.id, owner: entry.owner, browser: entry.claimedBrowser, offeredAt: entry.offeredAt } }) : '';
   const deliveryText = entry.deliveryText ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
     maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
-  }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text) ?? text + suffix;
+  }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text, routing) ?? text + suffix + (routing ? '\n\n' + routing : '');
   // A single input must fit the tool envelope by itself. Aggregate batching below
   // may defer a second input, but cannot silently defer an individually impossible one.
   const envelope = `${TOOL_INPUT_HEADER}${deliveryText}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
@@ -784,6 +790,7 @@ export function fileRotationInput(sessionId: string, turnId: string): Promise<In
 }
 
 export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwner']): Promise<InputEntry> {
+  const selectedProvider = getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   return serial(async () => {
     const input = inputArgs.parse(raw);
     if (input.stages !== undefined && JSON.stringify([input.text, ...input.stages]).length > 12000)
@@ -845,7 +852,7 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const transportIntent = toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
       ? policy?.canInject ? 'tool' as const : !policy || policy.browserAllowed || policy.directTurn ? 'browser' as const : undefined : undefined;
     const directTurn = !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null;
-    const entry: InputEntry = { ...input, ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
+    const entry: InputEntry = { ...input, chatProvider: chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
       ...(injectionOwner ? { toolTurnId: injectionOwner.turnId } : {}), ...(transportIntent ? { transportIntent } : {}),
       ...(requestedMode !== input.mode ? { requestedMode } : {}), ...(finishOwner ? { finishOwner } : {}), state: 'queued', owner: null, createdAt: Date.now(), conversationId: null };
     if (input.projectId) {
@@ -1065,15 +1072,15 @@ async function settleToolInputFromFinal(row: InputEntry): Promise<InputEntry> {
     // Receipt settlement grants no new execution. The original exact turn may
     // already have ended, but rotation/revocation/rebinding still withdraw custody.
     if (!row.toolGeminiOffer.inputTurn || row.toolGeminiOffer.inputTurn.turnId !== row.toolTurnId) return row;
-    try { await validateGeminiBindingReceiptEvidence({ bindingId: row.toolGeminiOffer.bindingId, inputTurn: row.toolGeminiOffer.inputTurn,
-      conversationId: row.conversationId, sessionId: row.sessionId, attribution: 'gemini_session_capability' }); }
+    try { await validateLocalBindingReceipt({ bindingId: row.toolGeminiOffer.bindingId, inputTurn: row.toolGeminiOffer.inputTurn,
+      conversationId: row.conversationId, sessionId: row.sessionId, attribution: row.toolGeminiOffer.attribution ?? 'gemini_session_capability' }); }
     catch { return row; }
   }
   const calls = await readRecentEvents(row.sessionId, 256, { kinds: ['tool_call'] });
   const call = calls.find(event => event.kind === 'tool_call' && event.source === 'mcp' && event.turnId &&
     (!row.toolTurnId || event.turnId === row.toolTurnId) &&
     (row.toolGeminiOffer
-      ? event.call.attributionMethod === 'gemini_session_capability' && event.time === row.toolGeminiOffer.startedAt &&
+      ? event.call.attributionMethod === (row.toolGeminiOffer.attribution ?? 'gemini_session_capability') && event.time === row.toolGeminiOffer.startedAt &&
         !event.call.nested && event.turnId === row.toolTurnId
       : event.call.attribution === 'request_id' && event.call.requestId === row.owner) &&
     event.call.conversationId === row.conversationId && event.time <= row.offeredAt!);
@@ -1141,7 +1148,8 @@ export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): P
     const policy = await sessionInputPolicy(row.sessionId!);
     const session = await getSession(row.sessionId!);
     if (!session?.conversationId || session.conversationId !== row.conversationId) return false;
-    const toolTurn = geminiInput(session.conversationId) && policy.canInject && session.activeTurnId &&
+    const toolTurn = (intent?.delivery === 'tool' || geminiInput(session.conversationId)) &&
+      (policy.canInject || !!policy.directTurn) && session.activeTurnId &&
       policy.injectionTurnId === session.activeTurnId && row.queuedTurn?.turnId === session.activeTurnId &&
       row.queuedTurn.conversationId === session.conversationId ? session.activeTurnId : null;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
@@ -1224,6 +1232,28 @@ export function noteInputStartupError(id: string, error: string | null): Promise
     const next = { ...row, error: error ? error.slice(0, 200) : undefined, ...(released ? { dueAt: Math.max(row.dueAt, Date.now()) } : {}) };
     await commit(current.map(entry => entry === row ? next : entry));
     return { ...next };
+  });
+}
+/** A paired browser may explain an unclaimed route; it cannot claim or Send it. */
+export function noteBrowserInputRouting(id: string, provider: ChatProvider, issue: string | null): Promise<boolean> {
+  return serial(async () => {
+    if (provider !== 'gemini') return false;
+    const messages: Record<string, string> = {
+      gemini_account_context_required: 'Open Gemini in this browser and select the account to use.',
+      gemini_selected_account_changed: 'Wait for the Gemini account switch to finish.',
+      gemini_conversation_account_unknown: 'Open this existing Gemini chat in its original account.',
+      gemini_conversation_account_ambiguous: 'Select the original Gemini account for this chat.'
+    };
+    if (issue !== null && !messages[issue]) return false;
+    const current = await load(), row = current.find(entry => entry.id === id);
+    if (!row || row.state !== 'queued' || row.owner || row.offeredAt !== undefined || row.sendAuthorizedAt !== undefined ||
+        chatProviderForConversation(await target(row), row.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) !== provider) return false;
+    const prefix = 'Message queued. Browser routing: ';
+    if (row.error && !row.error.startsWith(prefix)) return false;
+    const error = issue === null ? undefined : prefix + messages[issue];
+    if (row.error === error) return true;
+    await commit(current.map(entry => entry === row ? { ...entry, error, ...(!error ? { dueAt: Math.max(row.dueAt, Date.now()) } : {}) } : entry));
+    return true;
   });
 }
 /** The same exact source boundary must still apply at claim and final Send authorization. */
@@ -1584,9 +1614,9 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return turnId;
 }
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
+    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
     const current = await load();
     for (const entry of ordered(current)) {
       if (companionOf(current, entry)) continue;
@@ -1597,14 +1627,14 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
         const conversationId = await target(entry);
         // A new chat of a project with a native Gemini Project opens in that Project and nowhere
         // else: it waits while the Project is being created or could not be, never the root.
-        const chatgptProject = chatProviderCapabilities(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
+        const chatgptProject = chatProviderCapabilities(chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
           ? (await getProject(entry.projectId))?.chatgpt : undefined;
         if (chatgptProject && chatgptProject.state !== 'linked') continue;
         const [end] = !entry.silenceBoundary && manualInput(entry) && entry.sessionId
           ? await readRecentEvents(entry.sessionId, 1, { kinds: ['turn_start', 'turn_end'] }) : [];
         const silenceTurnId = entry.silenceBoundary?.turnId ?? (end?.kind === 'turn_end' && end.outcome === 'failed' &&
           end.reason === 'thinking_failed' && end.turnId && await eligibleStageEnd(entry) === end.turnId ? end.turnId : undefined);
-        result.push({ id: entry.id, conversationId,
+        result.push({ id: entry.id, conversationId, chatProvider: chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
           ...(entry.recovery ? { recovery: { questionId: entry.recovery.questionId, stop: entry.silenceBoundary?.nativeBusy === true && entry.recovery.phase === 'ready' } } : {}),
           ...(silenceTurnId ? { silenceTurnId } : {}),
           ...(entry.directTurn ? { directTurn: entry.directTurn } : {}),
@@ -1721,6 +1751,7 @@ async function imageRequestWithoutMention(entry: InputEntry, session: SessionSum
 /** Initial provider binding uses the same reserved session as local admission. */
 async function bindOpening(entry: InputEntry, conversationId: string): Promise<boolean> {
   if (!entry.opening || !entry.sessionId) return false;
+  if (entry.chatProvider && chatProviderForConversation(conversationId) !== entry.chatProvider) return false;
   if (entry.conversationId && entry.conversationId !== conversationId) return false;
   if (await conversationWasSuperseded(conversationId)) return false;
   await materializeOpening(entry);
@@ -1786,6 +1817,16 @@ export function prepareGeminiInputClaim(id: string, owner: string, conversationI
 }
 
 export type GeminiInputBindingStatus = { state: 'pending' | 'invalid' } | { state: 'ready'; turn: GeminiInputTurn };
+/** Resolve only the exact claimed input's committed native Send/history receipt. */
+export async function chatgptInputBindingStatus(proof: GeminiBindingInput): Promise<LocalBindingStatus> {
+  const row = (await load()).find(entry => entry.id === proof.id);
+  if (!row || row.owner !== proof.owner || row.claimedBrowser !== proof.browser || row.offeredAt !== proof.offeredAt ||
+      !row.requiresAuthorization || !['browser', 'sent'].includes(row.state)) return { state: 'invalid' };
+  if (!row.conversationId) return row.state === 'browser' ? { state: 'pending' } : { state: 'invalid' };
+  if (chatProviderForConversation(row.conversationId) !== 'chatgpt' || !row.sessionId) return { state: 'invalid' };
+  const result = await geminiInputBindingStatus(proof, row.conversationId, row.sessionId);
+  return result.state === 'ready' ? { ...result, conversationId: row.conversationId, sessionId: row.sessionId } : result;
+}
 /** Read committed custody without re-entering the input queue: tool delivery already holds it.
  * Every awaited read is followed by the same exact row check; no latest-receipt/time inference. */
 export async function geminiInputBindingStatus(proof: GeminiBindingInput, conversationId: string, sessionId: string): Promise<GeminiInputBindingStatus> {
@@ -1820,6 +1861,7 @@ export function bindBrowserInputProject(id: string, owner: string, conversationI
     const current = await load();
     const entry = current.find(row => row.id === id && row.owner === owner);
     if (!entry || !['browser', 'sent'].includes(entry.state) || (!entry.opening && !entry.projectId) || entry.purpose === 'decision') return false;
+    if (entry.chatProvider && chatProviderForConversation(conversationId) !== entry.chatProvider) return false;
     if (entry.requiresAuthorization && entry.sendAuthorizedAt === undefined) return false;
     if (entry.conversationId && entry.conversationId !== conversationId) return false;
     if (await conversationWasSuperseded(conversationId)) return false;
@@ -1878,26 +1920,26 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
   });
 }
 /** A later exact call proves receipt of an earlier tool response, never of a queued task. */
-function toolInputScopeMatches(entry: InputEntry, binding?: GeminiBindingEvidence): boolean {
-  if (!geminiInput(entry.conversationId)) return true;
+function toolInputScopeMatches(entry: InputEntry, binding?: LocalBindingEvidence): boolean {
+  if (!binding && !geminiInput(entry.conversationId)) return !entry.toolGeminiOffer;
   const offer = entry.toolGeminiOffer, turn = binding?.inputTurn, held = offer?.inputTurn;
   return !!turn && offer?.bindingId === binding?.bindingId && held?.inputId === turn.inputId &&
     held.messageId === turn.messageId && held.historySeq === turn.historySeq && held.turnId === turn.turnId;
 }
-function toolInputReceipt(entry: InputEntry, sessionId: string, conversationId: string, startedAt: number, binding?: GeminiBindingEvidence): InputEntry {
+function toolInputReceipt(entry: InputEntry, sessionId: string, conversationId: string, startedAt: number, binding?: LocalBindingEvidence): InputEntry {
   const deliveredAt = offered.get(entry.id);
   return entry.sessionId === sessionId && entry.conversationId === conversationId && entry.state === 'tool' &&
     toolInputScopeMatches(entry, binding) && deliveredAt !== undefined && startedAt > deliveredAt
     ? { ...entry, state: 'sent', messageId: `input:${entry.id}`, deliveredAt, historyRecorded: false } : entry;
 }
 /** Commit incoming receipt evidence before a handler decides whether user work remains. */
-async function toolInputCaller(sessionId: string, conversationId: string, requestId: string | null | undefined, binding?: GeminiBindingEvidence): Promise<boolean> {
-  if (!geminiInput(conversationId)) return !!requestId;
+async function toolInputCaller(sessionId: string, conversationId: string, requestId: string | null | undefined, binding?: LocalBindingEvidence): Promise<boolean> {
+  if (!binding && !geminiInput(conversationId)) return !!requestId;
   if (!binding?.inputTurn || binding.sessionId !== sessionId || binding.conversationId !== conversationId) return false;
-  try { await validateGeminiBindingEvidence(binding); return true; } catch { return false; }
+  try { await validateLocalBinding(binding); return true; } catch { return false; }
 }
 
-export function acknowledgeToolInput(sessionId: string | null | undefined, conversationId: string | null | undefined, requestId: string | null | undefined, startedAt: number, binding?: GeminiBindingEvidence): Promise<void> {
+export function acknowledgeToolInput(sessionId: string | null | undefined, conversationId: string | null | undefined, requestId: string | null | undefined, startedAt: number, binding?: LocalBindingEvidence): Promise<void> {
   return serial(async () => {
     if (!sessionId || !conversationId || isChatBlocked(conversationId) || !await toolInputCaller(sessionId, conversationId, requestId, binding)) return;
     if ((await getSession(sessionId))?.conversationId !== conversationId) return;
@@ -1910,7 +1952,7 @@ export function acknowledgeToolInput(sessionId: string | null | undefined, conve
   });
 }
 
-export function offerToolInput(sessionId: string | null | undefined, conversationId: string | null | undefined, requestId: string | null | undefined, startedAt: number, finishBoundary = false, binding?: GeminiBindingEvidence): Promise<ToolInputBatch> {
+export function offerToolInput(sessionId: string | null | undefined, conversationId: string | null | undefined, requestId: string | null | undefined, startedAt: number, finishBoundary = false, binding?: LocalBindingEvidence): Promise<ToolInputBatch> {
   return serial(async () => {
     const batch: ToolInputBatch = { messages: [], reminder: '' };
     if (!sessionId || !conversationId || isChatBlocked(conversationId) || !await toolInputCaller(sessionId, conversationId, requestId, binding)) return batch;
@@ -1970,7 +2012,7 @@ export function offerToolInput(sessionId: string | null | undefined, conversatio
         batch.reminder = reminder;
         delivered.push(entry.id);
         return { ...prepared, state: 'tool', toolTurnId: entry.toolTurnId ?? session.activeTurnId ?? deliveryHooks?.activity?.(session).turnId,
-          ...(binding ? { toolGeminiOffer: entry.toolGeminiOffer ?? { bindingId: binding.bindingId, startedAt, inputTurn: binding.inputTurn } } : {}),
+          ...(binding ? { toolGeminiOffer: entry.toolGeminiOffer ?? { attribution: binding.attribution, bindingId: binding.bindingId, startedAt, inputTurn: binding.inputTurn } } : {}),
           offeredAt: entry.offeredAt ?? Date.now(), owner: entry.state === 'tool' ? entry.owner : requestId ?? null, conversationId };
       }
       return entry;

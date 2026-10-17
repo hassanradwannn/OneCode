@@ -1,10 +1,11 @@
 {
   "name": "onecode",
-  "version": "0.3.2",
-  "shortVersionWindows": "0.3.2.0",
+  "version": "0.3.3",
+  "shortVersionWindows": "0.3.3.0",
   "description": "Desktop workspace for AI providers with local MCP tools, managed chats and parallel agents.",
   "license": "MIT",
   "author": "OneCode contributors",
+  "homepage": "https://github.com/hassanradwannn/OneCode",
   "desktopName": "io.onecode.desktop",
   "main": "out/main/index.js",
   "scripts": {

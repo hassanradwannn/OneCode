@@ -108,7 +108,7 @@ export async function spawnAgentWorkers(
         isolationNotes.push('No workspace is selected; workers were spawned without isolated Git worktrees.');
       } else if (isGitRepository(source.real)) {
         if (!canIsolate()) {
-          throw new Error('WORKTREE_PERMISSION_REQUIRED: worker isolation requires Command, Create and Edit, with Read-only disabled.');
+          throw new WorkerWorktreeError('WORKTREE_PERMISSION_REQUIRED', 'worker isolation requires Command, Create and Edit, with Read-only disabled.');
         }
         for (const agentId of staged.newlyStagedWorkerIds) {
           allocationAttempted = true;

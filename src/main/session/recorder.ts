@@ -78,7 +78,7 @@ import {
   resetCorrelationRegistryForTests,
 } from './correlation.js';
 import { RESUME_CLAIM_WINDOW_MS, resumeOpeningChat } from './resume-gate.js';
-import { summarizeToolCall } from './summarize.js';
+import { summarizeToolCall, toolResultHeadline } from './summarize.js';
 import type { GeminiInputTurn } from '../gemini/bindings.js';
 
 interface LiveConversation {
@@ -1200,7 +1200,7 @@ export interface ToolCallInput {
   /** Durable local session principal carried by the exact request correlation, when available. */
   sessionId?: string | null;
   /** Validated by MCP ingress/dispatcher; local authorization, never Google request proof. */
-  attributionMethod?: 'gemini_session_capability';
+  attributionMethod?: 'gemini_session_capability' | 'chatgpt_session_capability';
   /** Captured before dispatch from this exact input's canonical ACK and actual native turn. */
   geminiInputTurn?: GeminiInputTurn;
   /** A successful worker finish report is a hard activity boundary, not fresh work. */
@@ -1253,8 +1253,8 @@ export function recordToolCall(input: ToolCallInput): Promise<ToolCallRecord | n
       sessionId:
         input.sessionId ??
         (correlation?.conversationId === input.conversationId ? correlation.sessionId : null),
-      attribution: input.attributionMethod === 'gemini_session_capability' ? 'gemini_session_capability' : 'request_id',
-      turnId: input.attributionMethod === 'gemini_session_capability' ? input.geminiInputTurn?.turnId ?? null : live?.turnId ?? null
+      attribution: input.attributionMethod ?? 'request_id',
+      turnId: input.attributionMethod ? input.geminiInputTurn?.turnId ?? null : live?.turnId ?? null
     };
     if (input.bind) bindAgentConversation(input.bind, input.conversationId);
     attributing = Promise.resolve(target);
@@ -1413,7 +1413,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       evidence,
       outcome: input.outcome,
       durationMs: input.durationMs,
-      resultHead: authoredResultText.split('\n', 1)[0] ?? ''
+      resultHead: toolResultHeadline(authoredResultText)
     });
     if (missingImages) {
       const notice = `${missingImages} image preview(s) not saved: ${[...imageRecordingReasons].join('; ')}. Image content remains in the tool response.`;
@@ -1451,7 +1451,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
 
     const call: ToolCallRecord = {
       ...(input.nested === true ? { nested: true } : {}),
-      ...((target.attribution === 'request_id' || target.attribution === 'gemini_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
+      ...((target.attribution === 'request_id' || target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
         ? { process: { sessionId: evidence.processSessionId } } : {}),
       ...callModel,
       callId: randomUUID(),
@@ -1462,8 +1462,8 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       attributionMethod:
         target.attribution === 'superseded'
           ? 'superseded'
-          : target.attribution === 'gemini_session_capability'
-            ? 'gemini_session_capability'
+          : target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability'
+            ? target.attribution
           : target.conversationId && input.requestId
             ? 'request_id'
             : 'unattributed',

@@ -135,9 +135,9 @@
    * every ask, and only those are ours: the other computer's calls run there, not here. Measured
    * 2026-10-04: the call path, `invocation.server` and `app_name` all carry the name as typed.
    */
-  const PLAIN_APPS = ['Chat On Steroids Core', 'Chat On Steroids Desktop', 'Chat On Steroids Plugins'];
+  const PLAIN_APPS = ['OneCode Core', 'OneCode Desktop', 'OneCode Plugins'];
   const LEGACY_APPS = ['TobisComputer'];
-  const SUFFIXED_APP = /^Chat On Steroids (Core|Desktop|Plugins) \([\p{L}\p{N} ._-]{1,32}\)$/u;
+  const SUFFIXED_APP = /^OneCode (Core|Desktop|Plugins)(?: [\p{L}\p{N} ._-]{1,32}| \([\p{L}\p{N} ._-]{1,32}\))$/u;
   let OUR_APPS = [...PLAIN_APPS, ...LEGACY_APPS];
   /** Takes the names an ask carries: three "Chat On Steroids …" names, in core/desktop/plugins order. */
   function adoptAppNames(names) {

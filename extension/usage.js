@@ -191,8 +191,8 @@
    * name is reported with its app id, and the content script picks its own by exact name. A name
    * that more than one app carries is ambiguous and reported without an id.
    */
-  const CORE_APP_NAME = 'Chat On Steroids Core';
-  const CORE_NAME = /^Chat On Steroids Core(?: \([\p{L}\p{N} ._-]{1,32}\))?$/u;
+  const CORE_APP_NAME = 'OneCode Core';
+  const CORE_NAME = /^OneCode Core(?: [\p{L}\p{N} ._-]{1,32}| \([\p{L}\p{N} ._-]{1,32}\))?$/u;
   let coreMention = null;
   async function inspectSystemHints(response) {
     if (!active) return;

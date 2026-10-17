@@ -1,4 +1,5 @@
 import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
+import { chatgptBindingInstructions, type LocalBindingStatus } from './session/local-binding.js';
 import { continuationReceipt } from '../shared/continuation-receipt.js';
 import { handoffContinuationId, handoffMarkdownLimit } from './session/handoff.js';
 import { nextWorkerArchive, settleWorkerArchive } from './worker-archive.js';
@@ -31,6 +32,7 @@ import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
+import { noteBrowserInputRouting } from './session/input.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 import { browserWindowBounds, currentBrowserWorkArea } from './browser-window-layout.js';
 export { setBrowserWorkArea } from './browser-window-layout.js';
@@ -592,7 +594,33 @@ let commandReceipts: CommandReceipt[] = [];
 /** The paired worker supplies Chrome document proof; the existing lease owns the command. */
 const geminiCommandCustody = new Map<string, {
   browser: string; owner: string; lease: string; tab?: number; document?: string; conversation?: string; sessionId?: string;
+  worker?: { runId: string; agent: string };
 }>();
+
+/** A worker grant remains dormant until this exact leased command's Send ACK commits. */
+export async function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> {
+  const custody = geminiCommandCustody.get(proof.id);
+  if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease || !custody.worker ||
+      !swarmRunning(custody.worker.runId)) return { state: 'invalid' };
+  const receipt = await commandSendReceipt(proof.id);
+  if (!receipt) {
+    const command = commands.find(entry => entry.id === proof.id);
+    return command?.owner === proof.owner && isLeased(command) && command.claimedAt !== null
+      ? { state: 'pending' } : { state: 'invalid' };
+  }
+  const conversation = receipt.conversationId;
+  if (!receipt.committed || receipt.outcome !== 'committed' || receipt.client !== proof.owner || !conversation ||
+      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation) ||
+      agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return { state: 'invalid' };
+  const worker = agentInfoForOwnedConversation(conversation);
+  if (worker?.lastRevivalCommandId && worker.lastRevivalCommandId !== proof.id) return { state: 'invalid' };
+  const session = await findSessionByConversation(conversation, { requireUnique: true });
+  // The ACK owns the native destination; its first observation still owns creating
+  // history. Do not turn that small observation gap into a permanent refusal.
+  if (!session) return { state: 'pending' };
+  return session?.conversationId === conversation && session.origin?.kind === 'worker' && session.origin.agentId === custody.worker.agent
+    ? { state: 'ready', conversationId: conversation, sessionId: session.id } : { state: 'invalid' };
+}
 
 /** Reads canonical command/receipt owners; a warmup never completes their transaction. */
 export async function geminiCommandBindingStatus(proof: GeminiBindingCommand, conversation: string,
@@ -600,18 +628,18 @@ export async function geminiCommandBindingStatus(proof: GeminiBindingCommand, co
   const custody = geminiCommandCustody.get(proof.id);
   if (custody?.owner !== proof.owner || custody.lease !== proof.lease ||
       custody.conversation !== conversation || custody.sessionId !== sessionId) return 'invalid';
-  const receipt = receiptFor(proof.id);
+  const receipt = await commandSendReceipt(proof.id);
   if (receipt) return receipt.client === proof.owner && receipt.conversationId === conversation && receipt.committed &&
     receipt.outcome === 'committed' ? 'committed' : 'invalid';
   const command = commands.find(entry => entry.id === proof.id);
   if (!command || command.owner !== proof.owner || command.claimedAt === null || !isLeased(command) ||
       custody?.owner !== proof.owner || custody.conversation !== conversation || custody.sessionId !== sessionId ||
-      command.spec.type === 'stop' || command.spec.type === 'revive' || isChatBlocked(conversation)) return 'invalid';
+      command.spec.type === 'stop' || isChatBlocked(conversation)) return 'invalid';
   const summary = await getSession(sessionId);
   if (!commands.includes(command) || command.owner !== proof.owner || geminiCommandCustody.get(proof.id) !== custody || !summary) return 'invalid';
-  if (command.spec.type === 'worker') {
+  if (command.spec.type === 'worker' || command.spec.type === 'revive') {
     const bound = agentConversation(command.spec.agent, command.spec.runId);
-    return swarmRunning(command.spec.runId) && (!bound || bound === conversation) && summary.conversationId === conversation &&
+    return swarmRunning(command.spec.runId) && (command.spec.type === 'revive' ? bound === conversation : !bound || bound === conversation) && summary.conversationId === conversation &&
       summary.origin?.kind === 'worker' && summary.origin.agentId === command.spec.agent ? 'pending' : 'invalid';
   }
   const entry = continuationByToken(command.spec.token);
@@ -643,8 +671,13 @@ async function bindingForGeminiCommand(conversation: string, proof: Record<strin
     const current = () => commands.includes(command) && command.owner === owner && command.claimedAt !== null && isLeased(command);
     if (!current() || command.spec.type === 'stop') throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
     if (command.spec.type === 'revive') {
-      if (command.spec.conversationId !== conversation || !swarmRunning(command.spec.runId)) throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
-      binding = await ensureGeminiBinding(conversation);
+      const session = await findSessionByConversation(conversation, { requireUnique: true });
+      if (command.spec.conversationId !== conversation || !swarmRunning(command.spec.runId) ||
+          agentConversation(command.spec.agent, command.spec.runId) !== conversation ||
+          session?.origin?.kind !== 'worker' || session.origin.agentId !== command.spec.agent || !current())
+        throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
+      Object.assign(custody, { tab: proof.tab_id, document: proof.document_id, conversation, sessionId: session.id });
+      binding = await prepareGeminiCommandBinding(conversation, session.id, { id, owner, lease: custody.lease });
       return true;
     }
     if (await conversationWasSuperseded(conversation)) throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
@@ -1371,7 +1404,7 @@ const EXTENSION_UPDATE_HOLDS: Record<string, string> = {
   'app-busy': 'a tool call is running in this app',
   sending: 'a message is being sent',
   commands: 'a browser command is still pending',
-  'chat-busy': 'a Gemini tab is still answering',
+  'chat-busy': 'an agent is still answering',
   'already-tried': 'it already tried this update once; reload it in chrome://extensions',
   'folder-not-ready': 'its folder does not hold the new build yet',
   'browser-updates-itself': 'Firefox updates the signed add-on itself (about:addons → Check for Updates)'
@@ -2974,6 +3007,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     } catch { return json(res, 400, { error: 'invalid_usage' }, origin); }
   }
 
+  if (route === '/input/routing' && req.method === 'POST') {
+    const body = await readBody(req) as Record<string, unknown>;
+    if (!browserOf(req) || !body || typeof body.id !== 'string' || !/^[a-f0-9-]{36}$/i.test(body.id) ||
+        body.provider !== 'gemini' || !(body.issue === null || typeof body.issue === 'string'))
+      return json(res, 400, { error: 'invalid_input_routing' }, origin);
+    return json(res, 200, { ok: await noteBrowserInputRouting(body.id, body.provider, body.issue as string | null) }, origin);
+  }
   if (['/input/claim', '/input/bind', '/input/ack', '/input/fail', '/input/answer', '/input/progress', '/input/attachment'].includes(route) && req.method === 'POST') {
     const body = await readBody(req) as Record<string, unknown>;
     if (!body || typeof body.id !== 'string' || !/^[a-f0-9-]{36}$/i.test(body.id) || typeof body.owner !== 'string' || body.owner.length > 160) {
@@ -2995,7 +3035,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         typeof body.detail === 'string' && /^[a-z-]{1,40}$/.test(body.detail) ? body.detail : undefined);
       // A rejected picker choice invalidates cached availability. Reobserve existing
       // browser documents through the catalog owner; failure grants no new-tab authority.
-      if (ok && body.error === 'Requested model or reasoning could not be confirmed') requestChatModels(false);
+      if (ok && typeof body.error === 'string' && /^Requested model or reasoning could not be confirmed(?: \([a-z-]{1,40}\))?$/.test(body.error)) requestChatModels(false);
       return json(res, 200, { ok }, origin);
     }
     if (route === '/input/progress') {
@@ -4956,6 +4996,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (redeemingBrowser) {
       if (!previousCustody || previousCustody.owner !== client)
         geminiCommandCustody.set(command.id, { browser: redeemingBrowser, owner: client, lease: randomBytes(8).toString('hex') });
+      const custody = geminiCommandCustody.get(command.id)!;
+      if (command.spec.type === 'worker' || command.spec.type === 'revive') {
+        custody.worker = { runId: command.spec.runId, agent: command.spec.agent };
+        const source = primeConversation(command.spec.runId);
+        if (source && chatProviderForConversation(source) === 'chatgpt') {
+          described.text += '\n\n' + chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+          if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
+        }
+      }
       for (const key of geminiCommandCustody.keys()) {
         if (!commands.some(entry => entry.id === key) && !receiptFor(key)) geminiCommandCustody.delete(key);
       }
@@ -5620,8 +5669,8 @@ async function sweepOwnedSwarm(runId: string, now: number): Promise<boolean> {
       const slept = sleepWorker(
         worker.id,
         proof.ended
-          ? 'Its Gemini chat was closed and its work has been durably quiet since.'
-          : `Its last Gemini turn ended ${proof.lastOutcome ?? 'without a completed outcome'} and it has been durably quiet since.`, runId
+          ? 'Its chat was closed and its work has been durably quiet since.'
+          : `Its last turn ended ${proof.lastOutcome ?? 'without a completed outcome'} and it has been durably quiet since.`, runId
       );
       if (slept?.report) {
         await recordAgentMessage(slept.report, 'sent', slept.info.conversationId);
@@ -6270,6 +6319,25 @@ async function persistRevivalRedeem(
 function receiptFor(id: string): CommandReceipt | null {
   pruneReceipts();
   return commandReceipts.find((receipt) => receipt.id === id) ?? null;
+}
+
+/** Provider-independent Send evidence. The broker owns a delivered revival while its
+ * command is retained as a liveness clock; that clock is not an authorization barrier. */
+async function commandSendReceipt(id: string): Promise<CommandReceipt | null> {
+  const receipt = receiptFor(id);
+  if (receipt) return receipt;
+  const command = commands.find(entry => entry.id === id);
+  if (!command || !deliveredRevivalReceipt(command)) return null;
+  // A racing MCP call must not execute from a broker transition whose disk barrier
+  // has not committed yet. Re-read both canonical owners after the awaited write.
+  if (!await persistCriticalSwarmNow()) return null;
+  return receiptFor(id) ?? (commands.includes(command) ? deliveredRevivalReceipt(command) : null);
+}
+
+function deliveredRevivalReceipt(command: Command): CommandReceipt | null {
+  if (command.spec.type !== 'revive' || !command.owner || !revivalDeliveryProven(command)) return null;
+  return { id: command.id, client: command.owner, conversationId: command.spec.conversationId,
+    outcome: 'committed', committed: true, error: null, completedAt: Date.now() };
 }
 
 function receiptReply(receipt: CommandReceipt): Record<string, unknown> {
@@ -8959,7 +9027,7 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     // Before the "no recorded call" verdict below: a call waiting for approval was never sent,
     // so none is recorded, and only the user can answer the card. Measured live on 2026-10-06.
     if (approvalCardWaiting(conversationId, now)) {
-      noteSilence(conversationId, grant, 'waiting: Gemini asks the user to allow or deny a tool call');
+      noteSilence(conversationId, grant, 'waiting: the provider asks the user to allow or deny a tool call');
       grant.until = now + GOAL_QUIET_MS;
       deferred = true;
       continue;
@@ -10192,10 +10260,10 @@ const REPAIR_HOLD_REASONS: Record<string, string> = {
   'page-changed': 'the page is on another chat or was reloaded',
   'stop-requested': 'a Stop is in progress',
   'tool-running': 'a local tool call for this chat is still running',
-  sending: 'a sent message is still waiting for Gemini to confirm it',
+  sending: 'a sent message is still waiting for the provider to confirm it',
   'page-busy': 'the page is busy with another action',
   compaction: 'a Compact & resume is in progress',
-  draft: 'text or attachments are in the Gemini message box',
+  draft: 'text or attachments are in the message box',
   changed: 'the chat changed while the repair was being checked'
 };
 const repairHoldsLogged = new Set<string>();
@@ -10250,7 +10318,7 @@ const REPAIR_PROGRESS_SOURCES: Record<string, string> = {
   'page-text': 'the answer text grew',
   'tool-resumed': 'a tool call resumed the answer',
   'app-tool_call': 'the app recorded a tool call',
-  'app-page_tool': 'the app recorded a Gemini step',
+  'app-page_tool': 'the app recorded an agent step',
   'app-progress': 'the app recorded a status note',
   'app-assistant_message': 'the app recorded answer text'
 };
@@ -10278,7 +10346,7 @@ async function failRepairAttempt(
     const streaming = why === 'streaming';
     if (streaming) {
       if (!repair.awaitingStream)
-        logInfo(`bridge: Gemini is answering again in ${conversationId}; the ${repair.reason} repair waits until it finishes`);
+        logInfo(`bridge: the agent is answering again in ${conversationId}; the ${repair.reason} repair waits until it finishes`);
     } else {
       const exact = why === 'changed' ? repairChangeDetail(changeDetail) : null;
       const detail = why && Object.hasOwn(REPAIR_FAIL_REASONS, why) ? `: ${REPAIR_FAIL_REASONS[why]}${exact ? ` — ${exact}` : ''}` : '';
@@ -10289,7 +10357,7 @@ async function failRepairAttempt(
       conversationId,
       repair,
       streaming
-        ? repair.attribution ? 'Not reloaded: Gemini is answering.' : 'Gemini is answering again; recovery waits until it finishes.'
+        ? repair.attribution ? 'Not reloaded: the agent is answering.' : 'The agent is answering again; recovery waits until it finishes.'
         : `${action === 'reopened' ? 'Reopen' : action === 'resumed' ? 'Resume' : 'Reload'} failed while ${repairPurpose(repair).during}${repair.attribution ? '.' : '; will retry.'}`
     );
     if (repairsInFlight.get(conversationId) !== repair) return;
@@ -10512,7 +10580,7 @@ async function openFreshChatInBrowser(command: Command): Promise<void> {
     drop(command, 'this app has no way to open a browser window');
     return;
   }
-  logInfo(`bridge: opening a fresh Gemini chat for ${specKey(command.spec)}`);
+  logInfo(`bridge: opening a fresh provider chat for ${specKey(command.spec)}`);
   try {
     // Stamped whether or not a browser was already running: this process cannot tell the
     // difference, and the window it opens is only ever spent by a browser failing to appear.
@@ -10950,7 +11018,20 @@ function tidyCommands(): void {
       // send rolled back, or the run cleared it. Retiring rather than dropping is deliberate —
       // whatever ended the reservation has already put the worker somewhere it belongs, and
       // failWorkerRevival() on top of that would report a failure that did not happen.
-      retire(command, 'its worker is no longer waiting to be woken');
+      const receipt = deliveredRevivalReceipt(command);
+      if (receipt) {
+        // Native turn evidence may win the race with the first MCP call. Preserve
+        // the exact Send receipt before retiring its transport, for every provider.
+        // Keep the command on disk on failure so its canonical broker proof survives.
+        if (!commandWrites.has(command.id)) void (async () => {
+          try {
+            if (!await persistCriticalSwarmNow()) return;
+            if (await finalizeCommand(command, receipt)) scheduleDeliver();
+          } catch (err) {
+            logWarn(`bridge: could not settle delivered ${specKey(command.spec)} — ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+      } else retire(command, 'its worker is no longer waiting to be woken');
       continue;
     }
     if (workerAgent && command.spec.type === 'worker' && command.claimedAt === null && !pendingWorkers.has(`${command.spec.runId}:${workerAgent}`)) {

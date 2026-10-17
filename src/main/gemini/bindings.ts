@@ -191,12 +191,14 @@ async function issue(conversationId: string, requested: string | undefined, rota
     } else sessionId = await sessionFor(conversationId, requested);
     const previous = rows.get(conversationId);
     const cached = issuedKeys.get(conversationId);
-    // Approval policy refreshes do not carry input custody. They may reuse the
-    // same key, but can never downgrade an exact input grant to a chat-only one.
-    if (!rotate && !input && !goal && !pendingCommand && !handoff && (previous?.input || previous?.goal || previous?.handoff)) {
+    // Approval policy refreshes carry no task custody. Reuse the exact grant;
+    // never replace a dormant command key or downgrade its ACK requirement.
+    if (!rotate && !input && !goal && !pendingCommand && !handoff && (previous?.pendingCommand || previous?.input || previous?.goal || previous?.handoff)) {
+      if (previous.pendingCommand && await (await import('../bridge.js')).geminiCommandBindingStatus(previous.pendingCommand, conversationId, sessionId) === 'invalid')
+        fail('GEMINI_COMMAND_NOT_OWNED');
       if (previous.handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(previous.handoff, conversationId, sessionId) === 'invalid')
         fail('GEMINI_HANDOFF_NOT_OWNED');
-      if (previous.revoked || previous.sessionId !== sessionId || !cached || previous.expiresAt <= Date.now()) fail(previous.handoff ? 'GEMINI_HANDOFF_BINDING_REQUIRED' : previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
+      if (previous.revoked || previous.sessionId !== sessionId || !cached || previous.expiresAt <= Date.now()) fail(previous.pendingCommand ? 'GEMINI_COMMAND_BINDING_REQUIRED' : previous.handoff ? 'GEMINI_HANDOFF_BINDING_REQUIRED' : previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
       return { conversation_id: conversationId, session_key: cached, session_id: sessionId };
     }
     if (input) {

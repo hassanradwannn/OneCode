@@ -90,6 +90,12 @@ function paintComposerContext(): void {
     return;
   }
   const observed = composerContext.observation;
+  if (activeProvider === 'gemini' && observed?.model === 'gemini-current' && !observed.reasoningEffort) {
+    composerContext.automatic = true;
+    paintPair('composerModel', 'composerReasoning', '', '');
+    return;
+  }
+  composerContext.automatic = false;
   const match = observed && observedModel(observed.model);
   // An unknown session model must not inherit the previous chat's valid Send choice.
   paintPair('composerModel', 'composerReasoning', match?.id ?? observed?.model ?? 'not-observed',
@@ -209,6 +215,7 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
   const automaticModel = allowEmpty || modelId === 'workerModel';
   let nextModel = modelValue ?? model.value;
   let nextEffort = effortValue ?? effort.value;
+  if (automaticModel && nextModel === 'gemini-current') nextModel = '';
   const observed = resolveChatModel(models, nextModel);
   if (modelId !== 'composerModel' && observed?.id !== nextModel && observed?.aliases?.includes(nextModel)) {
     // A saved execution alias is an exact lane request. The family effort union
@@ -233,7 +240,7 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
   if (supported && !nextEffort && !allowEmpty) {
     nextEffort = supported.includes('high') ? 'high' : supported[0] ?? '';
   }
-  const modelChoices = distinctModelChoices(models);
+  const modelChoices = distinctModelChoices(models).filter(choice => !automaticModel || choice.id !== 'gemini-current');
   if (automaticModel) modelChoices.unshift({ id: '', label: () => t('Automatic') });
   const effortChoices: Array<{ id: string; label: string | (() => string) }> =
     (models.find(item => item.id === nextModel)?.efforts ?? []).map(id => ({ id, label: () => effortLabel(id) }));
@@ -309,7 +316,7 @@ function paintComposerChoices(): void {
     // Automatic sits first in the list, as a deliberate choice that switches nothing.
     const button = el('button', 'model-choice') as HTMLButtonElement;
     button.type = 'button'; button.dataset.keepMenu = 'true'; button.dataset.model = '';
-    const auto = composerContext?.automatic === true;
+    const auto = composerContext?.automatic === true || selected.value === 'gemini-current';
     button.setAttribute('aria-pressed', String(auto));
     button.append(el('span', '', () => t("Automatic")), icon('i-check'));
     button.addEventListener('click', event => {
@@ -321,7 +328,7 @@ function paintComposerChoices(): void {
     });
     modelOptions.append(button);
   }
-  for (const choice of distinctModelChoices(choices)) {
+  for (const choice of distinctModelChoices(choices).filter(choice => choice.id !== 'gemini-current')) {
     const button = el('button', 'model-choice') as HTMLButtonElement;
     button.type = 'button'; button.dataset.keepMenu = 'true'; button.dataset.model = choice.id;
     button.setAttribute('aria-pressed', String(choice.id === selected.value));
@@ -464,7 +471,7 @@ export function confirmedComposerModel(): { model: string; reasoningEffort: Reas
 function paintComposerLabel(): void {
   // Display the same admission decision as Send, including discovery and removed efforts.
   const confirmed = confirmedComposerModel();
-  const modelLabel = confirmed ? catalog.models.find(model => model.id === confirmed.model)!.label : '';
+  const modelLabel = confirmed ? confirmed.model === 'gemini-current' ? t('Automatic') : catalog.models.find(model => model.id === confirmed.model)!.label : '';
   const label = () => confirmed
     ? confirmed.reasoningEffort === null ? modelLabel : chatModelDisplayLabel(modelLabel, confirmed.reasoningEffort, effortLabel(confirmed.reasoningEffort))
     : automaticApplies() ? t("Automatic")

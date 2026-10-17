@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { OutputPublication } from '../codex/unified-exec.js';
-import type { GeminiBindingEvidence } from '../gemini/bindings.js';
+import type { LocalBindingEvidence } from '../session/local-binding.js';
 
 /**
  * The id ChatGPT puts on the HTTP request that carries a tool call.
@@ -24,7 +24,7 @@ export interface InboundTiming {
   calls: number;
   phases: Record<InboundPhase, number>;
 }
-const store = new AsyncLocalStorage<{ requestId: string | null; timing?: InboundTiming; publication?: OutputPublication; providerRequest: boolean; geminiBinding?: GeminiBindingEvidence }>();
+const store = new AsyncLocalStorage<{ requestId: string | null; timing?: InboundTiming; publication?: OutputPublication; providerRequest: boolean; geminiBinding?: LocalBindingEvidence }>();
 
 /** Fixed-size, process-local numbers only: no payload, credential, path or chat identity. */
 export function createInboundTiming(): InboundTiming {
@@ -58,11 +58,11 @@ export function formatInboundTiming(timing: InboundTiming): string {
 }
 
 /** Runs `body` with the request id of the HTTP request currently being served. */
-export function withInboundRequestId<T>(requestId: string | null, body: () => T, timing?: InboundTiming, publication?: OutputPublication, providerRequest = false, geminiBinding?: GeminiBindingEvidence): T {
+export function withInboundRequestId<T>(requestId: string | null, body: () => T, timing?: InboundTiming, publication?: OutputPublication, providerRequest = false, geminiBinding?: LocalBindingEvidence): T {
   return store.run({ requestId, timing, publication, providerRequest, geminiBinding }, body);
 }
 export function inboundProviderRequest(): boolean { return store.getStore()?.providerRequest === true; }
-export function inboundGeminiBinding(): GeminiBindingEvidence | undefined { return store.getStore()?.geminiBinding; }
+export function inboundGeminiBinding(): LocalBindingEvidence | undefined { return store.getStore()?.geminiBinding; }
 
 /** Shared by calls in one HTTP response; socket completion alone is not a remote receipt. */
 export function inboundPublication(): OutputPublication | undefined {

@@ -1889,7 +1889,7 @@ var CLF_DOM = (() => {
    * The closing sentence every worker wake ends with (src/main/agents.ts planRevivalText), compared
    * without whitespace: ProseMirror's textContent drops the paragraph break before it.
    */
-  const REVIVAL_RESIDUE = new RegExp('\\(ChatOnSteroids:youarestill[A-Za-z0-9_-]{1,40}inthesamerun,' +
+  const REVIVAL_RESIDUE = new RegExp('\\((?:OneCode|ChatOnSteroids):youarestill[A-Za-z0-9_-]{1,40}inthesamerun,' +
     'andthisistheprimeagenttalkingtoyouagaininthechatyoualreadyknow\\.' +
     'Pickupfromwhatyoudidherebeforeratherthanstartingover\\.' +
     // With a connector suffix the sentence names this computer's Core: "the agents tool of … (Windows): ".

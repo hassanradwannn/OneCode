@@ -79,7 +79,9 @@ it('shows the live native Gemini model catalog without inventing thinking effort
   input.value = 'Preserve this staged seven-file request';
   receive({ state: 'ready', requestedAt: 1, observedAt: 2, models: nativeGeminiModels });
   expect((doc.getElementById('composerModelToggle') as HTMLButtonElement).disabled).toBe(false);
-  for (const model of nativeGeminiModels) {
+  expect(doc.querySelector('[data-model="gemini-current"]')).toBeNull();
+  expect(doc.querySelectorAll('[data-model=""]')).toHaveLength(1);
+  for (const model of nativeGeminiModels.filter(model => model.id !== 'gemini-current')) {
     const button = doc.querySelector<HTMLButtonElement>(`[data-model="${model.id}"]`)!;
     expect(button.textContent).toContain(model.label);
     button.click();
@@ -89,6 +91,23 @@ it('shows the live native Gemini model catalog without inventing thinking effort
     expect((doc.getElementById('composerSpark') as HTMLButtonElement).disabled).toBe(true);
   }
   expect(input.value).toBe('Preserve this staged seven-file request');
+});
+it('shows a Gemini worker native current-mode observation as one Automatic choice and permits an exact model edit', async () => {
+  dom = new JSDOM(await readFile('src/renderer/index.html', 'utf8'));
+  vi.stubGlobal('window', dom.window); vi.stubGlobal('document', dom.window.document);
+  Object.assign(dom.window, { api: { getChatModels: async () => ({ ok: true, data: { state: 'ready', models: nativeGeminiModels } }) } });
+  const { initChatModels, applyChatModels, applyComposerSessionModel, composerSendModel } = await import('../src/renderer/chat-models.js');
+  initChatModels(); applyChatModels({ multiAgent: {}, goal: {} } as Config); await Promise.resolve();
+  applyComposerSessionModel('gemini-worker:1', { model: 'gemini-current', observedAt: 2 });
+  const doc = dom.window.document;
+  expect(doc.getElementById('composerModelLabel')!.textContent).toBe('Automatic');
+  expect(doc.getElementById('composerPowerTitle')!.textContent).toBe('Automatic');
+  expect(doc.querySelector('[data-model="gemini-current"]')).toBeNull();
+  expect(composerSendModel()).toEqual({ model: null, reasoningEffort: null });
+  const worker = doc.getElementById('workerModel') as HTMLSelectElement;
+  expect([...worker.options].filter(option => /Automatic/.test(option.textContent!))).toHaveLength(1);
+  doc.querySelector<HTMLButtonElement>('[data-model="e6fa609c3fa255c0"]')!.click();
+  expect(composerSendModel()).toEqual({ model: 'e6fa609c3fa255c0', reasoningEffort: null });
 });
 it.each(['', 'high'])('restores an exact native model default and preserves an unobserved explicit effort for consent: %s', async savedEffort => {
   dom = new JSDOM(await readFile('src/renderer/index.html', 'utf8'));

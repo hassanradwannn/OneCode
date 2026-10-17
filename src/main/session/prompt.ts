@@ -4,7 +4,7 @@ import { effectiveCapabilities, getConfig } from '../config.js';
 import { currentCoreInstructions } from '../mcp/instructions.js';
 import { withMcpProvider } from '../mcp/provider-context.js';
 import { geminiBindingsEnabled } from '../gemini/bindings.js';
-import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER } from '../../shared/chat-provider.js';
+import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../../shared/chat-provider.js';
 import { getSession } from './store.js';
 import { getSessionProject, projectWorkspace } from '../projects.js';
 import { resolvePath } from '../sandbox.js';
@@ -16,7 +16,7 @@ import { pluginDiscoveryInstructions } from '../mcp/plugin-discovery.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
 
-type PromptScope = { sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
+type PromptScope = { chatProvider?: ChatProvider; routingInstructions?: string; sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
   /** Verified broker-owned worker checkout; the selected project is only the source of instructions. */
   workingDirectory?: string;
 };
@@ -148,12 +148,12 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   // other Skill the chat can use is still listed, exactly as without routing.
   const config = getConfig();
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
-  const provider = chatProviderForConversation(session?.conversationId, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const compact = provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = compact ? geminiOpeningInstructions() : await withMcpProvider(provider, () => currentCoreInstructions(library));
+  const core = [compact ? geminiOpeningInstructions() : await withMcpProvider(provider, () => currentCoreInstructions(library)), scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
   const agents = await projectInstructions(scope);
@@ -167,8 +167,9 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const skills = await selectedSkillInstructions(authored, { projectPath: folder?.real ?? null }, undefined, scope.autoSkills);
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
-  const provider = chatProviderForConversation(session?.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const discovery = [
+    ...(scope.routingInstructions ? [scope.routingInstructions] : []),
     ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
     ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), provider)] : [])
   ].join('\n\n');

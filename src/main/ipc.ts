@@ -1996,7 +1996,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       if (!await startBridge()) throw new Error('The browser bridge could not start');
       signal.throwIfAborted();
       const marker = `cos-input=${encodeURIComponent(entry.id)}`;
-      const provider: ChatProvider = chatProviderForConversation(entry.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+      const provider: ChatProvider = chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
       const base = entry.conversationId ? chatUrl(entry.conversationId) : chatProviderHomeUrl(provider);
       const separator = base.includes('?') ? '&' : '?';
       await wakeBrowserUrl(entry.conversationId ? base
@@ -2020,7 +2020,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     },
     changed: () => push('session:changed'),
     recordDelivered: (entry, anchorCommitted) => getConfig().sessions.record ? recordDeliveredInput(entry, anchorCommitted) : Promise.resolve(true),
-    prepareText: async (entry, limits, authored) => {
+    prepareText: async (entry, limits, authored, routingInstructions) => {
       const control = entry.conversationId ? goalSwitchFor(entry.conversationId) : getConfig().goal;
       const mode = entry.automation ?? (control.enabled ? control.mode : 'off');
       const text = mode === 'goal' && goalBackendFor('goal') === 'templates' && !entry.text.includes(GOAL_MARKER_INSTRUCTION)
@@ -2028,8 +2028,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       // Only the opening user input owns executor setup. Existing chats, queued
       // checkpoints and automatic continuations already have their instructions.
       return (entry.opening || !entry.sessionId) && !entry.conversationId && !entry.finishOwner && entry.mode !== 'finish'
-        ? prepareSessionPrompt(text, entry, limits, authored)
-        : !entry.finishOwner && entry.purpose !== 'decision' ? prepareSkillFollowup(text, authored, limits, entry) : text;
+        ? prepareSessionPrompt(text, { ...entry, routingInstructions }, limits, authored)
+        : !entry.finishOwner && entry.purpose !== 'decision' ? prepareSkillFollowup(text, authored, limits, { ...entry, routingInstructions }) : text;
     },
     applyAutomation: async (conversationId, automation, phase, objective, loopAfterTurn) => {
       // This message supersedes the old final; never pick that old final up merely

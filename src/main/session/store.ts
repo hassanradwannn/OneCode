@@ -2042,7 +2042,7 @@ export async function turnHasMcpCall(sessionId: string, conversationId: string, 
     kinds: ['tool_call'], before: Number.POSITIVE_INFINITY,
     acceptEvent: call => call.kind === 'tool_call' && call.turnId === turnId && call.source === 'mcp' &&
       call.call?.conversationId === conversationId && (call.call.attribution === 'request_id' ||
-        (current && call.call.attribution === 'gemini_session_capability' && call.call.attributionMethod === 'gemini_session_capability'))
+        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability') && call.call.attributionMethod === call.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);
@@ -2121,7 +2121,7 @@ export async function questionHasMcpCall(sessionId: string, conversationId: stri
     kinds: ['tool_call'], before: Number.POSITIVE_INFINITY,
     acceptEvent: call => call.kind === 'tool_call' && !!call.turnId && siblings.has(call.turnId) && call.source === 'mcp' &&
       call.call?.conversationId === conversationId && (call.call.attribution === 'request_id' ||
-        (current && call.call.attribution === 'gemini_session_capability' && call.call.attributionMethod === 'gemini_session_capability'))
+        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability') && call.call.attributionMethod === call.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);
@@ -2141,7 +2141,7 @@ export async function conversationHasMcpCallSince(
     acceptEvent: event => event.kind === 'tool_call' && event.source === 'mcp' && event.time >= startedAt &&
       (!event.turnId || event.turnId === turnId) && event.call?.conversationId === conversationId &&
       (event.call.attribution === 'request_id' ||
-        (current && event.call.attribution === 'gemini_session_capability' && event.call.attributionMethod === 'gemini_session_capability'))
+        (current && (event.call.attribution === 'gemini_session_capability' || event.call.attribution === 'chatgpt_session_capability') && event.call.attributionMethod === event.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);

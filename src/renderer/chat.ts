@@ -1683,9 +1683,8 @@ let durationTimer: number | undefined;
 function queuedNowDelivery(entry?: InputEntry): 'tool' | 'direct' | 'idle' | null {
   if (selectedId === null || controlledSessionId !== selectedId || controlledSelection !== selectionGeneration || controlledStopPending) return null;
   if (!controlledTurnId) return controlledCanSendQueuedWhenIdle ? 'idle' : null;
-  if (controlledCanSendDirectly) return 'direct';
   const conversationId = sessions.find(session => session.id === selectedId)?.conversationId;
-  return controlledCanInject && entry?.queuedTurn?.turnId === controlledTurnId &&
+  return (controlledCanInject || controlledCanSendDirectly) && entry?.queuedTurn?.turnId === controlledTurnId &&
     entry.queuedTurn.conversationId === conversationId ? 'tool' : null;
 }
 function paintQueuedNow(button: HTMLButtonElement, entry?: InputEntry): void {
@@ -3213,7 +3212,12 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>, context?:
   if (call.tool === 'exec_command' || call.tool === 'write_stdin') head.append(el('span', 'tool-tag is-shell', 'shell'));
   else if (call.changes?.length || call.tool === 'apply_patch') head.append(el('span', 'tool-tag is-diff', 'diff'));
   head.append(el('b', '', call.summary.title));
-  if (call.summary.detail) head.append(el('em', '', call.summary.detail));
+  if (call.summary.detail) {
+    const detail = el('em', '', call.summary.detail);
+    detail.title = call.summary.detail;
+    head.append(detail);
+    if (call.outcome !== 'ok' && call.outcome !== 'process_exit_nonzero') head.title = `${call.summary.title}: ${call.summary.detail}`;
+  }
   if (call.changes?.length) {
     const added = call.changes.reduce((total, change) => total + change.added, 0);
     const removed = call.changes.reduce((total, change) => total + change.removed, 0);
@@ -6245,7 +6249,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
     row.append(cancel);
   }
   if (entry.state === 'queued' && (entry.error?.startsWith('Message queued. Browser startup failed:') ||
-      entry.error?.startsWith('Message queued. Finish Setup to send:') || entry.error?.startsWith('Local chat setup failed:'))) {
+      entry.error?.startsWith('Message queued. Finish Setup to send:') || entry.error?.startsWith('Message queued. Browser routing:') || entry.error?.startsWith('Local chat setup failed:'))) {
     const retry = dockAction(() => t("Retry browser"), 'i-retry', () => {});
     retry.classList.add('delivery-retry');
     retry.onclick = async () => { retry.setAttribute('disabled', ''); await run(api.retryInputBrowser(entry.id)); void refreshInputQueue(); };

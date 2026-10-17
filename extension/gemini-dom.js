@@ -273,6 +273,7 @@ var CLF_DOM = (() => {
   }
   function cancelApprovalReplyProofs(reason = 'retired') {
     for (const proof of pendingApprovalReplies) if (proof.lastAuditStage !== 'revoked') auditApprovalReply(proof, 'revoked', reason);
+    for (const proof of pendingApprovalReplies) proof.observer?.disconnect();
     pendingApprovalReplies.length = 0;
     provisionalApprovalReplyIds.clear();
     clearTimeout(approvalReplyTimer); approvalReplyTimer = null;
@@ -291,6 +292,15 @@ var CLF_DOM = (() => {
     if (!id || !source || !proof.sourceId || !card.node.closest('model-response')) {
       auditApprovalReply(proof, 'untracked', 'missing-native-source'); return;
     }
+    // Preserve native mutations between recorder scans. A framework can disable
+    // both original decisions and remove their card in one render transaction.
+    // Final detached state alone is insufficient evidence of that ordering.
+    proof.mutations = [];
+    proof.observer = new MutationObserver(records => {
+      proof.mutations.push(...records);
+      if (proof.mutations.length > 64) { proof.overflow = true; proof.mutations.length = 0; proof.observer.disconnect(); }
+    });
+    proof.observer.observe(source, { subtree: true, childList: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled'] });
     pendingApprovalReplies.push(proof);
     auditApprovalReply(proof, 'click', 'registered');
     if (approvalReplyTimer === null) {
@@ -303,6 +313,19 @@ var CLF_DOM = (() => {
     provisionalApprovalReplyIds.clear();
     const ended = button => button?.disabled === true || button?.getAttribute('aria-disabled') === 'true' || Boolean(button?.closest('[inert]'));
     for (const proof of [...pendingApprovalReplies]) {
+      const mutations = [...proof.mutations, ...proof.observer.takeRecords()];
+      proof.mutations.length = 0;
+      const endedControls = proof.endedControls || (proof.endedControls = new Set());
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && [proof.allow, proof.deny].includes(mutation.target) && ended(mutation.target))
+          endedControls.add(mutation.target);
+        if (mutation.type === 'childList' && [...mutation.removedNodes].some(node => node === proof.card || node.contains?.(proof.card))) {
+          if (!proof.overflow && endedControls.size === 2 && ended(proof.allow) && ended(proof.deny) &&
+              proof.allow.closest('remy-confirmation-card') === proof.card && proof.deny.closest('remy-confirmation-card') === proof.card)
+            proof.completed = true;
+          break;
+        }
+      }
       const sameSource = proof.source.isConnected && proof.source.id.toLowerCase() === proof.sourceId;
       const mounted = proof.card.isConnected && proof.card.closest('.conversation-container[id]') === proof.source;
       const originalControls = proof.allow.isConnected && proof.deny.isConnected &&
@@ -351,6 +374,7 @@ var CLF_DOM = (() => {
         void flushApprovalReceipts();
       }
       if (approvalReplyIds.size > 2000) approvalReplyIds.delete(approvalReplyIds.values().next().value);
+      proof.observer.disconnect();
       pendingApprovalReplies.splice(pendingApprovalReplies.indexOf(proof), 1);
     }
     if (!pendingApprovalReplies.length) cancelApprovalReplyProofs();
@@ -790,6 +814,14 @@ var CLF_DOM = (() => {
       if (!settled || composerAuthoredText()) return refused('warmup-not-settled');
       box = composer();
       if (!insertPrompt(submitted, true)) return refused('task-not-restored');
+      // The accepted warm-up can mount a new native editing host. Transfer the
+      // existing task lease only at this controlled empty -> exact-task boundary,
+      // under the same command and the conversation proved by its warm-up row.
+      // Otherwise the shared bootstrap guard still sees the disconnected host
+      // and refuses the real task before Send.
+      if (initialDraft && initialCommand && commandClaim === initialCommand &&
+          !initialDraft.current() && (!current() || !initialDraft.rebind() || !initialDraft.current()))
+        return refused('task-lease-not-restored');
     }
     const binding = id && !localHelper ? await bindingFor(id, current) : null;
     if (id && !localHelper && !binding) return refused('session-binding-unavailable');
@@ -1046,12 +1078,18 @@ var CLF_DOM = (() => {
     // The native compact header may keep only its arrow inside the button;
     // its accessible label still states the selected model explicitly.
     const accessible = /^Open mode picker, currently ([^\r\n]{1,96})$/.exec(picker.getAttribute('aria-label') || '')?.[1];
-    return { model: caption || compact(accessible || ''), reasoningEffort: null };
+    if (!caption && !compact(accessible || '')) return null;
+    // The collapsed caption names a lane (for example "Gemini Flash"), not a
+    // versioned mode ID. Report the existing current-model option rather than
+    // inventing an exact catalog match for worker/session observations.
+    const selected = nativeModelMenu()?.find(row => row.selected);
+    return { model: selected?.id || 'gemini-current', reasoningEffort: null };
   };
   const nativeModelRows = () => all('gem-menu-item[role="menuitem"][data-mode-id]').filter(node => shown(node) && !node.closest(TURN));
   function nativeModelMenu() {
     const rows = nativeModelRows().filter(node => enabled(node) && /^[0-9a-f]{16}$/i.test(node.getAttribute('data-mode-id') || '') &&
-      !node.querySelector('[data-mat-icon-name="lock"],[fonticon="lock"]')).map(node => ({ node,
+      !node.querySelector('[data-mat-icon-name="lock"],[fonticon="lock"],[data-mat-icon-name="lock_outline"],[fonticon="lock_outline"]') &&
+      !all('mat-icon,gem-icon', node).some(icon => /^(?:lock|lock_outline)$/.test(compact(text(icon))))).map(node => ({ node,
         id: node.getAttribute('data-mode-id').toLowerCase(), label: compact(text(node.querySelector('.label'))),
         selected: node.classList.contains('selected') && Boolean(node.querySelector('[aria-label="Selected"]')) }));
     if (!rows.length || rows.some(row => !row.label || row.label.length > 80) || new Set(rows.map(row => row.id)).size !== rows.length ||
@@ -1082,9 +1120,10 @@ var CLF_DOM = (() => {
     return [{ id: 'gemini-current', label: 'Automatic (current Gemini model)', efforts: [] },
       ...rows.map(({ id, label }) => ({ id, label, efforts: [] }))];
   }
-  async function selectModelSettings(model, effort, current = () => true) {
+  async function selectModelSettings(model, effort, current = () => true, failure = null) {
     const initial = modelSurface(current);
     const refuse = (stage, surface = initial) => {
+      failure?.(stage);
       const picker = pickerButton(), rows = nativeModelMenu();
       console.info('[OneCode model] ' + JSON.stringify({ stage,
         requestedModel: model === 'gemini-current' ? model : /^[0-9a-f]{16}$/i.test(String(model)) ? String(model).toLowerCase() : 'other',

@@ -17,7 +17,8 @@ import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_VERSION, BRIDGE_PROTOCOL } from '../src/main/version.js';
 import { userPromptText } from '../src/shared/user-prompt.js';
-import { currentCoreInstructions } from '../src/main/mcp/instructions.js';
+import { currentCoreInstructions as providerCoreInstructions } from '../src/main/mcp/instructions.js';
+import { withMcpProvider } from '../src/main/mcp/provider-context.js';
 import { browserControl } from '../src/main/browser-control.js';
 import { cosSignInTransfer } from '../src/main/cos-browser/sign-in-transfer.js';
 import { beginCosBrowserSignInSession, endCosBrowserSignInSession, cosBrowserSignedIn, cosBrowserSignInLease } from '../src/main/cos-browser/sign-in.js';
@@ -50,6 +51,8 @@ vi.mock('electron', () => ({
 const { safeStorage } = await import('electron');
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
+function fixtureConfig() { const config = defaultConfig(); return { ...config, ui: { ...config.ui, chatProvider: 'chatgpt' as const }, multiAgent: { ...config.multiAgent, enabled: true } }; }
+const currentCoreInstructions = () => withMcpProvider('chatgpt', () => providerCoreInstructions());
 const { initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
 const {
   bridgePort,
@@ -265,7 +268,9 @@ function request(
   options: { body?: unknown; origin?: string | null; auth?: string | null; raw?: string; extensionVersion?: string; protocol?: number; extensionBuild?: string; browser?: string; host?: string; engine?: string } = {}
 ): Promise<Reply> {
   const url = new URL(path, base);
-  const payload = options.raw ?? (options.body === undefined ? null : JSON.stringify(options.body));
+  const body = options.body && typeof options.body === 'object' && !Array.isArray(options.body) &&
+    ['/status', '/browser/presence'].includes(url.pathname) ? { provider: 'chatgpt', ...options.body } : options.body;
+  const payload = options.raw ?? (body === undefined ? null : JSON.stringify(body));
   const headers: Record<string, string> = {};
   // Every extension request carries its protocol generation. Pairing must fail closed
   // across incompatible app/extension builds instead of provisioning a token that can
@@ -372,7 +377,7 @@ beforeAll(async () => {
   initSessionStore(dir);
   initDurableStore(dir);
   onSwarmPersistNow((snapshot) => writeDurableNow('swarm', snapshot));
-  const baseConfig = defaultConfig();
+  const baseConfig = fixtureConfig();
   suiteConfig = {
     ...baseConfig,
     sessions: { ...baseConfig.sessions, record: true },
@@ -736,7 +741,7 @@ describe('who is allowed to talk to it', () => {
     try {
       expect((await request('POST', '/pair', { host: 'browser', extensionVersion: '0.0.1', protocol: 0 })).status).toBe(426);
       // An incompatible peer leaves no lasting proof either.
-      expect((await bridgeStatus()).externalExtension).toEqual({ present: false, version: '0.0.1', lastSeenAt: null, signedIn: null, proof: null });
+      expect((await bridgeStatus()).externalExtension).toEqual({ present: false, version: '0.0.1', lastSeenAt: null, signedIn: null, proof: null, provider: 'gemini' });
       expect(changed).toHaveBeenCalled();
     } finally { unsubscribe(); }
   });
@@ -772,7 +777,7 @@ describe('who is allowed to talk to it', () => {
       externalExtension: { present: false, signedIn: null, proof: { version: APP_VERSION, signedIn: true } } });
     await pair();
     await request('POST', '/status', { host: 'browser', browser, body: { openConversations: [], chatGptSignedIn: false } });
-    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: false });
+    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: false, provider: 'chatgpt' });
   });
 
   it('hears an idle browser’s extension and its login through presence, without handing out work', async () => {
@@ -783,11 +788,11 @@ describe('who is allowed to talk to it', () => {
     expect(reply.body).toEqual({ ok: true });
     expect((await bridgeStatus()).externalExtension).toMatchObject({ present: true, signedIn: false, proof: { version: APP_VERSION, signedIn: false } });
     await request('POST', '/browser/presence', { host: 'browser', browser, body: { chatGptSignedIn: true } });
-    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: true });
+    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: true, provider: 'chatgpt' });
     // The CoS browser's copy and unauthenticated callers say nothing about the person's browser.
     await request('POST', '/browser/presence', { host: 'cos', browser, body: { chatGptSignedIn: false } });
     await request('POST', '/browser/presence', { host: 'browser', browser, auth: 'wrong-token', body: { chatGptSignedIn: false } });
-    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: true });
+    expect((await bridgeStatus()).externalExtension?.proof).toEqual({ version: APP_VERSION, signedIn: true, provider: 'chatgpt' });
   });
 
   it('accepts Gemini login only from the active built-in companion through paired status/presence', async () => {
@@ -926,13 +931,13 @@ describe('who is allowed to talk to it', () => {
   // The suite binds ephemeral ports so it can never collide with the installed app, so the
   // shipped range has to be asserted directly or a typo in it would ship unnoticed.
   it('ships the fixed candidate range the extension scans', () => {
-    expect(DEFAULT_PORTS).toEqual([28765, 28766, 28767, 28768, 28769, 18765, 18766, 18767, 18768, 18769, 38765, 38766, 38767, 38768, 38769]);
+    expect(DEFAULT_PORTS).toEqual([28765, 28766, 28767, 28768, 28769, 29765, 29766, 29767, 29768, 29769, 39765, 39766, 39767, 39768, 39769]);
   });
 
   it('identifies itself to an extension without any credential', async () => {
     const reply = await request('GET', '/hello', { auth: null });
     expect(reply.status).toBe(200);
-    expect(reply.body.app).toBe('chat-on-steroids');
+    expect(reply.body.app).toBe('onecode');
     // Against the constant, not a literal: what matters is that the handshake reports the
     // build's own version, and a hard-coded number here only ever fails on release day.
     expect(reply.body.version).toBe(APP_VERSION);
@@ -1402,7 +1407,7 @@ describe('extension update holds', () => {
     const before = lines().length;
     const status = (updateHold?: string) => request('POST', '/status', { body: { openConversations: [], ...(updateHold ? { updateHold } : {}) } });
     await status('chat-busy'); await status('chat-busy');
-    expect(lines().slice(before).map(entry => entry.message)).toEqual(['bridge: the browser extension waits to update: a Gemini tab is still answering']);
+    expect(lines().slice(before).map(entry => entry.message)).toEqual(['bridge: the browser extension waits to update: an agent is still answering']);
     await status('already-tried');
     expect(lines().at(-1)!.message).toContain('already tried this update once; reload it in chrome://extensions');
     await status('browser-updates-itself');
@@ -2395,7 +2400,7 @@ describe('activity feed', () => {
   it('answers what drives a chat before the recorder has attached to it', async () => {
     await pair();
     const chat = 'cafe0044-0000-4000-8000-000000000044';
-    await saveConfig({ ...defaultConfig(), goal: { ...defaultConfig().goal, backend: 'api', enabled: false, mode: 'goal' } });
+    await saveConfig({ ...fixtureConfig(), goal: { ...fixtureConfig().goal, backend: 'api', enabled: false, mode: 'goal' } });
     await writeDurableNow(GOAL_SWITCHES_STATE, null);
 
     // Exactly what a New Chat's opening does: the goal is bound as a loop before anything
@@ -2722,8 +2727,8 @@ describe('automatic compaction', () => {
     await request('GET', `/status?repairHeld=${encodeURIComponent(handout.token)}&why=draft`);
     await request('GET', `/status?repairHeld=unknown-token&why=sending`);
     expect(held()).toEqual([
-      `bridge: the page held the compaction repair for ${conversationId}: a sent message is still waiting for Gemini to confirm it`,
-      `bridge: the page held the compaction repair for ${conversationId}: text or attachments are in the Gemini message box`
+      `bridge: the page held the compaction repair for ${conversationId}: a sent message is still waiting for the provider to confirm it`,
+      `bridge: the page held the compaction repair for ${conversationId}: text or attachments are in the message box`
     ]);
     // The repair itself is untouched: the next ordinary pass still offers it.
     expect((await request('GET', '/status')).body.repairs.some((row: { token: string }) => row.token === handout.token)).toBe(true);
@@ -5782,9 +5787,9 @@ describe('delivering a bootstrap', () => {
       const { id } = await waitForRevival();
       const priorLogs = new Set(getLog());
 
-      // A slow browser pickup outlives an ordinary command without gaining a
-      // second command, message or tab. Its original absolute wake still expires.
-      const slowPickup = COMMAND_DEADLINE_MS + 1_000;
+      // The revival's own absolute deadline, independent of ordinary bootstrap
+      // timing, owns when this queued wake expires.
+      const slowPickup = REVIVAL_DEADLINE_MS - 1_000;
       await vi.advanceTimersByTimeAsync(slowPickup);
       expect(swarmStateForCaller({ conversationId: PRIME_CHAT }).agents.find(agent => agent.id === 'worker-1'))
         .toMatchObject({ state: 'waking', pending: 1 });
@@ -7592,7 +7597,7 @@ describe('targeted open', () => {
       expect(opened).toEqual([commandUrl(command.id)]);
 
       // The page never redeems, never acks, never types.
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(COMMAND_DEADLINE_MS + 1);
 
       expect(pendingCommands()).toEqual([]);
       expect(continuationByToken(token)?.state).toBe('aborted');
@@ -9557,7 +9562,7 @@ describe('unattributed activity recovery', () => {
         expect(await maintenance(), 'a reload was queued over the approval card').toBeNull();
       }
       const why = getLog().filter(entry => entry.message.includes(`silence recovery for ${chat}`)).map(entry => entry.message);
-      expect(why).toEqual([expect.stringContaining('waiting: Gemini asks the user to allow or deny a tool call')]);
+      expect(why).toEqual([expect.stringContaining('waiting: the provider asks the user to allow or deny a tool call')]);
       expect((await request('GET', `/activity?conversationId=${chat}&approval=0`)).status).toBe(200);
       await vi.advanceTimersByTimeAsync(GOAL_QUIET_MS);
       await sweepStaleSwarm(Date.now());
@@ -10862,7 +10867,7 @@ describe('unattributed activity recovery', () => {
       expect(handout?.reason).toBe('assistant-error');
       expect((await request('POST', '/repairs/claim', { body: { token: handout!.token } })).body.allowed).toBe(true);
       const waiting = await request('GET', `/status?repairFailed=${handout!.token}&repairAction=reloaded&why=streaming`);
-      expect(await rows()).toEqual(['Gemini is answering again; recovery waits until it finishes.']);
+      expect(await rows()).toEqual(['The agent is answering again; recovery waits until it finishes.']);
       handout = waiting.body.repairs?.[0] ?? await maintenance();
     }
     // One info line for the episode, no warning, and no "Trying to reload" row while it waits.
@@ -13784,7 +13789,7 @@ describe('restarting the bridge', () => {
       // The old deadline timer is gone because stopBridge deliberately cleared it. Advance
       // only the clock: on restart an implementation that forgets to re-arm/expire the
       // retained lease sees it as deliverable and opens the exact same bootstrap again.
-      Date.now = () => leasedAt + 91_000;
+      Date.now = () => leasedAt + WORKER_BOOTSTRAP_LIMIT_MS + 1;
       const port = await startBridge();
       expect(port).not.toBeNull();
       base = `http://127.0.0.1:${port}`;
@@ -13810,9 +13815,9 @@ describe('restarting the bridge', () => {
 describe('the goal loop over the bridge', () => {
   beforeEach(async () => {
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: true, model: 'deepseek/deepseek-v4-flash', reasoning: 'default' }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: true, model: 'deepseek/deepseek-v4-flash', reasoning: 'default' }
     });
     await setSecret('openRouterApiKey', 'sk-or-bridge');
     resetGoalStateForTests();
@@ -13896,7 +13901,7 @@ describe('the goal loop over the bridge', () => {
 
   it('advertises the configured Loop helper rather than the inactive API model', async () => {
     await pair();
-    const config = defaultConfig();
+    const config = fixtureConfig();
     const conversation = 'cafe0081-0000-4000-8000-000000000081';
     await saveConfig({ ...config, goal: { ...config.goal, enabled: true, mode: 'loop', backend: 'api',
       loopBackend: 'chatgpt', helperModel: 'gpt-5.6-sol', model: 'z-ai/glm-5.3-flash' } });
@@ -14311,18 +14316,18 @@ describe('the goal loop over the bridge', () => {
     });
 
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: false }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: false }
     });
     const off = await request('POST', '/goal/draft', { body: { conversationId: 'cafe0002-0000-4000-8000-000000000002', turnId: 'g-1' } });
     expect(off.status).toBe(409);
     expect(off.body.error).toBe('goal_disabled');
 
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: true }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: true }
     });
     await setSecret('openRouterApiKey', '');
     const keyless = await request('POST', '/goal/draft', { body: { conversationId: 'cafe0002-0000-4000-8000-000000000002', turnId: 'g-1' } });
@@ -14351,9 +14356,9 @@ describe('the goal loop over the bridge', () => {
   it('finds an older recorded chat through the durable ownership index, not the capped UI list', async () => {
     await pair();
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: true }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: true }
     });
     await setSecret('openRouterApiKey', 'sk-or-test');
     const conversationId = 'cafe0099-0000-4000-8000-000000000099';
@@ -14647,9 +14652,9 @@ describe('the goal loop over the bridge', () => {
     await pair();
     const chat = 'cafe0021-0000-4000-8000-000000000021';
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: false }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: false }
     });
     await request('POST', '/events', {
       body: {
@@ -14720,9 +14725,9 @@ describe('the goal loop over the bridge', () => {
     await pair();
     const chat = 'cafe0023-0000-4000-8000-000000000023';
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: false }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: false }
     });
     await request('POST', '/events', {
       body: {
@@ -14780,11 +14785,11 @@ describe('the goal loop over the bridge', () => {
     await pair();
     const chat = 'cafe0022-0000-4000-8000-000000000022';
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
       // The exact configuration the lost run had: switched off, with `loop` sitting there as a
       // remembered preference that nothing reads while `enabled` is false.
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: false, mode: 'loop' }
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: false, mode: 'loop' }
     });
     await request('POST', '/events', {
       body: {
@@ -15713,9 +15718,9 @@ describe('the goal loop over the bridge', () => {
 
     // Read-only: the switches still change through the POST and nowhere else.
     await saveConfig({
-      ...defaultConfig(),
-      sessions: { ...defaultConfig().sessions, record: true },
-      goal: { ...defaultConfig().goal, backend: 'api', enabled: false }
+      ...fixtureConfig(),
+      sessions: { ...fixtureConfig().sessions, record: true },
+      goal: { ...fixtureConfig().goal, backend: 'api', enabled: false }
     });
     expect((await request('GET', '/settings')).body.goal.enabled).toBe(false);
     expect((await request('GET', '/settings', { auth: null })).status).toBe(401);
@@ -16339,7 +16344,7 @@ describe('worker brief on a computer with its own connector names', () => {
     await saveConfig({ ...previous, connectorSuffix: 'Windows VM' });
     try {
       expect(workerBriefForTests('worker-1', 'Check the tests'))
-        .toContain('Report to prime through the agents tool of OneCode Core (Windows VM) — ');
+        .toContain('Report to prime through the agents tool of OneCode Core Windows VM — ');
     } finally { await saveConfig(previous); }
   });
 });
@@ -16390,11 +16395,14 @@ describe('native Gemini Project for a new CoS project', () => {
   async function newProject(name: string) {
     const fs = await import('node:fs/promises');
     const path = await import('node:path');
-    const { addProject } = await import('../src/main/projects.js');
+    const { addProject, listProjects } = await import('../src/main/projects.js');
     const folder = path.join(dir, name);
     await fs.mkdir(folder, { recursive: true });
     await saveConfig({ ...suiteConfig, roots: [{ name: 'project', path: folder }] });
-    return addProject(folder);
+    const project = await addProject(folder);
+    const queued = { ...project, chatgpt: { state: 'requested' as const, requestId: randomUUID(), updatedAt: Date.now() } };
+    await writeDurableNow('projects', (await listProjects()).map(row => row.id === project.id ? queued : row));
+    return queued;
   }
 
   it('lets only the page that claimed and armed it report the Project id', async () => {

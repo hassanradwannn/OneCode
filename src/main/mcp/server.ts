@@ -28,11 +28,11 @@ import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
 import { SURFACE_IDS, configuredConnectorName, surfaceDefinition, type SurfaceId } from './surfaces.js';
-import { authenticateGeminiBinding, geminiBindingsEnabled, GeminiBindingError, stripGeminiRoutingArgs,
-  type GeminiBindingEvidence } from '../gemini/bindings.js';
+import { authenticateGeminiBinding, geminiBindingsEnabled, GeminiBindingError, stripGeminiRoutingArgs } from '../gemini/bindings.js';
 import { pluginManager } from '../plugins/manager.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { withMcpProvider } from './provider-context.js';
+import { authenticateChatgptExec, type LocalBindingEvidence } from '../session/local-binding.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -437,7 +437,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // A Gemini client may send arbitrary/reused RPC ids and no request header. Never
     // convert a claimed header into browser proof when local capability routing is active.
     const requestId = provider === 'gemini' && geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
-    const dispatch = (body?: unknown, geminiBinding?: GeminiBindingEvidence): void => {
+    const dispatch = (body?: unknown, geminiBinding?: LocalBindingEvidence): void => {
       if (stopping || res.destroyed) {
         if (!res.destroyed) {
           res.setHeader('connection', 'close');
@@ -456,7 +456,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
       };
       res.once('finish', release);
       res.once('close', release);
-      withMcpProvider(provider, () => withInboundRequestId(requestId, () => void route.handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
+      withMcpProvider(provider, () => withInboundRequestId(geminiBinding ? null : requestId, () => void route.handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       void readBoundedJsonBody(req).then(async (parsed) => {
@@ -470,6 +470,19 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
           return;
         }
         const message = parsed.body as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: { name?: unknown; arguments?: unknown } } | undefined;
+        if (provider === 'chatgpt' && message?.method === 'tools/call') {
+          try {
+            const authenticated = await withMcpProvider(provider, () => authenticateChatgptExec(message.params?.name, message.params?.arguments));
+            dispatch({ ...message, params: { ...message.params, arguments: authenticated.args } }, authenticated.evidence);
+          } catch {
+            if (res.destroyed || res.headersSent) return;
+            const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
+              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. Send a fresh message from this exact OneCode chat to refresh its local session authorization.' }] } });
+            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
+            res.end(body);
+          }
+          return;
+        }
         if (provider === 'gemini' && geminiBindingsEnabled() && message?.method === 'tools/call') {
           try {
             const binding = await authenticateGeminiBinding(message.params?.arguments);

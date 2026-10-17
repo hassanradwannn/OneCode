@@ -190,6 +190,15 @@ export interface SummaryInput {
   resultHead?: string;
 }
 
+/** The result is already redacted by the recorder. Read errors start with a
+ * section heading, which names the file but hides the actual reason one line down. */
+export function toolResultHeadline(text: string): string {
+  const lines = text.slice(0, 16_000).split(/\r?\n/);
+  const error = lines.findIndex(line => /^--- .* — ERROR ---$/.test(line.trim()));
+  return (error >= 0 ? lines.slice(error + 1).find(line => line.trim() && !line.startsWith('---'))
+    : lines.find(line => line.trim()))?.trim().slice(0, 240) ?? '';
+}
+
 /** What a call is doing while it runs: "Reading src/x.ts", "Running npm test", and its kind. */
 export function summarizeRunningCall(tool: string, args: unknown, evidence: CallEvidence): { title: string; kind: ActivitySummary['kind'] } {
   let summary: ActivitySummary;
@@ -239,7 +248,7 @@ export function summarizeToolCall(input: SummaryInput): ActivitySummary {
   } else if (!failed.metric || !failed.metric.startsWith('✕')) {
     failed.metric = '✕ failed';
   }
-  if (head && !failed.detail) failed.detail = head.slice(0, 120);
+  if (head) failed.detail = head.slice(0, 240);
   return failed;
 }
 

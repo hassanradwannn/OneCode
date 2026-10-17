@@ -9,6 +9,7 @@ export function updateErrorText(source: string): string {
     case 'This downloaded update is no longer current. Check for updates again.':
     case 'The OneCode update metadata does not match this release and architecture':
     case 'OneCode did not download one complete installer':
+    case 'Refusing an older OneCode release':
       return t('The downloaded update could not be confirmed for installation.');
     case 'The OneCode installation registration changed':
       return t('The registered OneCode installation changed. Reinstall OneCode in its current folder before retrying.');

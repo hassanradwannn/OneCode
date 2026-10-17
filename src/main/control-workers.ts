@@ -7,6 +7,7 @@ import { RequestError } from './control-reads.js';
 import { projectWorkspace } from './projects.js';
 import { redactSecretText } from './redaction.js';
 import { findSessionByConversation } from './session/store.js';
+import { WorkerWorktreeError } from './worktrees/index.js';
 
 const uuid = z.string().uuid().refine(value => value === value.toLowerCase());
 const routePattern = /^\/v1\/workers\/([0-9a-f-]{36})(?:\/(spawn|message|reports|ack))?$/;
@@ -97,6 +98,10 @@ export async function serveWorkerAction(method: string, route: string, raw: unkn
           if (workspace && JSON.stringify(getConfig().roots) !== roots) throw new RequestError(409, 'project_roots_changed');
         },
         validate: async () => { if (body.projectId) await projectWorkspace(body.projectId); }
+      }).catch(error => {
+        if (error instanceof WorkerWorktreeError && error.code === 'WORKTREE_PERMISSION_REQUIRED')
+          throw new RequestError(403, 'worktree_permission_required', 'Worker isolation requires Command, Create and Edit, with Read-only disabled. No worker was admitted.');
+        throw error;
       });
     requestWorkerBootstraps(result.created.map(worker => worker.id), result.runId);
     return { status: 202, body: { runId: result.runId, workers: result.created.map(worker => ({ id: worker.id, label: worker.label, state: worker.state })),

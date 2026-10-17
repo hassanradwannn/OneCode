@@ -1,6 +1,20 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+/** Legacy VM fixtures must load the real routing module they previously stripped. */
+export function backgroundVmSource(source: string): string {
+  const routing = readFileSync(new URL('../extension/gemini-routing.js', import.meta.url), 'utf8').replace(/^export /gm, '');
+  return routing + '\n' + source.replace(/^import .*$/gm, '').replace("let selectedProvider = 'gemini';", "let selectedProvider = 'chatgpt';");
+}
+
+/** The real shared provider routing owner for focused service-worker fragments. */
+export function backgroundProviderSource(source: string, provider: 'chatgpt' | 'gemini' = 'gemini'): string {
+  const from = source.indexOf("let selectedProvider = 'gemini';");
+  const end = source.indexOf('let activeTabs = null;', from);
+  if (from < 0 || end < 0) throw new Error('Provider routing fragment not found');
+  return source.slice(from, end).replace("let selectedProvider = 'gemini';", `var selectedProvider = '${provider}';`) + '\n';
+}
 
 /**
  * Creates an isolated temp directory and canonicalises it. The canonical form

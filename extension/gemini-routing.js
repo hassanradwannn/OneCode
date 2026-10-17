@@ -87,10 +87,19 @@ export function createGeminiRouting(chrome, ownedWindow) {
         const managed = await ownedWindow().catch(() => null);
         selected = tabs.filter(tab => tab.active === true && tab.windowId === managed?.id && !tab.incognito);
       }
+      // Switching to another provider must not strand queued Gemini work. When
+      // no Gemini tab is selected, a single live account context is unambiguous;
+      // multiple accounts still require an explicit native selection.
+      let requireActive = true;
+      if (!selected.length) {
+        const available = tabs.filter(tab => !tab.incognito && !tab.pendingUrl && selectedContext(tab.url));
+        const prefixes = new Set(available.map(tab => selectedContext(tab.url).prefix));
+        if (prefixes.size === 1) { selected = available.slice(0, 1); requireActive = false; }
+      }
       if (selected.length !== 1) throw new Error('gemini_account_context_required');
       if (selected[0].pendingUrl) throw new Error('gemini_selected_account_changed');
       const current = await chrome.tabs.get(selected[0].id).catch(() => null);
-      if (!current || current.pendingUrl || current.url !== selected[0].url || current.windowId !== selected[0].windowId || current.active !== true || current.incognito)
+      if (!current || current.pendingUrl || current.url !== selected[0].url || current.windowId !== selected[0].windowId || (requireActive && current.active !== true) || current.incognito)
         throw new Error('gemini_selected_account_changed');
       context = selectedContext(current.url);
       if (!context) throw new Error('gemini_account_context_required');

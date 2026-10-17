@@ -13,7 +13,7 @@ export const CODE_MODE_LIMITS = Object.freeze({
 });
 export const codeModeSchema = z.object({ code: z.string().min(1).max(CODE_MODE_LIMITS.codeChars)
   .describe('Raw JavaScript source with top-level await. Emit results with text(...) or image(...).') }).strict();
-export type CodeModeTool = { name: string; description: string };
+export type CodeModeTool = { name: string; description: string; inputSchema?: object };
 export type CodeModeOptions = { windowsDesktop?: boolean; surface?: import('./surfaces.js').SurfaceId };
 const requireRuntime = createRequire(typeof __filename === 'string' ? __filename : import.meta.url);
 let activeRuns = 0;
@@ -58,6 +58,7 @@ export async function runCodeMode(
   let worker: Worker | undefined, ended = false, calls = 0, resultBytes = 0, emittedBytes = 0;
   let textBytes = 0, images = 0, textTruncated = false;
   const allowed = new Set(tools.map(tool => tool.name));
+  let workerFinishIssued = false;
   try {
     const status = await new Promise<string | null>(resolve => {
       const finish = (reason: string | null) => {
@@ -108,6 +109,17 @@ export async function runCodeMode(
         let request: { name: string; args?: unknown };
         try { request = JSON.parse(message.json); } catch { finish('BRIDGE_ERROR'); return; }
         if (!allowed.has(request.name)) { finish('UNKNOWN_TOOL'); return; }
+        if (workerFinishIssued) {
+          worker!.postMessage({ type: 'result', id, json: JSON.stringify(errorResult('WORKER_FINISH_BARRIER: this script already issued worker finish. No further tool ran.')) });
+          return;
+        }
+        const workerFinish = request.name === 'agents' && request.args && typeof request.args === 'object' &&
+          (request.args as Record<string, unknown>).action === 'finish';
+        if (workerFinish && pending.size > 0) {
+          worker!.postMessage({ type: 'result', id, json: JSON.stringify(errorResult('WORKER_FINISH_BARRIER: await all earlier tools before finishing. Worker finish did not run.')) });
+          return;
+        }
+        if (workerFinish) workerFinishIssued = true;
         // Admission is synchronous. No late worker message may start another action after finish.
         calls++;
         const work = Promise.resolve().then(() => invoke(request.name, request.args)).then(result => {

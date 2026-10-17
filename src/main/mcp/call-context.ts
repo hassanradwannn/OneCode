@@ -15,7 +15,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AssetRef, FileChange, RunningToolActivity, ToolOutcome } from '../../shared/session.js';
 import type { OutputPublication, ProcessCompletion } from '../codex/unified-exec.js';
-import type { GeminiBindingEvidence } from '../gemini/bindings.js';
+import type { LocalBindingEvidence } from '../session/local-binding.js';
 
 export interface CallEvidence {
   processCompletion?: Promise<ProcessCompletion>;
@@ -47,7 +47,7 @@ export interface CallEvidence {
 export interface CallCaller {
   transportKey: string | null;
   /** Locally issued authorization for an exact durable session; never Google request proof. */
-  geminiBinding?: GeminiBindingEvidence;
+  geminiBinding?: LocalBindingEvidence;
   /**
    * Local Setup profile that owns the MCP endpoint generation which accepted this call.
    *

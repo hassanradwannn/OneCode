@@ -128,8 +128,10 @@ import {
 } from '../session/store.js';
 import { sessionFinishDeadline } from '../session/finish.js';
 import type { ToolOutcome } from '../../shared/session.js';
-import { geminiBindingsEnabled, geminiBindingIsCurrent, validateGeminiBindingEvidence, GeminiBindingError } from '../gemini/bindings.js';
+import { geminiBindingsEnabled, GeminiBindingError } from '../gemini/bindings.js';
+import { localBindingIsCurrent, validateLocalBinding } from '../session/local-binding.js';
 import { geminiToolSchema } from '../gemini/routing-schema.js';
+import { toolSchemaJson } from './tool-declarations.js';
 
 /** The page's exact proof of a request id, by which a running call counts for its chat. */
 const requestOwner = (requestId: string): string | null => requestCorrelation(requestId)?.conversationId ?? null;
@@ -180,7 +182,7 @@ async function recordUntrustedRefusalNotice(context: CallContext): Promise<void>
   untrustedNoticeEpisodes.set(key, true);
   const exact = requestCorrelation(caller.requestId);
   const binding = caller.geminiBinding;
-  const proven = binding ? geminiBindingIsCurrent(binding) && binding.conversationId === caller.conversationId && binding.sessionId === caller.sessionId
+  const proven = binding ? localBindingIsCurrent(binding) && binding.conversationId === caller.conversationId && binding.sessionId === caller.sessionId
     : exact?.conversationId === caller.conversationId && exact.sessionId === caller.sessionId;
   if (!proven ||
       await conversationAttachment(caller.conversationId, caller.sessionId) !== 'current') {
@@ -717,7 +719,7 @@ async function dispatchTracked(
   nested: boolean
 ): Promise<ToolResult> {
   if (context.caller.geminiBinding) {
-    try { await validateGeminiBindingEvidence(context.caller.geminiBinding); }
+    try { await validateLocalBinding(context.caller.geminiBinding); }
     catch (error) { return fail(error instanceof GeminiBindingError ? error.code : 'GEMINI_SESSION_NOT_AUTHORIZED'); }
   }
   noteTransportIdentity(transportKey);
@@ -1013,14 +1015,14 @@ async function dispatchTracked(
     if (!admissionRefusal) clearUntrustedRefusalEpisode(context);
   }
   if (!admissionRefusal && context.caller.geminiBinding) {
-    try { await validateGeminiBindingEvidence(context.caller.geminiBinding); }
+    try { await validateLocalBinding(context.caller.geminiBinding); }
     catch (error) { admissionRefusal = error instanceof GeminiBindingError ? error.code : 'GEMINI_SESSION_NOT_AUTHORIZED'; }
   }
   if (admissionRefusal === STRICT_CHAT_REFUSAL) await recordUntrustedRefusalNotice(context);
   let handlerRan = false;
   markTiming('identity');
   const invokeHandler = (): Promise<ToolResult> => {
-    if (context.caller.geminiBinding && !geminiBindingIsCurrent(context.caller.geminiBinding)) {
+    if (context.caller.geminiBinding && !localBindingIsCurrent(context.caller.geminiBinding)) {
       return Promise.resolve(fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED: no local tool ran.'));
     }
     handlerRan = true;
@@ -1069,7 +1071,8 @@ async function dispatchTracked(
               'CALLER_IDENTITY_REQUIRED: this operation needs this chat’s exact workspace, but the connector could not prove which ChatGPT conversation made the call. Retry after the extension reconnects; no file or command was changed.'
             )
           )
-        : nested && surface !== 'plugins' && (name === 'exec' || name === 'session_finish' || name === 'save_handoff' || isFinish)
+        : nested && surface !== 'plugins' && (name === 'exec' || name === 'session_finish' || name === 'save_handoff' ||
+          (isFinish && !context.caller.conversationId))
         ? Promise.resolve(fail('DIRECT_CALL_REQUIRED: call this lifecycle tool directly, outside exec. No action was taken.'))
         : invokeHandler()
   );
@@ -1211,7 +1214,7 @@ async function dispatchTracked(
     requestId: context.caller.requestId,
     conversationId: context.caller.conversationId,
     sessionId: context.caller.sessionId ?? null,
-    ...(context.caller.geminiBinding ? { attributionMethod: 'gemini_session_capability' as const } : {}),
+    ...(context.caller.geminiBinding ? { attributionMethod: context.caller.geminiBinding.attribution } : {}),
     ...(context.caller.geminiBinding?.inputTurn ? { geminiInputTurn: context.caller.geminiBinding.inputTurn } : {}),
     endsActivity: isFinish && !result.isError
   });
@@ -1483,7 +1486,7 @@ export interface SurfaceRegistrar {
   registered(): string[];
   /** Same registered handler/schema, with a fresh child recording context and inherited proof. */
   invokeNested(name: string, args: unknown, parent: CallContext): Promise<ToolResult>;
-  descriptions(): Array<{ name: string; description: string }>;
+  descriptions(): Array<{ name: string; description: string; inputSchema: object }>;
 }
 
 export function createRegistrar(server: McpServer | null, ctx: ToolContext, surface: SurfaceId, observe?: (name: string, config: { description: string; inputSchema: z.ZodType; annotations?: ToolAnnotations }) => void): SurfaceRegistrar {
@@ -1499,7 +1502,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
   const agentToolsExposed = ctx.exposedAgentTools ?? agentToolsLive;
   const findExposed = ctx.exposedFind ?? (!exposedCaps.command && exposedCaps.search);
   const names: string[] = [];
-  const handlers = new Map<string, { description: string; run: (args: unknown) => Promise<ToolResult> }>();
+  const handlers = new Map<string, { description: string; inputSchema: z.ZodType; run: (args: unknown) => Promise<ToolResult> }>();
 
   return {
     ctx,
@@ -1511,7 +1514,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     agentToolsExposed,
     findExposed,
     registered: () => [...names],
-    descriptions: () => [...handlers].map(([name, entry]) => ({ name, description: entry.description })),
+    descriptions: () => [...handlers].map(([name, entry]) => ({ name, description: entry.description, inputSchema: toolSchemaJson(entry.inputSchema, 'input') })),
     invokeNested(name, args, parent) {
       return dispatch(name, args, parent.caller.transportKey, parent.caller.requestId, surface, async () => {
         const entry = handlers.get(name);
@@ -1520,7 +1523,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     },
     register(name, config, handler) {
       names.push(name);
-      handlers.set(name, { description: config.description, run: async args => {
+      handlers.set(name, { description: config.description, inputSchema: config.inputSchema, run: async args => {
         const parsed = await config.inputSchema.safeParseAsync(args);
         if (parsed.success) return handler(parsed.data);
         // Preserve the schema owner's corrective explanation for code-mode children too.

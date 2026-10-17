@@ -16,3 +16,13 @@ resources/updater/*
 .env*
 *.private.*
 /extension/build-stamp.txt
+
+# Local profiles, acceptance evidence and generated scratch never enter source history.
+/.tmp*/
+/.test-temp/
+/outputs/
+/.codex-remote-attachments/
+*.private.*
+*.pem
+*.p12
+*.pfx

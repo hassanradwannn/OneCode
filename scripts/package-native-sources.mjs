@@ -74,7 +74,7 @@ for (const name of ['sources.json', 'README.md', 'SOURCE-BUILD.md', 'COMPONENT-N
   await fs.copyFile(path.join(noticeDirectory, name), path.join(output, name));
 }
 await fs.writeFile(path.join(output, 'SHA256SUMS.txt'), inventory.sources.map(source => `${source.sha256}  archives/${source.file}`).join('\n') + '\n');
-const destination = path.join(root, 'release', 'Chat-On-Steroids-Native-Sources.tar.gz');
+const destination = path.join(root, 'release', 'OneCode-Native-Sources.tar.gz');
 // List the reviewed files explicitly: stale files from an older local build cannot enter the release.
 const files = ['sources.json', 'README.md', 'SOURCE-BUILD.md', 'COMPONENT-NOTICES.txt', 'LGPL-3.0.txt', 'GPL-3.0.txt', 'MPL-2.0.txt', 'SHA256SUMS.txt',
   ...inventory.sources.map(source => `archives/${source.file}`)];

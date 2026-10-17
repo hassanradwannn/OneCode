@@ -24,6 +24,11 @@
 (() => {
   'use strict';
 
+  // The recorder owns this adapter peer. Late static injection can replace the
+  // global after recovery installed a healthy pair; it must not erase the
+  // resolver, draft leases or callbacks held by that still-running recorder.
+  const CLF_DOM = globalThis.CLF_DOM;
+
   const onNativeAppHome = () => CLF_DOM.isAppHomePath?.(location.pathname) ?? (location.pathname === '/app');
 
   // Static content scripts are not re-run in an already-open tab when an unpacked
@@ -38,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 22;
+  const RECORDER_VERSION = 26;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -955,7 +960,7 @@
       ? event.data.candidates.slice(0, 16).filter(entry => typeof entry?.name === 'string' && entry.name.length <= 80)
         .map(entry => ({ name: entry.name, path: valid(entry.path) }))
       // An observer from before suffixes names only the plain Core.
-      : event.data.name === 'Chat On Steroids Core' ? [{ name: event.data.name, path: valid(event.data.path) }] : [];
+      : event.data.name === 'OneCode Core' ? [{ name: event.data.name, path: valid(event.data.path) }] : [];
     corePluginList = event.data.pluginList === true;
     reportCorePlugin();
   });
@@ -1054,7 +1059,8 @@
     }
     // The receipt is compared with the rendered message, which readers take without an app
     // mention chip (#861); capture the same authored text, never the chip (#900).
-    const text = sendText(CLF_DOM.composerAuthoredText());
+    const authoredText = CLF_DOM.composerAuthoredText();
+    const text = sendText(authoredText);
     const attachmentNames = CLF_DOM.composerAttachmentNames();
     if (!text && !attachmentNames.length) return;
     // The same Send is recorded again by the page's own click and submit listeners; they cannot
@@ -1071,6 +1077,7 @@
     const sections = assistantSections();
     userSendReceipt = {
       text,
+      authoredText,
       inserted,
       attachmentNames,
       conversationId: CLF_DOM.conversationId(),
@@ -1737,7 +1744,11 @@
     // refusing it left the rewritten brief unrecorded. So the settled question needs a clean
     // page and a much longer settle than an unrecorded question does.
     const settled = newest === appSettledQuestionId;
-    if (!newest || newest === openedUserMessageId || (settled && CLF_DOM.errors().length > 0)) {
+    // A rendered id is not a recorded question. Incomplete transport readback
+    // must not open a turn under the previous durable question while it settles.
+    if (!newest || newest === openedUserMessageId ||
+        (!reportedUserMessages.has(newest) && !userAnchorByMessage.has(newest)) ||
+        (settled && CLF_DOM.errors().length > 0)) {
       unrecordedGeneratingSince = 0;
       return null;
     }
@@ -2565,8 +2576,18 @@
         // Rendered inline code can remove Markdown bytes even inside a pre-wrap
         // bubble. Do not publish a broken transport frame while its exact source
         // is pending. A canonical user-authored marker remains literal text.
-        if (!source.canonical && /^\\?\[\\?\[COS\\?_CONTEXT\\?:\d{1,6}\\?\]\\?\]/.test(source.text) && CLF_DOM.userPromptText(source.text) === null) continue;
-        const text = source.text;
+        let text = source.text;
+        if (!source.canonical && /^\\?\[\\?\[COS\\?_CONTEXT\\?:\d{1,6}\\?\]\\?\]/.test(text) && CLF_DOM.userPromptText(text) === null) {
+          const receipt = userSendReceipt, accepted = receipt?.accepted;
+          // Native readback may add whitespace inside a length-framed context.
+          // Its accepted exact message and unchanged task text prove the original
+          // composer source; rewriting an arbitrary malformed frame does not.
+          if (accepted?.messageId !== message.id || accepted.conversationId !== CLF_DOM.conversationId() ||
+              accepted.epoch !== epoch || Date.now() - receipt.at > USER_SEND_RECEIPT_MS ||
+              typeof receipt.authoredText !== 'string' || CLF_DOM.userPromptText(receipt.authoredText) === null ||
+              !matchesSubmittedBootstrap(message, receipt.authoredText)) continue;
+          text = receipt.authoredText;
+        }
         const sentModel = sendModels.get(message.id);
         // As in the Fiber path: the model is part of the occurrence, so a late report re-emits.
         const key = occurrenceKey(message.id, text + (sentModel ? `\u0000${sentModel}` : ''));
@@ -11833,10 +11854,13 @@
       Boolean(id) &&
       prior &&
       prior.id !== id &&
-      prior.source === 'recovery' &&
+      (prior.source === 'recovery' || (prior.source === 'url' && OPENED_CONVERSATION && !OPENED_PROJECT_ENTRY)) &&
       prior.phase === 'waiting' &&
-      source !== 'recovery';
+      !fromUrl;
     if (maySupersede) {
+      // Background recovery reconciles its exact marker with the app before offering it,
+      // just like a direct handoff. Either may retire an older pre-redeem waiter,
+      // including a stale revival marker retained in the page URL after restart.
       // No bridge redeem has started yet, so this is only cancellation of a browser-side waiter.
       // Wake its readiness observer immediately; its async finally block is identity-guarded and
       // cannot clear the newer attempt that takes over below.
@@ -13196,9 +13220,10 @@
       if (!target && CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setOpeningClaim?.({ id: input.id, owner: input.owner });
       withdrawableRecoveryDraft = Boolean(input.recovery) && !(input.images || []).length && !(input.attachments || []).length;
       // A chat ChatGPT deleted fails every check after it (its tab moves home); say why instead.
-      const fail = async (error) => {
-        const why = target && deletedConversations.has(target.toLowerCase()) ? CONVERSATION_DELETED : error;
-        await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true, error: why }); return false;
+      const fail = async (error, detail) => {
+        const why = target && deletedConversations.has(target.toLowerCase()) ? CONVERSATION_DELETED :
+          detail && /^[a-z-]{1,40}$/.test(detail) ? `${error} (${detail})` : error;
+        await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true, error: why, ...(detail ? { detail } : {}) }); return false;
       };
       // ChatGPT restores its shared home draft even in a newly opened input tab.
       // This exact claimed bootstrap owns replacement text; existing chats and
@@ -13260,11 +13285,12 @@
       const providerLimitation = () => CLF_DOM.errors().find(error => error.blocking === true)?.text;
       const limitation = providerLimitation();
       if (limitation) return fail(limitation);
-      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget))) return fail(
+      let modelFailure = '';
+      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }))) return fail(
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
           'Requested model or reasoning could not be confirmed'
-        )
+        ), modelFailure || undefined
       );
       // Native picker closure can precede re-enabling the same editor. Wait before
       // its one insertion; a disabled editing host is not a rejected helper prompt.
@@ -13497,6 +13523,18 @@
           (witnessedSendReceipt.previousMessageId ?? null) === (previousUserId ?? null) &&
           Date.now() - witnessedSendReceipt.at <= USER_SEND_RECEIPT_MS) {
         witnessedSendReceipt.accepted = { messageId: receipt.user.id, conversationId: deliveredConversation, epoch };
+        if (CLF_DOM.provider === 'gemini' && !temporary) {
+          const latest = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
+          if (latest?.id === receipt.user.id && matchesSubmittedBootstrap(latest, input.text)) {
+            // Escaped native readback can satisfy the task receipt before the
+            // ordinary recorder can match its composer text. ACK now pins that
+            // exact native message. Spend it on the existing turn observer here;
+            // hidden tabs must not wait for another throttled timer to authorize
+            // the task's first tool call. Never mint a separate turn from ACK.
+            observe();
+            await flush();
+          }
+        }
       }
       // Stop/composer-clear may precede the exact user row. This receipt, not that early
       // native acceptance, owns retirement of the still-untouched prepared draft. A
@@ -13710,7 +13748,7 @@
           const next = await CLF_DOM.pluginRefreshView(request.connectorName, request.tools);
           return appId && next?.appId === appId ? href : null;
         }, () => alive && epoch === requestEpoch && !generating && !CLF_DOM.generating() &&
-          new URL(location.href).origin === 'https://gemini.google.com' && CLF_DOM.pluginManagementIdle(), 8000);
+          new URL(location.href).origin === listUrl.origin && CLF_DOM.pluginManagementIdle(), 8000);
         if (!discovered || !alive || epoch !== requestEpoch || location.href !== discovered) return false;
         const url = new URL(discovered); url.searchParams.set('cos-plugin-refresh', request.id);
         history.replaceState(history.state, '', url.href); return true;

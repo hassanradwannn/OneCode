@@ -6,6 +6,8 @@ afterEach(() => { document.body.replaceChildren(); });
 it('keeps names and paths inserted into neutral authored templates byte-for-byte', () => {
   expect(providerCopy('Open {0} in Gemini', 'chatgpt', ['My ChatGPT folder'])).toBe('Open My ChatGPT folder in provider');
   expect(providerCopy('Gemini and ChatGPT chats retain {0}', 'gemini', ['C:/Gemini files'])).toBe('chats retain C:/Gemini files');
+  expect(providerCopy('Gemini wartet auf {0}', 'chatgpt', ['Gemini Projekt'], { provider: 'Anbieter', Provider: 'Anbieter', providers: 'Anbieter' }))
+    .toBe('Anbieter wartet auf Gemini Projekt');
 });
 it('persists either provider selector once and keeps Setup and Settings in sync', () => {
   document.body.innerHTML = '<select id="chatProvider"><option>gemini</option><option>chatgpt</option></select><select id="setupChatProvider"><option>gemini</option><option>chatgpt</option></select>';

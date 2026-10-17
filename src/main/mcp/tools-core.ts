@@ -1208,7 +1208,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
     toolDeclaration('agents', () => ({
       title: 'Multi-agent run',
       description:
-        'Run Gemini workers. Omit model and reasoning_effort unless the user explicitly requests an override; saved app defaults apply. Do not ask the user to choose them. Reuse a suitable sleeping worker with message before spawn. ' +
+        'Run workers on this chat\'s provider. Omit model and reasoning_effort unless the user explicitly requests an override; saved app defaults apply. Do not ask the user to choose them. Reuse a suitable sleeping worker with message before spawn. ' +
         'message: prime↔worker. Reports ride tool results, never restart primes. Use status once to collect pending reports before finalizing; otherwise state that review is pending. Never poll repeatedly. ' +
         'status: your active, sleeping/revivable and terminal workers, including parked families. finish: record the report, then normally sleep.',
       inputSchema: z.object({

@@ -4,7 +4,15 @@ A desktop workspace for AI providers and local tools on Windows. Work with files
 
 **[Download OneCode for Windows](https://github.com/hassanradwannn/OneCode/releases/latest)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
-## What's new in 0.3.2
+The configured macOS packaging targets require macOS 13 Ventura or newer. This repair candidate's installed acceptance is on Windows; a platform target alone does not establish a tested release for that platform.
+
+Linux packaging uses unprivileged user namespaces for Chromium sandboxing. Hosts that prohibit them may require the AppImage's conditional `--no-sandbox` fallback, which reduces process isolation. Linux acceptance is separate from the Windows repair candidate.
+
+## What's new in 0.3.3
+
+- Gemini worker recovery preserves the same conversation across stale tab waiters and extension reinjection.
+- Worker model selection recognizes Gemini's current model. Refresh follows the selected native account, excludes locked models and shows one Automatic choice. ChatGPT retains native availability checks.
+- Worker delivery and tool attribution preserve exact task receipts. See [0.3.3 release notes](docs/release-notes/v0.3.3.md) for validation and Windows update details.
 
 - Shared settings and the Companion use provider/agent wording. Provider names remain in the selector and service-specific connection instructions.
 - Existing chats retain their provider, model choices and trust settings. Different providers use independent local MCP endpoints. Ordinary input in separate chats also runs independently when a call has no proven chat identifier; global update and compaction safety checks remain conservative.
