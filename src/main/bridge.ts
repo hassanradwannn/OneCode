@@ -1135,9 +1135,10 @@ function externalExtensionStatus(): BridgeStatus['externalExtension'] {
     present: externalExtensionPresent(),
     version: externalExtension?.version ?? null,
     lastSeenAt: externalExtension?.seenAt ?? null,
-    signedIn: externalExtensionPresent() && externalExtension?.loginAt != null && Date.now() - externalExtension.loginAt < BROWSER_PRESENT_MS
+    signedIn: externalExtensionPresent() && (externalExtension?.provider ?? 'gemini') === selectedChatProvider() && externalExtension?.loginAt != null && Date.now() - externalExtension.loginAt < BROWSER_PRESENT_MS
       ? externalExtension.signedIn ?? null : null,
-    proof: proof && { version: proof.version, signedIn: proof.signedIn },
+    proof: proof && { version: proof.version, signedIn: (proof.provider ?? 'gemini') === selectedChatProvider() ? proof.signedIn : null, provider: proof.provider ?? 'gemini' },
+    provider: externalExtension?.provider ?? 'gemini',
     ...(externalExtension?.engine ? { engine: externalExtension.engine } : {}),
     ...(externalExtension?.chatgptAccess !== undefined && externalExtensionPresent() ? { chatgptAccess: externalExtension.chatgptAccess } : {})
   };
@@ -1162,7 +1163,7 @@ export function browserWakeConnected(): boolean { return browserWake?.connected(
  * Version observations do not grant presence. Old peers without a host header are unknown:
  * an older built-in worker also lacks that header and must not complete external Setup.
  */
-let externalExtension: { seenAt: number | null; version: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko'; chatgptAccess?: boolean } | null = null;
+let externalExtension: { seenAt: number | null; version: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko'; chatgptAccess?: boolean; provider?: ChatProvider } | null = null;
 
 /** The CoS browser's own copy of the extension, last heard from: its sign-in step needs it connected. */
 let cosExtensionSeenAt: number | null = null;
@@ -1219,11 +1220,12 @@ function noteExternalExtension(req: http.IncomingMessage): boolean {
 }
 
 /** Gemini's own answer in the person's browser. It outlasts the tab: Setup keeps it until a signed-out answer. */
-function noteExternalLogin(browserId: string, signedIn: boolean | null): void {
+function noteExternalLogin(browserId: string, signedIn: boolean | null, provider: ChatProvider = 'gemini'): void {
   if (!externalExtension || externalExtension.browserId !== browserId) return;
   externalExtension.signedIn = signedIn;
   externalExtension.loginAt = Date.now();
-  if (signedIn !== null) noteExternalSignedIn(browserId, signedIn);
+  externalExtension.provider = provider;
+  if (signedIn !== null) noteExternalSignedIn(browserId, signedIn, Date.now(), provider);
   scheduleBrowserPresence();
   changed();
 }
@@ -2496,6 +2498,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (await browserDisconnected()) return json(res, 401, { error: 'browser_disconnected' }, origin);
   if (!(await authorised(req))) return json(res, 401, { error: 'unauthorised' }, origin);
   if (!protocolCompatible(req)) {
+    // An already-paired older companion must be able to acquire the shipped build.
+    // Never expose commands, inputs, session state or browser presence across this fence.
+    if (route === '/status' || route === '/extension/update' && req.method === 'POST') {
+      if (rateLimited()) return json(res, 429, { error: 'rate_limited' }, origin);
+      if (route === '/extension/update') {
+        const prepared = prepareExtensionUpdate(extensionBuildOf(req));
+        return json(res, 200, prepared ?? { ready: false }, origin);
+      }
+      const offer = extensionUpdateOffer(extensionBuildOf(req));
+      return json(res, 200, { extensionUpdate: offer ? { ...offer, busy: runningToolCalls() > 0 } : null }, origin);
+    }
     return json(
       res,
       426,
@@ -2618,7 +2631,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const signedIn = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).chatGptSignedIn : undefined;
     if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
         externalExtension.browserId === browserOf(req) && (typeof signedIn === 'boolean' || signedIn === null)) {
-      noteExternalLogin(externalExtension.browserId, signedIn);
+      noteExternalLogin(externalExtension.browserId, signedIn,
+        (body as Record<string, unknown>).provider === 'chatgpt' ? 'chatgpt' : 'gemini');
     }
     if (req.headers['x-extension-host'] === 'cos' && (typeof signedIn === 'boolean' || signedIn === null)) {
       publishCosLogin(signedIn);
@@ -2778,7 +2792,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     let revealRequested = false;
     let imageExportRequested = false;
     if (req.method === 'POST') {
-      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown };
+      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown; provider?: unknown };
       if (!Array.isArray(body?.openConversations) || body.openConversations.length > 10_000 || body.openConversations.some(id => !conversationId(id))) {
         return json(res, 400, { error: 'invalid_open_conversations' }, origin);
       }
@@ -2796,7 +2810,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Whether this browser may open chatgpt.com at all; older extensions say nothing (unknown).
         const access = typeof body.chatgptAccess === 'boolean' ? body.chatgptAccess : undefined;
         if (externalExtension.chatgptAccess !== access) { externalExtension.chatgptAccess = access; changed(); }
-        noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);
+        noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null, body.provider === 'chatgpt' ? 'chatgpt' : 'gemini');
       }
       if (req.headers['x-extension-host'] === 'cos') {
         publishCosLogin(typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);

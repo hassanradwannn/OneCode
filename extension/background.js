@@ -2821,6 +2821,7 @@ function inspectRequestedModels(request) {
   if (modelCatalogFlight) return modelCatalogFlight;
   const intent = connectionEpoch;
   const wanted = request && /^[a-f0-9-]{36}$/i.test(request.nonce) && Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt ? request : null;
+  const provider = wanted?.provider === 'gemini' || wanted?.provider === 'chatgpt' ? wanted.provider : selectedProvider;
   const current = () => wanted && intent === connectionEpoch && token && !disconnected && Date.now() < wanted.expiresAt;
   const waiting = async reason => {
     if (!current()) return;
