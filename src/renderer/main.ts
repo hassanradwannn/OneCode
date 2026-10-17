@@ -1864,7 +1864,7 @@ function apply(next: AppState): void {
         : unverified.length > 0
           ? // One connector working is not the whole setup. Naming the missing one is the
             // difference between "something is off" and knowing what to go and create.
-            t(unverified.length === 1
+            providerT(unverified.length === 1
               ? "Gemini ran a tool {0}, but {1} has never been called — create it in Gemini to use it."
               : "Gemini ran a tool {0}, but {1} have never been called — create them in Gemini to use them.",
             [ago(ranAt), new Intl.ListFormat(currentLanguage(), { type: 'conjunction' })

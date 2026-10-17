@@ -105,7 +105,7 @@ const CORE: SurfaceDefinition = {
     'running builds, tests, linters, git, npm and shell commands, continuing long-running or interactive terminal sessions, ' +
     'and writing files onto this computer. ' +
     'Also discovers and calls enabled external MCP integrations through the plugins tool, displays task plans and — when the user has ' +
-    'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several Gemini conversations.',
+    'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several AI conversations.',
   cardSummary: 'Files, patches and terminal.',
   required: true,
   // A stable superset lets the user switch providers without reconnecting the MCP app.
