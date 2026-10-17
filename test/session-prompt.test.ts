@@ -17,7 +17,7 @@ let directory: string;
 
 it.each(['chatgpt', 'gemini'] as const)('guides %s openings and existing-chat turns to live local discovery after installation', async provider => {
   const config = getConfig();
-  await saveConfig({ ...config, ui: { ...config.ui, chatProvider: provider } });
+  await saveConfig({ ...config, connectorSuffix: 'Desktop', ui: { ...config.ui, chatProvider: provider } });
   if (provider === 'gemini') await initGeminiBindings(directory);
   const tools = vi.spyOn(pluginManager, 'tools').mockReturnValue([]);
   try {
@@ -26,8 +26,11 @@ it.each(['chatgpt', 'gemini'] as const)('guides %s openings and existing-chat tu
     tools.mockReturnValue([{ name: 'read_graph', description: 'Read stored knowledge', inputSchema: { type: 'object' } }]);
     for (const prepared of [await prepareSessionPrompt(authored), await prepareSkillFollowup(authored, authored)]) {
       expect(prepared).toContain(PLUGIN_DISCOVERY_INSTRUCTIONS);
+      expect(prepared).toContain('"OneCode Core Desktop"');
+      expect(prepared).toContain('text(await tools.plugins({action:"list"}));');
       expect(userPromptText(prepared)).toBe(authored);
-      expect(prepared).not.toContain('session_key');
+      if (provider === 'chatgpt') expect(prepared).toContain('ChatGPT Core tools require no Gemini routing credentials');
+      else expect(prepared).toContain('exec children inherit it');
     }
     tools.mockReturnValue([]);
     expect(await prepareSkillFollowup(authored, authored)).not.toContain(PLUGIN_DISCOVERY_INSTRUCTIONS);
@@ -42,7 +45,7 @@ it.each(['chatgpt', 'gemini'] as const)('keeps live skill discovery in %s existi
   for (const prepared of [await prepareSessionPrompt(authored), await prepareSkillFollowup(authored, authored)]) {
     expect(prepared).toContain(SKILL_DISCOVERY_INSTRUCTIONS);
     expect(userPromptText(prepared)).toBe(authored);
-    expect(prepared).not.toContain('session_key');
+    expect(prepared).not.toContain('[[GEMINI_LOCAL_SESSION]]');
   }
   // Turning Read files off cannot add instructions to use an unavailable read tool.
   await saveConfig({ ...getConfig(), capabilities: { ...getConfig().capabilities, read: false } });

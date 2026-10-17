@@ -4,7 +4,7 @@ A desktop workspace for AI providers and local tools on Windows. Work with files
 
 **[Download OneCode for Windows](https://github.com/hassanradwannn/OneCode/releases/latest)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
-## What's new in 0.3.1
+## What's new in 0.3.2
 
 - Shared settings and the Companion use provider/agent wording. Provider names remain in the selector and service-specific connection instructions.
 - Existing chats retain their provider, model choices and trust settings. Different providers use independent local MCP endpoints. Ordinary input in separate chats also runs independently when a call has no proven chat identifier; global update and compaction safety checks remain conservative.
@@ -38,7 +38,7 @@ Cloudflare quick tunnels remain available as an alternative. Their address chang
 
 Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Windows can fall back from a differential download to the complete installer.
 
-Some old 0.2.9 installers omitted `resources/app-update.yml`. If an update check reports that missing file, install the current release manually once. Current packages include and validate it. The older compatibility build `0.2.905` displays as `0.2.9.5`; this release uses `0.3.1` consistently.
+Some old 0.2.9 installers omitted `resources/app-update.yml`. If an update check reports that missing file, install the current release manually once. Current packages include and validate it. The older compatibility build `0.2.905` displays as `0.2.9.5`; this release uses `0.3.2` consistently.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 

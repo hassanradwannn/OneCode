@@ -48,11 +48,24 @@ it('waits for the old tree, waits for installation, verifies version and then ch
     registration: () => events.push('registration'), version: () => { events.push('version'); return '0.2.8.5'; },
     shortcuts: () => events.push('shortcuts'),
     execute: async (_file: string, args: string[]) => { events.push('installer start'); expect(args.at(-1)).toBe(`/D=${options.target}`); expect(args).not.toContain('--force-run'); await new Promise(resolve => setTimeout(resolve, 5)); events.push('installer exit'); },
-    launch: () => { events.push('launch'); launched = true; void writeFile(options.log, `${new Date().toISOString()} info window loaded\n`); return spawn(); }
+    launch: (_file: string, args: string[], settings: object) => { events.push('launch'); launched = true;
+      expect(args).toEqual(['--updated']); expect(settings).toMatchObject({ windowsHide: false });
+      void writeFile(options.log, `${new Date().toISOString()} info window loaded\n${new Date().toISOString()} info main window presentation {"visible":true,"minimized":false,"quitting":false}\n`); return spawn(); }
   });
   expect(events).toEqual(['old tree', 'registration', 'installer start', 'installer exit', 'registration', 'version', 'shortcuts', 'launch']);
   expect(JSON.parse(await readFile(path.join(directory, 'last-success.json'), 'utf8')).status).toBe('success');
   await expect(readFile(options.note)).rejects.toThrow();
+});
+it('requires a current visible non-minimized successor, not merely a loaded hidden window', () => {
+  const since = Date.now(), now = new Date(since).toISOString(), old = new Date(since - 1000).toISOString();
+  const loaded = `${now} info window loaded\n`;
+  const presentation = (state: object, time = now) => `${time} info main window presentation ${JSON.stringify(state)}\n`;
+  const visible = { visible: true, minimized: false, quitting: false };
+  expect(helper.readyWindow(loaded, since)).toBe(false);
+  expect(helper.readyWindow(loaded + presentation(visible, old), since)).toBe(false);
+  expect(helper.readyWindow(loaded + presentation(visible), since)).toBe(true);
+  for (const state of [{ ...visible, visible: false }, { ...visible, minimized: true }, { ...visible, quitting: true }])
+    expect(helper.readyWindow(loaded + presentation(visible) + presentation(state), since)).toBe(false);
 });
 it('refuses a success receipt or relaunch when the installer leaves a shortcut tracking its deleted old executable', async () => {
   const options = await fixture(); await startWindowsUpdate(options);

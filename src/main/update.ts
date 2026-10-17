@@ -159,6 +159,7 @@ let installEpoch = 0;
 let installPoll: ReturnType<typeof setTimeout> | null = null;
 let installCheck: Promise<void> | null = null;
 let quitForUpdate: (() => void) | null = null;
+let prepareUpdateHandoff: ((version: string) => Promise<void>) | null = null;
 let busyProjection = updateBusyReasons;
 let installTarget = currentWindowsInstallTarget;
 let windowsDownload = downloadWindowsUpdate;
@@ -517,7 +518,10 @@ export function markInstallOnQuit(expectedVersion?: string): boolean {
 }
 
 /** Configured by the existing IPC/shutdown owner, never by the download engine. */
-export function configureUpdateInstall(quit: () => void): void { quitForUpdate = quit; }
+export function configureUpdateInstall(quit: () => void, prepare?: (version: string) => Promise<void>): void {
+  quitForUpdate = quit;
+  if (prepare) prepareUpdateHandoff = prepare;
+}
 
 export function cancelUpdateInstall(): boolean {
   const wasRequested = requestedVersion !== null;
@@ -636,6 +640,9 @@ export async function applyStagedUpdate(): Promise<void> {
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
       if (!ready.target || await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+      // The ordinary Install when done path also refreshes changed Core schemas
+      // after restart, without enabling the global automatic-refresh preference.
+      await prepareUpdateHandoff?.(ready.version);
       // NSIS /D must be the final, unquoted argument. It names only the verified current install.
       const elevate = process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
@@ -664,7 +671,7 @@ export async function applyStagedUpdate(): Promise<void> {
 export function resetUpdateForTests(): void {
   cancelUpdateInstall();
   busyProjection = updateBusyReasons; installTarget = currentWindowsInstallTarget; windowsDownload = downloadWindowsUpdate;
-  quitForUpdate = null; installCheck = null;
+  quitForUpdate = null; prepareUpdateHandoff = null; installCheck = null;
   installFolderAccess = probeInstallFolder;
   status = CLEAR;
   staged = null;

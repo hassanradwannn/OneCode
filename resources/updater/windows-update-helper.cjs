@@ -34,6 +34,21 @@ function tail(file, limit = 65536) {
   try { const size = fs.fstatSync(handle).size, bytes = Buffer.alloc(Math.min(limit, size)); fs.readSync(handle, bytes, 0, bytes.length, Math.max(0, size - bytes.length)); return bytes.toString('utf8'); }
   finally { fs.closeSync(handle); }
 }
+function readyWindow(text, since) {
+  const lines = text.split(/\r?\n/).filter(line => Date.parse(line.slice(0, 24)) >= since);
+  const loaded = lines.some(line => line.includes('window loaded'));
+  let visible = false;
+  for (const line of lines) {
+    const marker = 'main window presentation ';
+    const index = line.indexOf(marker);
+    if (index < 0) continue;
+    try {
+      const state = JSON.parse(line.slice(index + marker.length));
+      visible = state.visible === true && state.minimized === false && state.quitting === false;
+    } catch { /* Incomplete diagnostic lines cannot prove presentation. */ }
+  }
+  return loaded && visible;
+}
 function registration(target) {
   const guid = '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
   const rows = JSON.parse(ps(`$rows=@(foreach($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)){$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,$view);try{$a=$base.OpenSubKey('Software\\${guid}');$b=$base.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${guid}');if($a -or $b){@{location=$(if($a){$a.GetValue('InstallLocation')});uninstall=$(if($b){$b.GetValue('UninstallString')})}}}finally{if($a){$a.Dispose()};if($b){$b.Dispose()};$base.Dispose()}});ConvertTo-Json -InputObject $rows -Compress`));
@@ -86,13 +101,16 @@ async function run(note, dependencies = {}) {
     log('installer exited 0');
     noLinks(record.executable); registered(record.target);
     const installed = dependencies.version ? dependencies.version() : ps(`(Get-Item -LiteralPath ${quote(record.executable)}).VersionInfo.ProductVersion`);
-    if (installed !== record.fileVersion) throw new Error(`Installed version ${installed} differs from ${record.fileVersion}`);
+    const normalizedVersion = value => /^\d+\.\d+\.\d+(?:\.\d+)?$/.test(value) ? value.split('.').concat('0').slice(0, 4).join('.') : null;
+    if (normalizedVersion(installed) !== normalizedVersion(record.fileVersion)) throw new Error(`Installed version ${installed} differs from ${record.fileVersion}`);
     log(`installed version ${installed}; sha256 ${crypto.createHash('sha256').update(fs.readFileSync(record.executable)).digest('hex')}`);
     (dependencies.shortcuts || shortcuts)(record.executable);
     log('installed shortcuts verified');
     persist('relaunching');
     if (!listing(record.executable).length) {
-      const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: true });
+      // An explicit Update and restart must show the GUI successor. Only the
+      // helper/installer are hidden; do not pass SW_HIDE to the app itself.
+      const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref();
       log(`launched installed executable pid ${child.pid}`);
@@ -103,12 +121,11 @@ async function run(note, dependencies = {}) {
       const running = listing(record.executable).length > 0;
       if (running && !stableSince) stableSince = Date.now();
       if (!running) stableSince = 0;
-      const loaded = tail(record.log).split(/\r?\n/).some(line => Date.parse(line.slice(0, 24)) >= record.at && line.includes('window loaded'));
-      if (running && Date.now() - stableSince >= 5000 && loaded) break;
-      if (Date.now() > startupDeadline) throw new Error('Installed app did not reach stable window initialization');
+      if (running && Date.now() - stableSince >= 5000 && readyWindow(tail(record.log), record.at)) break;
+      if (Date.now() > startupDeadline) throw new Error('Installed app did not reach a stable visible window');
       await sleep(1000);
     }
-    log('success: installed app survived and window loaded');
+    log('success: installed app survived and window loaded and visible');
     persist('success');
     fs.renameSync(note, path.join(path.dirname(note), 'last-success.json'));
   } catch (error) {
@@ -116,5 +133,5 @@ async function run(note, dependencies = {}) {
     throw error;
   }
 }
-module.exports = { validate, run };
+module.exports = { validate, run, readyWindow };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });

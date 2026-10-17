@@ -12,7 +12,8 @@ import { MAX_BROWSER_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-
 import { selectedSkillInstructions, type SelectedSkill } from './skill-prompt.js';
 import { listSkillLibrary, SKILL_DISCOVERY_INSTRUCTIONS } from '../skill-library.js';
 import { pluginManager } from '../plugins/manager.js';
-import { PLUGIN_DISCOVERY_INSTRUCTIONS } from '../mcp/plugin-discovery.js';
+import { pluginDiscoveryInstructions } from '../mcp/plugin-discovery.js';
+import { configuredConnectorName } from '../mcp/surfaces.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
 
 type PromptScope = { sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
@@ -32,7 +33,7 @@ function geminiOpeningInstructions(): string {
   const config = getConfig();
   return [
     config.mcp.useGeminiWebSkill === true ? '@gemini-code' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
-    ...(pluginManager.tools().length ? [PLUGIN_DISCOVERY_INSTRUCTIONS] : []),
+    ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), 'gemini')] : []),
     `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
     ...(effectiveCapabilities(config).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
@@ -165,9 +166,11 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const folder = await promptFolder(scope);
   const skills = await selectedSkillInstructions(authored, { projectPath: folder?.real ?? null }, undefined, scope.autoSkills);
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
+  const session = scope.sessionId ? await getSession(scope.sessionId) : null;
+  const provider = chatProviderForConversation(session?.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const discovery = [
     ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
-    ...(pluginManager.tools().length ? [PLUGIN_DISCOVERY_INSTRUCTIONS] : [])
+    ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), provider)] : [])
   ].join('\n\n');
   return skills.length || discovery ? fitSessionPrompt(text, discovery, null, budget, skills) : text;
 }

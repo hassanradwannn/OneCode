@@ -1,6 +1,6 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.3.1
+## Version 0.3.2
 
 Shared OneCode controls use **provider** or **agent** wording. Choose the actual service in **AI provider**; browser destinations, account checks and tool routing remain provider-specific. Existing chats keep their original provider.
 

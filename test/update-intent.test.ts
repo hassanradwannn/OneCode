@@ -40,10 +40,13 @@ it('downloads in the background but ordinary Quit cannot execute anything', asyn
   expect(owner.markInstallOnQuit(version)).toBe(false); // cannot bypass the work/intent owner
 });
 it('binds explicit intent to the displayed version and final verified installation directory', async () => {
+  const prepare = vi.fn(async () => undefined);
+  owner.configureUpdateInstall(quit, prepare);
   await expect(owner.requestUpdateInstall('98.0.0')).rejects.toThrow(/no longer current/);
   expect(quit).not.toHaveBeenCalled();
   expect(await owner.requestUpdateInstall(version)).toBe('restarting'); expect(quit).toHaveBeenCalledOnce();
   await owner.applyStagedUpdate();
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(version);
   expect(bootstrap).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
     file: path.join(state.directory, 'updates', version, `OneCode-Setup-${process.arch}.exe`), version,
     target: 'D:\\One Code', elevate: false, pid: process.pid, executable: process.execPath

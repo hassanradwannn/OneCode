@@ -17,11 +17,12 @@ import type { SkillLibrary } from '../../shared/skills.js';
 import { withManagedSkills } from '../skill-access.js';
 import { canAddCodeMode, CODE_MODE_INSTRUCTIONS } from './code-mode-tool.js';
 import { pluginManager } from '../plugins/manager.js';
-import { PLUGIN_DISCOVERY_INSTRUCTIONS } from './plugin-discovery.js';
+import { pluginDiscoveryInstructions } from './plugin-discovery.js';
+import { mcpProvider } from './provider-context.js';
 import { effectiveCapabilities, getConfig, MAX_MCP_INSTRUCTIONS_CHARS } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
 import type { ToolContext } from './kernel.js';
-import { surfaceDefinition, type SurfaceId } from './surfaces.js';
+import { surfaceDefinition, configuredConnectorName, type SurfaceId } from './surfaces.js';
 import { geminiBindingsEnabled } from '../gemini/bindings.js';
 
 export const GEMINI_ROUTING_INSTRUCTIONS = 'Call only the native tools actually exposed in this Gemini message, using their exact names and schemas. Do not invent api_tool, list_resources, tool-search helpers or another provider\'s discovery namespace. If this message has no enabled connector tools, the companion must enable the connector and deliver a fresh app-authored turn before local work can run. Every direct native tool call must include conversation_id and session_key from the latest app-supplied binding in this chat. The app can rotate the key for a new authored turn: its latest binding replaces every older one in this conversation. These fields authorize one durable local session; do not invent them, borrow another chat\'s binding or print the key. If missing, revoked or expired, ask the paired companion to refresh this exact chat; no local tool can issue a binding. In exec JavaScript, tools.<name>(...) children inherit the validated outer binding, so omit these two routing fields from nested tool arguments. A tool result or durable receipt proves execution; prose claiming a command or edit ran does not. A delayed or disconnected mutation may already have completed: never automatically repeat it to repair delivery or attribution.';
@@ -109,7 +110,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     `; ${surfaceDefinition('desktop').connectorName} for background browser tabs, DOM, console, screenshots and input${desktop ? ', native windows and clipboard' : ''}` +
     `; Core plugins action=list then action=call for enabled external apps and services (the separate ${surfaceDefinition('plugins').connectorName} connector also exposes their native tools).`,
     'For external MCPs, discover with plugins {action:"list",query:"optional literal search"}; then call plugins {action:"call",name:"exact_listed_name",arguments:{...}} using the returned inputSchema. Use arguments, not args. No separate @Plugins mention is needed. This bridge does not install, enable, sign in or import another app\'s MCP settings. Live plugin admission and this chat\'s binding, Block and Trust still apply.',
-    PLUGIN_DISCOVERY_INSTRUCTIONS,
+    pluginDiscoveryInstructions(configuredConnectorName('core'), mcpProvider()),
     `Host: ${host}. Roots: ${roots}`,
     `Current Core authority (informational; live guards decide): ${authority}; read-only=${ctx.readOnly ? 'on' : 'off'}; plans=${sessionTools ? 'on' : 'off'}; workers=${agentTools ? 'on' : 'off'}.`,
     ctx.readOnly ? 'The local tools are read-only.' : 'Use the tools listed in this conversation.',

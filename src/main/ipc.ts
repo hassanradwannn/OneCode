@@ -651,7 +651,10 @@ export async function openSessionChat(id: string): Promise<void> {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
-  configureUpdateInstall(quitToInstall);
+  configureUpdateInstall(quitToInstall, async version => {
+    const { requestPluginRefreshes } = await import('./plugin-refresh.js');
+    await requestPluginRefreshes(version, ['core']);
+  });
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
   // A session row remains visible until its delete IPC resolves. Fence Trust while deletion is
