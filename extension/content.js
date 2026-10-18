@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 27;
+  const RECORDER_VERSION = 28;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -12271,12 +12271,17 @@
     // The last custody writes await HTTP. They cannot preserve the composer or SPA route
     // that was checked above; prove both again after each write and at the native click.
     const exactBootstrapDraft = () => squeeze(CLF_DOM.provider === 'gemini' ? CLF_DOM.composerAuthoredText() : CLF_DOM.composer()?.textContent) === expectedText;
+    // Gemini's tool-free warm-up has already created this exact command's
+    // conversation. Keep the existing document/route checkpoint in agreement
+    // with that proof; ChatGPT still authorizes from its id-less fresh page.
+    const destinationCheckpoint = flag => ask({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID,
+      ...(preparedCommandTarget() ? { conversationId: preparedCommandTarget() } : {}), [flag]: true });
     const rejectChangedBootstrap = async () => {
       if (await failIfRetargeted()) return true;
       if (exactBootstrapDraft()) return false;
       if (boot.type === 'resume' && !squeeze(CLF_DOM.composer()?.textContent)) {
         continuationJournalPending = false;
-        await ask({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID, destinationLost: true });
+        await destinationCheckpoint('destinationLost');
         return true;
       }
       await fail(t(
@@ -12318,16 +12323,29 @@
     rememberUserSend();
     // The bootstrap's own receipt, which allows for the composer's Markdown escaping — see
     // matchesSubmittedBootstrap. Every other caller keeps the exact comparison.
+    let resumeDispatchRequested = false, bootstrapAuthorizationFailure = null;
     const authorizeBootstrapSend = async sendCurrent => {
-      if (!sendCurrent() || !stillOnTarget() || !exactBootstrapDraft() || !bootstrapDraft.current()) return false;
+      const callerCurrent = sendCurrent(), targetCurrent = stillOnTarget(),
+        textCurrent = exactBootstrapDraft(), leaseCurrent = bootstrapDraft.current();
+      if (!callerCurrent || !targetCurrent || !textCurrent || !leaseCurrent) {
+        bootstrapAuthorizationFailure = !callerCurrent ? 'bootstrap-lifetime-changed' : !targetCurrent ? 'bootstrap-target-changed' :
+          !textCurrent ? 'bootstrap-text-changed' : 'bootstrap-draft-lease-changed';
+        console.info('[OneCode bootstrap] ' + JSON.stringify({ reason: bootstrapAuthorizationFailure,
+          callerCurrent, targetCurrent, textCurrent, leaseCurrent }));
+        return false;
+      }
       if (boot.type === 'resume') {
         continuationJournalPending = true;
-        const permit = await ask({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID, destinationAttempt: true });
+        const permit = await destinationCheckpoint('destinationAttempt');
         if (!sendCurrent() || await rejectChangedBootstrap()) return false;
         if (permit?.ok !== true || permit.data?.allowed !== true) { await bootstrapDraft.clear(); return false; }
         // Only the real task is being dispatched. The preceding tool-free
         // Gemini warm-up has obtained an ID but has armed no Resume Send.
-        const armed = await ask({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID, destinationDispatch: true });
+        // The reply can disappear after the app arms dispatch. Retain custody
+        // from the request boundary, rather than mistaking a lost reply for an
+        // unsent task that could safely be retried.
+        resumeDispatchRequested = true;
+        const armed = await destinationCheckpoint('destinationDispatch');
         if (!sendCurrent() || await rejectChangedBootstrap()) return false;
         if (armed?.ok !== true || armed.data?.armed !== true) { await bootstrapDraft.clear(); return false; }
       }
@@ -12340,14 +12358,15 @@
     step('sending');
     if (CLF_DOM.provider === 'gemini') CLF_DOM.setCommandClaim?.({ id: boot.id, client: RUN_ID });
     if (!(await sendSubmittedText(() => !attempt?.cancelled && sendingBootstrap(), false, authorizeBootstrapSend, null,
-                                  matchesSubmittedBootstrap, null, why => { sendRefusal = why; }, currentCoreMention(), null, false, bootstrapDraft))) {
+                                  matchesSubmittedBootstrap, null, why => { sendRefusal = bootstrapAuthorizationFailure || why; }, currentCoreMention(), null, false, bootstrapDraft))) {
       // Once send() was invoked, a missing/cleared draft cannot prove that no click
       // happened. Only the exact pre-click check above may release the dispatch.
-      if (boot.type === 'resume') {
+      if (boot.type === 'resume' && resumeDispatchRequested) {
         // Retain the armed ticket and journal gate for exact marker reconciliation; never
         // replay an ambiguous click or let ordinary events create its shadow session.
         return;
       }
+      if (boot.type === 'resume') continuationJournalPending = false;
       // The command fails either way; that is what keeps a possible click from being replayed.
       // The draft is a separate matter: left in the box it read as a message the user still had
       // to send (#864). Clear only our own unchanged text; anything the user typed stays.

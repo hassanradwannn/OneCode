@@ -752,7 +752,12 @@ var CLF_DOM = (() => {
   async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, clearAcceptedDraft = true,
     beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, whileGenerating = false, initialDraft = null,
     prepareAttachments = null } = {}) {
-    const refused = reason => { explain?.(reason); return false; };
+    const refused = reason => {
+      console.info('[OneCode Send] ' + JSON.stringify({ reason, callerCurrent: stillCurrent(),
+        conversationPresent: Boolean(conversationId()), preparedConversation: Boolean(preparedConversation()),
+        commandPresent: Boolean(commandClaim), editorWritable: composerWritable(), nativeGenerating: generating() }));
+      explain?.(reason); return false;
+    };
     let box = composer(), id = conversationId();
     const submitted = composerAuthoredText();
     if (!box || !submitted || !composerWritable()) return refused('editor-not-ready');

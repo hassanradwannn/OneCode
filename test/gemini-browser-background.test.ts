@@ -48,6 +48,40 @@ describe('provider-specific compaction source checkpoints', () => {
   });
 });
 
+describe('compaction destination route checkpoints', () => {
+  it.each([
+    { url: `https://gemini.google.com/app/${id}`, conversationId: id, allowed: true },
+    { url: `https://gemini.google.com/u/2/app/${id}`, conversationId: id, allowed: true },
+    { url: `https://gemini.google.com/app/${id}`, conversationId: undefined, allowed: false },
+    { url: `https://gemini.google.com/app/${other}`, conversationId: id, allowed: false },
+    { url: `https://gemini.google.com/app/${id}`, conversationId: id, pendingUrl: `https://gemini.google.com/app/${other}`, allowed: false },
+    { url: 'https://chatgpt.com/', conversationId: undefined, allowed: true },
+    { url: 'https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', conversationId: undefined, allowed: false }
+  ])('validates the exact current destination before permission: $url ($conversationId)', async fixture => {
+    const bodies: any[] = [];
+    const context: any = { URL, load: async () => {}, ownsDocument: () => true, noteTabConversation: async () => {},
+      cleanConversationId: (value: string) => value || null, projectFromUrl: () => null,
+      chrome: { tabs: { get: async () => ({ ...fixture, status: 'complete' }) } },
+      call: async (_route: string, options: any) => { bodies.push(JSON.parse(options.body)); return { ok: true, data: {} }; }
+    };
+    vm.createContext(context);
+    vm.runInContext(backgroundProviderSource(source), context);
+    vm.runInContext(fragment('function conversationFromUrl(', '\n/** Serializes every ownership transition'), context);
+    vm.runInContext(fragment('const COMPACT_CHECKPOINT_FLAGS', '\nfunction serializeTab('), context);
+    vm.runInContext(`handler = ({ ${fragment('  async compact(message, _sender, source)', '\n  /**\n   * The goal loop:')} }).compact`, context);
+    for (const flag of ['destinationAttempt', 'destinationDispatch']) {
+      const reply = await context.handler({ token: 'test-continuation', commandId: '1234567890abcdef', client: 'owned-document',
+        conversationId: fixture.conversationId, [flag]: true }, {}, { tab: 10, documentId: 'destination-document' });
+      expect(reply.ok).toBe(fixture.allowed);
+      if (fixture.allowed) {
+        expect(bodies.at(-1)).toMatchObject({ commandId: '1234567890abcdef', client: 'owned-document', [flag]: true });
+        expect(bodies.at(-1).sourceDocument).toBeUndefined();
+      }
+    }
+    expect(bodies).toHaveLength(fixture.allowed ? 2 : 0);
+  });
+});
+
 describe('Gemini recorder repair injection', () => {
   const healthyFixtures: Record<ChatProvider, { url: string; helperFiles: string[] }> = {
     chatgpt: { url: 'https://chatgpt.com/', helperFiles: ['usage.js', 'fiber.js'] },

@@ -4760,7 +4760,8 @@ const HANDLERS = {
     if (!ownsDocument(source) || !tab || !isChatGptUrl(tab.url))
       return { ok: false, error: 'stale_document' };
     const named = cleanConversationId(message.conversationId);
-    // Destination permits precede the first Send and therefore have no chat route.
+    // ChatGPT destination permits precede the first Send and have no chat route.
+    // Gemini's verified tool-free warm-up already names its concrete conversation.
     // Loading that same leased document is normal; leaving it for another route is not.
     // Named source checkpoints still require a fully settled matching conversation.
     if (named
@@ -5382,7 +5383,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 27;
+const PAGE_RECORDER_VERSION = 28;
 
 let deferredRecoveryWork = null;
 

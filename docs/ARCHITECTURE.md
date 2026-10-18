@@ -102,6 +102,8 @@ Compaction checkpoints derive their provider from the browser's validated curren
 
 Only a page's handoff-capture reply may consume its replacement placement. Gemini's MCP `save_handoff` response cannot open a browser tab, so its capture leaves that offer with the ordinary browser status owner. A foreign browser cannot collect it, and the owning browser can collect it only once.
 
+Gemini's replacement command carries its verified tool-free warm-up conversation at the destination checkpoints. ChatGPT still requests these checkpoints from its fresh, id-less route. Both pass the bridge's existing exact document and current route checks. A preparation failure before requesting destination dispatch fails the command visibly; after that request, even a lost reply retains custody because Send may have been armed.
+
 Context counts are local recorder estimates. The configured reference controls presentation and the automatic-compaction trigger; exceeding it cannot revoke a caller, stop a turn, or block authored input. A history-load HTTP 429 is separate transport evidence. Its retry deadline can include OneCode's own conservative backoff, so the interface must not attribute that deadline to the model or describe it as the provider's context capacity.
 
 Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Future work includes receiving native generated images and other model outputs in OneCode, including Gemini image generation. This requires real media export, ingestion and validation; it is not implemented by changing tool descriptions.

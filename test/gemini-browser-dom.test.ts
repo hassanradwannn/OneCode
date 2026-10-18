@@ -2235,8 +2235,9 @@ describe('existing durable recorder with the Gemini adapter', () => {
   it.each([['worker', true, false, false], ['resume', true, false, false], ['resume', false, false, false],
     ['worker', true, true, false], ['worker', true, false, true], ['resume', true, false, true],
     ['worker', true, false, false, true], ['worker', true, false, false, false, true],
-    ['resume', true, false, false, false, true]] as const)(
-    'binds a redeemed %s command after warm-up and spends its real task dispatch only when permitted=%s (native initial remount=%s, native Skill=%s, human draft=%s, static reinjection=%s)', async (kind, permit, remount, webSkill, humanDraft: boolean = false, reinjection: boolean = false) => {
+    ['resume', true, false, false, false, true], ['resume', true, false, false, true],
+    ['resume', true, false, false, false, false, true]] as const)(
+    'binds a redeemed %s command after warm-up and spends its real task dispatch only when permitted=%s (native initial remount=%s, native Skill=%s, human draft=%s, static reinjection=%s, lost dispatch reply=%s)', async (kind, permit, remount, webSkill, humanDraft: boolean = false, reinjection: boolean = false, lostDispatchReply: boolean = false) => {
     const commandId = '1234567890abcdef', token = 'scratch_resume_marker_123456789';
     const authoredTask = kind === 'resume' ? `[[CLF-RESUME:${token}]]\n\nContinue the scratch task.` : 'Perform the scratch worker task.';
     const task = webSkill ? prependUserPrompt(authoredTask, '@gemini-code\n\nPlatform: win32.') : authoredTask;
@@ -2261,7 +2262,8 @@ describe('existing durable recorder with the Gemini adapter', () => {
         if (message.type === 'compact' && (message.destinationAttempt || message.destinationDispatch)) {
           expect(nativeSends).toHaveLength(1); expect(api.confirmedMention('OneCode')).toBe(true);
           expect(api.composerAuthoredText()).toBe(task);
-          expect(message).toMatchObject({ token, commandId, client });
+          expect(message).toMatchObject({ token, commandId, client, conversationId: id });
+          if (message.destinationDispatch && lostDispatchReply) return { ok: false, error: 'transport-reply-lost' };
           return { ok: true, data: message.destinationAttempt ? { allowed: permit } : { armed: true } };
         }
         if (message.type === 'status') return { connected: true, paired: true, connectorNames: { core: 'OneCode' } };
@@ -2309,14 +2311,18 @@ describe('existing durable recorder with the Gemini adapter', () => {
     });
     win.eval(recorderSource); await vi.advanceTimersByTimeAsync(10000);
     expect(nativeSends, JSON.stringify(sent.map(message => ({ type: message.type, error: message.error, step: message.step,
-      status: message.status, conversationId: message.conversationId })))).toHaveLength(permit && !humanDraft ? 2 : 1);
+      status: message.status, conversationId: message.conversationId })))).toHaveLength(permit && !humanDraft && !lostDispatchReply ? 2 : 1);
     const acknowledgements = sent.filter(message => message.type === 'ack' && message.status === 'sent');
-    expect(acknowledgements).toHaveLength(permit && !humanDraft ? 1 : 0);
-    if (permit && !humanDraft) expect(acknowledgements[0]).toMatchObject({ id: commandId, conversationId: id, client });
+    expect(acknowledgements).toHaveLength(permit && !humanDraft && !lostDispatchReply ? 1 : 0);
+    if (permit && !humanDraft && !lostDispatchReply) expect(acknowledgements[0]).toMatchObject({ id: commandId, conversationId: id, client });
     const dispatches = sent.filter(message => message.type === 'compact' && message.destinationDispatch);
-    expect(dispatches).toHaveLength(kind === 'resume' && permit ? 1 : 0);
+    expect(dispatches).toHaveLength(kind === 'resume' && permit && !humanDraft ? 1 : 0);
     expect(api.preparedConversation()).toBeNull();
     if (humanDraft) expect(box.textContent).toBe('A human draft in the new editor');
+    if (kind === 'resume' && (!permit || humanDraft)) {
+      expect(sent.filter(message => message.type === 'ack' && message.status === 'failed')).toHaveLength(1);
+    }
+    if (lostDispatchReply) expect(sent.filter(message => message.type === 'ack')).toHaveLength(0);
   });
   it.each([
     { fresh: true, outcome: 'sent', delayedWarmupModel: true }, { fresh: true, outcome: 'sent', delayedWarmupModel: false },
