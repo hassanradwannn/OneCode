@@ -15252,6 +15252,32 @@ describe('the Compact & resume control', () => {
     expect(order).toEqual(['claim', 'arm', 'send']);
   });
 
+  it('keeps a desktop repair from reloading an owner between dispatch authorization and native Send', async () => {
+    let state = 'not-attempted';
+    let authorize!: (reply: unknown) => void;
+    const armed = new Promise(resolve => { authorize = resolve; });
+    const job = () => ({ sessionId: 's1', stage: 'handoff-pending', busy: true,
+      automatic: false, sourceSend: { state, messageId: null }, handoffId: null, error: null });
+    live = await harness(undefined, {
+      activity: () => ({ ok: true, data: { entries: [], stream: [], nextSince: 0, pendingTools: 0, job: job() } }),
+      compact: message => {
+        if (message.sourceAttempt) { state = 'attempted-unresolved'; return { ok: true, data: { allowed: true } }; }
+        if (message.sourceDispatch) { state = 'dispatched-unresolved'; return armed; }
+        return { ok: true, data: { token: 'tok-slow-arm', prompt: 'Write the exact handoff', sourceSend: { state, messageId: null }, job: job() } };
+      }
+    });
+    const sends = watchSend(live.document);
+    const owner = live.hook.startCompact();
+    await vi.waitFor(() => expect(state).toBe('dispatched-unresolved'));
+    await live.hook.pullActivity();
+    expect(await live.runtimeMessage({ type: 'clf-resume-compaction',
+      conversationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })).toEqual({ accepted: true });
+    expect(sends()).toBe(0);
+    authorize({ ok: true, data: { armed: true } });
+    await owner; await settle();
+    expect(sends()).toBe(1);
+  });
+
   it('re-presses a handoff left holding the claim, and never one that armed the click', async () => {
     const resumable = (state: string) => ({
       ok: true,
@@ -18062,6 +18088,27 @@ describe('the context meter and automatic compaction', () => {
       type: 'clf-resume-compaction',
       conversationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     })).toEqual({ accepted: true });
+  });
+
+  it('acknowledges desktop Compact before a slow feed can outlive the browser reply deadline', async () => {
+    let pending = false;
+    let finish!: (value: unknown) => void;
+    live = await harness(undefined, {
+      activity: () => pending ? new Promise(resolve => { finish = resolve; })
+        : withContext(50_000, settings({ auto: false, threshold: 200_000 }))
+    });
+    await live.hook.pullActivity();
+    await settle();
+    pending = true;
+    const pickup = live.runtimeMessage({ type: 'clf-resume-compaction',
+      conversationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
+    // No activity response exists yet. The background must already know it cannot reload
+    // this document while the pending response may start the one authorized handoff Send.
+    expect(await pickup).toEqual({ accepted: true });
+    await settle();
+    finish(withContext(50_000, settings({ auto: false, threshold: 200_000 }),
+      { job: { ...automaticTicket('not-attempted').job, automatic: false } }));
+    await settle();
   });
 
   it.each(['broken', 'streaming'] as const)('leaves a compaction pickup to the reload while the source answer is broken (%s)', async state => {

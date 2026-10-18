@@ -13,6 +13,7 @@
 import { CODING_INSTRUCTIONS } from './coding-instructions.js';
 import { skillCatalogInstructions } from '../skills.js';
 import { listSkillLibrary, skillLibraryInstructions, SKILL_DISCOVERY_INSTRUCTIONS } from '../skill-library.js';
+import { SESSION_HISTORY_INSTRUCTIONS } from '../session/history-files.js';
 import type { SkillLibrary } from '../../shared/skills.js';
 import { withManagedSkills } from '../skill-access.js';
 import { canAddCodeMode, CODE_MODE_INSTRUCTIONS } from './code-mode-tool.js';
@@ -103,7 +104,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
   const lines = [
     CODING_INSTRUCTIONS,
     skills,
-    ...(caps.read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
+    ...(caps.read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
     '',
     '# Local tools',
     `Use the connected tools as needed: ${surfaceDefinition('core').connectorName} for files, terminal, plans and workers` +

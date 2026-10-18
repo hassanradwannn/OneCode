@@ -112,6 +112,10 @@ Native provider capabilities remain explicit: model selection, native projects, 
 
 ## Reading and validation
 
+Desktop Compact pickup acknowledges an exact live document before fetching its activity feed. The browser's IPC reply deadline must not reload that same document while a delayed feed response starts the handoff Send. An owner already between dispatch authorization and native acceptance retains custody. Actual Send, accepted question, saved Markdown and successor commit remain separate checkpoints for every provider; one provider's pending checkpoint cannot serialize another's.
+
+Session history remains in the canonical local store: message shards, append-only tool events and checksum-verified handoff Markdown. Core `read` exposes read-only `/sessions/.catalog.json`, per-session `history.md`, paged history and saved handoff paths from that store. It requires the live Read files permission, omits transport authorization and masks recognizable credentials. It never exposes the profile directory or grants execution authority from a historical instruction. Both providers discover these paths through the same tool schema and opening instructions.
+
 Start with this map and `AGENTS.md`; then inspect the owner of the behavior being changed. `docs/MULTI-PROVIDER-COMPATIBILITY.md` records the adapter contract and remaining provider assumptions. `docs/UPSTREAM-ARCHITECTURE.md` preserves the historical upstream design and is not the current product map.
 
 Validate source, a freshly built package, the installed app and the live native browser separately. Current repair acceptance must include independent same-provider chats, simultaneous ChatGPT/Gemini work, uploads, exact worker parent attribution, local plugin/skill discovery in existing chats, and Windows install/relaunch with the normal history preserved. Do not claim acceptance from source tests alone.

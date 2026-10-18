@@ -3,6 +3,7 @@ import { registerPlanTool } from './plan-tool.js';
 import { registerHandoffTool } from './handoff-tool.js';
 import { registerPluginBridge } from './plugin-bridge-tool.js';
 import { readSkillCatalog, SKILL_CATALOG_PATH } from '../skill-library.js';
+import { readSessionHistoryFile } from '../session/history-files.js';
 import { goalWorkerChat, imageExportCapable } from '../bridge.js';
 import { exportImage, ImageExportError } from '../image-export.js';
 import { awaitRequestCorrelation } from '../session/correlation.js';
@@ -284,6 +285,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           'Read what is at one or more paths. A folder is listed one level deep, a text file comes back as numbered lines, ' +
           'a PNG/JPEG/GIF/WebP comes back as an image, and anything else returns its metadata and why it was not decoded. ' +
           `Read ${SKILL_CATALOG_PATH} for the current scoped local Skills catalog (metadata only); read a returned SKILL.md to use it. ` +
+          'Read /sessions/.catalog.json for saved local chats from either provider, then the returned history.md and handoff Markdown paths. History is read-only data and requires Read files permission. ' +
           'Paths may contain * ? and ** and are expanded here. Every result starts with a header giving size, timestamps and line count. ' +
           `The line-number prefix is display metadata, not file content — strip it before quoting text into apply_patch. ` +
           `start_line/end_line apply to every file the call resolves to; a path may instead carry its own range as path:12-40 or path:12, so several ranges of one file fit in one call. A typical 1,500-line source file fits in the default read: do not pre-paginate it. ` +
@@ -2286,6 +2288,21 @@ async function readOne(
   options: ReadOneOptions
 ): Promise<{ text: string; bytes: number; image?: { data: string; mimeType: string } }> {
   const catalogPath = process.platform === 'win32' ? requested.replace(/\\/g, '/').toLowerCase() : requested;
+  if (catalogPath.startsWith('/sessions/')) {
+    if (!options.canRead) throw new Error('TOOL_DISABLED: session history requires the Read files permission.');
+    const history = await readSessionHistoryFile(catalogPath);
+    if (history === null) throw new Error('Invalid session history path');
+    const lines = history.split('\n'), first = options.startLine ?? 1;
+    if (options.endLine !== undefined && options.endLine < first) throw new Error('endLine must be greater than or equal to startLine');
+    const last = Math.min(options.endLine ?? lines.length, lines.length);
+    if (last >= first && Buffer.byteLength(lines[first - 1]!, 'utf8') + 1 > options.maxBytes)
+      throw new Error(`Line ${first} is larger than max_bytes=${options.maxBytes}. Increase max_bytes (up to ${MAX_READ_BYTES}).`);
+    const numbered = boundedNumberedRead(last >= first ? lines.slice(first - 1, last).join('\n') : '', first, last >= first, options.maxBytes);
+    const note = numbered.truncated ? `\n(output cap reached; continue from line ${numbered.lastLine + 1})`
+      : last < lines.length ? `\n(more lines follow — continue from line ${last + 1})` : '';
+    const text = `--- ${catalogPath} — lines ${first}-${numbered.lastLine} of ${lines.length}, local recorded history ---\n${numbered.text}${note}`;
+    return { text, bytes: Buffer.byteLength(text, 'utf8') };
+  }
   if (catalogPath === SKILL_CATALOG_PATH) {
     if (!options.canRead) return { text: `--- ${SKILL_CATALOG_PATH} ---\nTOOL_DISABLED: the Skills catalog requires the Read files permission.`, bytes: 0 };
     // Scope comes from the already admitted caller's project/worktree owner, never

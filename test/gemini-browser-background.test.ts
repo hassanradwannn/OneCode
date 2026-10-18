@@ -20,6 +20,34 @@ describe('provider-specific compaction source checkpoints', () => {
     chatgpt: { conversationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', url: 'https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', messageId: 'native-handoff-question', accountPath: '' },
     gemini: { conversationId: id, url: `https://gemini.google.com/u/2/app/${id}`, messageId: `gemini:${id}:user:0123456789abcdef`, accountPath: '/u/2' }
   };
+  it.each(CHAT_PROVIDERS)('a stalled %s checkpoint does not hold the other provider', async slowProvider => {
+    let release!: (value: unknown) => void;
+    const waiting = new Promise(resolve => { release = resolve; });
+    const completed: string[] = [];
+    const tabs = [fixtures.chatgpt, fixtures.gemini];
+    const context: any = { URL, load: async () => {}, ownsDocument: () => true,
+      noteTabConversation: async () => {}, cleanConversationId: (value: string) => value, projectFromUrl: () => null,
+      chrome: { tabs: { get: async (tab: number) => ({ url: tabs[tab]!.url, status: 'complete' }) } },
+      call: async (_route: string, options: any) => {
+        const body = JSON.parse(options.body);
+        if (body.sourceDocument.provider === slowProvider) await waiting;
+        completed.push(body.sourceDocument.provider);
+        return { ok: true, data: {} };
+      } };
+    vm.createContext(context);
+    vm.runInContext(backgroundProviderSource(source), context);
+    vm.runInContext(fragment('function conversationFromUrl(', '\n/** Serializes every ownership transition'), context);
+    vm.runInContext(fragment('const COMPACT_CHECKPOINT_FLAGS', '\nfunction serializeTab('), context);
+    vm.runInContext(`handler = ({ ${fragment('  async compact(message, _sender, source)', '\n  /**\n   * The goal loop:')} }).compact`, context);
+    const slow = context.handler({ conversationId: fixtures[slowProvider].conversationId, token: 'slow-test', sourceDispatch: true }, {},
+      { tab: slowProvider === 'chatgpt' ? 0 : 1, documentId: 'slow-document' });
+    const fastProvider = slowProvider === 'chatgpt' ? 'gemini' : 'chatgpt';
+    expect((await context.handler({ conversationId: fixtures[fastProvider].conversationId, token: 'fast-test', sourceDispatch: true }, {},
+      { tab: fastProvider === 'chatgpt' ? 0 : 1, documentId: 'fast-document' })).ok).toBe(true);
+    expect(completed).toEqual([fastProvider]);
+    release(null); await slow;
+    expect(completed).toEqual([fastProvider, slowProvider]);
+  });
   it.each(CHAT_PROVIDERS)('carries the actual %s provider through attempt, dispatch and question receipt', async provider => {
     const fixture = fixtures[provider];
     const bodies: any[] = [];

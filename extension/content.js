@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 29;
+  const RECORDER_VERSION = 30;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -9960,7 +9960,11 @@
   function resumePendingCompactionFromRepair(expectedConversationId) {
     const source = job && job.stage === 'handoff-pending' ? job.sourceSend : null;
     if (!alive || !expectedConversationId || conversationId !== expectedConversationId ||
-        CLF_DOM.conversationId() !== expectedConversationId || !source ||
+        CLF_DOM.conversationId() !== expectedConversationId || !source) return false;
+    // A repair claimed before dispatch can arrive after the checkpoint advanced. The
+    // still-running owner must finish its native click/receipt, not be reloaded mid-Send.
+    if (nativeBusy && !currentAssistantError()) return true;
+    if (
         (source.state !== 'not-attempted' && source.state !== 'attempted-unresolved')) return false;
     // A source answer ChatGPT broke off ("Connection interrupted. Waiting for the complete
     // answer") never settles in this document, so the ticket cannot be sent from it. Declining
@@ -14067,14 +14071,21 @@
           sendResponse({ accepted });
           return false;
         }
-        // A desktop Compact hands its pickup ~90 ms after opening the ticket, before this page's
-        // feed has carried the job. Declining then reloaded a healthy chat, and the handoff request
-        // met a composer that was not ready yet (VM 2026-10-09). Read the feed once, then decide.
+        // Acknowledge custody before fetching the feed. The background message has a three-second
+        // deadline; awaiting a slow activity read here allowed its timeout to reload this document
+        // while that same read subsequently started the handoff Send. An ACK means only that this
+        // live exact-chat document owns the pickup, never permission to Send without the WAL.
+        if (CLF_DOM.conversationId() !== message.conversationId || currentAssistantError()) {
+          sendResponse({ accepted: false });
+          return false;
+        }
+        sendResponse({ accepted: true });
         void (async () => {
           for (let wait = 0; pulling && wait < 15; wait++) await new Promise(resolve => setTimeout(resolve, 100));
           await pullActivity();
-        })().catch(() => {}).then(() => sendResponse({ accepted: resumePendingCompactionFromRepair(message.conversationId) }));
-        return true;
+          resumePendingCompactionFromRepair(message.conversationId);
+        })().catch(() => {});
+        return false;
       }
       // Popup diagnostics. Ids and counters only — no prose, no transcript, no page text.
       if (message.type === 'clf-page-status') {

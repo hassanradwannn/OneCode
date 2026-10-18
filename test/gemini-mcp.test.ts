@@ -152,6 +152,27 @@ describe('Gemini routing through the real MCP endpoint and tool engines', () => 
     expect(JSON.stringify(wrong)).not.toContain(a.session_key);
   });
 
+  it('reads another provider’s saved local chat through ordinary read, with live permission revocation', async () => {
+    const conversationId = randomUUID();
+    const source = await createSession({ conversationId, title: 'Historical ChatGPT task' });
+    await recordChatObservations(conversationId, [
+      { kind: 'user_message', time: Date.now(), messageId: 'history-question', text: 'Historical user instruction' },
+      { kind: 'assistant_message', time: Date.now() + 1, messageId: 'history-answer', text: 'HISTORY-CROSS-PROVIDER-OK', final: true }
+    ]);
+    await flushRecorder(); await flushSessions();
+    const catalog = await call(a, 'read', { paths: ['/sessions/.catalog.json'] });
+    expect(catalog.result.isError, text(catalog)).not.toBe(true);
+    expect(text(catalog)).toContain(`/sessions/${source.id}/history.md`);
+    const history = await call(a, 'read', { paths: [`/sessions/${source.id}/history.md`] });
+    expect(history.result.isError, text(history)).not.toBe(true);
+    expect(text(history)).toContain('Historical user instruction');
+    expect(text(history)).toContain('HISTORY-CROSS-PROVIDER-OK');
+    context.caps.read = false;
+    const denied = await call(a, 'read', { paths: [`/sessions/${source.id}/history.md`] });
+    expect(text(denied)).toContain('Read files permission');
+    expect(text(denied)).not.toContain('HISTORY-CROSS-PROVIDER-OK');
+  });
+
   it('rejects missing/cross-chat keys on every surface even with a claimed x-request-id', async () => {
     for (const surface of ['core', 'desktop', 'plugins'] as const) {
       const missing = await rpc('tools/call', { name: 'read', arguments: { paths: ['/work/a/marker.txt'] } }, { 'x-request-id': 'wfr_claimed/a' }, surface);

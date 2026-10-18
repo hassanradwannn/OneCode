@@ -11,6 +11,7 @@ import { resolvePath } from '../sandbox.js';
 import { MAX_BROWSER_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
 import { selectedSkillInstructions, type SelectedSkill } from './skill-prompt.js';
 import { listSkillLibrary, SKILL_DISCOVERY_INSTRUCTIONS } from '../skill-library.js';
+import { SESSION_HISTORY_INSTRUCTIONS } from './history-files.js';
 import { pluginManager } from '../plugins/manager.js';
 import { pluginDiscoveryInstructions } from '../mcp/plugin-discovery.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
@@ -35,7 +36,7 @@ function geminiOpeningInstructions(): string {
     config.mcp.useGeminiWebSkill === true ? '@gemini-code' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
     ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), 'gemini')] : []),
     `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
-    ...(effectiveCapabilities(config).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
+    ...(effectiveCapabilities(config).read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
   ].join('\n\n');
 }
@@ -170,7 +171,7 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
-    ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS] : []),
+    ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
     ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), provider)] : [])
   ].join('\n\n');
   return skills.length || discovery ? fitSessionPrompt(text, discovery, null, budget, skills) : text;
