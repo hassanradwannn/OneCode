@@ -17,10 +17,15 @@ Upstream build/source projects:
 - Windows libvips builds: https://github.com/libvips/build-win64-mxe
 - libvips source: https://github.com/libvips/libvips
 
-The current dependency set uses sharp 0.35.4 / libvips 8.18.6. The release pipeline
-places `Chat-On-Steroids-Native-Sources.tar.gz` beside the matching installers at:
-https://github.com/totec448-spec/chat-on-steroids/releases
-Use the source archive and checksums from the same release as your installer.
+The current dependency set uses sharp 0.35.4 / libvips 8.18.6. Its source inventory
+is unchanged between OneCode 0.3.5 and 0.3.6. The matching source bundle remains at:
+https://github.com/hassanradwannn/OneCode/releases/download/v0.3.500/OneCode-Native-Sources.tar.gz
+Its checksum is available at:
+https://github.com/hassanradwannn/OneCode/releases/download/v0.3.500/OneCode-Native-Sources.tar.gz.sha256
+
+App releases do not duplicate this large optional download. It is not part of the
+installer or internal update download. Reuse requires the exact unchanged source
+inventory; a changed native dependency set needs a matching source reference.
 
 It contains original component archives, locked Rust dependency sources, build repositories,
 patches, source license/copyright notices, a URL/SHA-256 inventory, and build/replacement

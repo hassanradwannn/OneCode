@@ -57,7 +57,7 @@ assert.equal(metadata.files[0].sha512, createHash('sha512').update(installer).di
 const names = [
   'OneCode-Setup-x64.exe', 'OneCode-Setup-x64.exe.blockmap', 'latest-x64.yml', companionName,
   'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip', 'SKILL.md',
-  'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', 'OneCode-Native-Sources.tar.gz'
+  'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md'
 ];
 const sums = [];
 for (const name of names) {
