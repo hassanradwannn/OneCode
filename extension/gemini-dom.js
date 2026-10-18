@@ -689,7 +689,7 @@ var CLF_DOM = (() => {
     }
   }
   const selectConnector = (name, current, explain = null) => selectNativeMention(name, current, explain);
-  async function sendControlledWarmup(box, submitted, warmup, current, explain) {
+  async function sendControlledWarmup(box, submitted, warmup, current, explain, adoptEditor = null) {
     if (warmup === SKILL_WARMUP) {
       // A pasted @name does not activate Gemini's native Skill state. Select
       // its actual native option/token, then spend the same tool-free warm-up
@@ -719,13 +719,30 @@ var CLF_DOM = (() => {
     const route = location.href;
     const edit = { expected: submitted, route, html: box.innerHTML, normalizationText: null, revoked: false };
     composerTransitions.set(box, edit);
-    let performingOwnEdit = false, clicked = false;
+    let performingOwnEdit = false, clicked = false, staged = false, rebound = false;
+    const opening = openingClaim, command = commandClaim, attachments = attachmentRows();
     const ownEdit = operation => { performingOwnEdit = true; try { return operation(); } finally { performingOwnEdit = false; } };
     const snapshot = () => { edit.html = box.innerHTML; edit.normalizationText = blockText(box); };
-    const trustedEdit = event => { if (event.isTrusted && !performingOwnEdit) edit.revoked = true; };
-    const owns = () => location.href === route && composer() === box && transitionOwns(box, submitted) && current();
+    const trustedEdit = event => { if (event.isTrusted && !performingOwnEdit && event.target?.closest?.(BOX)) edit.revoked = true; };
+    const owns = () => {
+      const replacement = composer();
+      // Gemini can remount its fresh editor after staging the controlled warm-up,
+      // before enabling Send. Transfer this same transition once, only while the
+      // exact opening/command, route, text and attachments remain unchanged. A
+      // human edit or an existing conversation cannot acquire this preparation.
+      if (staged && !rebound && !clicked && !box.isConnected && replacement?.isConnected &&
+          Boolean(opening || command) && openingClaim === opening && commandClaim === command &&
+          location.href === route && !conversationId() && transitionOwns(box, submitted) &&
+          composerWritable() && composerAuthoredText() === warmup &&
+          attachmentRows().length === attachments.length && attachmentRows().every((node, index) => node === attachments[index]) &&
+          adoptEditor?.(replacement) === true) {
+        if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
+        box = replacement; rebound = true; snapshot(); composerTransitions.set(box, edit);
+      }
+      return location.href === route && composer() === box && transitionOwns(box, submitted) && current();
+    };
     const refused = reason => { explain?.(reason); return false; };
-    box.addEventListener('beforeinput', trustedEdit, true); box.addEventListener('input', trustedEdit, true);
+    document.addEventListener('beforeinput', trustedEdit, true); document.addEventListener('input', trustedEdit, true);
     try {
       // A DOM replacement is not proof that Gemini's Send model has caught up.
       // The real task must first leave that model through observed native empty
@@ -735,16 +752,25 @@ var CLF_DOM = (() => {
       if (!await waitFor(() => emptyComposerSettled(box), owns)) return refused('warmup-empty-not-settled');
       if (!ownEdit(() => establishEmptyCaret(box)) || !owns()) return refused('warmup-caret-unconfirmed');
       if (!ownEdit(() => insertPrompt(warmup, true))) return refused('warmup-not-ready');
-      snapshot();
+      snapshot(); staged = true;
       const ready = await waitFor(() => enabled(sendButton()) && composerAuthoredText() === warmup && sendButton(), owns, 30000);
-      if (!ready || !owns() || composerAuthoredText() !== warmup) return refused('warmup-send-not-ready');
+      if (!ready || !owns() || composerAuthoredText() !== warmup) {
+        const reason = composer() !== box ? 'warmup-editor-replaced' : location.href !== route ? 'warmup-route-changed' :
+          !current() ? 'warmup-lifetime-changed' : composerAuthoredText() !== warmup ? 'warmup-text-changed' :
+          !transitionOwns(box, submitted) ? 'warmup-draft-lease-changed' : 'warmup-send-not-ready';
+        console.info('[OneCode warmup] ' + JSON.stringify({ reason, editorSame: composer() === box,
+          editorConnected: box.isConnected, routeMatches: location.href === route, callerCurrent: current(),
+          textMatches: composerAuthoredText() === warmup, leaseCurrent: transitionOwns(box, submitted),
+          readyObserved: Boolean(ready), sendEnabled: enabled(sendButton()) }));
+        return refused(reason);
+      }
       cancelApprovalReplyProofs('new-send'); ready.click(); clicked = true;
       return warmup;
     } finally {
       // A failed preparation never restores over a foreign edit or a changed
       // route. After a click, only the native warm-up receipt can advance it.
       if (!clicked && owns()) ownEdit(() => insertPrompt(submitted, true));
-      box.removeEventListener('beforeinput', trustedEdit, true); box.removeEventListener('input', trustedEdit, true);
+      document.removeEventListener('beforeinput', trustedEdit, true); document.removeEventListener('input', trustedEdit, true);
       if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
     }
   }
@@ -809,7 +835,10 @@ var CLF_DOM = (() => {
       if (hasComposerAttachments()) return refused('warmup-attachments-present');
       // Gemini assigns a chat ID only after a real first Send. Keep tools out of this
       // controlled warm-up; a guessed/provisional ID never authorizes local execution.
-      const warmup = await sendControlledWarmup(box, submitted, openingWarmup(submitted), current, explain);
+      const warmup = await sendControlledWarmup(box, submitted, openingWarmup(submitted), current, explain, replacement => {
+        if (!stillCurrent() || id || conversationId() || location.href !== initialRoute) return false;
+        box = replacement; return current();
+      });
       if (!warmup) return false;
       const warmId = await waitFor(() => conversationId() && all('user-query').some(node =>
         compact(authored(node.querySelector('.query-text') || node)) === warmup) && conversationId(),

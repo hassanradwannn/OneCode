@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 28;
+  const RECORDER_VERSION = 29;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,

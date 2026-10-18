@@ -2236,8 +2236,11 @@ describe('existing durable recorder with the Gemini adapter', () => {
     ['worker', true, true, false], ['worker', true, false, true], ['resume', true, false, true],
     ['worker', true, false, false, true], ['worker', true, false, false, false, true],
     ['resume', true, false, false, false, true], ['resume', true, false, false, true],
-    ['resume', true, false, false, false, false, true]] as const)(
-    'binds a redeemed %s command after warm-up and spends its real task dispatch only when permitted=%s (native initial remount=%s, native Skill=%s, human draft=%s, static reinjection=%s, lost dispatch reply=%s)', async (kind, permit, remount, webSkill, humanDraft: boolean = false, reinjection: boolean = false, lostDispatchReply: boolean = false) => {
+    ['resume', true, false, false, false, false, true],
+    ['worker', true, false, false, false, false, false, true],
+    ['resume', true, false, false, false, false, false, true],
+    ['resume', true, false, false, true, false, false, true]] as const)(
+    'binds a redeemed %s command after warm-up and spends its real task dispatch only when permitted=%s (native initial remount=%s, native Skill=%s, human draft=%s, static reinjection=%s, lost dispatch reply=%s, warm-up remount=%s)', async (kind, permit, remount, webSkill, humanDraft: boolean = false, reinjection: boolean = false, lostDispatchReply: boolean = false, warmupRemount: boolean = false) => {
     const commandId = '1234567890abcdef', token = 'scratch_resume_marker_123456789';
     const authoredTask = kind === 'resume' ? `[[CLF-RESUME:${token}]]\n\nContinue the scratch task.` : 'Perform the scratch worker task.';
     const task = webSkill ? prependUserPrompt(authoredTask, '@gemini-code\n\nPlatform: win32.') : authoredTask;
@@ -2274,6 +2277,21 @@ describe('existing durable recorder with the Gemini adapter', () => {
       storage: { local: { get: async () => ({}) }, onChanged: { addListener() {}, removeListener() {} } }
     };
     nativeStrongMenu(webSkill);
+    if (warmupRemount) {
+      const edit = document.execCommand;
+      document.execCommand = (command, ui, value) => {
+        const done = edit(command, ui, value);
+        if (value === warmup && !nativeSends.length) {
+          const button = document.querySelector('button[aria-label="Send message"]') as HTMLButtonElement; button.disabled = true;
+          setTimeout(() => {
+            const replacement = box.cloneNode(true) as HTMLElement;
+            box.replaceWith(replacement); box = replacement; button.disabled = false;
+            if (humanDraft) box.textContent = 'A human draft in the new editor';
+          }, 200);
+        }
+        return done;
+      };
+    }
     if (remount) {
       const edit = document.execCommand;
       document.execCommand = (command, ui, value) => {
@@ -2311,7 +2329,7 @@ describe('existing durable recorder with the Gemini adapter', () => {
     });
     win.eval(recorderSource); await vi.advanceTimersByTimeAsync(10000);
     expect(nativeSends, JSON.stringify(sent.map(message => ({ type: message.type, error: message.error, step: message.step,
-      status: message.status, conversationId: message.conversationId })))).toHaveLength(permit && !humanDraft && !lostDispatchReply ? 2 : 1);
+      status: message.status, conversationId: message.conversationId })))).toHaveLength(warmupRemount && humanDraft ? 0 : permit && !humanDraft && !lostDispatchReply ? 2 : 1);
     const acknowledgements = sent.filter(message => message.type === 'ack' && message.status === 'sent');
     expect(acknowledgements).toHaveLength(permit && !humanDraft && !lostDispatchReply ? 1 : 0);
     if (permit && !humanDraft && !lostDispatchReply) expect(acknowledgements[0]).toMatchObject({ id: commandId, conversationId: id, client });

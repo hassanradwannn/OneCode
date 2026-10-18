@@ -104,6 +104,8 @@ Only a page's handoff-capture reply may consume its replacement placement. Gemin
 
 Gemini's replacement command carries its verified tool-free warm-up conversation at the destination checkpoints. ChatGPT still requests these checkpoints from its fresh, id-less route. Both pass the bridge's existing exact document and current route checks. A preparation failure before requesting destination dispatch fails the command visibly; after that request, even a lost reply retains custody because Send may have been armed.
 
+The controlled Gemini warm-up can transfer its existing edit transition once when the native fresh editor is replaced before Send. The old host must be disconnected, the replacement must contain exactly that warm-up, and its opening/command, route and attachments must still match. Trusted edits revoke the transition, and a different draft is preserved. This does not arm or replay the real task.
+
 Context counts are local recorder estimates. The configured reference controls presentation and the automatic-compaction trigger; exceeding it cannot revoke a caller, stop a turn, or block authored input. A history-load HTTP 429 is separate transport evidence. Its retry deadline can include OneCode's own conservative backoff, so the interface must not attribute that deadline to the model or describe it as the provider's context capacity.
 
 Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Future work includes receiving native generated images and other model outputs in OneCode, including Gemini image generation. This requires real media export, ingestion and validation; it is not implemented by changing tool descriptions.
