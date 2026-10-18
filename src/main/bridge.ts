@@ -157,6 +157,7 @@ import {
 } from './session/store.js';
 import { inFlightMcpRequests, inFlightToolCalls, runningToolCalls, runningToolProgress, settlingToolCalls } from './mcp/call-context.js';
 import { nativeHandoffPrompt } from './session/handoff-prompt.js';
+import { toolDeclarationTitle } from './mcp/tool-declarations.js';
 import { DEFAULT_HANDOFF_PROMPT } from '../shared/handoff.js';
 import { briefShortfall, resumeBootstrapText } from './session/handoff.js';
 import { ownCoreHint,
@@ -2681,7 +2682,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const names = connectorNames(getConfig().connectorSuffix);
       const tools = surfaces.flatMap(surface => surface.tools);
       const titles: Record<string, string> = { plugins: 'External MCP plugins', read: 'Read files and folders', find: 'Find files or text', exec: 'Run JavaScript', agents: 'Multi-agent run', usage: 'Usage and limits' };
-      const toolLabels = (list: string[]) => [...new Set(list.flatMap(tool => [tool, tool.replaceAll('_', ' '), ...(titles[tool] ? [titles[tool]] : [])]))];
+      const toolLabels = (list: string[]) => [...new Set(list.flatMap(tool => [tool, tool.replaceAll('_', ' '),
+        ...(titles[tool] ? [titles[tool]] : []), ...(toolDeclarationTitle(tool) ? [toolDeclarationTitle(tool)!] : [])]))];
       return json(res, 200, { ...binding, connector_name: names.core,
         connector_names: surfaces.map(surface => names[surface.id]),
         enabled_tools: toolLabels(tools),
@@ -4260,8 +4262,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const token = typeof body['token'] === 'string' ? body['token'] : '';
       const entry = continuationByToken(token);
       if (!entry || entry.sessionId !== sessionId) return json(res, 409, { error: 'no_such_continuation' }, origin);
-      if (entry.sourceSend.custody || entry.sourceSend.receipt?.provider === 'gemini')
-        return json(res, 409, { error: 'native_handoff_tool_required' }, origin);
+      if (entry.sourceSend.custody || entry.sourceSend.receipt?.provider === 'gemini') {
+        if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
+        // A rendered string is not a completed response. The same canonical
+        // recorder used by source-anchor reconciliation must prove the final.
+        const captured = await captureRecordedBrief(id, token, entry.sourceSend.messageId || '');
+        if (captured) return json(res, captured.status, captured.body, origin);
+        return json(res, 503, { error: 'handoff_response_pending', retryable: true }, origin);
+      }
       const captured = await captureCompactionBrief(id, entry, body['summary'], known);
       return json(res, captured.status, captured.body, origin);
     }
@@ -6967,7 +6975,7 @@ function commandHomeConversation(spec: CommandSpec): string | null {
  */
 let placementCollector: string | null = null;
 
-/** The only Gemini handoff writer. Identity and storage paths never come from model text. */
+/** Compatibility tool writer for older prompts. Identity and paths never come from model text. */
 export async function saveGeminiHandoff(token: string, markdown: string, evidence: GeminiBindingEvidence): Promise<Record<string, unknown>> {
   const entry = continuationByToken(token);
   if (!evidence.handoff || evidence.handoff.id !== handoffContinuationId(token) || !entry ||
@@ -7118,8 +7126,6 @@ async function captureRecordedBrief(
   anchor: string
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const entry = continuationByToken(token);
-  // Gemini saves only through the exact source-scoped Core receipt, never answer scraping.
-  if (entry?.sourceSend.custody || entry?.sourceSend.receipt?.provider === 'gemini') return null;
   if (!entry || entry.from !== conversationId || entry.state !== 'awaiting-summary' ||
       entry.sourceSend.state !== 'sent' || entry.sourceSend.messageId !== anchor ||
       runningToolCalls(conversationId) > 0) return null;

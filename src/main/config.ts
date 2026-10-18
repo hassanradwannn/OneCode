@@ -541,6 +541,7 @@ const configSchema = z.object({
         .transform((value) => value.slice(0, MAX_MCP_INSTRUCTIONS_CHARS).trim())
         .catch(DEFAULT_MCP.instructions),
       useGeminiWebSkill: z.boolean().optional().catch(false),
+      useChatgptWebSkill: z.boolean().optional().catch(false),
       // Opt-in only: a malformed value repairs to off, the rotating default.
       persistentUrls: z.boolean().optional().default(false).catch(false)
     })

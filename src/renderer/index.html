@@ -895,6 +895,21 @@
               </li>
             </ol>
 
+            <details class="advanced" id="chatgptSkillSetup" data-provider-only="chatgpt" open>
+              <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>ChatGPT skill — optional</summary>
+              <div class="field">
+                <p>Install <b translate="no">onecode-chatgpt</b> in ChatGPT to reduce repeated tool instructions. Core works normally without it.</p>
+                <div class="step-actions">
+                  <button class="btn" id="saveChatgptSkillMarkdown" type="button">Save SKILL.md</button>
+                  <button class="btn" id="saveChatgptSkillZip" type="button">Save skill ZIP</button>
+                  <button class="btn" id="openChatgptSkills" type="button">Open ChatGPT Skills help</button>
+                </div>
+                <p>In ChatGPT, open Plugins → Skills, choose Create → Upload from computer, and upload the ZIP. Enable the skill in the account and workspace you use with OneCode.</p>
+                <label class="setting"><span class="setting-text"><b>Use ChatGPT's onecode-chatgpt skill</b><em>I installed and enabled this skill in ChatGPT. OneCode will send shorter instructions while keeping fresh authorization for every message. This option does not install the skill.</em></span><input id="useChatgptWebSkill" type="checkbox" /></label>
+                <p class="hint" id="chatgptSkillResult" role="status">Skills availability depends on your ChatGPT account and workspace. Leave this off if Skills is unavailable.</p>
+              </div>
+            </details>
+
             <details class="advanced" id="geminiSkillSetup" data-provider-only="gemini" open>
               <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini skill — optional</summary>
               <div class="field">

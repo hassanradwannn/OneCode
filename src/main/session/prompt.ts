@@ -41,6 +41,18 @@ function geminiOpeningInstructions(): string {
   ].join('\n\n');
 }
 
+/** Reusable native skill owns the manual; this message supplies only live state. */
+function chatgptSkillInstructions(): string {
+  const config = getConfig();
+  return [
+    `Use the installed onecode-chatgpt skill. Current Core connector: ${JSON.stringify(configuredConnectorName('core'))}.`,
+    `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
+    ...(effectiveCapabilities(config).read ? ['Live local references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.'] : []),
+    ...(pluginManager.tools().length ? ['Discover enabled integrations through Core plugins {action:"list"}; use returned schemas and the live plugin bridge for Computer use.'] : []),
+    ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
+  ].join('\n\n');
+}
+
 /** One selected folder, never cwd inference, global discovery or a recursive document scan. */
 async function projectInstructions(scope: PromptScope): Promise<ProjectInstructions | null> {
   if (!scope.sessionId && !scope.projectId) return null;
@@ -150,11 +162,12 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   const config = getConfig();
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
-  const compact = provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
+  const chatgptSkill = provider === 'chatgpt' && config.mcp.useChatgptWebSkill === true;
+  const compact = chatgptSkill || provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = [compact ? geminiOpeningInstructions() : await withMcpProvider(provider, () => currentCoreInstructions(library)), scope.routingInstructions].filter(Boolean).join('\n\n');
+  const core = [compact ? (chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)), scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
   const agents = await projectInstructions(scope);
@@ -169,10 +182,15 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true;
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
-    ...(effectiveCapabilities(getConfig()).read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
-    ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), provider)] : [])
+    ...(effectiveCapabilities(getConfig()).read ? compactSkill
+      ? ['Use the installed onecode-chatgpt skill. Live references: /skills/.catalog.json and /sessions/.catalog.json.']
+      : [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
+    ...(pluginManager.tools().length ? [compactSkill
+      ? `Current Core: ${JSON.stringify(configuredConnectorName('core'))}; discover enabled tools through plugins {action:"list"}.`
+      : pluginDiscoveryInstructions(configuredConnectorName('core'), provider)] : [])
   ].join('\n\n');
   return skills.length || discovery ? fitSessionPrompt(text, discovery, null, budget, skills) : text;
 }

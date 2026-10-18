@@ -1,8 +1,8 @@
 /**
  * Preparing and publishing a handoff.
  *
- * One store, one writer: the source conversation writes its own brief. Gemini delivers it
- * through its exact scoped save_handoff tool; legacy ChatGPT capture remains readable.
+ * One store, one writer: the source conversation returns its own completed brief.
+ * The recorder captures that exact response; older scoped tool saves remain compatible.
  * The id is minted here rather
  * than taken from the text — a model that invents its own handoff id can collide with a
  * real one, overwrite it, or hand the next chat an id that resolves to somebody else's

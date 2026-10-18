@@ -18,6 +18,8 @@ import { SKILL_ID_PATTERN } from '../shared/skills.js';
 import { listSkillLibrary } from './skill-library.js';
 import { installRecommendedSkill, listRecommendedSkills } from './recommended-skills.js';
 import { copyBundledGeminiSkill, exportBundledGeminiSkill } from './gemini-web-skill.js';
+import { exportBundledChatgptSkill } from './chatgpt-web-skill.js';
+import { CHATGPT_SKILLS_URL } from '../shared/chatgpt-web-skill.js';
 import { GEMINI_SKILLS_URL } from '../shared/gemini-web-skill.js';
 import { noteChatOrigin } from './session/recorder.js';
 import { refreshAppProxy } from './app-proxy.js';
@@ -285,7 +287,7 @@ const settingsPatch = z.object({
     endSleepingWorkerProcesses: z.boolean().optional(),
     archiveWorkerChats: z.boolean().optional()
   }),
-  mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS), persistentUrls: z.boolean().optional(), useGeminiWebSkill: z.boolean().optional() }).strict().optional(),
+  mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS), persistentUrls: z.boolean().optional(), useGeminiWebSkill: z.boolean().optional(), useChatgptWebSkill: z.boolean().optional() }).strict().optional(),
   controlApi: z.object({ enabled: z.boolean(), allowActions: z.boolean().optional() }).strict().optional(),
   goal: z.object({
     impulseMinutes: z.number().int().min(0).max(60).optional(),
@@ -376,6 +378,10 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       ...(wanted.mcp.useGeminiWebSkill === undefined && current.mcp.useGeminiWebSkill === undefined ? {} : {
         useGeminiWebSkill: pick(current.mcp.useGeminiWebSkill === true, base.mcp?.useGeminiWebSkill === true,
           wanted.mcp.useGeminiWebSkill ?? current.mcp.useGeminiWebSkill === true)
+      }),
+      ...(wanted.mcp.useChatgptWebSkill === undefined && current.mcp.useChatgptWebSkill === undefined ? {} : {
+        useChatgptWebSkill: pick(current.mcp.useChatgptWebSkill === true, base.mcp?.useChatgptWebSkill === true,
+          wanted.mcp.useChatgptWebSkill ?? current.mcp.useChatgptWebSkill === true)
       }),
       persistentUrls: pick(current.mcp.persistentUrls === true, base.mcp?.persistentUrls === true, wanted.mcp.persistentUrls ?? current.mcp.persistentUrls === true) } : current.mcp,
     controlApi,
@@ -1265,6 +1271,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('clipboard:write', async (payload) => {
     const { text } = z.object({ text: z.string().max(1_000_000) }).parse(payload);
     await clipboard.writeText(text);
+    return true;
+  });
+  handle('chatgptSkill:export', async payload => {
+    const { format } = z.object({ format: z.enum(['markdown', 'zip']) }).strict().parse(payload);
+    return exportBundledChatgptSkill(format, getWindow());
+  });
+  handle('chatgptSkill:open', async payload => {
+    z.object({}).strict().parse(payload ?? {});
+    if (getConfig().ui.chatBrowser === 'cos') throw new Error('Choose a full browser in Setup before opening ChatGPT Skills help.');
+    await openInPreferredBrowser(CHATGPT_SKILLS_URL, { reveal: true });
     return true;
   });
   handle('geminiSkill:export', async payload => {

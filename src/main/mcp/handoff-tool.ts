@@ -8,7 +8,7 @@ import { saveGeminiHandoff } from '../bridge.js';
 export function registerHandoffTool(reg: SurfaceRegistrar): void {
   reg.register('save_handoff', toolDeclaration('save_handoff', () => ({
     title: 'Save handoff',
-    description: 'Only for the app’s exact Compact & Resume request. Save the complete Markdown handoff to app-owned storage using its issued token. No filesystem path is accepted. The existing stored receipt is returned on retry; a prose reply alone is not saved. Call directly, outside exec. All other work must stop until the successor opens.',
+    description: 'Compatibility save for an older app-issued Compact & Resume request that explicitly asks for this tool. Current compaction requests require a complete Markdown reply with no tool calls; OneCode captures and saves that completed reply automatically. For an older tool-based request only, save the complete Markdown using its issued token. No filesystem path is accepted. Retries return the existing receipt. Call directly, outside exec.',
     inputSchema: z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/), markdown: z.string().min(1).max(512 * 1024) }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   })), input => guard('save_handoff', async () => {

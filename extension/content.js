@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 48;
+  const RECORDER_VERSION = 50;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -764,6 +764,7 @@
   let streamEntries = [];
   /** Exact request id -> one durable local turn, null when the retained stream conflicts. */
   const streamRequestTurnOwners = new Map();
+  const streamMessageTurnOwners = new Map();
   let pulling = false;
 
   /**
@@ -1976,6 +1977,7 @@
     openedUserMessageId = null;
     streamEntries = [];
     streamRequestTurnOwners.clear();
+    streamMessageTurnOwners.clear();
     since = 0;
     job = null;
     pendingTools = 0;
@@ -4463,9 +4465,27 @@
   function settledTurnOwner(turn) {
     const requests = new Set();
     for (const call of (turn && turn.calls) || []) if (call && call.requestId) requests.add(call.requestId);
-    if (requests.size !== 1) return null;
-    const requestId = requests.values().next().value;
-    return streamRequestTurnOwners.get(requestId) || null;
+    // A response may contain many requests. An already recorded native assistant
+    // message also proves which local response this exact model descriptor describes,
+    // including tool-less turns and late commentary after completion/reload. This is
+    // transcript placement only, never caller authorization or a new live generation.
+    const owners = new Set();
+    for (const requestId of requests) {
+      if (!streamRequestTurnOwners.has(requestId)) continue;
+      const owner = streamRequestTurnOwners.get(requestId);
+      if (!owner) return null;
+      owners.add(owner);
+    }
+    for (const message of turn?.messages || []) {
+      if (message.role !== 'assistant') continue;
+      for (const id of [message.messageId, message.rawMessageId]) {
+        if (!id || !streamMessageTurnOwners.has(id)) continue;
+        const owner = streamMessageTurnOwners.get(id);
+        if (!owner) return null;
+        owners.add(owner);
+      }
+    }
+    return owners.size === 1 ? owners.values().next().value : null;
   }
 
   /**
@@ -5173,7 +5193,7 @@
         messagesReported.set(message.messageId, { signature, owner, conflicted: ownerConflict, text: message.rawText });
         if (state === 'streaming' && owner && priorMessage?.text !== message.rawText && freshPublication) noteTurnProgress(owner, 'page-text');
         const liveAssistant =
-          Boolean(localOwner) ||
+          Boolean(localOwner && index === activeTurnIndex) ||
           (generating && (index === activeTurnIndex || (activeTurnIndex < 0 && index === answer.turns.length - 1)));
         emit({
           kind: 'assistant_message',
@@ -5527,6 +5547,15 @@
     // all 4,000 retained stream rows once per visible Fiber turn just to answer one request-id
     // ownership lookup. Build that exact fail-closed relation once when the stream changes.
     streamRequestTurnOwners.clear();
+    streamMessageTurnOwners.clear();
+    for (const entry of streamEntries) {
+      if (entry.kind !== 'assistant_message' || !entry.turnId) continue;
+      for (const id of [entry.messageId, entry.providerMessageId]) {
+        if (!id) continue;
+        if (!streamMessageTurnOwners.has(id)) streamMessageTurnOwners.set(id, entry.turnId);
+        else if (streamMessageTurnOwners.get(id) !== entry.turnId) streamMessageTurnOwners.set(id, null);
+      }
+    }
     for (const entry of streamEntries) {
       if (!entry || entry.kind !== 'tool_call' || !entry.requestId || !entry.turnId) continue;
       if (!streamRequestTurnOwners.has(entry.requestId)) {
@@ -10640,11 +10669,7 @@
       ) + (marked.answer?.calls || []).filter(call => call?.answered === true).length)
     });
     if (!bound || bound.ok !== true) return continuationRefused(bound) ? 'settled' : false;
-    if (CLF_DOM.provider === 'gemini') {
-      if (bound.data?.job) job = bound.data.job;
-      // Only save_handoff commits Gemini's Markdown. Native prose is never its file receipt.
-      return bound.data?.stored === true ? 'committed' : false;
-    }
+    if (bound.data?.job) job = bound.data.job;
     // The app captured the brief from its recorder's exact response to this anchor, which
     // outranks whatever answer shape is mounted now (#787).
     if (bound.data?.stored === true) {

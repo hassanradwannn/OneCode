@@ -6,5 +6,5 @@ export function pluginDiscoveryInstructions(name: string, provider: ChatProvider
   const identity = provider === 'chatgpt'
     ? 'ChatGPT Core tools require no Gemini routing credentials. If a different connector asks for conversation_id/session_key, select the configured ChatGPT connector instead; never invent or borrow credentials.'
     : 'Gemini direct calls use only the latest app-supplied binding in this chat; exec children inherit it. Never invent or borrow a binding.';
-  return `${route}\n${identity}\n${PLUGIN_DISCOVERY_INSTRUCTIONS}`;
+  return `${route}\n${identity}\n${PLUGIN_DISCOVERY_INSTRUCTIONS}\nFor Computer use, prefer the enabled live plugin bridge and its advertised schemas. A skill pack version does not identify the running daemon. Inspect actual version/status and protocol errors before claiming it is outdated; do not replace a working shared daemon.`;
 }

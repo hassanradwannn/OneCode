@@ -12,6 +12,12 @@ export function toolDeclaration<T extends object>(name: string, create: () => T,
   return value;
 }
 
+/** The title actually published for this declaration, never an inferred tool name. */
+export function toolDeclarationTitle(name: string): string | null {
+  const value = declarations.get(name)?.value as { title?: unknown } | undefined;
+  return typeof value?.title === 'string' && value.title.length <= 160 ? value.title : null;
+}
+
 function convertSchema(schema: z.ZodType, io: 'input' | 'output') {
   return z.toJSONSchema(schema, { target: 'draft-2020-12', io });
 }

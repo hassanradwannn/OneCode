@@ -2,6 +2,7 @@ import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/wo
 import type { ApprovalCardView } from '../shared/approval-wait.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
+import type { ChatgptSkillExportFormat, ChatgptSkillExportResult } from '../shared/chatgpt-web-skill.js';
 import type { GeminiSkillExportFormat, GeminiSkillExportResult } from '../shared/gemini-web-skill.js';
 import type { GoalModel } from '../shared/goal-reasoning.js';
 import type { TaskProgress } from '../shared/task-progress.js';
@@ -247,6 +248,8 @@ const api = {
   getLogText: () => call<string>('log:text'),
   getLogJson: () => call<string>('log:json'),
   writeClipboard: (text: string) => call<boolean>('clipboard:write', { text }),
+  exportChatgptSkill: (format: ChatgptSkillExportFormat) => call<ChatgptSkillExportResult>('chatgptSkill:export', { format }),
+  openChatgptSkills: () => call<boolean>('chatgptSkill:open'),
   exportGeminiSkill: (format: GeminiSkillExportFormat) => call<GeminiSkillExportResult>('geminiSkill:export', { format }),
   copyGeminiSkillInstructions: () => call<boolean>('geminiSkill:copy'),
   openGeminiSkills: () => call<boolean>('geminiSkill:open'),

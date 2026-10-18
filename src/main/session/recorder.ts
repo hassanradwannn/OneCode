@@ -2538,7 +2538,7 @@ async function recordChatObservationsNow(
     const { turnId, time } = recoveredFinal;
     await appendEvent(sessionId, {
       time, source: 'extension', kind: 'turn_end', turnId, outcome: 'completed',
-      detail: 'recovered from a final assistant message after the ChatGPT page reloaded',
+      detail: 'recovered from a final assistant message after the provider page reloaded',
       ...(agent ? { agent } : {})
     });
     // Commit before publishing, preserving the same late-tool evidence as an explicit end.

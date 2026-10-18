@@ -3,6 +3,7 @@ import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
+import { initChatgptSkillSetup } from './setup-chatgpt-skill.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
@@ -114,6 +115,7 @@ const settingsSearch = initSettingsSearch({
   shown: () => document.querySelector<HTMLElement>('.app')!.dataset.screen === 'settings'
 });
 const paintProviderGuide = initSetupGuide();
+const chatgptSkillSetup = initChatgptSkillSetup(api);
 const geminiSkillSetup = initGeminiSkillSetup(api);
 const paintProviderCopy = initProviderCopy();
 const browserSetup = initBrowserSetup({
@@ -769,7 +771,7 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
     ...chatPatch,
     // After the chat patch, which still carries the stored mcp settings it no longer edits.
     mcp: { instructions: previous.mcp?.instructions ?? '', persistentUrls: $<HTMLInputElement>('mcpPersistentUrls').checked,
-      useGeminiWebSkill: $<HTMLInputElement>('useGeminiWebSkill').checked }
+      useChatgptWebSkill: $<HTMLInputElement>('useChatgptWebSkill').checked, useGeminiWebSkill: $<HTMLInputElement>('useGeminiWebSkill').checked }
   };
   requestedSettings = patch;
 
@@ -1704,6 +1706,9 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('controlApiEnabled'), config.controlApi?.enabled === true, previousState?.config.controlApi?.enabled);
   applyChecked($<HTMLInputElement>('mcpPersistentUrls'), config.mcp?.persistentUrls === true, previousState?.config.mcp?.persistentUrls);
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
+  applyChecked($<HTMLInputElement>('useChatgptWebSkill'), config.mcp?.useChatgptWebSkill === true, previousState?.config.mcp?.useChatgptWebSkill);
+  chatgptSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
+  $('chatgptSkillSetup').hidden = provider !== 'chatgpt';
   geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
   $('geminiSkillSetup').hidden = provider !== 'gemini';
   const providerName = 'the provider';
@@ -2783,7 +2788,7 @@ for (const id of [
   'controlApiEnabled',
   'controlApiAllowActions',
   'mcpPersistentUrls',
-  'useGeminiWebSkill',
+  'useGeminiWebSkill', 'useChatgptWebSkill',
   'privacyScreenshots',
   'tunnelKind',
   'tunnelId',

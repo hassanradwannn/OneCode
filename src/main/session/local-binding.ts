@@ -10,6 +10,7 @@ import type { GeminiBindingEvidence, GeminiBindingInput, GeminiInputTurn } from 
 import { GeminiBindingError, geminiBindingIsCurrent, validateGeminiBindingEvidence, validateGeminiBindingReceiptEvidence } from '../gemini/bindings.js';
 import { mcpProvider } from '../mcp/provider-context.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
+import { getConfig } from '../config.js';
 import { INPUT_RECEIPT_WAIT_MS } from '../../shared/input.js';
 
 export interface ChatgptBindingEvidence {
@@ -49,6 +50,9 @@ export function chatgptBindingInstructions(proof: ChatgptBindingProof): string {
   const key = `sk-onecode-session-${randomBytes(32).toString('base64url')}`;
   const grant = { id: randomUUID(), digest: digest(key), proof: structuredClone(proof), expiresAt: Date.now() + LIFETIME };
   grants.set(grant.digest, grant);
+  if (getConfig().mcp.useChatgptWebSkill === true) return `Use the installed onecode-chatgpt skill with ${configuredConnectorName('core')}. Fresh authorization for this exact task: start every outer exec code with this first line:
+// onecode-session: ${key}
+Then JavaScript. Direct native calls use onecode_session_key="${key}". This replaces older credentials. Never print or copy the key. If authorization is rejected, stop and request a fresh OneCode message; never replay an uncertain mutation.`;
   return `For this exact app-authored task, use ${configuredConnectorName('core')}'s exec tool for local tools, including plugins and agents. Start every outer exec code with this exact first line:\n// onecode-session: ${key}\nThen put the requested JavaScript on the next line. Before an unfamiliar tool call, inspect ALL_TOOLS.find(tool => tool.name === "the_tool").inputSchema and use its declared arguments. Nested tools inherit this local session authorization. Workers may finish with await tools.agents({action:"finish",result:"your verified report"}) as their last nested call, after awaiting all earlier tools. For a direct native call (required for session_finish), supply onecode_session_key="${key}" instead. This replaces older task credentials; never print it, copy it to another chat, or invent conversation/request IDs. If this session authorization is missing, expired, revoked or rejected, stop and ask OneCode to send a fresh message. An argument or path validation error that explicitly says nothing ran is different: inspect the schema and correct that rejected input before execution. Shell commands cannot use app virtual paths: use workdir with relative filenames or an approved native path. Never replay a mutation whose execution is uncertain.`;
 }
 async function status(grant: Grant): Promise<LocalBindingStatus> {

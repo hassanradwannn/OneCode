@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.3.6] — 2026-10-19
+
+Unify Gemini and ChatGPT handoff capture around completed Markdown replies without a save-tool approval. Preserve the original task across native manual approval replies, include published tool titles in connector-scoped auto-approval, and repair the fresh Gemini editor remount before warm-up. Add optional native ChatGPT skill export and shorter authorized prompts, preserve late progress placement, and forward native screenshots as images without base64 text overflow. See [0.3.6 release notes](docs/release-notes/v0.3.6.md).
+
 ## [0.3.5] — 2026-10-18
 
 Repair desktop compaction and successor authorization on both providers, repeated attachment confirmation, first-message tool access and completed chats remaining Thinking or Active. Reduce Tailscale startup waits and finish provider-neutral status/test-fixture cleanup. Windows x64 internal updates use compatibility version 0.3.500. See [0.3.5 release notes](docs/release-notes/v0.3.5.md) and [installed acceptance](docs/release-acceptance/v0.3.5.md).

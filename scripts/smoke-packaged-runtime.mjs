@@ -109,6 +109,9 @@ for (const relative of [
 const skillPath = 'skills/gemini-code/SKILL.md';
 if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository, 'resources', ...skillPath.split('/')))))
   throw new Error('Packaged Gemini skill differs from the public source asset');
+const chatgptSkillPath = 'skills/onecode-chatgpt/SKILL.md';
+if (!readFileSync(required(chatgptSkillPath)).equals(readFileSync(path.join(repository, ...chatgptSkillPath.split('/')))))
+  throw new Error('Packaged ChatGPT skill differs from the public source asset');
 
 if (targetPlatform === 'win32') {
   if (process.platform === 'win32') {

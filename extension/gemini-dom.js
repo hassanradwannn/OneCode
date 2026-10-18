@@ -719,7 +719,7 @@ var CLF_DOM = (() => {
     const route = location.href;
     const edit = { expected: submitted, route, html: box.innerHTML, normalizationText: null, revoked: false };
     composerTransitions.set(box, edit);
-    let performingOwnEdit = false, clicked = false, staged = false, rebound = false;
+    let performingOwnEdit = false, clicked = false, cleared = false, staged = false, rebound = false;
     const opening = openingClaim, command = commandClaim, attachments = attachmentRows();
     const ownEdit = operation => { performingOwnEdit = true; try { return operation(); } finally { performingOwnEdit = false; } };
     const snapshot = () => { edit.html = box.innerHTML; edit.normalizationText = blockText(box); };
@@ -730,14 +730,16 @@ var CLF_DOM = (() => {
       // before enabling Send. Transfer this same transition once, only while the
       // exact opening/command, route, text and attachments remain unchanged. A
       // human edit or an existing conversation cannot acquire this preparation.
-      if (staged && !rebound && !clicked && !box.isConnected && replacement?.isConnected &&
+      if ((cleared || staged) && !rebound && !clicked && !box.isConnected && replacement?.isConnected &&
           Boolean(opening || command) && openingClaim === opening && commandClaim === command &&
           location.href === route && !conversationId() && transitionOwns(box, submitted) &&
-          composerWritable() && composerAuthoredText() === warmup &&
+          composerWritable() && composerAuthoredText() === (staged ? warmup : '') &&
+          (staged || (!hasComposerAttachments() && !enabled(sendButton()))) &&
           attachmentRows().length === attachments.length && attachmentRows().every((node, index) => node === attachments[index]) &&
           adoptEditor?.(replacement) === true) {
         if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
         box = replacement; rebound = true; snapshot(); composerTransitions.set(box, edit);
+        if (!staged && document.activeElement === document.body) ownEdit(() => box.focus({ preventScroll: true }));
       }
       return location.href === route && composer() === box && transitionOwns(box, submitted) && current();
     };
@@ -748,7 +750,7 @@ var CLF_DOM = (() => {
       // The real task must first leave that model through observed native empty
       // UI. Only then can the controlled, tool-free warm-up become submit-ready.
       if (!owns() || !ownEdit(() => insertPrompt('', true))) return refused('warmup-editor-clear-refused');
-      snapshot();
+      snapshot(); cleared = true;
       if (!await waitFor(() => emptyComposerSettled(box), owns)) return refused('warmup-empty-not-settled');
       if (!ownEdit(() => establishEmptyCaret(box)) || !owns()) return refused('warmup-caret-unconfirmed');
       if (!ownEdit(() => insertPrompt(warmup, true))) return refused('warmup-not-ready');
@@ -946,6 +948,17 @@ var CLF_DOM = (() => {
   }
   const approvalCard = () => { const cards = approvalCards(); return cards.length === 1 ? cards[0] : null; };
   const approvalClicks = new WeakSet();
+  // Native decisions clicked by the user need the same exact exchange receipt
+  // as Companion clicks. Otherwise Gemini's generated Allow row is mistaken
+  // for a new authored task and cancels the handoff it was approving.
+  document.addEventListener('click', function noteNativeApprovalDecision(event) {
+    if (!event.isTrusted) return;
+    const button = event.target?.closest?.('button');
+    const card = approvalCards().find(card => card.allowButton === button || card.denyButton === button);
+    if (!card || !enabled(button) || approvalClicks.has(card.node)) return;
+    approvalClicks.add(card.node);
+    expectApprovalReply(card, card.allowButton === button ? 'allow' : 'deny');
+  }, true);
   function clickApprovalCard(expected, choice) {
     const card = approvalCards().find(card => card.node === expected.node);
     if (!card || card.tool !== expected.tool || card.machineTool !== expected.machineTool || card.connector !== expected.connector) return 'card_changed';

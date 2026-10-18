@@ -404,6 +404,7 @@ export interface McpSettings {
   instructions: string;
   /** Use the user's installed native Gemini gemini-code skill for reusable opening guidance. */
   useGeminiWebSkill?: boolean;
+  useChatgptWebSkill?: boolean;
   /**
    * Keep each connector's secret URL path across restarts, for a tunnel of the user's own whose
    * URL Gemini stores (#924). Off by default: tokens rotate on every start. Stored only in the

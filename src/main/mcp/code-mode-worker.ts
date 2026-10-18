@@ -56,9 +56,18 @@ function finish(error) { if (closed) return; send({ type: 'done', error }); clos
     'const tools = Object.create(null); ' +
     'const entries = ' + JSON.stringify(workerData.tools) + '; ' +
     'for (const entry of entries) { Object.freeze(entry); tools[entry.name] = args => bridge("call", stringify({name:entry.name,args})).then(parse); } ' +
+    // Explicitly printing a native MCP screenshot result must not turn image bytes
+    // into base64 text. Only this emitted value is inspected; unprinted tool results
+    // remain private, and every image still crosses the host validator and budgets.
+    'const outputText = value => bridge("text", stringify(typeof value === "string" ? value : (stringify(value) ?? String_(value)))); ' +
+    'const output = value => { ' +
+      'if (value && typeof value === "object" && Array.isArray(value.content) && value.content.some(part => part && part.type === "image")) { ' +
+        'const content = value.content.map(part => { if (!part || part.type !== "image") return part; ' +
+          'bridge("image", stringify(part)); return {type:"image",mimeType:part.mimeType,emitted:true}; }); ' +
+        'return outputText({...value,content}); } return outputText(value); }; ' +
     'Object.defineProperties(globalThis, {' +
       'tools: {value:Object.freeze(tools)}, ALL_TOOLS:{value:Object.freeze(entries)}, ' +
-      'text:{value:value => bridge("text", stringify(typeof value === "string" ? value : (stringify(value) ?? String_(value))))}, ' +
+      'text:{value:output}, ' +
       'image:{value:value => bridge("image", stringify(value))}, ' +
       'exit:{value:() => { bridge("exit", "null"); throw undefined; }}' +
     '}); ' +

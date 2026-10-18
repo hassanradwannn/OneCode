@@ -4786,7 +4786,7 @@ const HANDLERS = {
         ticket: message.ticket === true,
         automatic: message.automatic === true,
         // Native question custody comes from Chrome's validated sender, never model arguments.
-        ...((message.sourceAttempt === true || message.sourceDispatch === true || typeof message.sourceMessageId === 'string')
+        ...((message.sourceAttempt === true || message.sourceDispatch === true || typeof message.sourceMessageId === 'string' || typeof message.summary === 'string')
           ? { sourceDocument: { provider: sourceProvider, tabId: source.tab, documentId: source.documentId,
             accountPath: sourceProvider === 'gemini'
               ? new URL(sourceUrl).pathname.match(/^(\/u\/[0-9]+)\/app(?:\/|$)/)?.[1] || '' : '' } } : {}),
@@ -5388,7 +5388,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 48;
+const PAGE_RECORDER_VERSION = 50;
 
 let deferredRecoveryWork = null;
 
