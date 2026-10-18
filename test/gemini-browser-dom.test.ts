@@ -1401,12 +1401,14 @@ describe('one Send and native acceptance', () => {
     }, explain: (reason: string) => why.push(reason) });
     await vi.advanceTimersByTimeAsync(31000);
     expect(await pending).toBe(false); expect(why).toEqual(['draft-changed']); expect(clicked).not.toHaveBeenCalled();
-    expect(diagnostic).toHaveBeenCalledTimes(1);
-    const line = String(diagnostic.mock.calls[0]?.[0]);
+    const lines = diagnostic.mock.calls.map(call => String(call[0]));
+    const drafts = lines.filter(line => line.startsWith('[OneCode draft] '));
+    expect(drafts).toHaveLength(1);
+    const line = drafts[0];
     const evidence = JSON.parse(line.slice('[OneCode draft] '.length));
     expect(evidence).toMatchObject({ stage, callerCurrent: true, editorSame: true, routeMatches: true, authoredMatches: true,
       sendPresent: true, sendEnabled: false, nativeMentionProof: true, controlFramePresent: true, controlFrameComplete: true, bindingPresent: true });
-    expect(line).not.toContain('Private exact task'); expect(line).not.toContain(key);
+    for (const entry of lines) { expect(entry).not.toContain('Private exact task'); expect(entry).not.toContain(key); }
   });
   it.each(['before-authorization', 'after-authorization'])('waits for a remounted Send while retaining exact draft custody at %s', async stage => {
     api.insertPrompt('Exact task while Core finishes loading', true); nativeStrongMenu(); api.setBindingResolver(async () => binding());
