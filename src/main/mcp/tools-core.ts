@@ -1147,7 +1147,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   if (reg.sessionToolsExposed) {
     registerPlanTool(reg);
-    registerHandoffTool(reg);
+    // Do not advertise a save tool whose admission proof belongs to another adapter.
+    if (mcpProvider() === 'gemini') registerHandoffTool(reg);
   }
   if (reg.ctx.exposedFinishTool ?? getConfig().ui.finishTool === true) {
     reg.register('session_finish', toolDeclaration('session_finish', () => ({

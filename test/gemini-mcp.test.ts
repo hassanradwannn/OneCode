@@ -97,6 +97,7 @@ afterEach(async () => {
 
 describe('Gemini routing through the real MCP endpoint and tool engines', () => {
   it('hosts independent Gemini and ChatGPT servers concurrently without sharing credential schemas or URL tokens', async () => {
+    context.sessionTools = true;
     const { startProviderMcpServers } = await import('../src/main/mcp/provider-servers.js');
     await endpoint.stop();
     let selected: 'gemini' | 'chatgpt' = 'gemini';
@@ -117,6 +118,8 @@ describe('Gemini routing through the real MCP endpoint and tool engines', () => 
     ]);
     const geminiRead = geminiList.result.tools.find((tool: any) => tool.name === 'read');
     const chatgptRead = chatgptList.result.tools.find((tool: any) => tool.name === 'read');
+    expect(geminiList.result.tools.map((tool: any) => tool.name)).toContain('save_handoff');
+    expect(chatgptList.result.tools.map((tool: any) => tool.name)).not.toContain('save_handoff');
     expect(geminiRead.inputSchema.required).toContain('session_key');
     expect(chatgptRead.inputSchema.properties).not.toHaveProperty('session_key');
     const [geminiResult, chatgptResult] = await Promise.all([

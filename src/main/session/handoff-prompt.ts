@@ -51,7 +51,7 @@ export function nativeHandoffPrompt(
         'Use only the currently exposed tool schema, never a namespace copied from older turns. ' +
         'The app opens the successor only after the file and its receipt are durable. A prose reply alone does not save it. ' +
         'If the result is lost, retry the same token and document; the tool returns the existing stored receipt without rewriting it.'
-      : 'Your reply to this message must be the brief itself and nothing else: no preamble, no closing remark, no ' +
-        'question back, and no tool calls. The app reads this reply, stores it, and opens the fresh chat with it.')
+      : 'Your reply to this message must be the complete Markdown document itself and nothing else: no preamble, no closing remark, no ' +
+        'question back, and no tool calls, including save_handoff. OneCode automatically saves your reply as a .md file, verifies it, and opens the fresh chat with its complete contents. Do not attempt a tool-based save.')
   );
 }
