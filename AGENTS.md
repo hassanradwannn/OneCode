@@ -43,6 +43,8 @@ Goal/Loop/Steer, helper chats, native finals, silent recovery and Compact & Resu
 
 ## Validation and shipping
 
+Normal app releases do not attach the large `OneCode-Native-Sources.tar.gz` archive or its separate checksum. The user explicitly excluded it. Preserve third-party notices and use the existing matching source reference when the native inventory is unchanged. Do not dispatch the native-source publishing workflow for an ordinary app release.
+
 The test suite, Vitest configuration, manual UI test scripts and their fixtures are maintained locally and ignored by Git at the user's request. Preserve those files when changing tracking. `npm test` uses that local suite; public `npm run verify` checks source prerequisites, privacy, notices, TypeScript and the production build without requiring unpublished tests. Public release acceptance documents retain the historical validation scope.
 
 Run meaningful focused tests for changed owners, TypeScript, build, packaged runtime smoke and relevant Electron UI checks. The full inherited test suite has known obsolete fixtures; do not mass-skip or weaken production behavior to claim parity.
