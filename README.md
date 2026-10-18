@@ -8,18 +8,13 @@ The current release is available for **Windows x64**, with **ChatGPT web and Gem
 
 ## What's new in 0.3.6
 
-- **CUA screenshots:** native screenshots reach the model as images instead of exhausting the text output limit.
-- **Optional ChatGPT skill:** export reusable instructions in Setup, then confirm native activation to reduce repeated guidance.
-- **Progress placement:** late historical commentary stays with its completed response.
-- **Matching handoff flow:** Gemini and ChatGPT both return Markdown for OneCode to save and carry into a fresh chat, without a tool approval to save it.
-- **Approval continuity:** native approval replies retain the original task, and enabled tools are recognized by their published titles.
-- **Fresh Gemini chats:** preparation survives the controlled empty-editor remount before initialization.
-- **Attachments:** repeated ChatGPT uploads confirm correctly when the provider renames a duplicate file.
-- **First-message authorization:** preserves the exact task through browser preparation and enables tools in the resumed chat without requiring another “continue” message.
-- **Faster connections:** independent Tailscale readiness checks avoid waiting for a slow network route when another works.
-- **Clearer context and status:** the context meter is a local reference; shared notices use provider-neutral wording.
+- Improved **Compact & Resume** for ChatGPT and Gemini.
+- Smoother **computer use and screenshots**.
+- More consistent **tool confirmations** and chat status.
+- Cleaner progress messages after a task finishes.
+- An optional **ChatGPT skill** that reduces repeated instructions. Export it from Setup, enable it in ChatGPT, then turn on the matching OneCode option.
 
-See the [0.3.6 release notes](docs/release-notes/v0.3.6.md) and [changelog](CHANGELOG.md).
+See the [release notes](docs/release-notes/v0.3.6.md) or follow the [setup guide](docs/WINDOWS-SETUP.md).
 
 ## Work with your own provider account
 
@@ -53,11 +48,11 @@ Cloudflare quick tunnels remain available as an alternative. Their address chang
 
 Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Windows can fall back from a differential download to the complete installer.
 
-If an old installation reports missing updater metadata, install the current release manually once. **0.3.6** uses package/updater version **0.3.600**, which upgrades from **0.3.500** (displayed as 0.3.5). Updates preserve your profile and saved chats.
+Updates preserve your profile and saved chats. If an older installation cannot update, run the latest installer once.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-The installed 0.3.6 Windows candidate passed source and package checks, preserved recorded chats, and received user confirmation after the requested ChatGPT and Gemini manual tests. See [release acceptance](docs/release-acceptance/v0.3.6.md) for the scope of validation.
+Developers can find validation details in the [release acceptance notes](docs/release-acceptance/v0.3.6.md).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
