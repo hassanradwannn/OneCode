@@ -24,7 +24,7 @@ import { desktopAutomationSupported } from './platform.js';
 import { publishPluginSurface, unpublishPluginSurface, pluginRefreshPublications } from './plugin-refresh.js';
 import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
-import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 
 let endpoint: ProviderEndpoints | null = null;
 /** Retain custody while draining so final shutdown can bound that same stop. */
@@ -287,12 +287,13 @@ function desktopUnavailableDetail(id: SurfaceId): string {
 }
 
 /** The tools this surface would advertise right now, for the "what you get" list. */
-export function liveSurfaceToolNames(id: SurfaceId): string[] {
+export function liveSurfaceToolNames(id: SurfaceId, provider?: ChatProvider): string[] {
   const names: string[] = [];
   // Use the endpoint's real exposure projection, not the pre-connection preview
   // catalog. New tools such as save_handoff must enter approval policy with
   // exactly the same enabled declarations that the provider receives.
-  endpoint?.publication?.(id, (_name, _version, _instructions, tools) => names.push(...tools.map(tool => tool.name)));
+  const owner = provider ? endpoint?.providers[provider] : endpoint;
+  owner?.publication?.(id, (_name, _version, _instructions, tools) => names.push(...tools.map(tool => tool.name)));
   return [...new Set(names)];
 }
 

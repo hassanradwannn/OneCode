@@ -2655,7 +2655,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       } else binding = await ensureGeminiBinding(body.conversation_id, reservedSession);
       const connection = await import('./connection.js');
       const surfaces = connection.getStatus().surfaces.filter(surface => surface.available)
-        .map(surface => ({ ...surface, tools: connection.liveSurfaceToolNames(surface.id) }));
+        // This endpoint's caller is Gemini regardless of the new-chat selector. Its
+        // approval policy must come from that same server, never the selected UI preview.
+        .map(surface => ({ ...surface, tools: connection.liveSurfaceToolNames(surface.id, 'gemini') }));
       const names = connectorNames(getConfig().connectorSuffix);
       const tools = surfaces.flatMap(surface => surface.tools);
       const titles: Record<string, string> = { plugins: 'External MCP plugins', read: 'Read files and folders', find: 'Find files or text', exec: 'Run JavaScript', agents: 'Multi-agent run', usage: 'Usage and limits' };

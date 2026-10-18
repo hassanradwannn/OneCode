@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => {
     readOnly: true,
     capabilities: caps,
     tunnel: { kind: 'cloudflared', tunnelId: '', desktopTunnelId: '', pluginsTunnelId: '', binaryPath: '' },
-    ui: { privacyScreenshots: false },
+    ui: { privacyScreenshots: false, chatProvider: 'gemini' as 'gemini' | 'chatgpt' },
     sessions: { record: false },
     multiAgent: { enabled: false },
     mcp: { instructions: '', persistentUrls: false }
@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     reports: new Map<string, (report: Record<string, unknown>) => void>(),
     initialTunnelState: 'connected',
     starts: 0,
+    providerTools: null as Record<'gemini' | 'chatgpt', string[]> | null,
     prewarm: vi.fn(async () => undefined),
     endpointStop: vi.fn(async (_options?: { forceAfterMs?: number }): Promise<void> => undefined),
     publication: vi.fn((surface: string, observe: (name: string, version: string, instructions: string, tools: unknown[]) => void) => observe(`Gemini Code ${surface}`, '1', 'instructions', [])),
@@ -86,7 +87,13 @@ vi.mock('../src/main/mcp/provider-servers.js', () => ({
   startProviderMcpServers: async (context: () => unknown, kept: { gemini?: Record<string, string> }) => {
     const { startMcpServer } = await import('../src/main/mcp/server.js');
     const endpoint = await startMcpServer(context as never, kept.gemini ?? {});
-    return { ...endpoint, providers: { gemini: endpoint, chatgpt: endpoint } };
+    const provider = (name: 'gemini' | 'chatgpt') => ({ ...endpoint,
+      publication: (surface: string, observe: (...args: any[]) => void) => mocks.providerTools
+        ? observe(name, '1', 'instructions', mocks.providerTools[name].map(tool => ({ name: tool })))
+        : endpoint.publication(surface as never, observe) });
+    const providers = { gemini: provider('gemini'), chatgpt: provider('chatgpt') };
+    return { ...endpoint, providers,
+      publication: (surface: string, observe: (...args: any[]) => void) => providers[mocks.config.ui.chatProvider].publication(surface, observe) };
   }
 }));
 const paths = vi.hoisted(() => ({ kept: {} as Record<string, string>, remembered: [] as unknown[] }));
@@ -159,6 +166,8 @@ describe('connection surface state', () => {
       clipboardWrite: false
     });
     mocks.config.roots = [{ name: 'workspace', path: 'C:\\workspace' }];
+    mocks.providerTools = null;
+    mocks.config.ui.chatProvider = 'gemini';
     mocks.config.readOnly = true;
     mocks.config.tunnel.kind = 'cloudflared';
     mocks.config.tunnel.tunnelId = '';
@@ -1073,6 +1082,28 @@ describe('persistent connector URLs', () => {
     await connection.disconnect();
     mocks.config.tunnel.kind = 'cloudflared';
   });
+  it.each(['gemini', 'chatgpt'] as const)('keeps %s approval declarations independent of the new-chat selection', async selected => {
+    vi.resetModules();
+    mocks.providerTools = { gemini: ['read', 'save_handoff'], chatgpt: ['read'] };
+    mocks.config.ui.chatProvider = selected;
+    const connection = await import('../src/main/connection.js');
+    await connection.connect();
+    try {
+      expect(connection.liveSurfaceToolNames('core', 'gemini')).toEqual(['read', 'save_handoff']);
+      expect(connection.liveSurfaceToolNames('core', 'chatgpt')).toEqual(['read']);
+      mocks.config.ui.chatProvider = selected === 'gemini' ? 'chatgpt' : 'gemini';
+      expect(connection.liveSurfaceToolNames('core', 'gemini')).toEqual(['read', 'save_handoff']);
+      expect(connection.liveSurfaceToolNames('core', 'chatgpt')).toEqual(['read']);
+      mocks.providerTools.gemini = ['read'];
+      expect(connection.liveSurfaceToolNames('core', 'gemini')).toEqual(['read']);
+    } finally {
+      await connection.disconnect();
+      mocks.providerTools = null;
+      mocks.config.ui.chatProvider = 'gemini';
+    }
+    expect(connection.liveSurfaceToolNames('core', 'gemini')).toEqual([]);
+  });
+
   it('derives approval tool names from the endpoint declarations and withdraws them on disconnect', async () => {
     vi.resetModules();
     const connection = await import('../src/main/connection.js');
