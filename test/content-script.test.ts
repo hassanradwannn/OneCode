@@ -14257,6 +14257,13 @@ describe('the Compact & resume control', () => {
     });
   });
 
+  it('shows a rejected compaction checkpoint instead of waiting for an unsent handoff', async () => {
+    live = await harness();
+    expect(live.hook.controlState({ connected: true, conversationId: 'c1', now: 1000,
+      job: { stage: 'handoff-pending', busy: true }, phase: 'waiting', error: 'invalid_source_document'
+    })).toMatchObject({ mode: 'error', label: 'Paused', hint: 'invalid_source_document', action: 'cancel' });
+  });
+
   /**
    * The 1.7.1 reversal.
    *
@@ -23024,7 +23031,7 @@ describe('ordinary Continue native recovery', () => {
     // Chrome's static content cache can precede the helper read from disk by repair.
     win.__CLF_CONTENT_RECORDER__.stop();
     win.CLF_TEST_HOOK = (api: Hook) => { live!.hook = api; };
-    win.eval(contentSource.replace('const RECORDER_VERSION = 26;', 'const RECORDER_VERSION = 13;')
+    win.eval(contentSource.replace('const RECORDER_VERSION = 27;', 'const RECORDER_VERSION = 13;')
       .replace(`const FIBER_VERSION = ${fiberVersion};`, 'const FIBER_VERSION = 12;'));
     await settle();
     userTurn(live.document, 'source', 'Complete the task');

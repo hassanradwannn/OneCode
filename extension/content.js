@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 26;
+  const RECORDER_VERSION = 27;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -7357,7 +7357,7 @@
       };
     }
 
-    if (job && job.busy && error && !phase) {
+    if (job && job.busy && error && (!phase || phase === 'waiting')) {
       // The ticket is alive but this page's checkpoint failed. Say the failure without
       // declaring the durable job failed; a later generation/reload may pick it up, and the
       // only immediate action offered here is the explicit cancel that closes the ticket.
@@ -12713,7 +12713,7 @@
     limit.published = limit.retryAt;
     emit({
       kind: 'chat_error',
-      text: t('content_history_rate_limited', "The provider temporarily rate-limited loading this conversation history. OneCode is pausing automatic recovery until the retry wait ends."),
+      text: t('content_history_rate_limited', 'Loading this chat’s history returned HTTP 429. OneCode is waiting before retrying the history load. This is not a model context limit.'),
       recoverable: false,
       blocking: true,
       retryAt: limit.retryAt

@@ -14,7 +14,7 @@ const { initGeminiBindings, resetGeminiBindingsForTests, authenticateGeminiBindi
 const { spawn, resetSwarm, resetAgentsForTests, agentConversation, currentRunId, onSwarmPersistNow } = await import('../src/main/agents.js');
 const { openContinuationNow, attachSummary, continuationByToken } = await import('../src/main/session/continuation.js');
 const { startBridge, stopBridge, bridgePort, resetBridgeForTests, pendingCommands, setBrowserOpener,
-  queueResume, cancelWorkerCommands } = await import('../src/main/bridge.js');
+  queueResume, cancelWorkerCommands, saveGeminiHandoff } = await import('../src/main/bridge.js');
 const { APP_VERSION, BRIDGE_PROTOCOL } = await import('../src/main/version.js');
 const { startMcpServer } = await import('../src/main/mcp/server.js');
 const { getConfig } = await import('../src/main/config.js');
@@ -69,6 +69,31 @@ async function binding(id: string) {
 }
 
 describe('Gemini worker and Resume command warmup capabilities', () => {
+  it('leaves an MCP-saved handoff opening for its owning browser instead of discarding it in a tool reply', async () => {
+    const source = await createSession({ conversationId: CHAT_A });
+    await post('/status', { openConversations: [CHAT_A] });
+    const entry = await openContinuationNow(source.id, CHAT_A, false);
+    const document = { provider: 'gemini', tabId: 27, documentId: DOCUMENT, accountPath: '/u/0' };
+    const checkpoint = (extra: object) => post('/compact', { conversationId: CHAT_A, token: entry.token, sourceDocument: document, ...extra });
+    expect((await checkpoint({ sourceAttempt: true })).data.allowed).toBe(true);
+    expect((await checkpoint({ sourceDispatch: true })).data.armed).toBe(true);
+    const messageId = `gemini:${CHAT_A}:user:0123456789abcdef`;
+    await post('/events', { conversationId: CHAT_A, events: [
+      { kind: 'user_message', time: Date.now(), messageId, text: `[[CLF-HANDOFF:${entry.token}]]\nWrite the handoff.` },
+      { kind: 'turn_start', time: Date.now(), turnId: 'handoff-test-turn' }
+    ] });
+    expect((await checkpoint({ sourceMessageId: messageId })).data.bound).toBe(true);
+    const credential = await post('/gemini/binding', { conversation_id: CHAT_A });
+    expect(credential.status, JSON.stringify(credential.data)).toBe(200);
+    const evidence = await authenticateGeminiBinding(credential.data);
+    const saved = await saveGeminiHandoff(entry.token, SAMPLE_BRIEF, evidence);
+    expect(saved.stored).toBe(true);
+    const foreign = await post('/status', { openConversations: [] }, OTHER);
+    expect(foreign.data.placement).toBeNull();
+    const delivery = await post('/status', { openConversations: [CHAT_A] });
+    expect(delivery.data.placement).toMatchObject({ id: saved.command_id, homeConversationId: CHAT_A });
+    expect((await post('/status', { openConversations: [CHAT_A] })).data.placement).toBeNull();
+  });
   it.each(['before ACK', 'after ACK'] as const)('keeps the exact worker task key dormant through approval policy refresh %s', async phase => {
     const id = await worker(), credential = await binding(id);
     const ack = () => post('/commands/ack', { id, client: CLIENT, status: 'sent', conversationId: CHAT_B });

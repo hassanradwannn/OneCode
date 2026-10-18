@@ -70,6 +70,7 @@ beforeEach(async () => {
   config.capabilities.create = true; config.capabilities.edit = true;
   await saveConfig(config); await gemini.initGeminiBindings(directory);
   inputs.configureInputDelivery({ applyAutomation: async () => {}, changed: () => {},
+    recoveryAllowed: () => true,
     prepareText: (entry, limits, authored, routingInstructions) => prepareSkillFollowup(entry.text, authored, limits, { ...entry, routingInstructions }),
     activity: () => ({ possible: false, exact: false }), recordDelivered: recordDeliveredInput });
   sessionId = (await store.createSession({ conversationId: CHAT })).id;
@@ -106,6 +107,24 @@ it('attributes a fresh opening only after its canonical Send binds the reserved 
   await acknowledge(task, OTHER); await start(OTHER, 'fresh-native-turn');
   expect((await request).result.isError).not.toBe(true);
   expect((await store.findSessionByConversation(OTHER))?.id).toBe(task.sessionId);
+});
+it('keeps tools authorized above the local context reference and renews exact custody for recovery', async () => {
+  await saveConfig({ ...getConfig(), compaction: { ...getConfig().compaction, auto: false } });
+  const original = await claimed(); await acknowledge(original); await start();
+  const question = await store.readLatestUserMessage(sessionId);
+  expect(question?.messageId).toBe(original.messageId);
+  await store.upsertMessageEvent(sessionId, { ...question!, wireTokenEstimate: 600_000 });
+  expect((await store.getSession(sessionId))!.contextTokens).toBeGreaterThan(getConfig().sessions.limitTokens);
+  expect((await call(original.key, read)).result.isError).not.toBe(true);
+  await recorder.recordChatObservations(CHAT, [{ kind: 'turn_end', turnId: 'exact-native-turn', outcome: 'failed', time: Date.now() }]);
+  expect(await inputs.fileRecoveryInput(sessionId, CHAT, 'exact-native-turn', false, () => true, Date.now(), 'repair-fixture')).toBe(true);
+  const recovery = (await inputs.listInputs()).find(row => row.recovery)!;
+  const offered = await post('/input/claim', { id: recovery.id, owner: OWNER, conversationId: CHAT, requiresAuthorization: true });
+  const fresh = { id: recovery.id, key: keyOf(offered.data.input.deliveryText), messageId: randomUUID(), conversationId: CHAT, sessionId };
+  await acknowledge(fresh); await start(CHAT, 'recovered-native-turn');
+  expect(fresh.key).not.toBe(original.key);
+  expect((await call(fresh.key, read)).result.isError).not.toBe(true);
+  expect(JSON.stringify(await call(original.key, read))).toContain('CHATGPT_SESSION_NOT_AUTHORIZED');
 });
 it('routes simultaneous independent chat credentials to their own histories', async () => {
   const b = await store.createSession({ conversationId: OTHER });

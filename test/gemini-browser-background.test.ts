@@ -4,6 +4,7 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 import { backgroundProviderSource } from './helpers.js';
 import { CHAT_PROVIDERS, type ChatProvider } from '../src/shared/chat-provider.js';
+import { continuationReceipt } from '../src/shared/continuation-receipt.js';
 
 const source = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const id = 'ea972ba88cc341c6';
@@ -13,6 +14,39 @@ function fragment(start: string, end: string) {
   if (from < 0 || to < 0) throw new Error('Production adapter fragment not found');
   return source.slice(from, to);
 }
+
+describe('provider-specific compaction source checkpoints', () => {
+  const fixtures = {
+    chatgpt: { conversationId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', url: 'https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', messageId: 'native-handoff-question', accountPath: '' },
+    gemini: { conversationId: id, url: `https://gemini.google.com/u/2/app/${id}`, messageId: `gemini:${id}:user:0123456789abcdef`, accountPath: '/u/2' }
+  };
+  it.each(CHAT_PROVIDERS)('carries the actual %s provider through attempt, dispatch and question receipt', async provider => {
+    const fixture = fixtures[provider];
+    const bodies: any[] = [];
+    const context: any = { URL, load: async () => {}, ownsDocument: () => true,
+      noteTabConversation: async () => {}, cleanConversationId: (value: string) => value,
+      projectFromUrl: () => null, chrome: { tabs: { get: async () => ({ url: fixture.url, status: 'complete' }) } },
+      call: async (_route: string, options: any) => { bodies.push(JSON.parse(options.body)); return { ok: true, data: {} }; }
+    };
+    vm.createContext(context);
+    vm.runInContext(backgroundProviderSource(source), context);
+    vm.runInContext(fragment('function conversationFromUrl(', '\n/** Serializes every ownership transition'), context);
+    vm.runInContext(fragment('const COMPACT_CHECKPOINT_FLAGS', '\nfunction serializeTab('), context);
+    vm.runInContext(`handler = ({ ${fragment('  async compact(message, _sender, source)', '\n  /**\n   * The goal loop:')} }).compact`, context);
+    const document = { tab: 10, documentId: 'source-document', navigationEpoch: 1 };
+    for (const checkpoint of [{ sourceAttempt: true }, { sourceDispatch: true }, { sourceMessageId: fixture.messageId }]) {
+      await context.handler({ conversationId: fixture.conversationId, token: 'test-continuation', ...checkpoint }, {}, document);
+      const body = bodies.at(-1);
+      expect(body.sourceDocument).toEqual({ provider, tabId: 10, documentId: 'source-document', accountPath: fixture.accountPath });
+      // Exercise the bridge's production parser rather than accepting any shape in the mock.
+      expect(continuationReceipt({ ...body.sourceDocument, conversationId: body.conversationId,
+        transport: provider === 'gemini' ? 'native-question' : 'fiber-question',
+        messageId: body.sourceMessageId ?? (provider === 'gemini' ? `gemini:${id}:user:0000000000000000` : 'pending')
+      })?.provider).toBe(provider);
+    }
+    expect(bodies).toHaveLength(3);
+  });
+});
 
 describe('Gemini recorder repair injection', () => {
   const healthyFixtures: Record<ChatProvider, { url: string; helperFiles: string[] }> = {

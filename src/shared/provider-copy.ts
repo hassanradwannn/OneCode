@@ -1,11 +1,12 @@
 import type { ChatProvider } from './chat-provider.js';
 import { APPROVAL_ANSWERED_TEXT, APPROVAL_WAITING_TEXT } from './approval-wait.js';
 
-export const HISTORY_RATE_LIMIT_TEXT = 'The provider temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends.';
+export const HISTORY_RATE_LIMIT_TEXT = 'Loading this chat’s history returned HTTP 429. OneCode is waiting before retrying the history load. This is not a model context limit.';
 
 /** Match only known app notices; native errors and quoted user/model text stay verbatim. */
 export function neutralChatErrorCopy(text: string): string {
-  if (text === 'Gemini temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends.' ||
+  if (text === 'The provider temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends.' ||
+      text === 'Gemini temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends.' ||
       text === 'ChatGPT temporarily rate-limited loading this conversation history. Chat On Steroids is pausing automatic recovery until the retry wait ends.' ||
       text === 'ChatGPT temporarily rate-limited loading this conversation history. OneCode is pausing automatic recovery until the retry wait ends.') return HISTORY_RATE_LIMIT_TEXT;
   return text;

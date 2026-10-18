@@ -55,6 +55,11 @@ app.whenReady().then(async () => {
   win.webContents.debugger.attach('1.3');
   await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
   await check('Renderer selected the fixture session', `document.getElementById('contextMeterCompact').textContent==='38%'`);
+  await js(`composerFixture.summary.contextTokens=600000;composerFixture.notify()`);
+  await until(`document.getElementById('contextMeterCompact').textContent==='150%'`);
+  await check('An oversized local estimate remains a reference and leaves Send available', `document.getElementById('contextMeterCompact').textContent==='150%'&&document.getElementById('contextMeterButton').getAttribute('aria-label').includes('not the provider’s context limit')&&!document.getElementById('chatSend').disabled&&document.querySelector('.context-progress').getAttribute('aria-valuenow')==='100'`);
+  await js(`composerFixture.summary.contextTokens=152000;composerFixture.notify()`);
+  await until(`document.getElementById('contextMeterCompact').textContent==='38%'`);
   await capture('composer');
   await click('#modelMenu > summary');
   await check('Effort popover initially hides the model list', `document.getElementById('composerModelChoices').hidden&&document.getElementById('composerModelToggle').getAttribute('aria-expanded')==='false'`);

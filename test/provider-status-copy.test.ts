@@ -19,9 +19,10 @@ it.each([
 ])('shows shared history-limit notices neutrally, including saved history: %s', text => {
   const event = error(text), before = structuredClone(event);
   const view = chatErrorPresentation(event);
-  expect(view.title).toBe('Provider reported a problem');
+  expect(view.title).toBe('Chat history reload paused');
   expect(view.message).toBe(HISTORY_RATE_LIMIT_TEXT);
-  expect(view.next).toContain('Provider asked to wait until');
+  expect(view.next).toContain('OneCode will wait until');
+  expect(view.message).toContain('not a model context limit');
   expect(view.resolved).toBe(false);
   expect(event).toEqual(before);
 });

@@ -28,8 +28,9 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
   const selection = composer ?? (observed?.conversationId === session?.conversationId ? observed : null);
   const pro = isProModel(selection?.model, selection?.reasoningEffort ?? undefined);
   const limit = config.sessions.limitTokens;
-  const percent = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
-  arc.setAttribute('stroke-dasharray', `${pro ? 0 : percent * 0.377} 37.7`);
+  const percent = limit > 0 ? Math.round(used / limit * 100) : 0;
+  const boundedPercent = Math.min(100, percent);
+  arc.setAttribute('stroke-dasharray', `${pro ? 0 : boundedPercent * 0.377} 37.7`);
   const tokens = () => new Intl.NumberFormat(currentLanguage()).format(used);
   const root = document.getElementById('contextMeter')!;
   const values = root.dataset.display === 'values';
@@ -41,10 +42,10 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
   }
   const description = () => [t('Session context · estimated'), pro
     ? t('{0} tokens used', [tokens()])
-    : t('{0} / {1} tokens · {2}% of configured limit', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent]),
+    : t('{0} / {1} estimated tokens · {2}% of OneCode reference', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent]),
     pro ? t('Auto-compaction off for Pro') : config.compaction.auto
       ? t('Auto-compaction at {0} tokens', [new Intl.NumberFormat(currentLanguage()).format(config.compaction.autoTokens)])
-      : t('Auto-compaction off')].join('\n');
+      : t('Auto-compaction off'), t('This local estimate does not block messages or tools and is not the provider’s context limit.')].join('\n');
   // One fact per row: the estimate, the limit from Settings, the share, and when compaction starts.
   ui(document.getElementById('contextTokens')!, 'textContent', () => short(used));
   const limitRow = document.getElementById('contextLimit');
@@ -53,8 +54,8 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
   ui(document.getElementById('contextThreshold')!, 'textContent', () => pro ? t('Auto-compaction off for Pro') : config.compaction.auto ? short(config.compaction.autoTokens) : t('Off'));
   const progress = panel.querySelector<HTMLElement>('.context-progress')!;
   progress.hidden = pro;
-  progress.style.setProperty('--context-used', `${percent}%`);
-  progress.setAttribute('aria-valuenow', String(percent));
+  progress.style.setProperty('--context-used', `${boundedPercent}%`);
+  progress.setAttribute('aria-valuenow', String(boundedPercent));
   const display = document.getElementById('contextDisplay') as HTMLButtonElement;
   ui(display.querySelector('span')!, 'textContent', () => values ? t('Show percentage') : t('Show token values'));
   display.onclick = () => {

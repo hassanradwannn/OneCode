@@ -6954,7 +6954,7 @@ export async function saveGeminiHandoff(token: string, markdown: string, evidenc
     const shortfall = briefShortfall(markdown, (await getSession(entry.sessionId))?.estimatedTokens ?? 0);
     if (shortfall) throw new Error(shortfall);
   }
-  const captured = await captureCompactionBrief(entry.from, entry, markdown, null, authorize);
+  const captured = await captureCompactionBrief(entry.from, entry, markdown, null, authorize, false);
   if (captured.status !== 200 || captured.body.stored !== true) throw new Error('HANDOFF_NOT_STORED');
   const saved = await readHandoff(entry.sessionId, String(captured.body.handoffId));
   if (saved?.version !== 2 || !saved.markdown || saved.provenance?.sourceReceipt?.provider !== 'gemini')
@@ -6975,7 +6975,8 @@ async function captureCompactionBrief(
   entry: ContinuationView,
   text: string,
   known: SessionSummary | null,
-  authorize?: () => Promise<boolean>
+  authorize?: () => Promise<boolean>,
+  collectPlacement = true
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const { sessionId, token } = entry;
   // The handoff owner freezes and budgets the brief with its saved plan and
@@ -7048,7 +7049,9 @@ async function captureCompactionBrief(
   // This request is chat A's own page asking for the handoff it is in the middle of, so the
   // reply below can hand it the successor to open. Delivery may hold the OS opener back for
   // exactly as long as that is true — see offerPlacement.
-  placementCollector = conversationId;
+  // MCP tool replies cannot open browser tabs. Only a page capture may consume
+  // the offer here; tool capture leaves it for the owning browser's status poll.
+  placementCollector = collectPlacement ? conversationId : null;
   // The command's leased phase is a crash boundary: do not tell the page capture is fully
   // accepted until the attempt we are about to open is durable. This also makes the HTTP
   // response and the browser-open side effect deterministically ordered for callers.
@@ -7067,7 +7070,7 @@ async function captureCompactionBrief(
       commandId: command?.id ?? null,
       // Chat B, for A's own browser to open in A's own window. Null whenever delivery
       // already opened it through the OS, which is every path that has no page to tell.
-      placement: pendingBrowserPlacement(conversationId),
+      placement: collectPlacement ? pendingBrowserPlacement(conversationId) : null,
       job: resumeJobFor(sessionId)
     }
   };

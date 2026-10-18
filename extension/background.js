@@ -4769,6 +4769,7 @@ const HANDLERS = {
           (tab.pendingUrl && tab.pendingUrl !== tab.url)))
       return { ok: false, error: 'stale_document' };
     const sourceUrl = tab.url;
+    const sourceProvider = providerForUrl(sourceUrl);
     const result = await call('/compact', {
       method: 'POST',
       body: JSON.stringify({
@@ -4780,8 +4781,9 @@ const HANDLERS = {
         automatic: message.automatic === true,
         // Native question custody comes from Chrome's validated sender, never model arguments.
         ...((message.sourceAttempt === true || message.sourceDispatch === true || typeof message.sourceMessageId === 'string')
-          ? { sourceDocument: { provider: 'gemini', tabId: source.tab, documentId: source.documentId,
-            accountPath: new URL(sourceUrl).pathname.match(/^(\/u\/[0-9]+)\/app(?:\/|$)/)?.[1] || '' } } : {}),
+          ? { sourceDocument: { provider: sourceProvider, tabId: source.tab, documentId: source.documentId,
+            accountPath: sourceProvider === 'gemini'
+              ? new URL(sourceUrl).pathname.match(/^(\/u\/[0-9]+)\/app(?:\/|$)/)?.[1] || '' : '' } } : {}),
         ...((message.destinationAttempt === true || message.destinationDispatch === true || message.destinationLost === true)
           ? { commandId: String(message.commandId || ''), client: String(message.client || '') } : {}),
         // The capture. `token` names the transaction the page was given when it marked the
@@ -5380,7 +5382,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 26;
+const PAGE_RECORDER_VERSION = 27;
 
 let deferredRecoveryWork = null;
 
