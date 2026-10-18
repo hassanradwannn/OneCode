@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 22;
+  const VERSION = 23;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2216,8 +2216,16 @@
           channel: user ? null : final ? 'final' : 'commentary', end_turn: completed,
           status: completed ? 'finished_successfully' : 'in_progress', metadata: {} });
         const key = `${turnId}:${index}:${role}`;
-        const nodes = [...section.querySelectorAll('[data-content-search-unit-key]')].filter(node =>
-          node.closest('[data-turn-key]') === section && node.getAttribute('data-content-search-unit-key') === key);
+        const nodes = [...section.querySelectorAll('[data-content-search-unit-key], [data-chatgpt-search-unit-key]')].filter(node => {
+          if (node.closest('[data-turn-key]') !== section) return false;
+          if (node.getAttribute('data-content-search-unit-key') === key) return true;
+          // The current shell keeps a positional search-unit key, but publishes
+          // the exact native message id separately. Only that single id and
+          // matching role may join the new slot to this page-model item.
+          const nativeIds = [...new Set((node.getAttribute('data-chatgpt-search-message-ids') || '').trim().split(/\s+/).filter(Boolean))];
+          return /:(user|assistant)$/.exec(node.getAttribute('data-chatgpt-search-unit-key') || '')?.[1] === role &&
+            nativeIds.length === 1 && nativeIds[0] === id;
+        });
         if (nodes.length === 1) slots.push({ node: nodes[0], id });
       } else if (item?.type === 'generated-image') {
         lastAnswer = item;
@@ -2442,7 +2450,7 @@
           // and no turn. Name that one exact provider id on the exchange; isolated readers accept
           // it only under this scan's turn stamp. Several user messages stay unnamed.
           const users = renderedMessages.filter(message => message.role === 'user');
-          const userSlot = shell.slots.some(slot => /:user$/.test(slot.node.getAttribute('data-content-search-unit-key') || ''));
+          const userSlot = shell.slots.some(slot => /:user$/.test(slot.node.getAttribute('data-content-search-unit-key') || slot.node.getAttribute('data-chatgpt-search-unit-key') || ''));
           if (!conversation.conflict && !userSlot && users.length === 1 && users[0].rawMessageId) {
             desiredUserStamps.set(section, `${scanToken}:${index}:${encodeURIComponent(users[0].rawMessageId)}`);
           }

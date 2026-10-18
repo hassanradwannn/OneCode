@@ -22,7 +22,8 @@ beforeEach(async () => {
   directory = await makeTempDir('clf-openings-');
   initConfigPath(directory); initDurableStore(directory); initSessionStore(directory); resetInputForTests();
   resetTrustedChatsForTests();
-  await saveConfig(defaultConfig());
+  const config = defaultConfig(); config.ui.chatProvider = 'chatgpt';
+  await saveConfig(config);
   configureInputDelivery({
     applyAutomation: async () => {}, changed: () => {},
     trustOpening: async (_sessionId, conversationId) => { await setChatTrusted(conversationId, true); return true; }
@@ -175,6 +176,7 @@ it('binds an exact authorized opening before recording and acknowledges only its
 
 it('trusts a strict-mode CoS composer opening only after its exact authoritative bind', async () => {
   const config = defaultConfig();
+  config.ui.chatProvider = 'chatgpt';
   await saveConfig({ ...config, multiAgent: { ...config.multiAgent, strictChatAllowlist: true } });
   const row = await enqueueInput(args());
   const conversation = randomUUID();

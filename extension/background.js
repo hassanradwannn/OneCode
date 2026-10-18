@@ -4765,10 +4765,15 @@ const HANDLERS = {
     // Loading that same leased document is normal; leaving it for another route is not.
     // Named source checkpoints still require a fully settled matching conversation.
     if (named
-      ? (tab.pendingUrl || tab.status === 'loading' || conversationFromUrl(tab.url) !== named)
+      ? ((tab.pendingUrl && tab.pendingUrl !== tab.url) || conversationFromUrl(tab.url) !== named)
       : (conversationFromUrl(tab.url) !== null ||
           (tab.pendingUrl && tab.pendingUrl !== tab.url)))
       return { ok: false, error: 'stale_document' };
+    // The exact source can mount its editor before Chrome finishes loading. No
+    // app checkpoint ran; this live page may wait locally instead of relying on
+    // a minutes-later watchdog reload. A foreign route is still refused above.
+    if (named && (tab.status === 'loading' || tab.pendingUrl))
+      return { ok: false, error: 'source_page_loading', notForwarded: true };
     const sourceUrl = tab.url;
     const sourceProvider = providerForUrl(sourceUrl);
     const result = await call('/compact', {
@@ -5383,7 +5388,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 31;
+const PAGE_RECORDER_VERSION = 47;
 
 let deferredRecoveryWork = null;
 

@@ -596,13 +596,14 @@ let commandReceipts: CommandReceipt[] = [];
 const geminiCommandCustody = new Map<string, {
   browser: string; owner: string; lease: string; tab?: number; document?: string; conversation?: string; sessionId?: string;
   worker?: { runId: string; agent: string };
+  resume?: { sessionId: string; token: string };
 }>();
 
 /** A worker grant remains dormant until this exact leased command's Send ACK commits. */
 export async function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> {
   const custody = geminiCommandCustody.get(proof.id);
-  if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease || !custody.worker ||
-      !swarmRunning(custody.worker.runId)) return { state: 'invalid' };
+  if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease ||
+      (!custody.resume && (!custody.worker || !swarmRunning(custody.worker.runId)))) return { state: 'invalid' };
   const receipt = await commandSendReceipt(proof.id);
   if (!receipt) {
     const command = commands.find(entry => entry.id === proof.id);
@@ -611,8 +612,27 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
   }
   const conversation = receipt.conversationId;
   if (!receipt.committed || receipt.outcome !== 'committed' || receipt.client !== proof.owner || !conversation ||
-      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation) ||
-      agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return { state: 'invalid' };
+      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation)) return { state: 'invalid' };
+  if (custody.resume) {
+    // The original continuation and committed command receipt own this grant. The
+    // source chat/new-chat selector cannot authorize the destination, nor can a
+    // later question or Regenerate borrow the first successor turn's credential.
+    const entry = continuationByToken(custody.resume.token);
+    if (!entry || entry.sessionId !== custody.resume.sessionId || entry.state !== 'committed' || entry.to !== conversation) return { state: 'invalid' };
+    if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return { state: 'pending' };
+    const session = await getSession(entry.sessionId);
+    if (session?.conversationId !== conversation) return { state: 'invalid' };
+    const question = await readLatestUserMessage(entry.sessionId);
+    if (!question) return { state: 'pending' };
+    if (question.messageId !== entry.destinationSend.messageId)
+      return { state: question.messageId === entry.sourceSend.messageId ? 'pending' : 'invalid' };
+    const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === question.messageId);
+    if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return { state: 'invalid' };
+    if (!session.activeTurnId || !turns.length) return { state: 'pending' };
+    if (turns[0]?.[0] !== session.activeTurnId) return { state: 'invalid' };
+    return { state: 'ready', conversationId: conversation, sessionId: entry.sessionId };
+  }
+  if (!custody.worker || agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return { state: 'invalid' };
   const worker = agentInfoForOwnedConversation(conversation);
   if (worker?.lastRevivalCommandId && worker.lastRevivalCommandId !== proof.id) return { state: 'invalid' };
   const session = await findSessionByConversation(conversation, { requireUnique: true });
@@ -5011,6 +5031,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!previousCustody || previousCustody.owner !== client)
         geminiCommandCustody.set(command.id, { browser: redeemingBrowser, owner: client, lease: randomBytes(8).toString('hex') });
       const custody = geminiCommandCustody.get(command.id)!;
+      if (command.spec.type === 'resume') {
+        custody.resume = { sessionId: command.spec.sessionId, token: command.spec.token };
+        if (liveResume && chatProviderForConversation(liveResume.from) === 'chatgpt') {
+          described.text += '\n\n' + chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+          if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
+        }
+      }
       if (command.spec.type === 'worker' || command.spec.type === 'revive') {
         custody.worker = { runId: command.spec.runId, agent: command.spec.agent };
         const source = primeConversation(command.spec.runId);
@@ -7374,6 +7401,11 @@ export function sessionActivityExpiresAt(summary: SessionSummary): number | null
   // An abandoned open recorder turn is not fresh work, even if a later picker selection
   // differs from the model that owned the retired grant.
   if (!grant || grant.sessionId !== summary.id || grant.thinkingFailed) return null;
+  // A recovery watch may outlive a completed native turn while its final row
+  // finishes recording. That watch is not a still-running answer. Keep its
+  // recovery custody, but stop displaying Active unless newer work earned it.
+  if (!summary.activeTurnId && summary.lastTurnOutcome === 'completed' &&
+      summary.lastTurnEndAt != null && summary.lastTurnEndAt >= grant.evidenceAt) return null;
   return activityDeadline(grant);
 }
 

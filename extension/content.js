@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 31;
+  const RECORDER_VERSION = 47;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -1088,17 +1088,30 @@
       at: Date.now()
     };
   }
+  let clickedSendReceipt = null;
   listen(document, 'click', (event) => {
+    clickedSendReceipt = null;
     const button = CLF_DOM.sendButton?.();
-    if (button && event.target && button.contains(event.target)) rememberUserSend();
+    if (button && event.target && button.contains(event.target)) {
+      rememberUserSend();
+      clickedSendReceipt = { button, form: CLF_DOM.composer()?.closest('form'), receipt: userSendReceipt };
+    }
   }, true);
   listen(document, 'submit', (event) => {
+    const clicked = clickedSendReceipt;
+    clickedSendReceipt = null;
+    // Native click handling can clear the editor before its form submits,
+    // leaving the attachment tile mounted. That is the same Send, not a new
+    // attachment-only question. Consume its exact button/form receipt once.
+    if (clicked && clicked.form === event.target && event.submitter === clicked.button &&
+        userSendReceipt === clicked.receipt) return;
     const composer = CLF_DOM.composer();
     if (composer && event.target && typeof event.target.contains === 'function' && event.target.contains(composer)) {
       rememberUserSend();
     }
   }, true);
   listen(document, 'keydown', (event) => {
+    clickedSendReceipt = null;
     const composer = CLF_DOM.composer();
     if (
       composer &&
@@ -2552,6 +2565,9 @@
             userSendReceipt = null;
             return { messageId: message.id, baseline: receipt.baseline };
           }
+          // While an exact app ACK still owns the next question, a mounted
+          // source/history row cannot become that question by anchor absence.
+          if (receipt.accepted) return false;
         }
       }
       // Transcript custody and send custody are different facts. Fiber may publish this exact
@@ -2583,7 +2599,7 @@
           // Its accepted exact message and unchanged task text prove the original
           // composer source; rewriting an arbitrary malformed frame does not.
           if (accepted?.messageId !== message.id || accepted.conversationId !== CLF_DOM.conversationId() ||
-              accepted.epoch !== epoch || Date.now() - receipt.at > USER_SEND_RECEIPT_MS ||
+              accepted.epoch !== epoch || Date.now() - receipt.at > DESKTOP_RECEIPT_MS ||
               typeof receipt.authoredText !== 'string' || CLF_DOM.userPromptText(receipt.authoredText) === null ||
               !matchesSubmittedBootstrap(message, receipt.authoredText)) continue;
           text = receipt.authoredText;
@@ -2672,9 +2688,25 @@
       const baseline = new Set(receipt?.baseline?.sections || []);
       if (accepted?.messageId && accepted.messageId !== openedUserMessageId &&
           accepted.conversationId === CLF_DOM.conversationId() && accepted.epoch === epoch &&
+          Date.now() - receipt.at <= DESKTOP_RECEIPT_MS &&
           !rendered.some(message => message.id === accepted.messageId) &&
           (nowGenerating || CLF_DOM.turns().some(turn => turn.role === 'assistant' &&
             !(turn.nodes || [turn.node]).some(node => baseline.has(node))))) {
+        // The exact native Send POST + committed app ACK owns these frozen
+        // submitted bytes even before the shell renders its question. Publish
+        // the question before its turn, so the first tool need not wait for a
+        // page read that itself can be waiting on that tool. A foreign route,
+        // replaced receipt or later authored Send cannot spend this proof.
+        if (typeof receipt.authoredText !== 'string' ||
+            (/^\[\[COS_CONTEXT:/.test(receipt.authoredText) && CLF_DOM.userPromptText(receipt.authoredText) === null)) return null;
+        const shown = shownUserText(receipt.authoredText, false, receipt.authoredText);
+        const key = occurrenceKey(accepted.messageId, receipt.authoredText);
+        if (!seenMessages.has(key)) {
+          markSeen(key);
+          emit({ kind: 'user_message', text: shown, messageId: accepted.messageId, authoredNow: true });
+          reportedUserMessages.set(accepted.messageId, { text: shown, createTime: null,
+            conversationId: accepted.conversationId, model: null });
+        }
         userSendReceipt = null;
         newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline };
       }
@@ -3736,7 +3768,7 @@
   // 11: adds exact typed thought-notification ids and ephemeral DOM stamps for selective
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
-  const FIBER_VERSION = 22;
+  const FIBER_VERSION = 23;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -3754,6 +3786,7 @@
   let fiberRows = new Map();
   /** Per-turn descriptors from the last scan, keyed by the ephemeral stamp on its section. */
   let fiberTurns = new Map();
+  let generationDiagnostic = '';
   /** Exact scan frame those two descriptor maps came from. */
   let fiberScanToken = null;
   let fiberAsking = null;
@@ -4786,6 +4819,19 @@
     }
     const activeTurnIndex =
       ownedPageTurn && activeLocalTurnId ? answer.turns.indexOf(ownedPageTurn) : -1;
+    if (generating) {
+      const diagnostic = JSON.stringify({ nativeBusy: CLF_DOM.generating(), owner: !!exactOwner, activeTurnIndex,
+        domRoles: CLF_DOM.turns().map(turn => turn.role), layout: CLF_DOM.layoutDiagnostics?.(),
+        turns: answer.turns.map(turn => ({ final: !!turn.endMessageId,
+          sameConversation: turn.conversationId === askedConversation, conflict: turn.conversationConflict === true,
+          ownQuestion: (turn.messages || []).some(message => message.role === 'user' && (message.rawMessageId || message.messageId) === openedUserMessageId),
+          users: (turn.messages || []).filter(message => message.role === 'user').length,
+          assistants: (turn.messages || []).filter(message => message.role === 'assistant').length })) });
+      if (generationDiagnostic !== diagnostic) {
+        generationDiagnostic = diagnostic;
+        console.info('[OneCode generation lifecycle] ' + diagnostic);
+      }
+    }
     if (askedConversation) {
       // Ownership evidence is no longer gated on `activeTurnIndex`.
       //
@@ -7314,7 +7360,8 @@
       injectStage();
       // A pull that brought the Goal settings or this chat's resume role re-reads the transcript
       // with them. A page settled before this pull (a hidden tab) has nothing else to wake it.
-      if (JSON.stringify([goalConfig?.enabled ?? null, goalConfig?.objective ?? null, bootstrap]) !== goalBefore) observe();
+      if (JSON.stringify([goalConfig?.enabled ?? null, goalConfig?.objective ?? null, bootstrap]) !== goalBefore ||
+          (userSendReceipt?.accepted?.conversationId === forId && userSendReceipt.accepted.epoch === epoch)) observe();
       // The activity snapshot is now authoritative and visible. Arm the next read before
       // compaction or Goal side effects below can wait on the page for tens of seconds.
       armNextActivityPull();
@@ -9113,11 +9160,15 @@
   function stageView(input) {
     const { job, goal, phase = nativePhase, summary } = input;
     if (job && job.busy) {
+      const asked = job.sourceSend &&
+        (job.sourceSend.state === 'dispatched-unresolved' || job.sourceSend.state === 'sent');
       const stage =
         job.stage === 'opening'
           ? t('content_stage_opening_fresh_chat', 'Opening a fresh chat')
           : job.stage === 'waiting-for-browser'
             ? t('content_stage_waiting_for_chrome', 'Waiting for Chrome')
+            : !asked && phase !== 'delivering'
+              ? t('content_compact_step_preparing', 'Preparing')
             : phase === 'delivering'
               ? t('content_stage_saving_handoff', 'Saving the handoff')
               : summary?.state === 'stopped'
@@ -9132,15 +9183,12 @@
       // prompt has been with ChatGPT for minutes — and the bar then said "Preparing" about
       // work that was two steps further on, for as long as the answer took. The app's
       // checkpoint outlives the page, so the page reads its progress off that instead.
-      const asked =
-        job.sourceSend &&
-        (job.sourceSend.state === 'dispatched-unresolved' || job.sourceSend.state === 'sent');
       const at =
         job.stage === 'opening' || job.stage === 'waiting-for-browser'
           ? 3
           : phase === 'delivering'
             ? 2
-            : phase === 'prompting' || phase === 'waiting' || asked
+            : asked
               ? 1
               : 0;
       return { stage, detail: summary?.detail || '', body: '', kind: 'compact', steps: COMPACT_STEPS, at, done: false };
@@ -9244,7 +9292,7 @@
     const who = modelLabel(draft?.model || goal.model);
     const backend = draft?.backend || goal.backend;
     const dest = backend === 'chatgpt'
-      ? t('content_goal_backend_chatgpt_helper', "The provider helper")
+      ? t('content_goal_backend_chatgpt_helper', "the provider helper")
       : backend === 'templates'
         ? t('content_goal_backend_offline_templates', 'offline templates')
         : goal.provider === 'custom'
@@ -9705,7 +9753,7 @@
     // resume the same work, while the app still hands out no prompt until this page has proved
     // the chat stopped and its local calls settled. `automatic` lets Auto Off cancel only work
     // the threshold created, never a manual Compact & Resume press.
-    const filed = await ask({ type: 'compact', conversationId: forId, ticket: true, automatic });
+    const filed = await compactionCheckpoint({ type: 'compact', conversationId: forId, ticket: true, automatic }, current);
     if (!current()) return;
     if (!filed || filed.ok !== true || !filed.data) {
       pressedAt = 0;
@@ -9816,7 +9864,7 @@
       return;
     }
 
-    const reply = await ask({ type: 'compact', conversationId: forId, resume: true });
+    const reply = await compactionCheckpoint({ type: 'compact', conversationId: forId, resume: true }, current);
     if (!current()) return;
     if (!reply || reply.ok !== true) {
       pressedAt = 0;
@@ -9853,6 +9901,18 @@
       return;
     }
     await runNativeCompaction(String(data.prompt), String(data.token || ''), forId, forEpoch, forRun, sameTurn);
+  }
+
+  /** Retry only a proven local, pre-forwarding loading refusal. Lost replies,
+   * app refusals and uncertain dispatches are never replayed. */
+  async function compactionCheckpoint(message, current) {
+    let reply = null;
+    await waitUntil(async () => {
+      if (!current()) return true;
+      reply = await ask(message, current);
+      return reply?.error !== 'source_page_loading' || reply.notForwarded !== true;
+    }, 12_000);
+    return current() ? reply : null;
   }
 
   /**
@@ -10312,7 +10372,7 @@
       // Claiming the prompt. Nothing has been submitted under this state, and the app knows
       // that because this write happens before the composer is submitted at all — so a
       // document that dies between here and the next line leaves the prompt claimable again.
-      const permit = await ask({ type: 'compact', conversationId: forId, token, sourceAttempt: true });
+      const permit = await compactionCheckpoint({ type: 'compact', conversationId: forId, token, sourceAttempt: true }, () => current() && sameSource());
       if (!current()) return;
       if (!permit || permit.ok !== true || !permit.data || permit.data.allowed !== true) {
         CLF_DOM.clearPromptExact(prompt);
@@ -10349,8 +10409,8 @@
         // a missing reply retains custody rather than granting another click.
         attemptCrossed = true;
         const before = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
-        const armed = await ask({ type: 'compact', conversationId: forId, token, sourceDispatch: true,
-          ...(typeof before === 'string' && before ? { before } : {}) });
+        const armed = await compactionCheckpoint({ type: 'compact', conversationId: forId, token, sourceDispatch: true,
+          ...(typeof before === 'string' && before ? { before } : {}) }, () => stillSending() && current() && sameSource());
         if (!current()) return false;
         if (!armed || armed.ok !== true || armed.data?.armed !== true) {
           localError = t(
@@ -10624,6 +10684,9 @@
   function releaseContinuationJournal() {
     continuationJournalPending = false;
     commandJournalGate = false;
+    // A fast successor may have finished while its rebind was pending. Re-read
+    // the exact question/final now rather than waiting for a hidden-tab timer.
+    queueMicrotask(() => { if (alive) observe(); });
     void flush();
   }
 
@@ -11184,7 +11247,7 @@
     if (draft.stage === 'failed') {
       goalDraft = null;
       const fallbackDestination = draft.backend === 'chatgpt'
-        ? t('content_goal_backend_chatgpt_helper', "The provider helper")
+        ? t('content_goal_backend_chatgpt_helper', "the provider helper")
         : draft.backend === 'templates'
           ? t('content_goal_backend_offline_templates_title', 'Offline templates')
           : goalConfig && goalConfig.provider === 'custom'
@@ -12284,8 +12347,13 @@
       if (await failIfRetargeted()) return true;
       if (exactBootstrapDraft()) return false;
       if (boot.type === 'resume' && !squeeze(CLF_DOM.composer()?.textContent)) {
-        continuationJournalPending = false;
-        await destinationCheckpoint('destinationLost');
+        const rejectedEpoch = epoch;
+        const lost = await destinationCheckpoint('destinationLost');
+        // The adapter can finish its pre-click rejection while this awaited
+        // dispatch reply unwinds. Its runCommand finally must not leave a gate
+        // behind after the app confirms that no Resume Send remains armed.
+        if (lost?.ok === true && lost.data?.released === true && alive && epoch === rejectedEpoch &&
+            (!commandAttempt || commandAttempt === attempt)) releaseContinuationJournal();
         return true;
       }
       await fail(t(
@@ -12300,6 +12368,7 @@
       const found = CLF_DOM.conversationId();
       if (!found || (conversationId && conversationId !== found) ||
           (acceptedBootstrap && (acceptedBootstrap.conversationId !== found || acceptedBootstrap.epoch !== epoch))) return null;
+      if (acceptedBootstrap?.nativeRequest === true) return found;
       const message = CLF_DOM.messages().find(message => message.role === 'user' &&
         matchesSubmittedBootstrap(message, boot.text));
       if (!message || (acceptedBootstrap && acceptedBootstrap.messageId !== message.id)) return null;
@@ -12313,6 +12382,22 @@
         receipt.accepted = { messageId: message.id, conversationId: found, epoch };
       }
       return found;
+    };
+    const acknowledgeBootstrap = async found => {
+      const reply = await ask({ type: 'ack', id: boot.id, status: 'sent', conversationId: found, agent, client: RUN_ID });
+      if (boot.type === 'resume' && reply?.ok === true && acceptedBootstrap?.conversationId === found &&
+          reply.data?.committed !== false && reply.data?.ok !== false &&
+          acceptedBootstrap.epoch === epoch && alive && CLF_DOM.conversationId() === found) {
+        // Spend the native question already proved by this Send. Waiting for a
+        // later Fiber scan can deadlock the first tool's authorization behind
+        // that scan's own pending request. This is the existing destination
+        // checkpoint, not a new Send or an inferred question identity.
+        const bound = await ask({ type: 'compact', conversationId: found, token: resumeMarker[2],
+          destinationMessageId: acceptedBootstrap.messageId });
+        if (bound?.ok === true && bound.data?.committed === true && acceptedBootstrap.epoch === epoch &&
+            alive && CLF_DOM.conversationId() === found) releaseContinuationJournal();
+      }
+      return reply;
     };
     if (boot.type === 'resume' && (!resumeMarker || resumeMarker[1] !== 'RESUME')) {
         return void (await fail(t(
@@ -12341,7 +12426,7 @@
       if (boot.type === 'resume') {
         continuationJournalPending = true;
         const permit = await destinationCheckpoint('destinationAttempt');
-        if (!sendCurrent() || await rejectChangedBootstrap()) return false;
+        if (await rejectChangedBootstrap() || !sendCurrent()) return false;
         if (permit?.ok !== true || permit.data?.allowed !== true) { await bootstrapDraft.clear(); return false; }
         // Only the real task is being dispatched. The preceding tool-free
         // Gemini warm-up has obtained an ID but has armed no Resume Send.
@@ -12350,7 +12435,7 @@
         // unsent task that could safely be retried.
         resumeDispatchRequested = true;
         const armed = await destinationCheckpoint('destinationDispatch');
-        if (!sendCurrent() || await rejectChangedBootstrap()) return false;
+        if (await rejectChangedBootstrap() || !sendCurrent()) return false;
         if (armed?.ok !== true || armed.data?.armed !== true) { await bootstrapDraft.clear(); return false; }
       }
       if (attempt && boot.type === 'worker') attempt.phase = 'dispatching';
@@ -12361,8 +12446,27 @@
     let sendRefusal = null;
     step('sending');
     if (CLF_DOM.provider === 'gemini') CLF_DOM.setCommandClaim?.({ id: boot.id, client: RUN_ID });
-    if (!(await sendSubmittedText(() => !attempt?.cancelled && sendingBootstrap(), false, authorizeBootstrapSend, null,
-                                  matchesSubmittedBootstrap, null, why => { sendRefusal = bootstrapAuthorizationFailure || why; }, currentCoreMention(), null, false, bootstrapDraft))) {
+    // ChatGPT's exact Send POST can precede the first readable question. Use
+    // that same native receipt as desktop input; waiting for the question can
+    // deadlock Resume behind its first tool, exhausting the recorder claim.
+    const acceptBootstrapReceipt = CLF_DOM.provider === 'chatgpt' && !target ? (message, found) => {
+      if (!found || !sendingBootstrap() || message.id === priorBootstrapUser ||
+          (target && found !== target) || (conversationId && conversationId !== found)) return false;
+      if (!message.sentRequest) {
+        const users = CLF_DOM.messages().filter(row => row.role === 'user');
+        if ((!target && users.length !== 1) || users.at(-1)?.id !== message.id || !matchesSubmittedBootstrap(message, boot.text)) return false;
+      }
+      acceptedBootstrap = { conversationId: found, epoch, messageId: message.id, nativeRequest: message.sentRequest === true };
+      const receipt = userSendReceipt;
+      if (receipt && receipt.text === squeeze(boot.text) && (!receipt.conversationId || receipt.conversationId === found)) {
+        receipt.accepted = { messageId: message.id, conversationId: found, epoch };
+        receipt.authoredText = boot.text;
+      }
+      return true;
+    } : null;
+    if (!(await sendSubmittedText(() => !attempt?.cancelled && sendingBootstrap(), false, authorizeBootstrapSend, acceptBootstrapReceipt,
+                                  matchesSubmittedBootstrap, DESKTOP_RECEIPT_MS, why => { sendRefusal = bootstrapAuthorizationFailure || why; }, currentCoreMention(),
+                                  acceptBootstrapReceipt ? since => sentRequestSince(since) : null, false, bootstrapDraft))) {
       // Once send() was invoked, a missing/cleared draft cannot prove that no click
       // happened. Only the exact pre-click check above may release the dispatch.
       if (boot.type === 'resume' && resumeDispatchRequested) {
@@ -12407,7 +12511,7 @@
     // send immediately with the already-proven target. Fresh worker/resume commands still need
     // the loop below because ChatGPT has not assigned their new conversation id yet.
     if (target) {
-      const acknowledged = await ask({ type: 'ack', id: boot.id, status: 'sent', conversationId: target, agent, client: RUN_ID });
+      const acknowledged = await acknowledgeBootstrap(target);
       await publishBootstrapSelection(target);
       await clearAcknowledgedBootstrap(acknowledged);
       return;
@@ -12422,7 +12526,7 @@
       () => !attempt?.cancelled && sendingBootstrap(), Math.min(40000, commandWaitMs(40000, 2_000)));
     if (!found || !sendingBootstrap()) return;
     if (boot.type === 'resume') rememberResumeGoalPending(found, boot.id);
-    const acknowledged = await ask({ type: 'ack', id: boot.id, status: 'sent', conversationId: found, agent, client: RUN_ID });
+    const acknowledged = await acknowledgeBootstrap(found);
     await publishBootstrapSelection(found);
     await clearAcknowledgedBootstrap(acknowledged);
     } finally {
@@ -13205,6 +13309,7 @@
     desktopInputBusy = true;
     let decision = null;
     let sent = false;
+    let confirmedSendReceipt = null;
     let draft = null;
     let withdrawableRecoveryDraft = false;
     let claimedSilence = null;
@@ -13398,7 +13503,7 @@
       ));
       const previousUserId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
       rememberUserSend();
-      const submittedText = sendText(CLF_DOM.composer()?.textContent);
+      const submittedText = sendText(CLF_DOM.composerAuthoredText());
       if (input.purpose === 'decision') {
         decision = { id: input.id, owner: input.owner, messageId: null, text: input.text, temporary, onTarget: sendingTarget, conversationId: null, epoch: forEpoch, response: '', publishing: false };
         desktopDecision = decision;
@@ -13491,6 +13596,7 @@
       // Native Send listeners refresh the receipt; pin only that witnessed object.
       const witnessedSendReceipt = userSendReceipt;
       const deliveredConversation = receipt.conversation;
+      let waitedForReceiptIdentity = false;
       sent = true;
       if (decision) {
         decision.messageId = receipt.user.id;
@@ -13531,6 +13637,7 @@
             // flight from warm-up; a receipt never licenses reading history
             // before that answer. Expiry still ACKs the already witnessed Send.
             void pullActivity();
+            waitedForReceiptIdentity = true;
             await waitPageView(() => !resumeIdentityPending, ownsAcceptedQuestion, 5000, 200);
           }
           if (!resumeIdentityPending && ownsAcceptedQuestion()) {
@@ -13542,6 +13649,19 @@
       // The claim remains inert if this ACK is lost; no duplicate send after a reload.
       const acknowledged = await ask({ type: 'desktop_input', id: message.id, conversationId: deliveredConversation, messageId: receipt.user?.id, owner: input.owner, lifetime: input.lifetime, ack: true });
       const accepted = acknowledged?.data?.ok === true;
+      try {
+        const latest = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
+        console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'native-ack', accepted,
+          receiptPresent: !!witnessedSendReceipt, sameReceipt: userSendReceipt === witnessedSendReceipt,
+          sameText: witnessedSendReceipt?.text === submittedText,
+          receiptChars: witnessedSendReceipt?.text?.length ?? null, submittedChars: submittedText.length,
+          sameRoute: !!witnessedSendReceipt && (witnessedSendReceipt.conversationId === target || (!target && witnessedSendReceipt.conversationId === deliveredConversation)),
+          samePrevious: (witnessedSendReceipt?.previousMessageId ?? null) === (previousUserId ?? null),
+          receiptInWindow: !!witnessedSendReceipt && Date.now() - witnessedSendReceipt.at <= DESKTOP_RECEIPT_MS,
+          latestExact: latest?.id === receipt.user?.id, sourceReadable: !!userMessageSource(latest),
+          sourceMatches: !!latest && matchesSubmittedBootstrap(latest, input.text), identityPending: resumeIdentityPending,
+          frameReadable: CLF_DOM.userPromptText(input.text) !== null }));
+      } catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
       if (CLF_DOM.provider === 'gemini' && decision && accepted && desktopDecision === decision && decision.onTarget()) {
         decision.acknowledged = true;
         completeDesktopDecision();
@@ -13551,19 +13671,26 @@
           (witnessedSendReceipt.conversationId === target ||
             (!target && witnessedSendReceipt.conversationId === deliveredConversation)) &&
           (witnessedSendReceipt.previousMessageId ?? null) === (previousUserId ?? null) &&
-          Date.now() - witnessedSendReceipt.at <= USER_SEND_RECEIPT_MS) {
+          Date.now() - witnessedSendReceipt.at <= DESKTOP_RECEIPT_MS) {
         witnessedSendReceipt.accepted = { messageId: receipt.user.id, conversationId: deliveredConversation, epoch };
-        if (CLF_DOM.provider === 'gemini' && !temporary) {
-          const latest = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
-          if (latest?.id === receipt.user.id && matchesSubmittedBootstrap(latest, input.text)) {
-            // Escaped native readback can satisfy the task receipt before the
-            // ordinary recorder can match its composer text. ACK now pins that
-            // exact native message. Spend it on the existing turn observer here;
-            // hidden tabs must not wait for another throttled timer to authorize
-            // the task's first tool call. Never mint a separate turn from ACK.
-            observe();
-            await flush();
+        confirmedSendReceipt = witnessedSendReceipt;
+        // Native rich editors can flatten paragraph separators in textContent.
+        // The accepted exact task/claim still owns its original length-framed
+        // source. Preserve those bytes for the ordinary frame-recovery reader.
+        if (sendText(input.text) === witnessedSendReceipt.text) witnessedSendReceipt.authoredText = input.text;
+        if (!temporary) {
+          // The native POST can prove Send before the shell mounts a readable
+          // question. Resolve the existing history gate now; requiring that row
+          // first makes its own Fiber observation wait on the gate it releases.
+          // The ordinary observer still requires the exact native message.
+          observe();
+          if (resumeIdentityPending && !waitedForReceiptIdentity && sendingTarget()) {
+            void pullActivity();
+            await waitPageView(() => !resumeIdentityPending, () => sendingTarget() &&
+              CLF_DOM.conversationId() === deliveredConversation, 5000, 200);
+            if (sendingTarget()) observe();
           }
+          await flush();
         }
       }
       // Stop/composer-clear may precede the exact user row. This receipt, not that early
@@ -13589,6 +13716,14 @@
       if (!sent && decision && desktopDecision === decision) desktopDecision = null;
       if (CLF_DOM.provider === 'gemini') { CLF_DOM.setOpeningClaim?.(null); CLF_DOM.setInputClaim?.(null); }
       desktopInputBusy = false;
+      // Native Send cleanup may finish mounting its readable question after
+      // the synchronous ACK observation. Recheck the same receipt once the
+      // input slot releases, without depending on a hidden page timer.
+      if (confirmedSendReceipt) queueMicrotask(() => {
+        const accepted = confirmedSendReceipt.accepted;
+        if (alive && userSendReceipt === confirmedSendReceipt && accepted?.epoch === epoch &&
+            CLF_DOM.conversationId() === accepted.conversationId) { observe(); void flush(); }
+      });
     }
   }
 

@@ -86,6 +86,24 @@ When available, an exactly joined native request ID can identify a ChatGPT call.
 
 Credentials belong to the device and provider endpoint that issued them. They are consumed before recording tool arguments and must never appear in public diagnostics. A stale, cancelled, rebound, blocked, expired or foreign grant must fail before execution. App-authored input/worker instructions refresh task authorization; tool schemas or connector names alone cannot repair a missing caller.
 
+An unsent ChatGPT claim may reuse frozen prompt bytes only while their embedded process-local grant still matches that exact claim. Replacing the preparing document or restarting the app rebuilds its authorization before Send, preserving the authored task and attachments. Authorized or ambiguous sends cannot enter this preparation path. Both adapters allow the same bounded 120-second native receipt window for initial tool admission; waiting never substitutes for the exact accepted question and turn.
+
+After the desktop input's exact ACK, both adapters promote its witnessed native message into the ordinary turn observer, including Markdown-escaped first messages. The submitted-text check excludes native connector chips in the same way as the captured Send receipt. The original history/adoption gate still resolves before journaling; rejected ACKs and replaced receipt, route or document cannot spend this promotion.
+
+The accepted app-owned task retains its original length-framed source when a rich editor flattens paragraph separators. The exact ACK and full-task comparison own this recovery, within the same native receipt window. Releasing the desktop input slot queues one observation of that same still-current receipt after native Send cleanup; it cannot resend text.
+
+ChatGPT upload custody retains only new remove controls created during the exclusive upload. A unique native numeric collision rename may bind before the first observation only with a retained unchanged draft. Completion must pass that draft's trusted-edit fence as well as file-count and Send-readiness checks. Another basename/extension, an extra file or a changed task cannot acquire the upload lease.
+
+The native Send button's click and its form submission are one transaction. The exact button/form submission consumes the click's receipt once; a cleared editor with a lingering attachment tile cannot replace it with an attachment-only receipt. The current ChatGPT shell's search-unit question inside a shell exchange is read once by its native message ID and role, independent of positional layout keys.
+
+A native search wrapper and nested legacy slot can describe the same question. Identified nested slots are resolved once; a nested positional view with no independent identity cannot make that question ambiguous. Distinct questions and unrelated duplicate slots remain refused. A short answer's explicit assistant Markdown wrapper also supplies the assistant section when the native search/agent-start wrapper is absent. Redacted layout and lifecycle counters report structural counts and ownership/completion booleans without prompt text, credentials or provider URLs.
+
+Fresh ChatGPT commands can acknowledge the exact native Send POST before the readable question mounts, using the same receipt as ordinary desktop input. The committed command retires its lease normally; the accepted receipt and unchanged document still own the destination checkpoint and journal release afterward. An accepted question's frozen submitted bytes enter ordinary history before its turn when the native question is not yet readable. Mounted source/history rows cannot become that question by anchor absence. This preserves first-tool attribution without waiting for a renderer scan that can itself wait for that tool.
+
+Resume credentials belong to the continuation's provider and original durable session, independent of the new-chat preference. ChatGPT checks the committed command, exact destination question and first live successor turn. Bootstrap Send reports its already-proved destination question to the existing continuation checkpoint immediately after ACK, before waiting for another native scan or picker refresh. This avoids making the first tool wait for a scan that can itself be waiting on that tool. Releasing the journal gate immediately re-observes the successor, including a response that finished during rebind.
+
+A native completed turn stops the displayed Active indicator when no newer work exists. The underlying recovery watch may remain while final history finishes recording; that watch is not a running answer. Exact running tools and a newer live turn retain their own activity projection.
+
 ## Plugins, skills and provider features
 
 Core always exposes local plugin discovery through `plugins` with `action: list`. Its live catalog comes from the installed plugin manager. Existing chats can use Core code mode when a provider cached an older direct-tool list. Follow-up preparation includes live discovery guidance and the exact configured connector name. This must work on both current providers without marketplace search or a new chat as the normal discovery step.
@@ -113,6 +131,8 @@ Native provider capabilities remain explicit: model selection, native projects, 
 ## Reading and validation
 
 Desktop Compact pickup acknowledges an exact live document before fetching its activity feed. The browser's IPC reply deadline must not reload that same document while a delayed feed response starts the handoff Send. An owner already between dispatch authorization and native acceptance retains custody. Actual Send, accepted question, saved Markdown and successor commit remain separate checkpoints for every provider; one provider's pending checkpoint cannot serialize another's.
+
+An exactly matching source route that Chrome still marks loading can refuse a checkpoint before forwarding it to the app. Only that explicit unsent refusal has a bounded readiness retry. A changed document, foreign route, lost response or uncertain dispatch cannot use this retry. The compact status remains Preparing until durable source dispatch evidence exists.
 
 Native approval policy reads live declarations from the requesting provider's endpoint explicitly. The UI's new-chat selector is only a presentation default and cannot select another existing chat's tools. Adapter-only tools must not be advertised by an endpoint that cannot validate their admission proof.
 

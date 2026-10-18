@@ -615,8 +615,9 @@ var CLF_DOM = (() => {
     if (!turn || !stamp?.startsWith(`${turn}:`)) return null;
     try { return decodeURIComponent(stamp.slice(turn.length + 1)) || null; } catch { return null; }
   }
+  let turnReadError = null;
   function turns() {
-    return safe(() => {
+    try {
       const out = [];
       let previous = null;
       for (const node of document.querySelectorAll(TURN)) {
@@ -627,8 +628,20 @@ var CLF_DOM = (() => {
         if (node.matches?.(SEARCH_TURN) && (node.closest?.(LEGACY_TURN) || node.closest?.(SHELL_TURN))) continue;
         const id = turnIdOf(node);
         if (node.matches?.(SHELL_TURN)) {
-          const users = [...node.querySelectorAll('[data-content-search-unit-key$=":user"]')].filter(slot => slot.closest('[data-turn-key]') === node);
-          const answered = node.querySelector('[data-chatgpt-agent-turn-start], [data-content-search-unit-key$=":assistant"]');
+          const userSlots = [...node.querySelectorAll('[data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]')].filter(slot => slot.closest('[data-turn-key]') === node);
+          // During rollout the new search wrapper can contain the old slot for
+          // the same native question. Retain its innermost exact-id slot once;
+          // sibling duplicates or different native questions remain ambiguous.
+          const users = userSlots.filter(slot => !userSlots.some(other => {
+            if (other === slot || !messageIdOf(other)) return false;
+            const own = messageIdOf(slot);
+            // A nested positional slot without its own native id is another
+            // view of the enclosing identified question, not a second author.
+            if (!own) return slot.contains(other) || other.contains(slot);
+            return own === messageIdOf(other) && slot.contains(other);
+          }));
+          const answered = [...node.querySelectorAll('[data-chatgpt-agent-turn-start], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"], [data-markdown-text-style="assistant-message"]')]
+            .some(slot => slot.closest('[data-turn-key]') === node);
           // Two user slots in one exchange are ambiguous and stay unread. A missing one is not: ChatGPT
           // unmounts the question while its answer stays (#900), and skipping the whole exchange then
           // hid that answer's final, so its turn never ended (#910). The answer keeps the exchange's
@@ -648,8 +661,12 @@ var CLF_DOM = (() => {
         previous = { node, nodes: [node], id, role };
         out.push(previous);
       }
+      turnReadError = null;
       return out;
-    }, []);
+    } catch (error) {
+      turnReadError = typeof error?.name === 'string' ? error.name.slice(0, 40) : 'Error';
+      return [];
+    }
   }
 
   // Shell exchanges contain both sides. The normal presentation owner still
@@ -801,7 +818,7 @@ var CLF_DOM = (() => {
         !host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]');
     };
     return {
-      attachments(nodes) { if (same()) files = [...nodes]; },
+      attachments(nodes) { if (!same()) return false; files = [...nodes]; return true; },
       current: ownsAttachments,
       async clear() {
         if (!ownsAttachments() || !host) return false;
@@ -2321,7 +2338,7 @@ var CLF_DOM = (() => {
         } else {
           const first = sections[0];
           if (first.matches?.(SHELL_TURN)) {
-            const users = [...first.querySelectorAll('[data-content-search-unit-key$=":user"]')]
+            const users = [...first.querySelectorAll('[data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]')]
               .filter(node => node.closest('[data-turn-key]') === first && messageIdOf(node));
             if (users.length !== 1 || !users[0].parentElement) return false;
             const user = users[0];
@@ -2911,7 +2928,21 @@ var CLF_DOM = (() => {
         if (!ownedTiles) {
           const unmatched = [...tiles];
           if (images.every((image) => {
-            const index = unmatched.findIndex((button) => composerFileName(button) === image.name);
+            let index = unmatched.findIndex((button) => composerFileName(button) === image.name);
+            if (index < 0 && draft) {
+              // ChatGPT can collision-rename before the first DOM observation,
+              // e.g. report.txt -> report(1).txt. Only a unique NEW remove control
+              // in this exclusive upload, with the unchanged trusted draft, may
+              // acquire that spelling; another basename/extension stays refused.
+              const dot = image.name.lastIndexOf('.');
+              const stem = dot > 0 ? image.name.slice(0, dot) : image.name;
+              const suffix = dot > 0 ? image.name.slice(dot) : '';
+              const candidates = unmatched.map((button, at) => ({ name: composerFileName(button), at })).filter(({ name }) => {
+                if (!name?.startsWith(stem + '(') || !name.endsWith(')' + suffix)) return false;
+                return /^[1-9]\d{0,3}$/.test(name.slice(stem.length + 1, name.length - suffix.length - 1));
+              });
+              if (candidates.length === 1) index = candidates[0].at;
+            }
             if (index < 0) return false;
             unmatched.splice(index, 1);
             return true;
@@ -2922,7 +2953,7 @@ var CLF_DOM = (() => {
         // Bind once by exact original names, then retain those exact remove controls.
         if (tiles.length !== ownedTiles.length || tiles.some(node => !ownedTiles.includes(node))) return finish(false);
         if (!host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]') && sendButtonEnabled(sendButton())) {
-          draft?.attachments(ownedTiles);
+          if (draft?.attachments(ownedTiles) === false) return finish(false);
           finish(true);
         }
       };
@@ -3515,6 +3546,13 @@ var CLF_DOM = (() => {
     isAppHomePath: pathname => pathname === '/' || pathname === '',
     AUTHORED_SELECTOR: '[data-message-author-role="assistant"], .markdown, [data-content-search-unit-key], [data-markdown-text-style="assistant-message"]',
     turnIdOf,
+    layoutDiagnostics: () => safe(() => ({ error: turnReadError,
+      roots: [...document.querySelectorAll(SHELL_TURN)].slice(-6).map(node => ({
+        legacyUsers: node.querySelectorAll('[data-content-search-unit-key$=":user"]').length,
+        searchUsers: node.querySelectorAll('[data-chatgpt-search-unit-key$=":user"]').length,
+        ignored: !!node.closest(`${OWN_SURFACES},.markdown,[data-markdown-text-style],[data-content-search-unit-key],[contenteditable]`),
+        kept: onKeptPage(node), identified: !!turnIdOf(node)
+      })) }), null),
     messageIdOf,
     composerAuthoredText,
     userPromptText,

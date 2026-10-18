@@ -77,6 +77,21 @@ describe('provider-specific compaction source checkpoints', () => {
 });
 
 describe('compaction destination route checkpoints', () => {
+  it.each(CHAT_PROVIDERS)('identifies a loading %s source as locally retryable without forwarding a checkpoint', async provider => {
+    const url = provider === 'gemini' ? `https://gemini.google.com/app/${id}` : 'https://chatgpt.com/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const conversationId = provider === 'gemini' ? id : 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const call = vi.fn(async () => ({ ok: true, data: {} }));
+    const context: any = { URL, load: async () => {}, ownsDocument: () => true, noteTabConversation: async () => {},
+      cleanConversationId: (value: string) => value || null, projectFromUrl: () => null,
+      chrome: { tabs: { get: async () => ({ url, status: 'loading' }) } }, call };
+    vm.createContext(context); vm.runInContext(backgroundProviderSource(source), context);
+    vm.runInContext(fragment('function conversationFromUrl(', '\n/** Serializes every ownership transition'), context);
+    vm.runInContext(fragment('const COMPACT_CHECKPOINT_FLAGS', '\nfunction serializeTab('), context);
+    vm.runInContext(`handler = ({ ${fragment('  async compact(message, _sender, source)', '\n  /**\n   * The goal loop:')} }).compact`, context);
+    expect(await context.handler({ conversationId, sourceDispatch: true }, {}, { tab: 10, documentId: 'exact-source' }))
+      .toEqual({ ok: false, error: 'source_page_loading', notForwarded: true });
+    expect(call).not.toHaveBeenCalled();
+  });
   it.each([
     { url: `https://gemini.google.com/app/${id}`, conversationId: id, allowed: true },
     { url: `https://gemini.google.com/u/2/app/${id}`, conversationId: id, allowed: true },

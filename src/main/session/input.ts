@@ -8,7 +8,7 @@ import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, type 
 import type { SessionSummary } from '../../shared/session.js';
 import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
-import { chatgptBindingInstructions, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
+import { chatgptBindingInstructions, hasCurrentChatgptBinding, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
@@ -663,10 +663,16 @@ async function prepare(entry: InputEntry, suffix = ''): Promise<InputEntry> {
       ? `Original user request:\n${entry.objective}\n\nOpening instruction:\n${entry.text}\n\nFollow the complete original request, including all constraints, throughout this task.`
       : entry.text;
   const mandatoryOverhead = `${TOOL_INPUT_HEADER}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
-  const routing = !entry.deliveryText && entry.state === 'browser' && entry.requiresAuthorization && entry.owner && entry.claimedBrowser && entry.offeredAt &&
+  const proof = entry.state === 'browser' && entry.requiresAuthorization && entry.owner && entry.claimedBrowser && entry.offeredAt &&
     chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'chatgpt'
-    ? chatgptBindingInstructions({ kind: 'input', input: { id: entry.id, owner: entry.owner, browser: entry.claimedBrowser, offeredAt: entry.offeredAt } }) : '';
-  const deliveryText = entry.deliveryText ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
+    ? { kind: 'input' as const, input: { id: entry.id, owner: entry.owner, browser: entry.claimedBrowser, offeredAt: entry.offeredAt } } : null;
+  // A reloaded preparation can replace an UNSENT document owner, and restart
+  // invalidates process-local keys. Never carry that old key into the real first
+  // Send. Authored text/attachments survive; authorized/ambiguous sends cannot
+  // enter this preparation path at all.
+  const frozen = entry.deliveryText && (!proof || hasCurrentChatgptBinding(entry.deliveryText, proof)) ? entry.deliveryText : undefined;
+  const routing = !frozen && proof ? chatgptBindingInstructions(proof) : '';
+  const deliveryText = frozen ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
     maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
   }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text, routing) ?? text + suffix + (routing ? '\n\n' + routing : '');
   // A single input must fit the tool envelope by itself. Aggregate batching below

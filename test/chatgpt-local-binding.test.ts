@@ -108,6 +108,24 @@ it('attributes a fresh opening only after its canonical Send binds the reserved 
   expect((await request).result.isError).not.toBe(true);
   expect((await store.findSessionByConversation(OTHER))?.id).toBe(task.sessionId);
 });
+
+it.each(['replacement document', 'restart'] as const)('refreshes only an unsent opening credential after %s without requiring another user prompt', async reason => {
+  const task = await claimed(null);
+  if (reason === 'restart') bindings.resetLocalBindingsForTests();
+  const owner = reason === 'restart' ? OWNER : 'replacement-document-owner';
+  const renewed = await post('/input/claim', { id: task.id, owner, conversationId: null, requiresAuthorization: true });
+  expect(renewed.status, JSON.stringify(renewed.data)).toBe(200);
+  const fresh = keyOf(renewed.data.input.deliveryText);
+  expect(fresh).not.toBe(task.key);
+  expect(renewed.data.input.deliveryText).toContain('Exact user task');
+  const again = await post('/input/claim', { id: task.id, owner, conversationId: null, requiresAuthorization: true });
+  expect(again.data.input.deliveryText).toBe(renewed.data.input.deliveryText);
+  expect((await post('/input/claim', { id: task.id, owner, conversationId: null, authorize: true })).data.ok).toBe(true);
+  expect((await post('/input/ack', { id: task.id, owner, conversationId: OTHER, messageId: task.messageId })).data.ok).toBe(true);
+  await start(OTHER, 'first-opening-turn');
+  expect((await call(fresh, read)).result.isError).not.toBe(true);
+  expect(JSON.stringify(await call(task.key, read))).toContain('CHATGPT_SESSION_NOT_AUTHORIZED');
+});
 it('keeps tools authorized above the local context reference and renews exact custody for recovery', async () => {
   await saveConfig({ ...getConfig(), compaction: { ...getConfig().compaction, auto: false } });
   const original = await claimed(); await acknowledge(original); await start();

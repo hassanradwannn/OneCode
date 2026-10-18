@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { mcpProvider } from '../mcp/provider-context.js';
+import { INPUT_RECEIPT_WAIT_MS } from '../../shared/input.js';
 
 const CONVERSATION = /^[a-f0-9]{16}$/;
 const KEY = /^sk-gemini-session-[A-Za-z0-9_-]{43}$/;
@@ -20,8 +21,8 @@ const RENEW_WITHIN_MS = 60 * 60 * 1000;
 const MAX_BINDINGS = 20_000;
 const MAX_LEDGER_BYTES = 8 * 1024 * 1024;
 /** The actual task's browser receipt normally precedes its first native tool call. */
-export const GEMINI_COMMAND_ACK_WAIT_MS = 12_000;
-export const GEMINI_INPUT_TURN_WAIT_MS = 12_000;
+export const GEMINI_COMMAND_ACK_WAIT_MS = INPUT_RECEIPT_WAIT_MS;
+export const GEMINI_INPUT_TURN_WAIT_MS = INPUT_RECEIPT_WAIT_MS;
 
 export interface GeminiBindingCommand { id: string; owner: string; lease: string }
 export interface GeminiBindingInput { id: string; owner: string; browser: string; offeredAt: number }

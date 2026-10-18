@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHAT_PROVIDERS, type ChatProvider } from '../src/shared/chat-provider.js';
-import { makeTempDir, removeTempDir } from './helpers.js';
+import { makeTempDir, removeTempDir, SAMPLE_BRIEF } from './helpers.js';
 vi.mock('electron', () => ({ safeStorage: { isAsyncEncryptionAvailable: async () => true,
   getSelectedStorageBackend: () => 'gnome_libsecret', encryptStringAsync: async (value: string) => Buffer.from(value),
   decryptStringAsync: async (value: Buffer) => ({ result: value.toString(), shouldReEncrypt: false }) }, clipboard: {}, shell: {} }));
@@ -16,6 +17,10 @@ const google = await import('../src/main/gemini/bindings.js');
 const local = await import('../src/main/session/local-binding.js');
 const { withMcpProvider } = await import('../src/main/mcp/provider-context.js');
 const { APP_VERSION, BRIDGE_PROTOCOL } = await import('../src/main/version.js');
+const continuations = await import('../src/main/session/continuation.js');
+const { startMcpServer } = await import('../src/main/mcp/server.js');
+const inputs = await import('../src/main/session/input.js');
+const { recordDeliveredInput } = await import('../src/main/session/input-history.js');
 
 type Adapter = {
   conversation: () => string;
@@ -43,6 +48,121 @@ const adapters: Record<ChatProvider, Adapter> = {
 };
 it('requires a worker-delivery test adapter for every provider', () => {
   expect(Object.keys(adapters).sort()).toEqual([...CHAT_PROVIDERS].sort());
+});
+
+describe.each(CHAT_PROVIDERS)('%s successor tool authorization', provider => {
+  let directory: string;
+  beforeEach(async () => {
+    directory = await makeTempDir('successor-tool-authorization-'); bearer = '';
+    bridge.resetBridgeForTests(); agents.resetAgentsForTests(); recorder.resetRecorderForTests(); local.resetLocalBindingsForTests();
+    resetSecretsCacheForTests(); initConfigPath(directory); initSecretsPath(directory); initDurableStore(directory); store.initSessionStore(directory);
+    const config = getConfig(); config.ui.chatProvider = provider === 'chatgpt' ? 'gemini' : 'chatgpt';
+    config.multiAgent.enabled = false; config.multiAgent.allowUnattributedCalls = false;
+    inputs.configureInputDelivery({ activity: () => ({ possible: false, exact: false }), changed: () => {},
+      applyAutomation: async () => {}, recordDelivered: recordDeliveredInput });
+    await google.initGeminiBindings(directory); await bridge.startBridge(); bridge.setBrowserOpener(async () => undefined);
+    bearer = (await post('/pair', {})).data.token;
+  });
+  afterEach(async () => {
+    await bridge.stopBridge(); await recorder.flushRecorder(); await store.flushSessions(); await flushDurable();
+    vi.restoreAllMocks(); inputs.resetInputForTests();
+    bridge.resetBridgeForTests(); recorder.resetRecorderForTests(); store.resetSessionStoreForTests(); resetDurableForTests();
+    await google.resetGeminiBindingsForTests(); local.resetLocalBindingsForTests(); resetSecretsCacheForTests(); await removeTempDir(directory);
+  });
+  it('stops displaying Active after completion while preserving a newer turn', async () => {
+    const conversation = adapters[provider].conversation();
+    const session = await store.createSession({ conversationId: conversation });
+    const observe = (events: unknown[]) => post('/events', { conversationId: conversation, events });
+    const displayed = async () => bridge.sessionActivityExpiresAt((await store.getSession(session.id))!);
+    await observe([
+      { kind: 'user_message', messageId: 'question-one', text: 'Hi', authoredNow: true, time: Date.now() },
+      { kind: 'turn_start', turnId: 'first-turn', time: Date.now() }
+    ]);
+    expect(await displayed()).toBeGreaterThan(Date.now());
+    await observe([{ kind: 'turn_end', turnId: 'first-turn', outcome: 'completed', time: Date.now() }]);
+    expect(await displayed()).toBeNull();
+    await observe([
+      { kind: 'user_message', messageId: 'question-two', text: 'More work', authoredNow: true, time: Date.now() },
+      { kind: 'turn_start', turnId: 'second-turn', time: Date.now() }
+    ]);
+    expect(await displayed()).toBeGreaterThan(Date.now());
+    await observe([{ kind: 'turn_end', turnId: 'first-turn', outcome: 'completed', time: Date.now() }]);
+    expect(await displayed()).toBeGreaterThan(Date.now());
+  });
+  it('waits for a delayed first-message receipt and rotates an unsent replacement document credential', async () => {
+    const conversation = adapters[provider].conversation();
+    const session = await store.createSession({ conversationId: conversation });
+    const inputId = randomUUID();
+    const deliveredOwner = provider === 'gemini' ? '27:replacement-document:0' : OWNER;
+    await inputs.enqueueInput({ id: inputId, sessionId: session.id, chatProvider: provider, text: 'Complete the first task.', mode: 'auto', dueAt: 0, model: null, reasoningEffort: null });
+    const credentialFor = async (owner: string) => {
+      const document = owner === OWNER ? 'replacement-document' : 'first-document';
+      const inputOwner = provider === 'gemini' ? `27:${document}:0` : owner;
+      const claim = await post('/input/claim', { id: inputId, owner: inputOwner, conversationId: conversation, requiresAuthorization: true });
+      expect(claim.status).toBe(200);
+      if (provider === 'chatgpt') return claim.data.input.deliveryText.match(/\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})/)[1];
+      const key = await post('/gemini/binding', { conversation_id: conversation,
+        input: { id: inputId, owner: inputOwner, tab_id: 27, document_id: document } });
+      expect(key.status, JSON.stringify(key.data)).toBe(200);
+      return key.data;
+    };
+    const old = await credentialFor('first-document'), fresh = await credentialFor(OWNER);
+    await expect(adapters[provider].authenticate(old)).rejects.toThrow(/NOT_AUTHORIZED|INPUT_NOT_OWNED/);
+    const now = performance.now(), clock = vi.spyOn(performance, 'now').mockReturnValue(now);
+    let settled = false;
+    const pending = adapters[provider].authenticate(fresh).finally(() => { settled = true; });
+    void pending.catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 75));
+    clock.mockReturnValue(now + 35_000);
+    await new Promise(resolve => setTimeout(resolve, 75));
+    expect(settled).toBe(false); // The browser's 120-second native receipt window is still open.
+    expect((await post('/input/claim', { id: inputId, owner: deliveredOwner, conversationId: conversation, authorize: true })).data.ok).toBe(true);
+    const messageId = randomUUID();
+    expect((await post('/input/ack', { id: inputId, owner: deliveredOwner, conversationId: conversation, messageId })).data.ok).toBe(true);
+    await post('/events', { conversationId: conversation, events: [{ kind: 'turn_start', turnId: 'first-task-turn', time: Date.now() }] });
+    expect((await pending).sessionId).toBe(session.id);
+    clock.mockRestore();
+  });
+  it('binds the first resumed plan to its original durable session with the opposite new-chat default', async () => {
+    const from = adapters[provider].conversation(), to = adapters[provider].conversation();
+    const session = await store.createSession({ conversationId: from });
+    const entry = await continuations.openContinuationNow(session.id, from, false);
+    await continuations.attachSummary(entry.token, SAMPLE_BRIEF);
+    const command = bridge.queueResume(session.id, entry.token)!;
+    const redeemed = await post('/commands/redeem', { id: command.id, client: OWNER });
+    expect(redeemed.status).toBe(200);
+    const credential = await adapters[provider].credential(command.id, redeemed.data.command.text, to);
+    let admitted = false;
+    const waiting = adapters[provider].authenticate(credential).then(value => { admitted = true; return value; });
+    void waiting.catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 75));
+    expect(admitted).toBe(false);
+    expect((await post('/compact', { token: entry.token, commandId: command.id, client: OWNER, destinationAttempt: true })).data.allowed).toBe(true);
+    expect((await post('/compact', { token: entry.token, commandId: command.id, client: OWNER, destinationDispatch: true })).data.armed).toBe(true);
+    expect((await post('/commands/ack', { id: command.id, client: OWNER, conversationId: to, status: 'sent' })).data.committed).toBe(true);
+    const messageId = provider === 'chatgpt' ? 'resumed-question' : `gemini:${to}:user:0123456789abcdef`;
+    expect((await post('/compact', { token: entry.token, conversationId: to, destinationMessageId: messageId })).data.committed).toBe(true);
+    await post('/events', { conversationId: to, events: [
+      { kind: 'user_message', messageId, text: redeemed.data.command.text, time: Date.now() },
+      { kind: 'turn_start', turnId: 'resumed-turn', time: Date.now() }
+    ] });
+    expect((await waiting).sessionId).toBe(session.id);
+    const config = getConfig();
+    const endpoint = await startMcpServer(() => ({ roots: [], caps: config.capabilities, readOnly: false, agentTools: false }), {}, provider);
+    try {
+      const code = 'text(await tools.update_plan({plan:[{step:"Verify resumed session",status:"completed"}]}));';
+      const args = provider === 'chatgpt' ? { code: `// onecode-session: ${credential}\n${code}` }
+        : { conversation_id: to, session_key: (credential as { session_key: string }).session_key, code };
+      const reply = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: args } }) });
+      expect(await reply.text()).toContain('Plan updated');
+      expect((await store.readSessionPlan(session.id))?.plan[0]?.step).toBe('Verify resumed session');
+    } finally { await endpoint.stop(); }
+    if (provider === 'chatgpt') {
+      await post('/events', { conversationId: to, events: [{ kind: 'user_message', messageId: 'later-question', text: 'A different task', time: Date.now() }] });
+      await expect(adapters[provider].authenticate(credential)).rejects.toThrow('CHATGPT_SESSION_NOT_AUTHORIZED');
+    }
+  });
 });
 
 const OWNER = 'worker-delivery-document', BROWSER = 'workerdeliverybrowser1111';

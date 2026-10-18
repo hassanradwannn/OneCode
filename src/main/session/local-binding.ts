@@ -10,6 +10,7 @@ import type { GeminiBindingEvidence, GeminiBindingInput, GeminiInputTurn } from 
 import { GeminiBindingError, geminiBindingIsCurrent, validateGeminiBindingEvidence, validateGeminiBindingReceiptEvidence } from '../gemini/bindings.js';
 import { mcpProvider } from '../mcp/provider-context.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
+import { INPUT_RECEIPT_WAIT_MS } from '../../shared/input.js';
 
 export interface ChatgptBindingEvidence {
   bindingId: string;
@@ -30,6 +31,16 @@ const digest = (key: string) => createHash('sha256').update(key).digest('hex');
 const PREFIX = /^\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})\r?\n/;
 const LIFETIME = 6 * 60 * 60_000;
 const fail = (): never => { throw new GeminiBindingError('CHATGPT_SESSION_NOT_AUTHORIZED'); };
+
+/** Preparation may reuse frozen text only while its exact unsent claim still
+ * owns the embedded process-local credential. This never authorizes execution. */
+export function hasCurrentChatgptBinding(text: string, proof: ChatgptBindingProof): boolean {
+  const keys = [...text.matchAll(/^\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})\r?$/gm)];
+  return keys.some(match => {
+    const grant = grants.get(digest(match[1]!));
+    return !!grant && grant.expiresAt > Date.now() && JSON.stringify(grant.proof) === JSON.stringify(proof);
+  });
+}
 
 /** Called only inside the paired outbox/command claim owner, never by an MCP tool. */
 export function chatgptBindingInstructions(proof: ChatgptBindingProof): string {
@@ -88,7 +99,7 @@ export async function authenticateChatgptExec(name: unknown, args: unknown): Pro
       (match && hasKey && match[1] !== input.onecode_session_key)) fail();
   const grant = grants.get(digest((hasKey ? input.onecode_session_key : match![1]) as string));
   if (!grant) fail();
-  const deadline = performance.now() + 12_000;
+  const deadline = performance.now() + INPUT_RECEIPT_WAIT_MS;
   for (;;) {
     const current = await status(grant!);
     if (current.state === 'invalid') fail();

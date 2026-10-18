@@ -25,8 +25,9 @@ let contentSource = '';
  * The page-helper version the content script under test expects, so its Fiber replies match it.
  * Read at load: some fixtures are built while their describe block is collected.
  */
-const fiberVersion = Number(/const FIBER_VERSION = (\d+);/.exec(
-  await fs.readFile(path.join(process.cwd(), 'extension', 'content.js'), 'utf8'))?.[1]);
+const protocolSource = await fs.readFile(path.join(process.cwd(), 'extension', 'content.js'), 'utf8');
+const fiberVersion = Number(/const FIBER_VERSION = (\d+);/.exec(protocolSource)?.[1]);
+const recorderVersion = Number(/const RECORDER_VERSION = (\d+);/.exec(protocolSource)?.[1]);
 if (!Number.isInteger(fiberVersion)) throw new Error('content.js no longer declares FIBER_VERSION');
 
 beforeAll(async () => {
@@ -282,7 +283,7 @@ async function harness(
             own &&
             (own.data?.allowed !== undefined ||
               own.data?.armed !== undefined ||
-              (own.ok === false && /^(source|destination)_send_/.test(String(own.error || ''))));
+              (own.ok === false && (/^(source|destination)_send_/.test(String(own.error || '')) || own.error === 'source_page_loading')));
           return spoke ? own : { ok: true, data: arming ? { armed: true } : { allowed: true } };
         }
         const answer = reply.get(message.type);
@@ -791,8 +792,9 @@ describe('desktop input delivery and helper ownership', () => {
       live!.hook.observe();
     });
     expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: null })).toEqual({ ok: true });
-    expect(emitted(live.sent, 'turn_start')).toHaveLength(0);
-    // The question is gone and the whole answer is already final when this page first reads it.
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
+    // ACK now publishes the accepted question immediately. Its later virtualized
+    // answer still owns that one turn when the question leaves the native DOM.
     user.remove();
     const answer = assistantTurn(live.document, 'fast-answer', []);
     prose(live.document, answer, 'fast-message', 'ready');
@@ -807,7 +809,7 @@ describe('desktop input delivery and helper ownership', () => {
     releaseActivity?.({ ok: true, data: { entries: [], stream: [], nextSince: 1, activeTurnId: null, userAnchors: [] } });
     await settle(); live.hook.observe(); await settle(); await live.hook.flush();
     expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
-    expect(emitted(live.sent, 'turn_end')).toHaveLength(0);
+    expect(emitted(live.sent, 'turn_end')).toHaveLength(1);
     // The page keeps reporting the same finished answer; that final is this turn's own.
     await bindFiberTurns([{ section: answer, turn: { turnId: 'fast-answer', conversationId: chatB, endMessageId: 'fast-message',
       messages: [{ role: 'assistant', messageId: 'fast-message', rawMessageId: 'fast-message', rawText: 'ready' }] } }]);
@@ -1357,7 +1359,7 @@ describe('desktop input delivery and helper ownership', () => {
     live.document.execCommand = vi.fn(() => false);
     expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: null })).toEqual({ ok: false });
     expect(live.sent.filter(message => message.fail)).toEqual([expect.objectContaining({
-      id: inputId, owner: 'input-owner', error: 'Gemini did not accept the text (native_edit_rejected)'
+      id: inputId, owner: 'input-owner', error: 'The provider did not accept the text (native_edit_rejected)'
     })]);
     expect(live.sent.some(message => message.authorize || message.ack)).toBe(false);
   });
@@ -1674,6 +1676,11 @@ describe('desktop input delivery and helper ownership', () => {
     expect(live.sent.filter(message => message.type === 'desktop_input' && message.ack)).toEqual([
       expect.objectContaining({ id: inputId, owner: 'input-owner', conversationId: chatA, ack: true })
     ]);
+    await live.hook.flush();
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
+    live.hook.observe();
+    await live.hook.flush();
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
   });
 
   /**
@@ -1760,20 +1767,70 @@ describe('desktop input delivery and helper ownership', () => {
   });
 
   it('ACKs a fresh input whose user row the page stores Markdown-escaped', async () => {
-    const typed = '[[COS_CONTEXT:1]]\nInspect #3 of the *exact* task_list [here](x).';
-    const stored = '[[COS_CONTEXT:1]]\\\nInspect \\#3 of the \\*exact\\* task\\_list \\[here\\](x).';
+    const typed = '[[COS_CONTEXT:1]]\nx\n[[/COS_CONTEXT]]\n\nInspect #3 of the *exact* task_list [here](x).';
+    const stored = '[[COS_CONTEXT:1]]\\\nx\\\n[[/COS_CONTEXT]]\\\n\\\nInspect \\#3 of the \\*exact\\* task\\_list \\[here\\](x).';
     live = await harness(`https://chatgpt.com/?cos-input=${inputId}`, {
       desktop_input: message => ({ ok: true, data: message.authorize ? { ok: true } : message.ack ? { ok: true } : { input: claimed({ text: typed }) } })
     });
     live.document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
       live!.dom.reconfigure({ url: `https://chatgpt.com/c/${chatA}` });
-      userTurn(live!.document, 'escaped-desktop-user', stored);
+      // The real Send already fired; rendering its escaped bubble is not a
+      // second composer submission with different text.
+      userTurn(live!.document, 'escaped-desktop-user', stored, { sent: false });
       live!.document.querySelector('#prompt-textarea')!.textContent = '';
       live!.hook.observe();
     });
     expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: null })).toEqual({ ok: true });
     expect(live.sent.filter(message => message.type === 'desktop_input' && message.ack)).toEqual([
       expect.objectContaining({ id: inputId, owner: 'input-owner', conversationId: chatA, ack: true })
+    ]);
+    await live.hook.flush();
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
+  });
+
+  it.each([false, true])('resolves opening history after native POST ACK before the readable question mounts (attachment submit: %s)', async attachmentSubmit => {
+    const nativeQuestion = '12345678-1234-4234-8234-123456789abc';
+    let acknowledged = false, historyAfterAck = false, sends = 0;
+    live = await harness(`https://chatgpt.com/?cos-input=${inputId}`, {
+      desktop_input: message => {
+        if (message.ack) { acknowledged = true; return { ok: true, data: { ok: true } }; }
+        return { ok: true, data: message.authorize ? { ok: true } : { input: claimed() } };
+      },
+      activity: () => {
+        if (acknowledged && !historyAfterAck) {
+          historyAfterAck = true;
+          userTurn(live!.document, 'post-accepted-question', text, { sent: false });
+          live!.document.querySelector('[data-message-author-role="user"]')!.setAttribute('data-message-id', nativeQuestion);
+          startGenerating(live!.document, { send: false });
+        }
+        return { ok: true, data: { entries: [], stream: [], nextSince: 0, activeTurnId: null,
+          userAnchors: acknowledged ? [{ seq: 1, time: 1_700_000_000_000, messageId: nativeQuestion }] : [] } };
+      }
+    });
+    if (attachmentSubmit) {
+      const adapter = (live.window as any).CLF_DOM;
+      adapter.composerAttachmentNames = () => ['test.txt'];
+    }
+    live.document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
+      sends++;
+      live!.dom.reconfigure({ url: `https://chatgpt.com/c/${chatA}` });
+      live!.window.dispatchEvent(new live!.window.MessageEvent('message', { source: live!.window as unknown as Window,
+        origin: 'https://chatgpt.com', data: { type: 'cos-send-request', messageIds: [nativeQuestion] } }));
+      live!.document.querySelector('#prompt-textarea')!.textContent = '';
+      if (attachmentSubmit) {
+        const button = live!.document.querySelector('[data-testid="send-button"]')!;
+        const form = button.closest('form')!;
+        form.dispatchEvent(new live!.window.SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: button as HTMLButtonElement }));
+      }
+    });
+    expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: null })).toEqual({ ok: true });
+    await settle(); await live.hook.flush();
+    expect(historyAfterAck).toBe(true);
+    expect(sends).toBe(1);
+    expect((live.window as any).CLF_DOM.messages().find((row: any) => row.role === 'user')?.id).toBe(nativeQuestion);
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
+    expect(live.sent.filter(message => message.type === 'desktop_input' && message.ack)).toEqual([
+      expect.objectContaining({ messageId: nativeQuestion, conversationId: chatA })
     ]);
   });
 
@@ -2406,7 +2463,7 @@ describe('desktop input delivery and helper ownership', () => {
     };
     expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: chatA })).toEqual({ ok: false });
     expect(live.sent.find(message => message.type === 'desktop_input' && message.fail)?.error)
-      .toBe('This chat was deleted in Gemini. Start a new chat to continue.');
+      .toBe('This chat was deleted by the provider. Start a new chat to continue.');
     expect(live.sent).toContainEqual(expect.objectContaining({ type: 'conversation_deleted', conversationId: chatA }));
   });
 
@@ -2424,7 +2481,7 @@ describe('desktop input delivery and helper ownership', () => {
     });
     live.document.querySelector('[data-testid="send-button"]')!.addEventListener('click', sent);
     expect(await live.runtimeMessage({ type: 'clf-desktop-input', id: inputId, conversationId: null })).toEqual({ ok: confirmed });
-    expect(selectSettings).toHaveBeenCalledWith('gpt-5.6-sol', 'high', expect.any(Function));
+    expect(selectSettings).toHaveBeenCalledWith('gpt-5.6-sol', 'high', expect.any(Function), expect.any(Function));
     expect(sent).toHaveBeenCalledTimes(confirmed ? 1 : 0);
     expect(live.sent.filter(message => message.type === 'desktop_input' && message.ack)).toHaveLength(confirmed ? 1 : 0);
   });
@@ -3595,22 +3652,22 @@ describe('H2 resume transport evidence', () => {
  * is prove which sections it was already watching before the URL moved.
  */
 describe('recording authored message text', () => {
-  it('reports Gemini’s generated document title as conversation metadata and ignores the generic shell title', async () => {
+  it('reports ChatGPT’s generated document title as conversation metadata and ignores the generic shell title', async () => {
     live = await harness();
-    live.document.title = 'Fix Local Files Reconstruction | Gemini';
+    live.document.title = 'Fix Local Files Reconstruction | ChatGPT';
     live.hook.observe();
     await settle();
     expect(emitted(live.sent, 'conversation_title').map((entry) => entry.event.text)).toEqual([
       'Fix Local Files Reconstruction'
     ]);
 
-    live.document.title = 'Gemini';
+    live.document.title = 'ChatGPT';
     live.hook.observe();
     await settle();
     expect(emitted(live.sent, 'conversation_title')).toHaveLength(1);
 
-    // A project chat carries the project's page title until Gemini names the conversation.
-    live.document.title = 'Gemini - Homelab Development';
+    // A project chat carries the project's page title until ChatGPT names the conversation.
+    live.document.title = 'ChatGPT - Homelab Development';
     live.hook.observe();
     await settle();
     expect(emitted(live.sent, 'conversation_title')).toHaveLength(1);
@@ -11442,17 +11499,17 @@ describe('how a turn is recorded as having ended', () => {
     expect(terminal).toContainEqual(expect.objectContaining({ turnId: started.turnId, outcome: 'failed' }));
   });
 
-  it('treats Gemini stream recovery polling timeout as a recoverable transport failure', async () => {
+  it('treats ChatGPT stream recovery polling timeout as a recoverable transport failure', async () => {
     live = await harness();
     startGenerating(live.document);
     assistantTurn(live.document, 'stream-recovery-timeout', []);
     live.hook.observe(); await settle();
-    alertBanner(live.document, 'Gemini stream recovery polling timed out');
+    alertBanner(live.document, 'ChatGPT stream recovery polling timed out');
     live.hook.observe(); await settle();
     const [failure] = emitted(live.sent, 'chat_error').map((entry) => entry.event);
     const [started] = emitted(live.sent, 'turn_start').map((entry) => entry.event);
     expect(failure).toMatchObject({
-      text: 'Gemini stream recovery polling timed out', recoverable: true, turnId: started.turnId
+      text: 'ChatGPT stream recovery polling timed out', recoverable: true, turnId: started.turnId
     });
   });
 
@@ -12471,7 +12528,7 @@ describe('evidence from the page context', () => {
           blocking: true,
           recoverable: false,
           retryAt: observedAt + 24_000,
-          text: expect.stringContaining('retry wait')
+          text: expect.stringContaining('history returned HTTP 429')
         })
       })
     ]);
@@ -14525,6 +14582,35 @@ describe('the Compact & resume control', () => {
     expect(live.document.querySelector('.clf-pill-text')!.textContent).toContain('would not stop');
   });
 
+  it.each(['ticket', 'resume', 'sourceAttempt', 'sourceDispatch'])('waits for the exact source page at %s without a watchdog reload or duplicate Send', async checkpoint => {
+    let deferred = 0;
+    live = await harness(undefined, {
+      activity: () => ({ ok: true, data: { entries: [], stream: [], pendingTools: 0 } }),
+      compact: message => {
+        if (message[checkpoint] && ++deferred <= 2) return { ok: false, error: 'source_page_loading', notForwarded: true };
+        return { ok: true, data: { token: 'source-loading', prompt: 'Write the handoff brief.',
+          job: { stage: 'handoff-pending', busy: true, sourceSend: { state: 'not-attempted' } } } };
+      }
+    });
+    const sends = watchSend(live.document);
+    await live.hook.startCompact();
+    expect(deferred).toBe(3);
+    expect(sends()).toBe(1);
+    expect(live.sent.some(message => message.type === 'reload')).toBe(false);
+  });
+
+  it('does not retry a loading refusal without proof that no checkpoint was forwarded', async () => {
+    let attempts = 0;
+    live = await harness(undefined, {
+      activity: () => ({ ok: true, data: { entries: [], stream: [], pendingTools: 0 } }),
+      compact: () => { attempts++; return { ok: false, error: 'source_page_loading' }; }
+    });
+    const sends = watchSend(live.document);
+    await live.hook.startCompact();
+    expect(attempts).toBe(1);
+    expect(sends()).toBe(0);
+  });
+
   it('never overwrites a draft the user is writing', async () => {
     live = await harness(undefined, {
       activity: () => ({ ok: true, data: { entries: [], stream: [], nextSince: 0, pendingTools: 0, job: null } }),
@@ -15555,7 +15641,7 @@ describe('the field above the composer', () => {
   it('names the stage the transaction is in', async () => {
     live = await harness();
     expect(view({ job: { stage: 'handoff-pending', busy: true } })).toMatchObject({
-      stage: 'Waiting for the handoff response'
+      stage: 'Preparing'
     });
     expect(view({ job: { stage: 'opening', busy: true } })).toMatchObject({ stage: 'Opening a fresh chat' });
     expect(view({ job: { stage: 'waiting-for-browser', busy: true } })).toMatchObject({ stage: 'Waiting for Chrome' });
@@ -15836,9 +15922,8 @@ describe('the fresh chat the app opened', () => {
     await settle();
     expect(live.sent[0]?.type).toBe('register_document');
     expect(live.sent[1]?.type).toBe('redeem');
-    expect(live.sent.findIndex((message) => message.type === 'redeem')).toBeLessThan(
-      live.sent.findIndex((message) => message.type === 'status')
-    );
+    const statusIndex = live.sent.findIndex((message) => message.type === 'status');
+    expect(statusIndex === -1 || live.sent.findIndex((message) => message.type === 'redeem') < statusIndex).toBe(true);
     expect(live.document.querySelector('#prompt-textarea')!.textContent).toContain('the long carried handoff');
     expect(live.sent.some((message) => message.type === 'compact' && message.destinationAttempt === true)).toBe(true);
 
@@ -16087,7 +16172,7 @@ describe('the fresh chat the app opened', () => {
         expect(detail).toContain('last=source-turns-remain');
       }
       expect(error).not.toContain('[project-entry:');
-      expect(error).toContain('Gemini could not open the source Project through its native link; nothing was sent');
+      expect(error).toContain('The provider could not open the source Project through its native link; nothing was sent');
     }
   });
 
@@ -16372,6 +16457,49 @@ describe('the fresh chat the app opened', () => {
         error: expect.stringMatching(/composer changed|draft was preserved|replaced the composer/)
       })
     ]);
+  });
+
+  it.each([false, true])('ACKs the exact native Resume POST before its readable question mounts (mounted source history: %s)', async mountedHistory => {
+    const destination = '22222222-3333-4444-5555-666666666666';
+    const question = '12345678-1234-4234-8234-123456789abc';
+    const token = '0123456789abcdef0123456789abcdef';
+    const text = `[[CLF-RESUME:${token}]]\n\nKeep the original task stopped. Read the test fixture only.`;
+    let sends = 0, acknowledged = false;
+    live = await harness('https://chatgpt.com/?clf=cmd-native-resume-post', {
+      redeem: () => ({ ok: true, command: { id: 'cmd-native-resume-post', type: 'resume', text, agent: null } }),
+      compact: message => ({ ok: true, data: message.destinationAttempt ? { allowed: true }
+        : message.destinationDispatch ? { armed: true } : { committed: true, conversationId: destination } }),
+      ack: () => { acknowledged = true; return { ok: true }; },
+      activity: () => ({ ok: true, data: { entries: [], stream: [], nextSince: 0,
+        ...(acknowledged ? { sessionId: 'same-source-session', bootstrap: 'resume' } : {}) } })
+    }, (document, dom) => {
+      document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
+        sends++;
+        dom.reconfigure({ url: `https://chatgpt.com/c/${destination}` });
+        dom.window.dispatchEvent(new dom.window.MessageEvent('message', { source: dom.window as unknown as Window,
+          origin: 'https://chatgpt.com', data: { type: 'cos-send-request', messageIds: [question] } }));
+        document.querySelector('#prompt-textarea')!.textContent = '';
+        if (mountedHistory) userTurn(document, 'retained-source-question', 'Earlier source question', { sent: false });
+        startGenerating(document, { send: false });
+      });
+    });
+    await settle(400);
+    expect(sends).toBe(1);
+    expect(acknowledged).toBe(true);
+    expect(live.sent.filter(message => message.type === 'compact' && message.destinationMessageId)).toContainEqual(
+      expect.objectContaining({ conversationId: destination, destinationMessageId: question, token }));
+    expect((live.window as any).CLF_DOM.messages().some((message: any) => message.id === question)).toBe(false);
+    await live.hook.pullActivity();
+    live.hook.observe();
+    await settle();
+    await live.hook.flush();
+    expect(emitted(live.sent, 'user_message')).toContainEqual(expect.objectContaining({ event: expect.objectContaining({
+      messageId: question, text, authoredNow: true
+    }) }));
+    expect(emitted(live.sent, 'turn_start')).toHaveLength(1);
+    const journal = live.sent.filter(message => message.type === 'events').flatMap(message => message.entries);
+    const start = journal.findIndex(entry => entry.event.kind === 'turn_start');
+    expect(journal.slice(0, start).filter(entry => entry.event.kind === 'user_message').at(-1)?.event.messageId).toBe(question);
   });
 
   it.each([true, false])('journals the verified worker model only after successful bootstrap (%s)', async confirmed => {
@@ -16710,7 +16838,7 @@ describe('the fresh chat the app opened', () => {
     const failed = live.sent.find(message => message.type === 'ack' && message.status === 'failed');
     expect(edit).toHaveBeenCalledExactlyOnceWith('insertHTML', false, expect.stringContaining('Private test brief'));
     expect(send).not.toHaveBeenCalled();
-    expect(failed).toMatchObject({ id: 'cmd-native-edit-diagnostic', error: 'Gemini refused the inserted text (native_edit_rejected)' });
+    expect(failed).toMatchObject({ id: 'cmd-native-edit-diagnostic', error: 'The provider refused the inserted text (native_edit_rejected)' });
     expect(failed?.error).not.toContain('Private test brief');
     expect(composerText(live.document)).toBe('');
   });
@@ -17393,7 +17521,7 @@ describe('the fresh chat the app opened', () => {
         id: 'cmd-enter-noop',
         status: 'failed',
         // #882: the failure names the step Send reached, here a Send button that never enabled.
-        error: 'Gemini did not accept the bootstrap send (send-not-ready)',
+        error: 'The provider did not accept the bootstrap send (send-not-ready)',
         // #1086: refused before the native click, so nothing was sent and a wake may be retried.
         detail: 'transient'
       })
@@ -18795,7 +18923,7 @@ describe('one live isolated-world recorder per document', () => {
 
     await expect(live.runtimeMessage({ type: 'clf-recorder-ping' })).resolves.toEqual({
       ok: true,
-      recorderVersion: 26,
+      recorderVersion,
       busy: false
     });
   });
@@ -19573,7 +19701,7 @@ describe('the goal loop', () => {
     const token = 'iNHBs_C0p8fcQ9y7sG-I-A';
     const typed = `[[CLF-RESUME:${token}]]\n\n${brief}`;
     const asRendered = typed.replace('CLF-RESUME:', 'CLF-RESUME\\:').replace('iNHBs_C0', 'iNHBs\\_C0');
-    let committed = false;
+    let acknowledged = false, committed = false;
     live = await harness(
       `https://chatgpt.com/?clf=${commandId}`,
       {
@@ -19581,11 +19709,15 @@ describe('the goal loop', () => {
         compact: (message) => {
           if (message.destinationAttempt) return { ok: true, data: { allowed: true } };
           if (message.destinationDispatch) return { ok: true, data: { armed: true } };
-          if (message.destinationMessageId) return { ok: true, data: { committed: true, conversationId: CHAT, commandId } };
+          if (message.destinationMessageId) {
+            expect(acknowledged).toBe(true);
+            committed = true;
+            return { ok: true, data: { committed: true, conversationId: CHAT, commandId } };
+          }
           if (message.destinationLost) return { ok: true, data: { released: true } };
           return { ok: false, error: 'unexpected_compact_shape' };
         },
-        ack: () => { committed = true; return { ok: true }; },
+        ack: () => { acknowledged = true; return { ok: true }; },
         activity: () => ({
           ok: true,
           data: { entries: [], stream: [], nextSince: 0, pendingTools: 0, job: null,
@@ -19606,6 +19738,10 @@ describe('the goal loop', () => {
 
     const acks = live.sent.filter((message) => message.type === 'ack' && message.id === commandId);
     expect(acks.map((message) => message.conversationId)).toContain(CHAT);
+    // No later Fiber answer or activity poll is needed to report the native
+    // destination question; the first successor tool may already be waiting.
+    expect(live.sent).toContainEqual(expect.objectContaining({ type: 'compact',
+      destinationMessageId: 'm-resume-user', token, conversationId: CHAT }));
     expect(live.sent.filter((message) => message.type === 'compact' && message.destinationLost === true)).toEqual([]);
     await live.hook.pullActivity();
     live.hook.observe();
@@ -21052,7 +21188,7 @@ describe('the goal loop', () => {
     ).toMatchObject({ stage: 'deepseek-v4-flash wrote the next message', body: 'what about the tests' });
     expect(
       view({ phase: 'sending', error: '', model: MODEL, draft: { stage: 'ready', reply: 'what about the tests' } })
-    ).toMatchObject({ stage: 'Sending it to Gemini', body: 'what about the tests' });
+    ).toMatchObject({ stage: 'Sending it to the provider', body: 'what about the tests' });
     expect(view({ phase: 'done', error: '', model: MODEL, draft: null })).toMatchObject({
       stage: 'Goal reached',
       detail: 'nothing was sent',
@@ -21077,10 +21213,10 @@ describe('the goal loop', () => {
       view({ phase: 'drafting', error: '', model: 'llama3.1', provider: 'custom', draft: { stage: 'failed' } })
     ).toMatchObject({ detail: 'custom endpoint did not answer' });
     expect(view({ phase: 'requesting', model: 'gpt-5.6-sol', backend: 'chatgpt', provider: 'openrouter', draft: null }))
-      .toMatchObject({ stage: 'Sending the answer to Gemini helper', detail: 'gpt-5.6-sol' });
+      .toMatchObject({ stage: 'Sending the answer to the provider helper', detail: 'gpt-5.6-sol' });
     expect(view({ phase: 'drafting', model: MODEL, backend: 'api', provider: 'custom',
       draft: { stage: 'sending', backend: 'chatgpt', model: 'gpt-5.6-sol' } }))
-      .toMatchObject({ stage: 'Sending the answer to Gemini helper', detail: 'gpt-5.6-sol' });
+      .toMatchObject({ stage: 'Sending the answer to the provider helper', detail: 'gpt-5.6-sol' });
     expect(view({ phase: 'drafting', model: MODEL, backend: 'api',
       draft: { stage: 'answering', backend: 'chatgpt', model: 'gpt-5.6-sol', text: 'Next task' } }))
       .toMatchObject({ stage: 'gpt-5.6-sol is answering', body: 'Next task' });
@@ -21182,7 +21318,7 @@ describe('the goal loop', () => {
   });
 
   it.each([
-    { backend: 'chatgpt', provider: 'openrouter', model: 'gpt-5.6-sol', destination: 'Gemini helper' },
+    { backend: 'chatgpt', provider: 'openrouter', model: 'gpt-5.6-sol', destination: 'the provider helper' },
     { backend: 'api', provider: 'custom', model: 'local-model', destination: 'custom endpoint' }
   ])('keeps the actual $backend driver in the mounted progress panel', async driver => {
     const activity = () => {
@@ -23087,7 +23223,7 @@ describe('ordinary Continue native recovery', () => {
     // Chrome's static content cache can precede the helper read from disk by repair.
     win.__CLF_CONTENT_RECORDER__.stop();
     win.CLF_TEST_HOOK = (api: Hook) => { live!.hook = api; };
-    win.eval(contentSource.replace('const RECORDER_VERSION = 27;', 'const RECORDER_VERSION = 13;')
+    win.eval(contentSource.replace(/const RECORDER_VERSION = \d+;/, 'const RECORDER_VERSION = 13;')
       .replace(`const FIBER_VERSION = ${fiberVersion};`, 'const FIBER_VERSION = 12;'));
     await settle();
     userTurn(live.document, 'source', 'Complete the task');
@@ -23308,7 +23444,7 @@ describe('ordinary Continue native recovery', () => {
       .toMatchObject({ safe: false, why: 'changed', changed: 'progress', progressBy: 'app-page_tool' });
     userTurn(live.document, 'newer-question', 'A newer instruction');
     expect(await live.runtimeMessage({ type: 'clf-repair-check', conversationId: chat, expected: before }))
-      .toMatchObject({ safe: false, why: 'changed', changed: 'question' });
+      .toMatchObject({ safe: false, why: 'changed', changed: 'turn' });
   });
 
   it.each(['busy', 'idle', 'draft', 'revoked', 'became-idle'] as const)('uses Stop only for an unchanged active page (%s)', async scenario => {
@@ -23567,9 +23703,9 @@ describe('a chat deleted in Gemini', () => {
     deleted(chat); deleted(chat);
     await settle(); await live.hook.flush();
     expect(emitted(live.sent, 'chat_error').map(entry => entry.event)).toEqual([expect.objectContaining({
-      turnId: started.turnId, recoverable: false, text: 'This chat was deleted in Gemini. Start a new chat to continue.' })]);
+      turnId: started.turnId, recoverable: false, text: 'This chat was deleted by the provider. Start a new chat to continue.' })]);
     expect(emitted(live.sent, 'turn_end').map(entry => entry.event)).toEqual([expect.objectContaining({
-      turnId: started.turnId, outcome: 'failed', detail: 'This chat was deleted in Gemini. Start a new chat to continue.' })]);
+      turnId: started.turnId, outcome: 'failed', detail: 'This chat was deleted by the provider. Start a new chat to continue.' })]);
     expect(live.sent.filter(message => message.type === 'conversation_deleted')).toEqual([
       expect.objectContaining({ conversationId: chat })]);
   });
@@ -23584,7 +23720,7 @@ describe('a chat deleted in Gemini', () => {
     const [started] = emitted(live.sent, 'turn_start').map(entry => entry.event);
     expect(started?.turnId).toBeTruthy();
     expect(emitted(live.sent, 'turn_end').map(entry => entry.event)).toEqual([expect.objectContaining({
-      turnId: started.turnId, outcome: 'failed', detail: 'This chat was deleted in Gemini. Start a new chat to continue.' })]);
+      turnId: started.turnId, outcome: 'failed', detail: 'This chat was deleted by the provider. Start a new chat to continue.' })]);
     expect(emitted(live.sent, 'chat_error')).toHaveLength(1);
   });
 
@@ -23617,7 +23753,7 @@ describe('archiving a retired worker chat', () => {
     expect(calls).toEqual([
       { url: 'https://chatgpt.com/api/auth/session', method: 'GET', headers: {} },
       { url: `https://chatgpt.com/backend-api/conversation/${chat}`, method: 'PATCH',
-        headers: { Authorization: 'Bearer token-1', 'Content-Type': 'application/json', 'Gemini-Account-Id': 'account-1' },
+        headers: { Authorization: 'Bearer token-1', 'Content-Type': 'application/json', 'ChatGPT-Account-Id': 'account-1' },
         body: JSON.stringify({ is_archived: true }) }
     ]);
 

@@ -75,7 +75,7 @@ function nativeStrongMenu(includeSkill = false) {
 describe('native Gemini input ownership',()=>{
 it('accepts an explicit native model accessibility label without opening or changing the picker',async()=>{
 const picker=document.createElement('button');picker.ariaLabel='Open mode picker, currently Gemini Flash-Lite';picker.textContent='arrow_drop_down';document.body.append(picker);
-const click=vi.spyOn(picker,'click');expect(api.visibleModelSelection()).toEqual({model:'Gemini Flash-Lite',reasoningEffort:null});
+const click=vi.spyOn(picker,'click');expect(api.visibleModelSelection()).toEqual({model:'gemini-current',reasoningEffort:null});
 const pending=api.selectModelSettings('gemini-current',null);await vi.advanceTimersByTimeAsync(100);expect(await pending).toBe(true);expect(click).not.toHaveBeenCalled();});
   it.each(['accepted', 'rejected', 'foreign edit', 'changed route', 'retired claim', 'lost Core token'] as const)('prepares native attachments only after tool-free warmup and Core selection, before real task authorization: %s', async outcome => {
     dom.window.history.replaceState({}, '', '/u/1/app');

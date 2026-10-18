@@ -40,3 +40,6 @@ export interface QueuedInputNowIntent {
   delivery: 'tool' | 'direct' | 'idle';
   turnId: string | null;
 }
+/** Match the Companion's bounded native Send-receipt window. Tool admission may
+ * wait for that exact receipt; a short local timer cannot declare it revoked. */
+export const INPUT_RECEIPT_WAIT_MS = 120_000;
