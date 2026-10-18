@@ -15888,6 +15888,46 @@ describe('folding away the chat’s opening instruction', () => {
 });
 
 describe('the fresh chat the app opened', () => {
+  it.each(['destinationAttempt', 'destinationDispatch'])('waits through an explicitly unforwarded loading refusal at %s, then sends the brief once', async checkpoint => {
+    const commandId = 'cmd-loading-destination';
+    const text = '[[CLF-RESUME:0123456789abcdef0123456789abcdef]]\n\nthe carried brief';
+    let attempts = 0, sends = 0;
+    live = await harness(`https://chatgpt.com/?clf=${commandId}`, {
+      redeem: () => ({ ok: true, command: { id: commandId, type: 'resume', text, agent: null } }),
+      compact: message => {
+        if (message[checkpoint] && ++attempts <= 2)
+          return { ok: false, error: 'source_page_loading', notForwarded: true };
+        return { ok: true, data: message.destinationAttempt ? { allowed: true }
+          : message.destinationDispatch ? { armed: true } : { committed: true } };
+      },
+      ack: () => ({ ok: true })
+    }, (document, dom) => {
+      document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
+        sends++;
+        dom.reconfigure({ url: 'https://chatgpt.com/c/11111111-2222-3333-4444-555555555555' });
+        userTurn(document, 'accepted-resume', text, { sent: false });
+      });
+    });
+    await settle(800);
+    expect(attempts).toBe(3);
+    expect(sends).toBe(1);
+    expect(live.sent.some(message => message.type === 'reload')).toBe(false);
+    expect(live.sent.some(message => message.type === 'ack' && message.status === 'sent')).toBe(true);
+  });
+
+  it('does not repeat a destination checkpoint after an app refusal or an unproven loading reply', async () => {
+    let attempts = 0;
+    live = await harness('https://chatgpt.com/?clf=cmd-denied-destination', {
+      redeem: () => ({ ok: true, command: { id: 'cmd-denied-destination', type: 'resume',
+        text: '[[CLF-RESUME:0123456789abcdef0123456789abcdef]]\n\nthe brief', agent: null } }),
+      compact: () => { attempts++; return { ok: false, error: 'source_page_loading' }; }
+    });
+    const sends = watchSend(live.document);
+    await settle(500);
+    expect(attempts).toBe(1);
+    expect(sends()).toBe(0);
+  });
+
   it('delivers the bootstrap before unrelated status restoration can stall startup', async () => {
     let releaseStatus: () => void = () => undefined;
     const statusHeld = new Promise((resolve) => {

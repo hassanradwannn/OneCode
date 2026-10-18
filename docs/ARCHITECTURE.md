@@ -132,7 +132,7 @@ Native provider capabilities remain explicit: model selection, native projects, 
 
 Desktop Compact pickup acknowledges an exact live document before fetching its activity feed. The browser's IPC reply deadline must not reload that same document while a delayed feed response starts the handoff Send. An owner already between dispatch authorization and native acceptance retains custody. Actual Send, accepted question, saved Markdown and successor commit remain separate checkpoints for every provider; one provider's pending checkpoint cannot serialize another's.
 
-An exactly matching source route that Chrome still marks loading can refuse a checkpoint before forwarding it to the app. Only that explicit unsent refusal has a bounded readiness retry. A changed document, foreign route, lost response or uncertain dispatch cannot use this retry. The compact status remains Preparing until durable source dispatch evidence exists.
+An exactly matching route that Chrome still marks loading can refuse a checkpoint before forwarding it to the app. Source checkpoints and successor authorization both use the same bounded readiness wait for that explicit unforwarded refusal, including Gemini's named warm-up conversation. A changed document, foreign route, lost response or uncertain dispatch cannot use this retry. The compact status remains Preparing until durable source dispatch evidence exists.
 
 Native approval policy reads live declarations from the requesting provider's endpoint explicitly. The UI's new-chat selector is only a presentation default and cannot select another existing chat's tools. Adapter-only tools must not be advertised by an endpoint that cannot validate their admission proof.
 

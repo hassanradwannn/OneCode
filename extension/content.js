@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 47;
+  const RECORDER_VERSION = 48;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -12341,8 +12341,17 @@
     // Gemini's tool-free warm-up has already created this exact command's
     // conversation. Keep the existing document/route checkpoint in agreement
     // with that proof; ChatGPT still authorizes from its id-less fresh page.
-    const destinationCheckpoint = flag => ask({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID,
-      ...(preparedCommandTarget() ? { conversationId: preparedCommandTarget() } : {}), [flag]: true });
+    const destinationCheckpoint = async flag => {
+      const current = () => !attempt?.cancelled && stillOnTarget() &&
+        (flag === 'destinationLost' || exactBootstrapDraft());
+      const reply = await compactionCheckpoint({ type: 'compact', token: resumeMarker[2], commandId: boot.id, client: RUN_ID,
+        ...(preparedCommandTarget() ? { conversationId: preparedCommandTarget() } : {}), [flag]: true }, current);
+      if (reply?.ok !== true) console.info('[OneCode bootstrap checkpoint] ' + JSON.stringify({
+        stage: flag, reason: typeof reply?.error === 'string' ? reply.error : 'checkpoint-unavailable',
+        notForwarded: reply?.notForwarded === true
+      }));
+      return reply;
+    };
     const rejectChangedBootstrap = async () => {
       if (await failIfRetargeted()) return true;
       if (exactBootstrapDraft()) return false;
