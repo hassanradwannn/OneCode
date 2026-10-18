@@ -2015,7 +2015,7 @@ let helperFallbackLogged = '';
  * current selection instead (null), the same rule that keeps worker spawns working (#499).
  */
 /** The helper model as it will actually run, for progress and logs; never a model it will not use. */
-function helperModelLabel(): string { return goalHelperSelection().model ?? "Gemini's current selection"; }
+function helperModelLabel(): string { return goalHelperSelection().model ?? "the provider’s current selection"; }
 
 export function goalHelperSelection(): { model: string | null; reasoningEffort: ReasoningEffort | null } {
   const settings = getConfig().goal;
@@ -2033,7 +2033,7 @@ export function goalHelperSelection(): { model: string | null; reasoningEffort: 
   if (!models.length && catalog.state === 'unavailable') {
     if (helperFallbackLogged !== 'no-picker') {
       helperFallbackLogged = 'no-picker';
-      logInfo("goal: this Gemini account shows no readable model picker; the helper uses Gemini's current selection");
+      logInfo("goal: this provider account shows no readable model picker; the helper uses the provider’s current selection");
     }
     return { model: null, reasoningEffort: null };
   }
@@ -2053,7 +2053,7 @@ export function goalHelperSelection(): { model: string | null; reasoningEffort: 
   if (key) refreshForUnoffered(`goal helper ${key}`);
   if (key && key !== helperFallbackLogged) {
     helperFallbackLogged = key;
-    const line = `goal: the helper ${notes.join(' and ')} ${notes.length > 1 ? 'are' : 'is'} not offered by this Gemini account; using Gemini's current selection`;
+    const line = `goal: the helper ${notes.join(' and ')} ${notes.length > 1 ? 'are' : 'is'} not offered by this provider account; using the provider’s current selection`;
     // Falling back from the built-in defaults is routine, not a problem: nobody chose them, and as a
     // warning it showed as "1 problem" in Activity on every start for accounts without them.
     const defaults = defaultConfig().goal;
@@ -2261,7 +2261,7 @@ export async function draftTaskPlan(prompt: string, backend: 'api' | 'chatgpt', 
   const endpoint = goalEndpoint();
   const key = backend === 'api' ? await goalProviderKey(endpoint.kind) : null;
   // Custom endpoints may be keyless; only OpenRouter fails here without one.
-  if (backend === 'api' && !key && endpoint.kind === 'openrouter') throw new Error('Configure a Goal API key or choose Gemini');
+  if (backend === 'api' && !key && endpoint.kind === 'openrouter') throw new Error('Configure a Goal API key or choose the browser continuation source');
   onProgress?.({ phase: 'generating', text: '' });
   const result = await requestGoalDecision({ backend, endpoint, reasoning: settings.reasoning, lifetime: 'temporary-planner', key: key ?? '', model: settings.model, mode: 'goal', publish: text => onProgress?.({ phase: 'generating', text: planProgressText(text) }),
     system: ['You are a task planner, not the executor. Produce 2 to 12 substantial workflow stages; prefer a complete implementation stage followed by a few meaningful verification passes. The executor receives the original user request and the ENTIRE workflow in its first message. Stage 1 must state the complete objective, all implementation requirements and constraints, and the end-to-end execution approach. Never restrict Stage 1 to discovery, planning, a skeleton, or a fraction of the product. If the user requests subagents, include their concrete assignments and early delegation in Stage 1 so they can work in parallel immediately. Later stages are verification and improvement checkpoints, not withheld implementation requirements: where relevant, exercise the actual app with computer use, inspect failures, repair underlying causes, rebuild or reinstall when authorized, and repeat the failed workflows. Include independent subagent code review when requested and a final check of the whole original request. Preserve the user\'s scope, authorization limits, platform, constraints and required evidence; do not invent unrelated work or claim installation/browser checks were performed. Return action continue; its reply must be a JSON string encoding {"stages":["complete implementation workflow", "verification workflow"]}. Keep the entire plan below 12000 characters. Later checkpoints are queued to the same conversation at Session finish, or after a completed turn when the user enables that delivery.'],
@@ -2675,10 +2675,10 @@ async function pauseRepeatingGoal(draft: GoalDraft, answer: string): Promise<voi
   await setGoalSwitchNow(draft.conversationId, 'goal', false).catch(() => undefined);
   const shown = answer.length > 80 ? `${answer.slice(0, 77)}...` : answer;
   const { recordNote } = await import('./session/recorder.js');
-  await recordNote(draft.sessionId, `Goal paused: Gemini gave the same answer three times in a row ("${shown}"). ` +
+  await recordNote(draft.sessionId, `Goal paused: the provider gave the same answer three times in a row ("${shown}"). ` +
     'Goal sees answers, not tool results, so asking again would only repeat itself. Check the chat, then send a message or switch Goal back on.').catch(() => undefined);
   const { noticeChatStopped } = await import('./stuck-notice.js');
-  noticeChatStopped('Goal paused', 'Gemini gave the same answer three times in a row, so Goal stopped asking. Open the chat to continue.', draft.sessionId);
+  noticeChatStopped('Goal paused', 'The provider gave the same answer three times in a row, so Goal stopped asking. Open the chat to continue.', draft.sessionId);
   draft.reply = '';
   settle(draft, 'no-reply');
 }

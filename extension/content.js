@@ -279,7 +279,7 @@
 
   let conversationId = null;
   /** Chats ChatGPT said it deleted (`cos-conversation-deleted`, below). The same text is in src/shared/chat-error.ts. */
-  const CONVERSATION_DELETED = 'This chat was deleted in ChatGPT. Start a new chat to continue.';
+  const CONVERSATION_DELETED = 'This chat was deleted by the provider. Start a new chat to continue.';
   const deletedConversations = new Set();
   let agent = null;
   /** The worker this chat is, as the app's durable session origin names it; label only. */
@@ -2368,7 +2368,7 @@
     if (turn && CLF_DOM.interrupted(turn)) {
       return {
         outcome: 'interrupted',
-        detail: t('content_turn_chatgpt_interrupted', 'ChatGPT marked the turn interrupted')
+        detail: t('content_turn_chatgpt_interrupted', "The provider marked the turn interrupted")
       };
     }
     if (CLF_DOM.provider === 'gemini') {
@@ -6188,7 +6188,7 @@
     } else if (entry.kind === 'agent_message') {
       body.textContent = `${entry.from || 'agent'} → ${entry.to || 'agent'}: ${entry.text || ''}`;
     } else if (entry.kind === 'page_tool') {
-      body.textContent = entry.label || t('content_chatgpt_tool', 'ChatGPT tool');
+      body.textContent = entry.label || t('content_chatgpt_tool', "The provider tool");
     } else if (entry.kind === 'turn_start') {
       body.textContent = t('content_turn_started', 'Turn started');
     } else if (entry.kind === 'turn_end') {
@@ -7393,7 +7393,7 @@
           ? t('content_writing', 'Writing…')
           : NATIVE_PHASE_LABELS[phase] || t('content_waiting', 'Waiting…'),
         hint: summary?.state === 'writing'
-          ? t('content_compact_chatgpt_writing', 'ChatGPT is writing the handoff')
+          ? t('content_compact_chatgpt_writing', "The provider is writing the handoff")
           : t('content_compact_waiting_response', 'Waiting for the handoff response'),
         action: 'cancel'
       };
@@ -8491,7 +8491,7 @@
     setGoalPhase('sending');
     const previousComposer = CLF_DOM.composer()?.textContent || '';
     if (!CLF_DOM.insertPrompt(opening, true)) {
-      setGoalPhase('sending', t('content_goal_new_chat_draft_refused', 'ChatGPT would not replace the New Chat draft'));
+      setGoalPhase('sending', t('content_goal_new_chat_draft_refused', "The provider would not replace the New Chat draft"));
       return;
     }
     const preparedOpening = CLF_DOM.composer()?.textContent || '';
@@ -8513,7 +8513,7 @@
     if (!sendingTarget()) return;
     if (!sent) {
       pendingObjectiveSend = null;
-      setGoalPhase('sending', t('content_goal_send_failed', 'ChatGPT would not send the message'));
+      setGoalPhase('sending', t('content_goal_send_failed', "The provider would not send the message"));
       return;
     }
     openingSend.accepted = true;
@@ -9093,7 +9093,7 @@
         state: 'failed',
         detail: error.text || t(
           'content_compact_handoff_problem',
-          'ChatGPT reported a problem while preparing the handoff.'
+          "The provider reported a problem while preparing the handoff."
         )
       };
     }
@@ -9125,7 +9125,7 @@
                 : summary?.state === 'failed'
                   ? t('content_stage_handoff_attention', 'The handoff response needs attention')
                   : summary?.state === 'writing'
-                    ? t('content_compact_chatgpt_writing', 'ChatGPT is writing the handoff')
+                    ? t('content_compact_chatgpt_writing', "The provider is writing the handoff")
                     : t('content_compact_waiting_response', 'Waiting for the handoff response');
       // The prompt's durable position, not this document's memory of typing it. A reload
       // during the compaction turn starts a page whose `phase` is empty while the marked
@@ -9244,7 +9244,7 @@
     const who = modelLabel(draft?.model || goal.model);
     const backend = draft?.backend || goal.backend;
     const dest = backend === 'chatgpt'
-      ? t('content_goal_backend_chatgpt_helper', 'ChatGPT helper')
+      ? t('content_goal_backend_chatgpt_helper', "The provider helper")
       : backend === 'templates'
         ? t('content_goal_backend_offline_templates', 'offline templates')
         : goal.provider === 'custom'
@@ -9282,7 +9282,7 @@
     // different run entirely.
     if (goal.opening) {
       if (goal.phase === 'sending') return {
-        stage: t('content_goal_sending_to_chatgpt', 'Sending it to ChatGPT'),
+        stage: t('content_goal_sending_to_chatgpt', "Sending it to the provider"),
         detail: '',
         body: '',
         kind: 'goal',
@@ -9319,7 +9319,7 @@
         )
         : '';
       const stage = wait?.reason === 'native-busy'
-        ? t('content_goal_wait_resumed', 'ChatGPT resumed work · waiting before retry')
+        ? t('content_goal_wait_resumed', "The provider resumed work · waiting before retry")
         : wait?.reason === 'silence'
           ? t('content_goal_wait_recovery_reload', 'Waiting before recovery reload')
           : wait?.reason === 'quiet'
@@ -9335,7 +9335,7 @@
     }
     if (goal.phase === 'sending' && draft && draft.reply) {
       return {
-        stage: t('content_goal_sending_to_chatgpt', 'Sending it to ChatGPT'),
+        stage: t('content_goal_sending_to_chatgpt', "Sending it to the provider"),
         detail: '',
         body: draft.reply,
         kind: 'goal',
@@ -9769,7 +9769,7 @@
             )
             : t(
               'content_chatgpt_message_box_not_ready',
-              'The ChatGPT message box is not ready ($1). Wait for the page to load and retry.',
+              "The provider message box is not ready ($1). Wait for the page to load and retry.",
               CLF_DOM.composer() ? 'composer_unavailable' : 'composer_missing'
             )
           : t(
@@ -9806,7 +9806,10 @@
       nativeBusy = false;
       nativePhase = '';
       localError = barrier;
-      if (!automatic) await retireUnsentCompaction(forId, String(filed.data.token || ''), barrier, current);
+      // A failed receipt/Stop barrier is a concrete pre-Send refusal, not a
+      // reason to reload this same source for hours. Keep its reason in the WAL
+      // and release the ticket; dispatched requests remain protected below.
+      await retireUnsentCompaction(forId, String(filed.data.token || ''), barrier, current);
       if (!current()) return;
       renderControl();
       void pullActivity();
@@ -10032,16 +10035,20 @@
       const sourceNodes = new Set();
       const received = () => {
         const pageTurn = generationTurn();
-        const source = fiberTurnFor(pageTurn);
-        if (!source) return false;
+        if (!pageTurn) return false;
+        if ((pageTurn.nodes || [pageTurn.node]).some(node => !fiberTurnForNode(node))) return false;
         for (const node of pageTurn.nodes || [pageTurn.node]) if (node) sourceNodes.add(node);
         // The response may add a sibling while the parent result lands in its original
         // section. Retain those exact nodes; fresh scan stamps still own every lookup.
-        const sources = new Set([source]);
+        // A logical answer may already span several native sections when the
+        // ticket arrives. That merged view has no single Fiber descriptor.
+        // Read each exact section stamp instead of waiting forever on null.
+        const sources = new Set();
         for (const node of sourceNodes) {
           const prior = fiberTurnForNode(node);
           if (prior) sources.add(prior);
         }
+        if (!sources.size) return false;
         // Enclosing native calls retain their own message receipt even before any
         // child path materializes, and are never reported as local MCP invocations.
         const calls = [...sources].flatMap(turn => [...turn.calls, ...turn.codeModeCalls]);
@@ -10099,7 +10106,7 @@
       );
       if (!ready) return t(
         'content_compact_results_unconfirmed',
-        'ChatGPT has not confirmed receiving the latest tool results. Nothing was compacted.'
+        "The provider has not confirmed receiving the latest tool results. Nothing was compacted."
       );
     }
     // INTERRUPTING — stop the turn rather than wait it out. That is the whole request, by
@@ -10118,7 +10125,7 @@
       );
       if (!stopped) return t(
         'content_compact_stop_failed',
-        'ChatGPT would not stop the current turn. Nothing was compacted.'
+        "The provider would not stop the current turn. Nothing was compacted."
       );
     }
 
@@ -10242,7 +10249,7 @@
         return void (await abandonBeforeSend(
           t(
             'content_chatgpt_message_box_not_ready',
-            'The ChatGPT message box is not ready ($1). Wait for the page to load and retry.',
+            "The provider message box is not ready ($1). Wait for the page to load and retry.",
             reason
           )
         ));
@@ -10265,7 +10272,7 @@
           occupiedByOtherDraft
             ? t(
               'content_compact_existing_draft',
-              'A draft is already in ChatGPT; clear the message box before requesting the handoff.'
+              "A draft is already in the provider; clear the message box before requesting the handoff."
             )
             : t(
               'content_compact_insert_failed',
@@ -10310,7 +10317,7 @@
         pressedAt = 0;
         localError = replyError(permit) || t(
           'content_compact_attempt_owned',
-          'The durable handoff attempt is already owned; reconciling ChatGPT’s marked message.'
+          "The durable handoff attempt is already owned; reconciling the provider’s marked message."
         );
         renderControl();
         return;
@@ -10372,7 +10379,7 @@
         pressedAt = 0;
         localError ||= t(
           'content_compact_send_ambiguous',
-          'The send result was ambiguous. Nothing will be sent twice; cancel explicitly if ChatGPT never accepted it.'
+          "The send result was ambiguous. Nothing will be sent twice; cancel explicitly if the provider never accepted it."
         );
         renderControl();
         return;
@@ -10393,7 +10400,7 @@
     } catch (err) {
       const why = t(
         'content_compact_handoff_request_failed',
-        'Could not ask ChatGPT for a handoff: $1',
+        "Could not ask the provider for a handoff: $1",
         (err && err.message) || t('content_unknown_error', 'unknown error')
       );
       if (!attemptCrossed) await abandonBeforeSend(why);
@@ -11173,7 +11180,7 @@
     if (draft.stage === 'failed') {
       goalDraft = null;
       const fallbackDestination = draft.backend === 'chatgpt'
-        ? t('content_goal_backend_chatgpt_helper', 'ChatGPT helper')
+        ? t('content_goal_backend_chatgpt_helper', "The provider helper")
         : draft.backend === 'templates'
           ? t('content_goal_backend_offline_templates_title', 'Offline templates')
           : goalConfig && goalConfig.provider === 'custom'
@@ -11295,7 +11302,7 @@
       if (ownsDraft) goalDraft = null;
       if (!sent) {
         await ask({ type: 'goal_ack', conversationId: target, token: draft.token }).catch(() => undefined);
-        if (ownsDraft) setGoalPhase('sending', t('content_goal_send_failed', 'ChatGPT would not send the message'));
+        if (ownsDraft) setGoalPhase('sending', t('content_goal_send_failed', "The provider would not send the message"));
         return;
       }
       // Sending is the irreversible step. Record it before the fallible ACK hop so a lost
@@ -11438,7 +11445,7 @@
     );
     if (data.error === 'turn_still_generating') return t(
       'content_error_turn_still_generating',
-      'Wait for this ChatGPT turn to finish first.'
+      "Wait for this the provider turn to finish first."
     );
     if (data.error) return String(data.error).slice(0, 160);
     if (reply.error === 'app_not_found') return t(
@@ -12053,7 +12060,7 @@
       ))) {
         return void (await fail(t(
           'content_bootstrap_project_open_failed',
-          'ChatGPT could not open the source Project through its native link; nothing was sent'
+          "The provider could not open the source Project through its native link; nothing was sent"
         ), 'project-entry:' + projectEntryFailure));
       }
       // The provider's own SPA link consumes the opening URL. Carry this claimed command
@@ -12135,7 +12142,7 @@
     // may be tried again without counting against the chat (#1086).
     if (!readyComposer) return void (await fail(t(
       'content_bootstrap_composer_unavailable',
-      'ChatGPT never exposed a usable composer for bootstrap'
+      "The provider never exposed a usable composer for bootstrap"
     ), 'transient'));
     if (await failIfRetargeted()) return;
 
@@ -12143,7 +12150,7 @@
     if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget))) {
       return void (await fail(t(
         'content_bootstrap_model_unavailable',
-        'The requested model or reasoning is unavailable or could not be confirmed in ChatGPT'
+        "The requested model or reasoning is unavailable or could not be confirmed in the provider"
       )));
     }
     // ChatGPT's Chat/Work/model transition can replace the entire home composer after
@@ -12156,7 +12163,7 @@
       if (await failIfRetargeted()) return;
       return void (await fail(t(
         'content_bootstrap_composer_unavailable',
-        'ChatGPT never re-exposed a usable composer after model selection'
+        "The provider never re-exposed a usable composer after model selection"
       ), 'transient'));
     }
     const selectionConfirmedAt = Date.now();
@@ -12207,7 +12214,7 @@
     if (!CLF_DOM.insertPrompt(boot.text, true, reason => { insertionFailure = reason; })) {
       return void (await fail(t(
         'content_bootstrap_insert_refused',
-        'ChatGPT refused the inserted text$1',
+        "The provider refused the inserted text$1",
         insertionFailure ? ` (${insertionFailure})` : ''
       )));
     }
@@ -12246,7 +12253,7 @@
     if (!composer || squeeze(composer.textContent) !== expectedText) {
       return void (await fail(t(
         'content_bootstrap_composer_replaced',
-        'ChatGPT replaced the composer while inserting the bootstrap'
+        "The provider replaced the composer while inserting the bootstrap"
       )));
     }
     // The browser opener can focus this fresh tab while the user is typing elsewhere. The
@@ -12345,7 +12352,7 @@
       // The draft is a separate matter: left in the box it read as a message the user still had
       // to send (#864). Clear only our own unchanged text; anything the user typed stays.
       await bootstrapDraft.clear();
-      const notAccepted = t('content_bootstrap_send_not_accepted', 'ChatGPT did not accept the bootstrap send');
+      const notAccepted = t('content_bootstrap_send_not_accepted', "The provider did not accept the bootstrap send");
       // Refusals decided before the native Send click: nothing reached ChatGPT (#1086).
       const beforeSend = ['draft-changed', 'page-busy', 'mention-changed', 'send-not-ready'].includes(sendRefusal);
       return void (await fail(sendRefusal ? `${notAccepted} (${sendRefusal})` : notAccepted, beforeSend ? 'transient' : undefined));
@@ -12706,7 +12713,7 @@
     limit.published = limit.retryAt;
     emit({
       kind: 'chat_error',
-      text: t('content_history_rate_limited', 'ChatGPT temporarily rate-limited loading this conversation history. Chat On Steroids is pausing automatic recovery until the retry wait ends.'),
+      text: t('content_history_rate_limited', "The provider temporarily rate-limited loading this conversation history. OneCode is pausing automatic recovery until the retry wait ends."),
       recoverable: false,
       blocking: true,
       retryAt: limit.retryAt
@@ -13203,7 +13210,7 @@
           recoverable: true,
           text: t(
             'content_delivery_composer_stuck',
-            'ChatGPT finished its answer but its composer is still stuck on Stop. Recovering this page before delivering the queued message.'
+            "The provider finished its answer but its composer is still stuck on Stop. Recovering this page before delivering the queued message."
           )
         });
         await flush();
@@ -13248,7 +13255,7 @@
       const ownResidue = sendText(composer.textContent) === sendText(input.text);
       if ((!ownsFreshPage() && (composer.textContent || '').trim() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_existing_draft',
-        'ChatGPT already contains an unsent draft. Send or clear that draft in Chrome before trying again.'
+        "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
       ));
       if (message.directTurn) {
         // The offer only wakes this document. The just-committed outbox claim names the exact turn
@@ -13296,7 +13303,7 @@
       // its one insertion; a disabled editing host is not a rejected helper prompt.
       if (!await waitPageView(writableComposer, () => onTarget() && (!!message.directTurn || !CLF_DOM.generating()), 15000)) return fail(t(
         'content_delivery_editor_not_writable',
-        'The ChatGPT editor did not become writable before sending.'
+        "The provider editor did not become writable before sending."
       ));
       // Same allowance as the draft check above, for the same reason: text this delivery itself left
       // behind is not a composer that "changed". Re-read rather than reusing `ownResidue`, because
@@ -13306,13 +13313,13 @@
             sendText(CLF_DOM.composer()?.textContent) !== sendText(input.text)) ||
           CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_composer_changed',
-        'The ChatGPT composer changed before sending'
+        "The provider composer changed before sending"
       ));
       let insertionFailure = '';
       if (!CLF_DOM.insertPrompt(input.text, ownsFreshPage(), reason => { insertionFailure = reason; }))
         return fail(t(
           'content_delivery_text_not_accepted',
-          'ChatGPT did not accept the text$1',
+          "The provider did not accept the text$1",
           insertionFailure ? ` (${insertionFailure})` : ''
         ));
       const sendingTarget = submittedSendLifetime(target, forEpoch);
@@ -13344,7 +13351,7 @@
       }
       const uploadUnconfirmed = () => fail(t(
         'content_delivery_attachment_upload_unconfirmed',
-        'Attachment upload was not confirmed. Check the unsent draft and any file error in ChatGPT before trying again.'
+        "Attachment upload was not confirmed. Check the unsent draft and any file error in the provider before trying again."
       ));
       // Gemini's first tool-free Send creates the native conversation. Files
       // must stay local until that warm-up has settled, or Gemini consumes them
@@ -13802,7 +13809,7 @@
       if (!view.refresh || view.refresh.disabled) {
         const error = t(
           'content_connector_schema_no_refresh',
-          'Plugin schema differs, but ChatGPT exposes no Refresh control. Recreate or republish this plugin to load the current tool schema.'
+          "Plugin schema differs, but the provider exposes no Refresh control. Recreate or republish this plugin to load the current tool schema."
         );
         return (await ask({ type: 'plugin_refresh', action: 'manual', id: request.id, appId, connectorName: request.connectorName, tools: view.tools, tunnelId, error }, stillCurrent))?.data?.ok === true && stillCurrent();
       }

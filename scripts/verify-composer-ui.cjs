@@ -169,6 +169,20 @@ app.whenReady().then(async () => {
   await check('Removing a skill preserves the draft', `document.getElementById('chatInput').value==='Review the layout.'`);
   await click('#chatSend'); await pause(350);
   await check('Send retains selected model and effort', `(async()=>{const result=await window.api.listInputs();return result.data.some(entry=>entry.text==='Review the layout.'&&entry.model==='gpt-5.5'&&entry.reasoningEffort==='low')})()`);
+  await type('Enter submission retains composer focus.');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  await until(`document.getElementById('chatInput').value===''`);
+  await check('Native Enter submits once and retains composer focus', `(async()=>{const result=await window.api.listInputs();return result.data.filter(entry=>entry.text==='Enter submission retains composer focus.').length===1&&document.activeElement.id==='chatInput'})()`);
+  await js(`composerFixture.scenario('working')`);
+  await until(`document.getElementById('chatSend').dataset.action==='stop'`);
+  for (let index=0;index<5;index++) {
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter',isAutoRepeat:true});
+    win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  }
+  await pause(300);
+  await check('Repeated empty Enter cannot stop a running turn or move focus', `composerFixture.controls.activeTurnId==='sample-turn'&&document.activeElement.id==='chatInput'`);
+  assert.equal(win.isMinimized(),false,'Enter and repeated Enter leave the native window unminimized');
   await js(`composerFixture.scenario('empty')`); await pause(400);
   await click('#createPlan');
   await check('Plan toggles native send behavior', `document.getElementById('createPlan').getAttribute('aria-pressed')==='true'&&document.getElementById('chatSend').getAttribute('aria-label')==='Generate plan'`);

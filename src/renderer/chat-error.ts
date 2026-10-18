@@ -1,8 +1,9 @@
 import { providerText } from './provider-text.js';
 import type { SessionEvent } from '../shared/session.js';
 import { positionOf } from '../shared/chronology.js';
-import { chatErrorMessageKey, CONVERSATION_DELETED } from '../shared/chat-error.js';
+import { chatErrorMessageKey, isConversationDeleted } from '../shared/chat-error.js';
 import { currentLanguage, t } from './i18n.js';
+import { neutralChatErrorCopy } from '../shared/provider-copy.js';
 
 type ChatError = Extract<SessionEvent, { kind: 'chat_error' }>;
 
@@ -41,7 +42,7 @@ const noticeKey = (error: ChatError): string => `${error.seq}:${error.time}:${er
 /** Presentation only: never infer send/reload authority from error prose. */
 export function chatErrorPresentation(error: ChatError, history: readonly SessionEvent[] = []) {
   const text = error.message.text.trim();
-  if (text === CONVERSATION_DELETED) return { title: providerText('Chat deleted in Gemini'),
+  if (isConversationDeleted(text)) return { title: providerText('Chat deleted in Gemini'),
     message: providerText('Gemini no longer has this chat, so nothing more can be sent to it.'),
     next: t('Start a new chat to continue. This history stays in the app.'), resolved: false, reloaded: false };
   const thinking = text === 'Thinking failed';
@@ -49,7 +50,7 @@ export function chatErrorPresentation(error: ChatError, history: readonly Sessio
   const title = thinking ? t('Thinking failed') : stalled ? t('Response stalled') : providerText('Gemini reported a problem');
   // Older recordings described our open-turn bookkeeping as native generation.
   const message = thinking ? providerText('Gemini’s page reported a failure. This does not prove the work stopped.')
-    : stalled ? t('No visible progress for ten minutes. The app could not confirm that this turn finished.') : error.message.text;
+    : stalled ? t('No visible progress for ten minutes. The app could not confirm that this turn finished.') : neutralChatErrorCopy(error.message.text);
   let next = error.blocking === true
     ? error.retryAt
       ? providerText('Gemini asked to wait until at least {0}. After that the app continues by itself. Reloading cannot remove this limit.', [retryTime(error.retryAt, error.time)])

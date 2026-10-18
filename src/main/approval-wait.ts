@@ -73,7 +73,7 @@ export async function noteApprovalCard(
   let wait = waits.get(conversationId);
   if (wait && (!waiting || now - wait.seenAt >= APPROVAL_FRESH_MS)) {
     waits.delete(conversationId);
-    deps.log(`bridge: ${conversationId} no longer shows Gemini's tool approval card`);
+    deps.log(`bridge: ${conversationId} no longer shows the provider’s tool approval card`);
     // Only an answer seen on the page itself rewrites the row; a page that stopped reporting
     // says nothing about the card.
     const anchor = waiting ? null : await wait.row;
@@ -84,7 +84,7 @@ export async function noteApprovalCard(
   if (!wait) {
     wait = { since: now, seenAt: now, noticed: false, progressId: `${APPROVAL_PROGRESS_PREFIX}${conversationId}:${now}`, sessionId: null, row: null, card: null, answer: null };
     waits.set(conversationId, wait);
-    deps.log(`bridge: ${conversationId} waits for the user to answer Gemini's tool approval card`);
+    deps.log(`bridge: ${conversationId} waits for the user to answer the provider’s tool approval card`);
   }
   wait.seenAt = now;
   if (card) {

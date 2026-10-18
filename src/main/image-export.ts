@@ -41,10 +41,10 @@ export interface ImageExportResult { virtual: string; format: string; width: num
 
 /** Page-side refusals, in words a person can act on. */
 const PAGE_ERRORS: Record<string, string> = {
-  not_open: 'the chat is not open in the browser. Open it in Gemini and try again.',
-  not_rendered: 'the image is not shown on the chat\'s page right now. Scroll it into view in Gemini and try again.',
-  fetch_failed: 'Gemini did not hand out the image file.',
-  not_image: 'Gemini answered with something that is not an image.',
+  not_open: 'the chat is not open in the browser. Open it in the provider and try again.',
+  not_rendered: 'the image is not shown on the chat\'s page right now. Scroll it into view in the provider and try again.',
+  fetch_failed: 'The provider did not hand out the image file.',
+  not_image: 'The provider answered with something that is not an image.',
   too_large: `the image is larger than ${MAX_IMAGE_EXPORT_BYTES / 1024 / 1024} MB.`,
   unsupported: 'this browser companion cannot save images yet. Update the browser extension and try again.'
 };
@@ -64,14 +64,14 @@ export class ImageExportError extends Error {}
 
 /** Exports waiting for the browser, without their destinations: those never leave the app. */
 export function pendingImageExports(now = Date.now()): Array<{ nonce: string; conversationId: string; messageId: string; assetId: string }> {
-  for (const entry of [...pending.values()]) if (now >= entry.expiresAt) entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in Gemini and try again.'));
+  for (const entry of [...pending.values()]) if (now >= entry.expiresAt) entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in the provider and try again.'));
   return [...pending.values()].map(({ nonce, conversationId, messageId, assetId }) => ({ nonce, conversationId, messageId, assetId }));
 }
 
 /** The extension a saved image gets: the one asked for, or the format's own when none was given. */
 export function exportFileName(requested: string, format: string): string {
   const own = FORMATS[format];
-  if (!own) throw new ImageExportError(`Gemini delivered an unsupported image format (${format}).`);
+  if (!own) throw new ImageExportError(`The provider delivered an unsupported image format (${format}).`);
   const extension = path.extname(requested).toLowerCase();
   if (!extension) return requested + own;
   const named = EXTENSIONS[extension];
@@ -88,7 +88,7 @@ export function exportImage(
 ): Promise<ImageExportResult> {
   return new Promise((resolve, reject) => {
     const nonce = randomUUID();
-    const timer = setTimeout(() => entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in Gemini and try again.')), timeoutMs);
+    const timer = setTimeout(() => entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in the provider and try again.')), timeoutMs);
     timer.unref?.();
     const entry: Pending = {
       nonce, ...image, target, expiresAt: Date.now() + timeoutMs,
@@ -130,14 +130,14 @@ export async function completeImageExport(raw: unknown): Promise<boolean> {
 }
 
 async function save(bytes: Buffer, target: ImageExportTarget): Promise<ImageExportResult> {
-  if (bytes.length === 0) throw new ImageExportError('Gemini handed out an empty image file.');
+  if (bytes.length === 0) throw new ImageExportError('The provider handed out an empty image file.');
   if (bytes.length > MAX_IMAGE_EXPORT_BYTES) throw new ImageExportError(PAGE_ERRORS.too_large!);
   let metadata: Awaited<ReturnType<ReturnType<typeof sharp>["metadata"]>>;
   try {
     metadata = await sharp(bytes, { limitInputPixels: 100_000_000 }).metadata();
     // Decoding the pixels, not only the header, proves the file is a whole image.
     await sharp(bytes, { limitInputPixels: 100_000_000 }).stats();
-  } catch { throw new ImageExportError('Gemini handed out a file that is not a readable image.'); }
+  } catch { throw new ImageExportError('The provider handed out a file that is not a readable image.'); }
   const format = metadata.format ?? 'unknown';
   const file = exportFileName(target.real, format);
   const virtual = exportFileName(target.virtual, format);

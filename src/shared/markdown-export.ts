@@ -73,7 +73,7 @@ export function answerMarkdown(texts: readonly string[]): string {
 
 /** A readable transcript: the chat title, then each message under who said it. */
 export function sessionMarkdown(title: string, entries: readonly { role: 'user' | 'assistant'; text: string }[],
-  labels: { user: string; assistant: string } = { user: 'You', assistant: 'Gemini' }): string {
+  labels: { user: string; assistant: string } = { user: 'You', assistant: 'Agent' }): string {
   const parts = [`# ${title.trim() || 'Chat'}`];
   for (const entry of entries) {
     const text = entry.text.trim();

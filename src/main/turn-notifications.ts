@@ -11,7 +11,7 @@ import { providerEntitiesAsMarkdown } from '../shared/content-reference.js';
  * does not either: the chat itself says so.
  */
 
-const FALLBACK = 'Gemini finished.';
+const FALLBACK = 'The provider finished.';
 const MAX_BODY = 140;
 
 /** The start of the answer as plain text, short enough for a notification. */

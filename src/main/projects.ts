@@ -192,7 +192,7 @@ export async function expireArmedProjectCreates(): Promise<void> {
     if (now - link.updatedAt >= PROJECT_CREATE_ARMED_MS) {
       // Only the very arm this pass saw: a newer one has its own window.
       await updateChatgptLink(forRequest(link.requestId), (current, at) => current.state === 'creating' && current.updatedAt === link.updatedAt
-        ? { state: 'uncertain', requestId: current.requestId, error: 'Gemini did not show the new Project in time', updatedAt: at } : null);
+        ? { state: 'uncertain', requestId: current.requestId, error: 'The provider did not show the new Project in time', updatedAt: at } : null);
     } else next = Math.min(next, link.updatedAt + PROJECT_CREATE_ARMED_MS);
   }
   if (armedSweep) clearTimeout(armedSweep);
@@ -248,5 +248,5 @@ export async function retryProjectCreate(projectId: string): Promise<LocalProjec
  */
 export async function markProjectGone(projectId: string, chatgptId: string): Promise<boolean> {
   return !!await updateChatgptLink((link, project) => project.id === projectId && link.state === 'linked' && link.id === chatgptId,
-    (_link, now) => ({ state: 'failed', requestId: randomUUID(), error: 'Gemini no longer opens this Project', updatedAt: now }));
+    (_link, now) => ({ state: 'failed', requestId: randomUUID(), error: 'The provider no longer opens this Project', updatedAt: now }));
 }

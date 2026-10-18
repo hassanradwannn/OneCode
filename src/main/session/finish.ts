@@ -178,7 +178,7 @@ async function prepareNotice(sessionId: string, summary: string, userRequested =
         }
       } else if (mode === 'goal') {
         await releaseSessionFinish(sessionId, turnId);
-        result = 'Goal found no remaining requested work. The finish hold was released; Gemini may complete its answer.';
+        result = 'Goal found no remaining requested work. The finish hold was released; the provider may complete its answer.';
       }
     } catch (error) {
       result = `${notification} Goal follow-up was not available: ${(error as Error).message}. ${REMAINING}`;

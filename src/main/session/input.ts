@@ -156,7 +156,7 @@ const UNCONFIRMED_SEND = 'Stopped waiting for delivery confirmation. The message
 const RECEIPT_UNCONFIRMED = 'Native Send receipt was not confirmed.';
 /** The page clicked Send, yet its exact text stayed in the composer and no new user row appeared. */
 const SEND_NOT_TAKEN = 'Native Send did not take the message.';
-const NOT_TAKEN_FAILED = 'Not sent: Gemini did not accept the message.';
+const NOT_TAKEN_FAILED = 'Not sent: the provider did not accept the message.';
 export const TOOL_INPUT_HEADER = '\n--- New instructions from the user ---\n';
 export interface ToolInputBatch {
   messages: Array<{ text: string; images: InputImage[] }>;
@@ -197,7 +197,10 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // Gemini corrections use an actual tool response, not an assumed native Send API.
   const directTurn = !geminiInput(session.conversationId) && !stopped && activity.exact && end?.kind === 'turn_start' &&
     !!end.turnId && end.turnId === session.activeTurnId && !!selection?.model &&
-    activity.model !== 'pro' && activity.model !== 'unknown' &&
+    // The observed selection belongs to this exact chat. An activity renewal
+    // without its own model label cannot revoke immediate delivery mid-turn.
+    // A positive Pro observation still fences this native composer path.
+    activity.model !== 'pro' &&
     !isProModel(selection.model, selection.reasoningEffort)
     ? { id: end.turnId, startedAt: end.time } : null;
   const canInject = !stopped && activity.exact && !directTurn;
@@ -549,7 +552,7 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
       if (row.directTurn && manualInput(row) && !row.opening && !row.companionInputId) {
         const { directTurn: _turn, owner: _owner, offeredAt: _offered, requiresAuthorization: _authorization, ...rest } = row;
         return { ...rest, state: 'queued', mode: 'after-turn', owner: null,
-          error: 'Kept for after the running answer: Gemini could not take it into the answer.' };
+          error: 'Kept for after the running answer: the provider could not take it into the answer.' };
       }
       return { ...row, state: 'cancelled', error: row.requiresAuthorization && row.sendAuthorizedAt === undefined
         ? 'Not sent: browser preparation timed out. This attempt was cancelled.'
@@ -1037,7 +1040,7 @@ export function cancelInput(id: string): Promise<boolean> {
     await commit(current.map((entry) => sameDelivery(found, entry) ? { ...entry, state: 'cancelled', cancelledByUser: true,
       error: found.state === 'browser' ? found.requiresAuthorization && found.sendAuthorizedAt === undefined
         ? 'Not sent: this delivery was cancelled before Send was authorized.'
-        : 'Cancelled locally. Delivery to Gemini is unconfirmed; the message may already have been sent.'
+        : 'Cancelled locally. Delivery to the provider is unconfirmed; the message may already have been sent.'
         : found.state === 'queued' ? undefined : entry.error } : entry));
     decisionWaiters.get(id)?.reject(new Error('goal_browser_cancelled'));
     decisionWaiters.delete(id);
@@ -1115,7 +1118,7 @@ export function cancelFinishInputs(periodicOnly: boolean): Promise<void> {
   return serial(async () => {
     const current = await load();
     const next = current.map(row => row.finishOwner && (!periodicOnly || row.finishOwner.periodic) && !terminal(row)
-      ? { ...row, state: 'cancelled' as const, error: 'Automatic follow-up cancelled by settings. Already offered input may have reached Gemini.' } : row);
+      ? { ...row, state: 'cancelled' as const, error: 'Automatic follow-up cancelled by settings. Already offered input may have reached the provider.' } : row);
     if (next.some((row, index) => row !== current[index])) await commit(next);
   });
 }
@@ -1906,7 +1909,7 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
     if (entry.purpose === 'decision' && entry.lifetime !== 'temporary-planner' && deliveredConversation) await deliveryHooks?.bindHelper?.(deliveredConversation, entry.decisionSourceSessionId ?? null);
     const acknowledged: InputEntry = { ...entry, conversationId: deliveredConversation,
       deliveredSessionId: delivered?.id ?? null, state: entry.state === 'cancelled' ? 'cancelled' : entry.purpose === 'decision' ? 'decision' : 'sent',
-      ...(entry.state === 'cancelled' ? { error: 'Cancelled locally; delivery was later confirmed in Gemini.' } : {}),
+      ...(entry.state === 'cancelled' ? { error: 'Cancelled locally; delivery was later confirmed by the provider.' } : {}),
       ...(messageId ? { messageId } : {}), deliveredAt: Date.now() };
     await transition(current, current.map((row) => row === entry ? acknowledged : row.id === entry.companionInputId ? { ...row,
       state: acknowledged.state, error: acknowledged.error, deliveredSessionId: acknowledged.deliveredSessionId,
@@ -2112,7 +2115,7 @@ export function failBrowserInput(id: string, owner: string, error: string, detai
     if (entry.sendAuthorizedAt !== undefined && error === SEND_NOT_TAKEN) {
       const retry = (entry.notTakenRetries ?? 0) === 0 && manualInput(entry) && !entry.recovery && !entry.opening &&
         entry.purpose !== 'decision' && !entry.lifetime;
-      logWarn(`input ${entry.id}: Gemini did not take the clicked Send; ${retry ? 'queued once more' : 'reported as not sent'}`);
+      logWarn(`input ${entry.id}: The provider did not take the clicked Send; ${retry ? 'queued once more' : 'reported as not sent'}`);
       await commit(current.map(row => sameDelivery(entry, row) ? retry
         ? { ...row, state: 'queued', owner: null, offeredAt: undefined, sendAuthorizedAt: undefined, requiresAuthorization: undefined,
           deliveryText: undefined, error: undefined, notTakenRetries: (row.notTakenRetries ?? 0) + 1 }

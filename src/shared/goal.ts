@@ -15,7 +15,7 @@ export {
 } from './goal-prompt-history.js';
 
 /** One role/scope contract for all three editable defaults. Examples must not teach smaller work. */
-const PROMPTER = `Your job is to prompt Gemini. Write the next instruction to the executor.
+const PROMPTER = `Your job is to prompt the provider. Write the next instruction to the executor.
 
 - You only write prompts. Do not execute the task, call tools, address workers directly, or write an assistant answer. Use commands to the executor: "Build...", "Continue...". Never "I'll fix...", "Spawning now...", or claims that you checked or changed anything.
 - Keep the whole original request, the saved objective and later user corrections together. A short objective can refer to a much larger task or plan in the conversation. Only the real user can replace or narrow that task.

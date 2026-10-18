@@ -1781,7 +1781,7 @@ function normalizeModel(index: number, value: string | null | undefined): string
   if (!model) return null;
   if (!isModelSlug(model)) {
     throw new AgentError(
-      `Worker ${index + 1}'s model is not a Gemini model slug (letters, digits, dot, underscore, hyphen; limit ${MAX_MODEL_CHARS} characters)`
+      `Worker ${index + 1}'s model is not a model ID (letters, digits, dot, underscore, hyphen; limit ${MAX_MODEL_CHARS} characters)`
     );
   }
   return model;
@@ -1838,12 +1838,12 @@ function usableDefaults(
   // resolved label canonicalizes to the family. An ambiguous label stays a dropped default.
   const resolved = defaultModel && model ? resolveChatModel(models, model) : undefined;
   if (defaultModel && model && !resolved) {
-    notes.add(`The default worker model "${model}" saved in Settings is not offered by this Gemini account, so workers use Gemini's current model. Choose an available model in Settings → Agents & automation.`);
+    notes.add(`The default worker model "${model}" saved in Settings is not offered by this provider account, so workers use the provider’s current model. Choose an available model in Settings → Agents & automation.`);
     model = null;
   } else if (resolved && resolved.id !== model && !resolved.aliases?.includes(model!)) model = resolved.id;
   const offered = model ? (resolved ? [resolved] : models.filter(choice => choice.id === model || choice.aliases?.includes(model!))) : models;
   if (defaultEffort && effort && !offered.some(choice => choice.efforts.includes(effort!))) {
-    notes.add(`The default worker reasoning "${effort}" saved in Settings is not offered${model ? ` for model "${model}"` : ''} by this Gemini account, so workers use Gemini's current reasoning. Choose an available level in Settings → Agents & automation.`);
+    notes.add(`The default worker reasoning "${effort}" saved in Settings is not offered${model ? ` for model "${model}"` : ''} by this provider account, so workers use the provider’s current reasoning. Choose an available level in Settings → Agents & automation.`);
     effort = null;
   }
   if (notes.size) refreshForUnoffered(`default worker ${[...notes].join(',')}`);
@@ -1857,10 +1857,10 @@ function validateWorkerModel(index: number, model: string | null, effort: Reason
   const choices = model ? models.filter(choice => choice.id === model || choice.aliases?.includes(model)) : models;
   const available = models.map(choice => `${choice.id} (${choice.efforts.join(', ')})`).join('; ');
   if (model && choices.length !== 1) {
-    throw new AgentError(`Worker ${index + 1}'s model "${model}" is ${choices.length ? 'ambiguous' : 'not observed'} in the Gemini account. Observed model ids and reasoning: ${available}`);
+    throw new AgentError(`Worker ${index + 1}'s model "${model}" is ${choices.length ? 'ambiguous' : 'not observed'} in the provider account. Observed model ids and reasoning: ${available}`);
   }
   if (effort && !choices.some(choice => choice.efforts.includes(effort))) {
-    throw new AgentError(`Worker ${index + 1}'s reasoning_effort "${effort}" is not observed${model ? ` for model "${model}"` : ' in the Gemini account'}. Observed model ids and reasoning: ${available}`);
+    throw new AgentError(`Worker ${index + 1}'s reasoning_effort "${effort}" is not observed${model ? ` for model "${model}"` : ' in the provider account'}. Observed model ids and reasoning: ${available}`);
   }
   // Keep provider aliases exact: reducing a lane-specific slug to its family without an
   // explicit effort can change the requested lane. The native picker still proves the pair.
@@ -2104,7 +2104,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   const conversationId = input.caller.conversationId ?? null;
   if (!hasCallerIdentity(input.caller)) {
     throw new IdentityLostError(
-      'UNIDENTIFIED_CALLER: this app could not prove which Gemini conversation this call came from, so it will not ' +
+      'UNIDENTIFIED_CALLER: this app could not prove which provider conversation this call came from, so it will not ' +
         'make this chat the prime agent of a run. No workers were created. The paired browser extension has to be ' +
         'connected and this conversation has to be showing its connector activity; wait a moment and call ' +
         'agents action=spawn again.'
@@ -3911,7 +3911,7 @@ export function failWorkerRevival(id: string, why: string, runId?: string, optio
   const report = newMessage(
     id,
     PRIME_ID,
-    `[${id} could not be woken] ${why} It is still asleep and still holds everything it knew. Any revival text Gemini ` +
+    `[${id} could not be woken] ${why} It is still asleep and still holds everything it knew. Any revival text the provider ` +
       'accepted remains offered but was not proven read, so it will not be injected twice. Its slot is free again: try agents action=message to="' +
       id +
       '" once more, or do that work another way.'

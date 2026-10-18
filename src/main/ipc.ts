@@ -867,7 +867,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const window = getWindow();
     if (!window) throw new Error('No window');
     const result = await dialog.showOpenDialog(window, {
-      title: 'Approve a folder for Gemini',
+      title: 'Approve a folder for the agent',
       properties: ['openDirectory']
     });
     if (result.canceled || !result.filePaths[0]) return buildState();
@@ -996,7 +996,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('projects:add', async () => {
     const window = getWindow();
     if (!window) throw new Error('No window');
-    const result = await dialog.showOpenDialog(window, { title: 'Choose a project folder for Gemini', properties: ['openDirectory'] });
+    const result = await dialog.showOpenDialog(window, { title: 'Choose a project folder for the agent', properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return null;
     const folder = result.filePaths[0];
     try { await resolvePath(getConfig().roots, folder); }
@@ -1360,7 +1360,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       await openInPreferredBrowser('https://chatgpt.com/auth/logout', { reveal: true });
       return true;
     }
-    throw new Error('Use Gemini’s Google account menu in your browser to sign out. OneCode keeps no Google sign-in credentials.');
+    throw new Error('Use the provider’s account menu in your browser to sign out. OneCode keeps no provider sign-in credentials.');
   });
 
   // Installation does not change the saved execution browser or load the CoS host.

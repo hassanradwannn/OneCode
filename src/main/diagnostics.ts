@@ -267,29 +267,29 @@ async function probeText(url: string): Promise<{ status: number; body: string } 
 function developerMode(seen: number | null, called: number | null): Check {
   if (called !== null) {
     return {
-      name: 'Gemini allowed to use the tools',
+      name: 'Provider tool access',
       status: 'pass',
       ok: true,
-      detail: `Yes — Gemini last ran a tool ${ago(called)}, so the app is enabled in Gemini and the whole chain works.`
+      detail: `Yes — the provider last ran a tool ${ago(called)}, so the app is enabled in the provider and the whole chain works.`
     };
   }
   if (seen === null) {
     return {
-      name: 'Gemini allowed to use the tools',
+      name: 'Provider tool access',
       status: 'not-run',
       ok: null,
-      detail: 'Unknown — Gemini has not reached this app at all yet, so there is nothing to judge.'
+      detail: 'Unknown — the provider has not reached this app at all yet, so there is nothing to judge.'
     };
   }
   return {
-    name: 'Gemini allowed to use the tools',
+    name: 'Provider tool access',
     status: 'not-run',
     ok: null,
     detail:
-      'Cannot tell — Gemini connected and read the tool list, but has never run a tool. ' +
+      'Cannot tell — the provider connected and read the tool list, but has never run a tool. ' +
       'That is normal if you have not asked it to do anything yet. If you have asked and it ' +
-      'answered “does not support developer MCPs”, the cause is on Gemini’s side: check that ' +
-      'the CoS app is still added and enabled under Gemini → Plugins.'
+      'answered “does not support developer MCPs”, the cause is on the provider’s side: check that ' +
+      'OneCode is still added and enabled in the provider’s connector settings.'
   };
 }
 
@@ -310,8 +310,8 @@ export function describeSeparateTunnels(tunnel: ConnectorTunnelIds): Check | nul
   const list = names.length > 2 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names.join(' and ');
   return {
     name: 'One tunnel per connector', status: 'fail', ok: false,
-    detail: `${list} use the same tunnel ID. OpenAI hands requests to each of them in turn, so Gemini can lose a connector's tools or call the wrong one. ` +
-      'Create a separate tunnel for each connector, enter its ID in Setup, reconnect, then refresh the plugins in Gemini.'
+    detail: `${list} use the same tunnel ID. OpenAI hands requests to each of them in turn, so the provider can lose a connector's tools or call the wrong one. ` +
+      'Create a separate tunnel for each connector, enter its ID in Setup, reconnect, then refresh the plugins in the provider.'
   };
 }
 
@@ -372,8 +372,8 @@ export async function runDiagnostics(): Promise<Diagnosis> {
     const pending = !ingress || ingress === 'checking' || ingress === 'dns-pending';
     checks.push({
       name: 'Public HTTPS to OneCode', status: publicReady ? 'pass' : pending ? 'not-run' : 'fail', ok: publicReady ? true : pending ? null : false,
-      detail: publicReady ? 'The exact connector metadata answered through public Funnel ingress with a valid TLS certificate. Gemini use is checked separately.'
-        : snapshot?.detail ?? 'Connect first to verify the public endpoint. Local Tailscale access alone does not prove Gemini can reach this PC.'
+      detail: publicReady ? 'The exact connector metadata answered through public Funnel ingress with a valid TLS certificate. The provider use is checked separately.'
+        : snapshot?.detail ?? 'Connect first to verify the public endpoint. Local Tailscale access alone does not prove the provider can reach this PC.'
     });
   } else if (config.tunnel.kind !== 'openai') {
     checks.push({
@@ -433,13 +433,13 @@ export async function runDiagnostics(): Promise<Diagnosis> {
   // 6. The only end-to-end proof there is.
   const seen = lastRequestAt();
   checks.push({
-    name: 'Gemini reaching this PC',
+    name: 'Provider reaching this PC',
     status: seen === null ? 'not-run' : 'pass',
     ok: seen === null ? null : true,
     detail:
       seen === null
-        ? 'No request has arrived since the server started. Check public HTTPS, the exact Core URL and the Google account where the connector was added.'
-        : `Last request from Gemini ${ago(seen)}.`
+        ? 'No request has arrived since the server started. Check public HTTPS, the exact Core URL and the provider account where the connector was added.'
+        : `Last request from the provider ${ago(seen)}.`
   });
 
   // 7. The failure that looks exactly like success: Gemini connects, this app

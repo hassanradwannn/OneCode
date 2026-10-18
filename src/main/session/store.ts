@@ -577,7 +577,7 @@ export async function createSession(options: {
       return existing;
     }
   }
-  const summary = emptySummary(id, options.title?.trim() || 'Gemini session', options.conversationId ?? null);
+  const summary = emptySummary(id, options.title?.trim() || 'New chat', options.conversationId ?? null);
   summary.origin = options.origin ?? null;
   if (options.titleSource) summary.titleSource = options.titleSource;
   if (options.origin?.fromSessionId) {
@@ -1320,7 +1320,7 @@ export function upsertMessageEvent(
   options: { preferTime?: boolean; work?: boolean } = {}
 ): Promise<{ event: MessageEvent; changed: boolean; contentChanged: boolean }> {
   const directKey = messageKey(event as MessageEvent);
-  if (!directKey) throw new Error('Canonical message update requires Gemini messageId');
+  if (!directKey) throw new Error('Canonical message update requires provider messageId');
   return ensureOpen(sessionId).then((entry) => {
     const write = entry.queue.then(async () => {
       // Provider create_time can change after a tab reload while the actual message
@@ -3400,7 +3400,7 @@ export async function clearSessionName(id: string): Promise<void> {
     if (entry.summary.titleSource !== 'manual') return;
     const auto = entry.summary.autoTitle;
     const first = firstTitleMessage(entry.messages.values());
-    entry.summary.title = auto?.title || (first ? userTitle(first.message.text, first.authoredText) : '') || 'Gemini session';
+    entry.summary.title = auto?.title || (first ? userTitle(first.message.text, first.authoredText) : '') || 'New chat';
     entry.summary.titleSource = auto?.source ?? 'fallback';
     delete entry.summary.autoTitle;
     await writeMeta(entry);

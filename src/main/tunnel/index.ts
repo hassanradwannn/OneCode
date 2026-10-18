@@ -371,8 +371,8 @@ async function startOpenAiTunnel(opts: TunnelStartOptions): Promise<TunnelHandle
     opts.report({
       state: 'connected',
       detail: run.lastHandshake
-        ? `Connected. Last verified handshake with OpenAI ${ago(run.lastHandshake)}. Pick the tunnel in Gemini.`
-        : 'Connected. Pick the tunnel in Gemini.',
+        ? `Connected. Last verified handshake with OpenAI ${ago(run.lastHandshake)}. Pick the tunnel in the provider.`
+        : 'Connected. Pick the tunnel in the provider.',
       handshakeAt: run.lastHandshake,
       health: run.health
     });
@@ -389,7 +389,7 @@ async function startOpenAiTunnel(opts: TunnelStartOptions): Promise<TunnelHandle
     // never freezes on the first offline sample.
     opts.report({
       state: 'offline',
-      detail: `This PC cannot reach OpenAI — ${run.unreachableReason}. Last verified handshake ${ago(run.lastHandshake)}. Gemini cannot use the plugin until it is back; the tunnel keeps retrying on its own.`,
+      detail: `This PC cannot reach OpenAI — ${run.unreachableReason}. Last verified handshake ${ago(run.lastHandshake)}. The provider cannot use the plugin until it is back; the tunnel keeps retrying on its own.`,
       handshakeAt: run.lastHandshake,
       health: run.health
     });
@@ -811,7 +811,7 @@ async function startCloudflared(opts: TunnelStartOptions): Promise<TunnelHandle>
       logInfo('quick tunnel connected');
       opts.report({
         state: 'connected',
-        detail: 'Connected. Paste the URL below into Gemini as a custom connector.',
+        detail: 'Connected. Paste the URL below into the provider as a custom connector.',
         publicUrl
       });
       return;

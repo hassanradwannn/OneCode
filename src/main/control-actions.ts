@@ -94,7 +94,7 @@ function refusal(error: unknown): RequestError | null {
   if (message.startsWith('One message is already awaiting delivery')) return new RequestError(409, 'busy', 'another message for this chat is still awaiting delivery');
   if (message === 'Message id already belongs to different input') return new RequestError(409, 'id_conflict');
   if (message === 'Unblock this conversation before sending') return new RequestError(409, 'chat_blocked');
-  if (message === 'This recording has no Gemini conversation') return new RequestError(409, 'no_chat');
+  if (message === 'This recording has no Gemini conversation' || message === 'This recording has no provider conversation') return new RequestError(409, 'no_chat');
   if (message === 'The message queue is full') return new RequestError(503, 'queue_full');
   if (error instanceof z.ZodError) return new RequestError(400, 'invalid_body');
   return null;
@@ -129,7 +129,7 @@ async function send(rawBody: unknown): Promise<ActionReply> {
     const session = await readSession(body.sessionId);
     if (!session) throw new RequestError(404, 'session_not_found');
     await controllable(body.sessionId);
-    if (!session.conversationId) throw new RequestError(409, 'no_chat', 'this session has no Gemini chat to send to');
+    if (!session.conversationId) throw new RequestError(409, 'no_chat', 'this session has no provider chat to send to');
 
     // A send into an answer being written ends that part of the turn: Gemini continues with the
     // message. That is a decision for the caller, not a default.
@@ -186,12 +186,12 @@ async function cancel(id: string, rawBody: unknown): Promise<ActionReply> {
   // are: a message whose Send was authorized may already be in Gemini, and withdrawing it here
   // would free its chat for a second copy. Nothing is reported as cancelled unless the row is
   // provably not sent afterwards.
-  if (row.state === 'sent' || row.state === 'tool') return notCancellable(row, 'already handed to Gemini');
+  if (row.state === 'sent' || row.state === 'tool') return notCancellable(row, 'already handed to the provider');
   if (row.state === 'cancelled' || row.state === 'failed') {
     const already: ControlApiCancelResult = { input: projectInput(row), cancelled: false };
     return { status: 200, body: already };
   }
-  if (deliveryProof(row) !== 'pending') return notCancellable(row, 'Send was authorized; it may already be in Gemini');
+  if (deliveryProof(row) !== 'pending') return notCancellable(row, 'Send was authorized; it may already be in the provider');
   // A new chat's first message owns a reserved local chat that cancelling deletes, and a pair of
   // rows is cancelled together. Both are decisions for the person at the app.
   if (row.opening) return notCancellable(row, 'a new chat is opening; cancel it in the app');
@@ -219,7 +219,7 @@ async function stop(sessionId: string, rawBody: unknown): Promise<ActionReply> {
   const session = await readSession(sessionId);
   if (!session) throw new RequestError(404, 'session_not_found');
   await controllable(sessionId);
-  if (!session.conversationId) throw new RequestError(409, 'no_chat', 'this session has no Gemini chat to stop');
+  if (!session.conversationId) throw new RequestError(409, 'no_chat', 'this session has no provider chat to stop');
   if (!actionsAllowed()) throw new RequestError(403, 'actions_disabled');
   let controls: SessionControlsView;
   try {

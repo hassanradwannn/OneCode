@@ -10,4 +10,10 @@ export function chatErrorMessageKey(text: string, recoverable = false): string {
  * The reason a message or turn ends when Gemini says its chat was deleted (`conversation_deleted`).
  * The same text is in extension/content.js; the renderer translates it.
  */
-export const CONVERSATION_DELETED = 'This chat was deleted in Gemini. Start a new chat to continue.';
+export const CONVERSATION_DELETED = 'This chat was deleted by the provider. Start a new chat to continue.';
+
+/** Retained recordings from either adapter use the same deleted-chat presentation. */
+export function isConversationDeleted(text: string): boolean {
+  return text === CONVERSATION_DELETED || text === 'This chat was deleted in Gemini. Start a new chat to continue.' ||
+    text === 'This chat was deleted in ChatGPT. Start a new chat to continue.';
+}

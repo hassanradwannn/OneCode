@@ -17775,7 +17775,9 @@ describe('the context meter and automatic compaction', () => {
     await compacting;
     expect(stopped).not.toHaveBeenCalled();
     expect(startedCompactions(live)).toEqual([]);
-    expect(live.sent.some(message => message.type === 'compact' && (message.sourceDispatch || message.sourceLost))).toBe(false);
+    expect(live.sent.some(message => message.type === 'compact' && message.sourceDispatch)).toBe(false);
+    expect(live.sent).toContainEqual(expect.objectContaining({ type: 'compact', token: 'receipt-token', sourceLost: true,
+      sourceError: expect.stringContaining('has not confirmed receiving') }));
   }, 180_000);
 
   it('compacts once the turn ends by itself while a stale row still reads as unanswered', async () => {
@@ -17820,6 +17822,34 @@ describe('the context meter and automatic compaction', () => {
     await compacting;
     expect(stopped).not.toHaveBeenCalled();
     expect(startedCompactions(live)).toEqual([]);
+  });
+
+  it('compacts an answer already split across native sibling sections after every result is received', async () => {
+    live = await harness(undefined, {
+      activity: () => withContext(205_000, settings({ auto: true }), { pendingTools: 0 }),
+      compact: () => ({ ok: true, data: { token: 'receipt-token', prompt: 'Write the brief.',
+        ...automaticTicket('not-attempted') } })
+    });
+    userTurn(live.document, 'split-source-question', 'Complete this task.');
+    startGenerating(live.document);
+    const original = assistantTurn(live.document, 'split-original', []);
+    const sibling = assistantTurn(live.document, 'split-following', []);
+    sibling.setAttribute('data-turn-id', 'split-original');
+    let received = false;
+    compactionFiber(original, () => [compactionCall(true)], () => [{ section: sibling,
+      calls: [{ ...compactionCall(received), messageId: 'split-second-result' }] }]);
+    const stopped = vi.fn(() => stopGenerating(live!.document));
+    live.document.querySelector('[data-testid="stop-button"]')!.addEventListener('click', stopped);
+    const sends = watchSend(live.document);
+    const compacting = live.hook.startCompact(true);
+    await settle();
+    expect(stopped).not.toHaveBeenCalled();
+    expect(sends()).toBe(0);
+    received = true;
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledTimes(1), { timeout: 1500 });
+    await compacting;
+    expect(sends()).toBe(1);
+    expect(startedCompactions(live)).toHaveLength(1);
   });
 
   it('receives the original call after the same response moves into a sibling section', async () => {

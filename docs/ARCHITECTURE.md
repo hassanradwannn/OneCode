@@ -96,6 +96,8 @@ Computer use is a reviewed CUA Driver recipe in the ordinary plugin manager. It 
 
 A native stopped-turn observation reconciles a worker through the existing durable finish barrier immediately. It frees the slot while preserving the chat and unread queue, reports that work may be incomplete, and does not automatically wake queued work after an explicit Stop. An ACK for a stop click alone is not proof that the provider stopped; a historical stop cannot close a newer turn.
 
+Automatic compaction reads tool-result receipts from every exactly stamped section of its logical source answer. A response split across native sections has no single Fiber descriptor. Missing or conflicting receipts still prevent Stop and Send. A failed pre-Send barrier records its reason and releases that ticket; browser pickup cannot renew an exhausted retry budget. Once dispatch is uncertain, the original transaction retains custody and is never resent on a timer.
+
 Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Future work includes receiving native generated images and other model outputs in OneCode, including Gemini image generation. This requires real media export, ingestion and validation; it is not implemented by changing tool descriptions.
 
 ## Reading and validation

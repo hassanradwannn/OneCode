@@ -29,7 +29,7 @@ export function noteGoalHelperUnanswered(promptChars: number, now = Date.now()):
   if (limit >= goalHelperPromptLimit(now)) return;
   learned = { version: 1, limit, learnedAt: now };
   writeDurableSoon(GOAL_HELPER_SIZE_STATE, learned);
-  logInfo(`goal: Gemini took a ${promptChars}-character helper prompt and never answered; the next ones stay under ${limit} characters`);
+  logInfo(`goal: the provider took a ${promptChars}-character helper prompt and never answered; the next ones stay under ${limit} characters`);
 }
 
 export function restoreGoalHelperSize(saved: unknown): void {

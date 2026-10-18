@@ -3464,6 +3464,7 @@ function paintMessageReaction(box: HTMLElement, value: unknown): void {
 
 /** The approval row in the interface language. Literal `t()` calls keep the catalog audit able to see each key. */
 function approvalRowText(text: string): string {
+  text = neutralProgressCopy(text);
   // The recorded English stays as it was written; since 2.1.38 the row offers the answer itself.
   if (text === APPROVAL_WAITING_TEXT) return providerText('Gemini is waiting for you to allow or deny a tool call in this chat. Nothing continues until you answer it, here or in the browser.');
   if (text === APPROVAL_ANSWERED_TEXT) return providerText('The tool approval Gemini asked for in this chat was answered.');
@@ -3534,7 +3535,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     }
     case 'assistant_message': {
       const box = el('div', 'said');
-      box.append(el('b', '', () => event.final ? 'Gemini' : providerText("Gemini (partial)")));
+      box.append(el('b', '', () => event.final ? t('Agent') : providerText("Gemini (partial)")));
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references));
       return box;
     }
@@ -3588,7 +3589,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       }
       // Gemini's own tool approval card stands in this chat's page (approval-wait.ts). The app
       // writes the English source; only the user can answer the card, so the row opens the page.
-      const waiting = event.message.text === APPROVAL_WAITING_TEXT;
+      const waiting = neutralProgressCopy(event.message.text) === APPROVAL_WAITING_TEXT;
       const line = el('p', `meta is-progress thinking-line approval-wait${waiting ? ' is-waiting' : ''}`);
       line.append(icon(waiting ? 'i-lock' : 'i-check-circle', 'ico thinking-ico'), el('span', '', () => approvalRowText(event.message.text)));
       const owner = context?.id ?? selectedId;

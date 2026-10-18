@@ -3567,12 +3567,10 @@ describe('automatic compaction', () => {
   });
 
   /**
-   * Before the prompt has reached Gemini the pickup starts on a two-minute clock. Exhausting
-   * that first browser-recovery budget is not terminal authority for an automatic ticket: a
-   * responsive source may have spent the whole interval draining local/native work. The exact
-   * token survives and retries on a slower cadence until explicit policy/user/page evidence ends it.
+   * Before source Send, one bounded pickup budget belongs to the exact ticket.
+   * Exhaustion releases it, including after restart; elapsed time cannot create extra bursts.
    */
-  it.each([false, true])('retains an unsent automatic ticket after its first pickup budget and retries after backoff (restored: %s)', async restored => {
+  it.each([false, true])('ends an unsent automatic ticket after one pickup budget, including after restart (restored: %s)', async restored => {
     vi.useFakeTimers();
     try {
       await pair();
@@ -3614,13 +3612,10 @@ describe('automatic compaction', () => {
 
       await vi.advanceTimersByTimeAsync(2 * 60_000);
       expect(await takeRepair()).toBeNull();
-      expect(continuationByToken(token)).toMatchObject({ automatic: true, state: 'awaiting-summary' });
-      expect(continuationForSession(filed.body.sessionId as string)?.token).toBe(token);
-
-      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      expect(continuationByToken(token)).toMatchObject({ automatic: true, state: 'aborted', error: 'handoff_never_sent' });
+      expect(continuationForSession(filed.body.sessionId as string)).toBeNull();
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
       expect(await takeRepair()).toBeNull();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(await takeRepair()).toMatchObject({ conversationId, reason: 'compaction', focus: true });
     } finally {
       vi.useRealTimers();
     }
@@ -3629,8 +3624,8 @@ describe('automatic compaction', () => {
   /**
    * The retry is bounded. Each pickup reloads the source page, and a chat that can never reach Send
    * (#419: a turn that died mid-tool-call leaves results the page never acknowledges) would
-   * otherwise be reloaded every two minutes for as long as it exists. After the first burst and two
-   * slowed bursts the ticket is abandoned as a manual one is, and the next working turn opens anew.
+   * otherwise be reloaded for hours. One exhausted burst retires the unsent ticket;
+   * a later working turn can earn a fresh transaction.
    */
   // 2026-10-12: an automatic ticket filed while the crossing turn still worked spent all its pickups
   // reloading a generating page and gave up (handoff_never_sent) just after the turn ended.
@@ -3708,7 +3703,7 @@ describe('automatic compaction', () => {
     }
   });
 
-  it('abandons an automatic ticket that never reaches Send after its bounded retry bursts', async () => {
+  it('does not restart automatic pickup bursts after the source never reaches Send', async () => {
     vi.useFakeTimers();
     try {
       await pair();
@@ -3723,8 +3718,8 @@ describe('automatic compaction', () => {
         return (await request('GET', '/status')).body.repairs?.[0] ?? null;
       };
       let reloads = 0;
-      // Three bursts of five pickups; the pause between bursts is ten minutes.
-      for (let burst = 0; burst < 3; burst += 1) {
+      // One burst of five pickups; later time cannot refund that budget.
+      for (let burst = 0; burst < 1; burst += 1) {
         await vi.advanceTimersByTimeAsync(burst === 0 ? 2 * 60_000 : 10 * 60_000);
         for (let attempt = 0; attempt < 5; attempt += 1) {
           if (attempt > 0) await vi.advanceTimersByTimeAsync(2 * 60_000);
@@ -3736,7 +3731,7 @@ describe('automatic compaction', () => {
         await vi.advanceTimersByTimeAsync(2 * 60_000);
         expect(await takeRepair()).toBeNull();
       }
-      expect(reloads).toBe(15);
+      expect(reloads).toBe(5);
       expect(continuationForSession(filed.body.sessionId as string)?.token, 'abandoned, not retained').not.toBe(token);
       // No further reloads, however long the chat stays open.
       await vi.advanceTimersByTimeAsync(60 * 60_000);
@@ -16490,7 +16485,7 @@ describe('a chat deleted in Gemini', () => {
       expect(reply.body).toEqual({ ok: true, ended: 1 });
       const rows = await input.listInputs();
       expect(rows.find(row => row.id === waiting.id)).toMatchObject({ state: 'failed',
-        error: 'This chat was deleted in Gemini. Start a new chat to continue.' });
+        error: 'This chat was deleted by the provider. Start a new chat to continue.' });
       expect(rows.find(row => row.id === kept.id)).toMatchObject({ state: 'queued' });
       expect(rows.find(row => row.id === kept.id)?.error).toBeUndefined();
       // Said again (another page, a replay), it ends nothing more.

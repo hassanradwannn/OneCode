@@ -44,8 +44,8 @@ export function noticeChatStopped(title: StopNoticeText, body: StopNoticeText, s
  * answered since 2.1.38 (its row offers Deny and Allow once), or opened in the browser.
  */
 export function noticeApprovalWaiting(sessionId: string): void {
-  const title = 'Gemini is waiting for your approval';
-  const body = 'A chat is paused until you allow or deny a tool call in Gemini. Click to answer it in the app.';
+  const title = 'The provider is waiting for your approval';
+  const body = 'A chat is paused until you allow or deny a tool call in the provider. Click to answer it in the app.';
   try {
     notify?.(translations.get(title) ?? title, translations.get(body) ?? body, sessionId);
   } catch {

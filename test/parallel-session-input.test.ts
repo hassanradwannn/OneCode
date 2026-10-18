@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { initConfigPath, defaultConfig, saveConfig } from '../src/main/config.js';
 import { initDurableStore, flushDurable, resetDurableForTests } from '../src/main/durable.js';
-import { createSession, initSessionStore, getSession, resetSessionStoreForTests } from '../src/main/session/store.js';
+import { appendEvent, createSession, initSessionStore, getSession, observeSessionModel, resetSessionStoreForTests } from '../src/main/session/store.js';
 import { sessionInputActivity } from '../src/main/bridge.js';
 import { enqueueInput, pendingBrowserInputs, claimBrowserInput, sessionInputPolicy, configureInputDelivery, resetInputForTests } from '../src/main/session/input.js';
 import { emptyEvidence, runningToolCalls, trackInFlight, type CallContext } from '../src/main/mcp/call-context.js';
@@ -30,6 +30,35 @@ async function withCall(owner: string | null, run: () => Promise<void>) {
 }
 const request = (sessionId: string | null) => ({id: randomUUID(), sessionId, text: 'Harmless parallel check',
   mode: 'auto' as const, dueAt: Date.now(), model: null, reasoningEffort: null});
+
+it('keeps immediate steering eligible when the activity grant loses its model label', async () => {
+  const a = await createSession({ conversationId: chatA });
+  const turnId = 'steer-current-turn';
+  await appendEvent(a.id, { kind: 'turn_start', time: Date.now(), turnId, source: 'app' });
+  await observeSessionModel(a.id, chatA, 'gpt-6-thinking', Date.now(), 'high');
+  let model: 'other' | 'unknown' = 'other';
+  configureInputDelivery({ activity: () => ({ possible: true, exact: true, model, turnId }),
+    changed: () => {}, applyAutomation: async () => {} });
+  const row = await enqueueInput(request(a.id));
+  expect(row.directTurn?.id).toBe(turnId);
+  model = 'unknown';
+  expect((await sessionInputPolicy(a.id)).directTurn?.id).toBe(turnId);
+  expect(await pendingBrowserInputs()).toContainEqual(expect.objectContaining({ id: row.id, conversationId: chatA, directTurn: { id: turnId, startedAt: expect.any(Number) } }));
+  expect(await claimBrowserInput(row.id, 'steer-document', chatA, true)).toMatchObject({ id: row.id, state: 'browser' });
+});
+
+it.each([null, 'gpt-6-pro'])('does not infer native steering from an unknown activity model when selection is %s', async selected => {
+  const a = await createSession({ conversationId: chatA });
+  const turnId = 'unsupported-steer-turn';
+  await appendEvent(a.id, { kind: 'turn_start', time: Date.now(), turnId, source: 'app' });
+  if (selected) await observeSessionModel(a.id, chatA, selected, Date.now(), 'pro');
+  configureInputDelivery({ activity: () => ({ possible: true, exact: true, model: 'unknown', turnId }),
+    changed: () => {}, applyAutomation: async () => {} });
+  expect((await sessionInputPolicy(a.id)).directTurn).toBeNull();
+  const row = await enqueueInput(request(a.id));
+  expect(await pendingBrowserInputs()).not.toContainEqual(expect.objectContaining({ id: row.id }));
+  expect(await claimBrowserInput(row.id, 'unsupported-document', chatA, true)).toBeNull();
+});
 
 it.each([null, chatA])('allows an idle second chat while another or unassigned call runs: %s', async owner => {
   await createSession({conversationId: chatA});

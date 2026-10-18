@@ -36,10 +36,10 @@
     "message": "the composer changed before bootstrap send; the draft was preserved"
   },
   "content_bootstrap_composer_replaced": {
-    "message": "Gemini replaced the composer while inserting the bootstrap"
+    "message": "The provider replaced the composer while inserting the bootstrap"
   },
   "content_bootstrap_composer_unavailable": {
-    "message": "Gemini never re-exposed a usable composer after model selection"
+    "message": "The provider never re-exposed a usable composer after model selection"
   },
   "content_bootstrap_fresh_chat_changed": {
     "message": "the marked fresh chat changed before bootstrap send; nothing was sent"
@@ -48,19 +48,19 @@
     "message": "The handoff brief this app carried over — not something you typed"
   },
   "content_bootstrap_insert_refused": {
-    "message": "Gemini refused the inserted text$1"
+    "message": "The provider refused the inserted text$1"
   },
   "content_bootstrap_missing_target": {
     "message": "it was offered to a chat that already exists and it does not name one"
   },
   "content_bootstrap_model_unavailable": {
-    "message": "The requested model or reasoning is unavailable or could not be confirmed in Gemini"
+    "message": "The requested model or reasoning is unavailable or could not be confirmed in the provider"
   },
   "content_bootstrap_project_not_authorized": {
     "message": "the command did not authorize Project entry; nothing was sent"
   },
   "content_bootstrap_project_open_failed": {
-    "message": "Gemini could not open the source Project through its native link; nothing was sent"
+    "message": "The provider could not open the source Project through its native link; nothing was sent"
   },
   "content_bootstrap_project_source_changed": {
     "message": "the Project entry no longer matches the source conversation; nothing was sent"
@@ -69,7 +69,7 @@
     "message": "the resume bootstrap had no valid continuation marker"
   },
   "content_bootstrap_send_not_accepted": {
-    "message": "Gemini did not accept the bootstrap send"
+    "message": "The provider did not accept the bootstrap send"
   },
   "content_bootstrap_target_changed": {
     "message": "the chat this message was for changed before it was sent; nothing was sent"
@@ -96,10 +96,10 @@
     "message": "this chat is still opening — try again"
   },
   "content_chatgpt_message_box_not_ready": {
-    "message": "The Gemini message box is not ready ($1). Wait for the page to load and retry."
+    "message": "The provider message box is not ready ($1). Wait for the page to load and retry."
   },
   "content_chatgpt_tool": {
-    "message": "Gemini tool"
+    "message": "The provider tool"
   },
   "content_clear": {
     "message": "Clear"
@@ -120,7 +120,7 @@
     "message": "$1. The durable attempt will not be sent twice."
   },
   "content_compact_attempt_owned": {
-    "message": "The durable handoff attempt is already owned; reconciling Gemini’s marked message."
+    "message": "The durable handoff attempt is already owned; reconciling the provider’s marked message."
   },
   "content_compact_blocked_unavailable_hint": {
     "message": "A blocked chat is never compacted or resumed: the replacement chat would run without its tools. Release it in the app first."
@@ -150,10 +150,10 @@
     "message": "This chat changed while compaction was waiting for local tools."
   },
   "content_compact_chatgpt_writing": {
-    "message": "Gemini is writing the handoff"
+    "message": "The provider is writing the handoff"
   },
   "content_compact_existing_draft": {
-    "message": "A draft is already in Gemini; clear the message box before requesting the handoff."
+    "message": "A draft is already in the provider; clear the message box before requesting the handoff."
   },
   "content_compact_failed": {
     "message": "Compaction failed"
@@ -171,10 +171,10 @@
     "message": "The handoff response did not complete. Cancel compaction to return to this chat."
   },
   "content_compact_handoff_problem": {
-    "message": "Gemini reported a problem while preparing the handoff."
+    "message": "The provider reported a problem while preparing the handoff."
   },
   "content_compact_handoff_request_failed": {
-    "message": "Could not ask Gemini for a handoff: $1"
+    "message": "Could not ask the provider for a handoff: $1"
   },
   "content_compact_handoff_stopped_detail": {
     "message": "The handoff response was stopped. Cancel compaction to return to this chat."
@@ -204,7 +204,7 @@
     "message": "Could not verify whether this chat may be compacted."
   },
   "content_compact_results_unconfirmed": {
-    "message": "Gemini has not confirmed receiving the latest tool results. Nothing was compacted."
+    "message": "The provider has not confirmed receiving the latest tool results. Nothing was compacted."
   },
   "content_compact_resume_cancelled": {
     "message": "Resume cancelled"
@@ -213,7 +213,7 @@
     "message": "Compact & resume now"
   },
   "content_compact_send_ambiguous": {
-    "message": "The send result was ambiguous. Nothing will be sent twice; cancel explicitly if Gemini never accepted it."
+    "message": "The send result was ambiguous. Nothing will be sent twice; cancel explicitly if the provider never accepted it."
   },
   "content_compact_send_not_ready": {
     "message": "The handoff request was not submitted because the Send button or message box was not ready. Retry after the page is ready."
@@ -246,7 +246,7 @@
     "message": "Writing the handoff"
   },
   "content_compact_stop_failed": {
-    "message": "Gemini would not stop the current turn. Nothing was compacted."
+    "message": "The provider would not stop the current turn. Nothing was compacted."
   },
   "content_compact_stopping": {
     "message": "Stopping…"
@@ -285,7 +285,7 @@
     "message": "Plugin refresh could not be verified"
   },
   "content_connector_schema_no_refresh": {
-    "message": "Plugin schema differs, but Gemini exposes no Refresh control. Recreate or republish this plugin to load the current tool schema."
+    "message": "Plugin schema differs, but the provider exposes no Refresh control. Recreate or republish this plugin to load the current tool schema."
   },
   "content_connector_settings_unreadable": {
     "message": "The plugin settings card could not be read on the page this request owns"
@@ -300,7 +300,7 @@
     "message": "Attachment transfer was incomplete."
   },
   "content_delivery_attachment_upload_unconfirmed": {
-    "message": "Attachment upload was not confirmed. Check the unsent draft and any file error in Gemini before trying again."
+    "message": "Attachment upload was not confirmed. Check the unsent draft and any file error in the provider before trying again."
   },
   "content_delivery_chat_changed": {
     "message": "The chat changed before direct delivery."
@@ -309,19 +309,19 @@
     "message": "The chat changed or did not stop. The message was not sent."
   },
   "content_delivery_composer_changed": {
-    "message": "The Gemini composer changed before sending"
+    "message": "The provider composer changed before sending"
   },
   "content_delivery_composer_stuck": {
-    "message": "Gemini finished its answer but its composer is still stuck on Stop. Recovering this page before delivering the queued message."
+    "message": "The provider finished its answer but its composer is still stuck on Stop. Recovering this page before delivering the queued message."
   },
   "content_delivery_draft_preserved": {
     "message": "The composer changed; your draft was preserved"
   },
   "content_delivery_editor_not_writable": {
-    "message": "The Gemini editor did not become writable before sending."
+    "message": "The provider editor did not become writable before sending."
   },
   "content_delivery_existing_draft": {
-    "message": "Gemini already contains an unsent draft. Send or clear that draft in Chrome before trying again."
+    "message": "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
   },
   "content_delivery_model_unconfirmed": {
     "message": "Requested model or reasoning could not be confirmed"
@@ -333,7 +333,7 @@
     "message": "Temporary Chat was not confirmed. Open the helper tab and complete its Temporary Chat introduction."
   },
   "content_delivery_text_not_accepted": {
-    "message": "Gemini did not accept the text$1"
+    "message": "The provider did not accept the text$1"
   },
   "content_delivery_turn_changed": {
     "message": "The turn changed before direct delivery."
@@ -351,7 +351,7 @@
     "message": "This chat has no recorded local session yet."
   },
   "content_error_turn_still_generating": {
-    "message": "Wait for this Gemini turn to finish first."
+    "message": "Wait for this the provider turn to finish first."
   },
   "content_failed": {
     "message": "Failed"
@@ -372,7 +372,7 @@
     "message": "$1 is answering"
   },
   "content_goal_backend_chatgpt_helper": {
-    "message": "Gemini helper"
+    "message": "The provider helper"
   },
   "content_goal_backend_custom_endpoint": {
     "message": "custom endpoint"
@@ -414,7 +414,7 @@
     "message": "Goal mode"
   },
   "content_goal_new_chat_draft_refused": {
-    "message": "Gemini would not replace the New Chat draft"
+    "message": "The provider would not replace the New Chat draft"
   },
   "content_goal_no_api_key_unavailable": {
     "message": "No API key — Goal and Loop unavailable"
@@ -459,13 +459,13 @@
     "message": "the goal could not be saved to this chat"
   },
   "content_goal_send_failed": {
-    "message": "Gemini would not send the message"
+    "message": "The provider would not send the message"
   },
   "content_goal_sending_answer_to": {
     "message": "Sending the answer to $1"
   },
   "content_goal_sending_to_chatgpt": {
-    "message": "Sending it to Gemini"
+    "message": "Sending it to the provider"
   },
   "content_goal_status_dismiss": {
     "message": "Dismiss Goal status"
@@ -489,7 +489,7 @@
     "message": "Waiting before recovery reload"
   },
   "content_goal_wait_resumed": {
-    "message": "Gemini resumed work · waiting before retry"
+    "message": "The provider resumed work · waiting before retry"
   },
   "content_goal_wait_running_tools": {
     "message": "Waiting for running tools"
@@ -672,7 +672,7 @@
     "message": "Automatic Continue stopped an unchanged silent turn."
   },
   "content_turn_chatgpt_interrupted": {
-    "message": "Gemini marked the turn interrupted"
+    "message": "The provider marked the turn interrupted"
   },
   "content_turn_outcome": {
     "message": "Turn $1"
@@ -900,7 +900,7 @@
     "message": "The app rejected the last delivery ($1)."
   },
   "popup_pipeline_extension_blocked": {
-    "message": "The extension is not accepting this tab’s observations ($1). Reload the Gemini tab."
+    "message": "The extension is not accepting this tab’s observations ($1). Reload the the provider tab."
   },
   "popup_pipeline_id_found_waiting_receipt": {
     "message": "ID found in the latest turn. Waiting for the app to confirm receipt."
@@ -1038,13 +1038,13 @@
     "message": "Try again"
   },
   "popup_version_mismatch_help": {
-    "message": "App v$1 (protocol $2); extension v$3 (protocol $4). Open your browser's Extensions page, enable Developer mode, then Update / Reload this extension. If the mismatch remains, use Open extension folder in OneCode and load that folder. Reload Gemini tabs when their active work is finished."
+    "message": "App v$1 (protocol $2); extension v$3 (protocol $4). Open your browser's Extensions page, enable Developer mode, then Update / Reload this extension. If the mismatch remains, use Open extension folder in OneCode and load that folder. Reload the provider tabs when their active work is finished."
   },
   "popup_yes": {
     "message": "yes"
   },
   "content_goal_error_loop_mcp_call_missing": {
-    "message": "No MCP tool call was recorded in the last response. Gemini may be asking you something, or the tool connection may have been lost. Answer it, or check the tunnel if tools stopped working. Automatic continuation is paused; Loop remains enabled."
+    "message": "No MCP tool call was recorded in the last response. The provider may be asking you something, or the tool connection may have been lost. Answer it, or check the tunnel if tools stopped working. Automatic continuation is paused; Loop remains enabled."
   },
   "content_goal_error_goal_reply_not_pending": {
     "message": "There is no pending continuation for this answer. It may already have been handled or replaced by newer work. Check the latest chat activity before trying again."
@@ -1062,7 +1062,7 @@
     "message": "The provider response exceeded the size limit. Choose another continuation model or ask for shorter replies."
   },
   "content_goal_error_no_api_key": {
-    "message": "No API key is configured for the continuation provider. Add one in Settings, or select the Gemini continuation source."
+    "message": "No API key is configured for the continuation provider. Add one in Settings, or select the browser continuation source."
   },
   "content_goal_error_auth_rejected": {
     "message": "The continuation provider rejected the API credentials. Check its API key and access permissions in Settings."
@@ -1077,7 +1077,7 @@
     "message": "The custom continuation endpoint is invalid. Check its URL in Settings; use HTTPS or a local HTTP endpoint."
   },
   "content_history_rate_limited": {
-    "message": "Gemini temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends."
+    "message": "The provider temporarily limited access to this conversation history. OneCode is pausing automatic recovery until the retry wait ends."
   },
   "content_goal_error_rate_limited": {
     "message": "The continuation provider is rate-limiting requests. Wait for the displayed retry, or choose another continuation model."
@@ -1095,10 +1095,10 @@
     "message": "The helper request was cancelled. Start it again when you want to continue."
   },
   "content_goal_error_goal_browser_send_failed": {
-    "message": "The helper prompt could not be delivered to Gemini. Open the helper chat and check its composer or visible error before trying again."
+    "message": "The helper prompt could not be delivered to the provider. Open the helper chat and check its composer or visible error before trying again."
   },
   "content_goal_error_goal_browser_send_unconfirmed": {
-    "message": "The app could not confirm whether Gemini received the helper prompt. Check the helper chat before retrying to avoid sending it twice."
+    "message": "The app could not confirm whether the provider received the helper prompt. Check the helper chat before retrying to avoid sending it twice."
   },
   "content_goal_error_goal_owned_elsewhere": {
     "message": "Another browser tab is handling this continuation. Check that tab for progress."

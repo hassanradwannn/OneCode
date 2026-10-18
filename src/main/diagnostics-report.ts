@@ -79,7 +79,7 @@ function memoryLines(processes: ProcessMemory[]): string[] {
   const pages = of('chatgpt');
   return [
     `Total: ${sum(processes.map(process => process.megabytes))} MB in ${processes.length} processes`,
-    ...(pages.length ? [`Gemini pages in the built-in browser (${pages.length}): ${sum(pages)} MB — ${pages.map(size => Math.round(size)).join(', ')}`] : []),
+    ...(pages.length ? [`Provider pages in the built-in browser (${pages.length}): ${sum(pages)} MB — ${pages.map(size => Math.round(size)).join(', ')}`] : []),
     ...line('App window', of('window')),
     ...line('Main process', of('main')),
     ...line('Graphics', of('gpu')),

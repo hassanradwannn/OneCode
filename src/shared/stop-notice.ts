@@ -11,10 +11,10 @@ export const STOP_NOTICE_TEXTS = [
   'Its last turn failed and nothing followed. Send a message there to start a fresh turn.',
   'Recovery stopped',
   "The browser did not pick up this chat's repair, so the app stopped retrying. Open its tab again and recovery resumes.",
-  'Gemini is waiting for your approval',
-  'A chat is paused until you allow or deny a tool call in Gemini. Click to answer it in the app.',
+  'The provider is waiting for your approval',
+  'A chat is paused until you allow or deny a tool call in the provider. Click to answer it in the app.',
   'Goal paused',
-  'Gemini gave the same answer three times in a row, so Goal stopped asking. Open the chat to continue.'
+  'The provider gave the same answer three times in a row, so Goal stopped asking. Open the chat to continue.'
 ] as const;
 
 export type StopNoticeText = typeof STOP_NOTICE_TEXTS[number];

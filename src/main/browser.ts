@@ -322,6 +322,6 @@ export async function openInPreferredBrowser(
     }
   }
 
-  if (lastError) throw new Error(`${label} could not start: ${(lastError as Error).message}. Check Settings > Browser & history > Gemini browser.`);
-  throw new Error(`${label} was not found. Install it or change Settings > Browser & history > Gemini browser.`);
+  if (lastError) throw new Error(`${label} could not start: ${(lastError as Error).message}. Check Settings > Browser & history > Provider browser.`);
+  throw new Error(`${label} was not found. Install it or change Settings > Browser & history > Provider browser.`);
 }

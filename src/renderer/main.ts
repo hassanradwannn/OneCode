@@ -2234,7 +2234,7 @@ function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, all
     const row = el('li', `ready-check${passed ? ' is-passed' : ''}${narrowed ? ' is-limited' : ''}`);
     // Limited access is done but says what it leaves out.
     const label = () => narrowed
-      ? t(access === 'read' ? 'Gemini can only read files' : "Gemini can't edit files or run commands")
+      ? providerT(access === 'read' ? 'Gemini can only read files' : "Gemini can't edit files or run commands")
       : providerT(cosBrowser && check.cos ? check.cos : check.done);
     if (passed) {
       row.append(icon(narrowed ? 'i-warning' : 'i-check-circle'), el('span', '', label));

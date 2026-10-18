@@ -25,7 +25,7 @@ export function firstTitleMessage(events: Iterable<SessionEvent>): Extract<Sessi
 export function automaticTitle(summary: SessionSummary, first?: Extract<SessionEvent, { kind: 'user_message' }>): boolean {
   if (summary.origin && summary.origin.kind !== 'desktop') return false;
   if (summary.titleSource) return summary.titleSource !== 'manual';
-  if (summary.title === 'Gemini session' || legacyContextTitle(summary)) return true;
+  if (summary.title === 'Gemini session' || summary.title === 'New chat' || legacyContextTitle(summary)) return true;
   if (summary.origin?.kind === 'desktop' && summary.title === 'New chat') return true;
   if (!first) return false;
   return [first.authoredText, userPromptText(first.message.text), first.message.text].some(text =>
@@ -87,7 +87,7 @@ export function refreshUserTitle(summary: SessionSummary, events: Iterable<Sessi
   const authored = first ? userTitle(first.message.text, first.authoredText) : '';
   // Without a readable request, a provider title is still better than a placeholder.
   if (!authored && summary.titleSource === 'provider') return false;
-  const title = authored || 'Gemini session';
+  const title = authored || 'New chat';
   const changed = summary.title !== title || summary.titleSource !== 'fallback';
   summary.title = title;
   summary.titleSource = 'fallback';

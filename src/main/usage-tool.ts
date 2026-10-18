@@ -15,9 +15,9 @@ const windowName = (seconds: number | null) => seconds === 604800 ? 'weekly' : s
 
 export function usageReport(chatgpt: ModelUsage[], other: ProviderUsage, now: number): { text: string; structured: Record<string, unknown> } {
   const lines: string[] = [];
-  if (!chatgpt.length) lines.push('Gemini limits: not reported yet (they are read when the Gemini page shows them).');
+  if (!chatgpt.length) lines.push('Browser provider limits: not reported yet (they are read when the provider page shows them).');
   else {
-    lines.push(`Gemini (reported by Gemini, ${ago(Math.max(...chatgpt.map(row => row.observedAt)), now)}):`);
+    lines.push(`Browser provider (reported by the provider page, ${ago(Math.max(...chatgpt.map(row => row.observedAt)), now)}):`);
     for (const row of chatgpt) {
       const name = row.scope === 'shared' ? `${windowName(row.windowSeconds) || 'shared'} shared limit`.trim() : row.model;
       const left = row.resetAt !== null && row.resetAt <= now ? 'reset since this reading'
@@ -54,7 +54,7 @@ export function usageReport(chatgpt: ModelUsage[], other: ProviderUsage, now: nu
   }
   return {
     text: lines.join('\n'),
-    structured: { readAt: now, chatgpt: { source: 'reported by Gemini', limits: chatgpt },
+    structured: { readAt: now, chatgpt: { source: 'reported by the provider page', limits: chatgpt },
       otherApps: other.enabled ? 'on' : 'off', codex: other.codex, claude: other.claude }
   };
 }

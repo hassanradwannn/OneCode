@@ -331,7 +331,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
         if (result.state === 'ready') {
           failedSince = null; failures = 0;
-          report('connected', 'The exact OneCode connector is reachable through public DNS and verified HTTPS. Gemini installation and tool use are verified separately.', publicUrl);
+          report('connected', 'The exact OneCode connector is reachable through public DNS and verified HTTPS. the provider installation and tool use are verified separately.', publicUrl);
         } else {
           failedSince ??= deps.now(); failures++;
           if (deps.now() - failedSince >= deps.retryWindowMs) {

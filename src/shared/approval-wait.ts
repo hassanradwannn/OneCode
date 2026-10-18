@@ -7,9 +7,9 @@
 export const APPROVAL_PROGRESS_PREFIX = 'approval-wait:';
 
 export const APPROVAL_WAITING_TEXT =
-  'Gemini is waiting for you to allow or deny a tool call in this chat. Nothing continues until you answer it there.';
+  'The provider is waiting for you to allow or deny a tool call in this chat. Nothing continues until you answer it there.';
 
-export const APPROVAL_ANSWERED_TEXT = 'The tool approval Gemini asked for in this chat was answered.';
+export const APPROVAL_ANSWERED_TEXT = 'The tool approval the provider asked for in this chat was answered.';
 
 export const APPROVAL_TEXTS = [APPROVAL_WAITING_TEXT, APPROVAL_ANSWERED_TEXT] as const;
 

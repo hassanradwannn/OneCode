@@ -16,7 +16,7 @@ import { browserControl } from './browser-control.js';
 import type { BrowserResult } from '../shared/browser-control.js';
 import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
 import { MAX_BROWSER_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
-import { CONVERSATION_DELETED } from '../shared/chat-error.js';
+import { isConversationDeleted } from '../shared/chat-error.js';
 import { prepareSessionPrompt } from './session/prompt.js';
 import { pendingChatModelRequest, observeChatModels, requestChatModels } from './chat-models.js';
 import { isDeliberateEffort, isProModel } from '../shared/chat-models.js';
@@ -504,7 +504,7 @@ const COMMAND_STEP_TEXT: Record<CommandStep, string> = {
   'revival-busy': 'its chat was still answering',
   'revival-draft': 'its message box was not empty',
   'revival-editor': 'its page never showed a usable message box',
-  composer: 'waiting for Gemini\'s message box',
+  composer: 'waiting for the provider\'s message box',
   model: 'choosing the model and reasoning',
   'composer-after-model': 'waiting for the message box after choosing the model',
   inserting: 'putting the task into the message box',
@@ -2993,7 +2993,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const id = raw && typeof raw === 'object' ? conversationId((raw as Record<string, unknown>)['conversationId']) : null;
     if (!id) return json(res, 400, { error: 'invalid_request' }, origin);
     const ended = await failInputsForDeletedConversation(id);
-    logWarn(`bridge: Gemini says chat ${id} was deleted${ended ? `; ${ended} waiting message(s) ended` : ''}`);
+    logWarn(`bridge: Provider says chat ${id} was deleted${ended ? `; ${ended} waiting message(s) ended` : ''}`);
     return json(res, 200, { ok: true, ended }, origin);
   }
 
@@ -3043,7 +3043,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 200, { chunk: await readInputAttachmentChunk(attachment, body.offset) }, origin);
     }
     if (route === '/input/fail') {
-      const ok = await failBrowserInput(body.id, body.owner, typeof body.error === 'string' ? body.error : 'Unable to prepare Gemini',
+      const ok = await failBrowserInput(body.id, body.owner, typeof body.error === 'string' ? body.error : 'Unable to prepare the provider',
         typeof body.detail === 'string' && /^[a-z-]{1,40}$/.test(body.detail) ? body.detail : undefined);
       // A rejected picker choice invalidates cached availability. Reobserve existing
       // browser documents through the catalog owner; failure grants no new-tab authority.
@@ -4052,7 +4052,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const since = typeof body['documentSince'] === 'number' ? body['documentSince'] : 0;
       const released = await releaseUndeliveredSourceDispatchNow(checkpointToken, newest, since);
       if (!released) return json(res, 409, { error: 'source_send_not_releasable' }, origin);
-      logInfo(`bridge: the handoff click for ${entry.sessionId} never reached Gemini; it may be sent once more`);
+      logInfo(`bridge: the handoff click for ${entry.sessionId} never reached the provider; it may be sent once more`);
       changed();
       return json(res, 200, { released: true, sourceSend: released, job: resumeJobFor(entry.sessionId) }, origin);
     }
@@ -8671,7 +8671,7 @@ async function noteRecoveryObservations(
     if (proTerminal) endActivity(conversationId);
     else if (lastEnd === 'unknown' && terminalGrant?.model === 'unknown' && terminalGrant.sessionId === sessionId) {
       // Loss of browser completion evidence does not change the last meaningful-work clock.
-    } else if (lastEnd === 'failed' && ended?.detail === CONVERSATION_DELETED) {
+    } else if (lastEnd === 'failed' && ended?.detail && isConversationDeleted(ended.detail)) {
       // Gemini deleted this chat. Its own notice says so; a reload, a "send a message here" note
       // or a stopped-chat notification would all point at a chat that no longer exists.
       endActivity(conversationId);
@@ -9262,16 +9262,7 @@ const COMPACTION_PICKUPS: Record<CompactionPhase, { every: number; attempts: num
   writing: { every: 5 * 60_000, attempts: 3 },
   opening: { every: 15 * 60_000, attempts: 3 }
 };
-const compactionWatch = new Map<string, { token: string; phase: CompactionPhase; nextAt: number; attempts: number; backoffs?: number; told?: boolean; streamLost?: boolean }>();
-const AUTOMATIC_ASKING_RETRY_PAUSE_MS = 10 * 60_000;
-/**
- * How many slowed extra bursts an automatic pre-Send ticket gets before it is abandoned like a
- * manual one. Each pickup reloads the source page, so an unbounded retry turns a chat that can
- * never reach Send — #419: a turn that died mid-tool-call leaves results the page will never
- * acknowledge — into a reload every two minutes for as long as the chat exists. After this the
- * next working turn opens a fresh ticket, as before.
- */
-const AUTOMATIC_ASKING_RETRY_BURSTS = 2;
+const compactionWatch = new Map<string, { token: string; phase: CompactionPhase; nextAt: number; attempts: number; told?: boolean; streamLost?: boolean }>();
 
 function compactionPhaseOf(entry: ContinuationView): CompactionPhase {
   if (entry.state !== 'awaiting-summary') return 'opening';
@@ -9454,8 +9445,7 @@ async function inspectOwedPickups(now: number): Promise<boolean> {
 /**
  * Gives durable compaction tickets their bounded browser pickups — see COMPACTION_PICKUPS.
  *
- * Only a manual asking phase has a time-budget failure verdict. Automatic tickets retain the
- * exact token after an exhausted pickup burst and retry on a slower cadence. Past source Send,
+ * Both manual and automatic pre-Send tickets stop after one pickup budget. Past source Send,
  * every ticket has no abandonment clock here; it remains collectable until explicit cancel or
  * the marked bootstrap's durable commit in chat B.
  * Auto Off additionally cancels threshold-created tickets, never manual requests.
@@ -9521,20 +9511,6 @@ async function inspectOwedCompactions(now: number): Promise<boolean> {
         ).catch(() => undefined);
       }
       if (phase !== 'asking') continue;
-      if (entry.automatic && (watch.backoffs ?? 0) < AUTOMATIC_ASKING_RETRY_BURSTS) {
-        // A threshold-created ticket is durable work, not a ten-minute liveness verdict. The
-        // source can spend this whole first budget draining native/local work without ever
-        // reaching Send. Keep the exact pre-Send token and slow the recovery cadence instead of
-        // silently dropping auto-compaction while the chat keeps growing. Auto Off, explicit
-        // Cancel, or a page-proven pre-Send refusal remain the terminal owners.
-        watch.attempts = 0;
-        watch.backoffs = (watch.backoffs ?? 0) + 1;
-        watch.nextAt = now + AUTOMATIC_ASKING_RETRY_PAUSE_MS;
-        logInfo(
-          `bridge: compaction ticket ${entry.token.slice(0, 8)} still has no source Send after ${schedule.attempts} pickups — retaining automatic ticket and backing off`
-        );
-        continue;
-      }
       // Ten minutes and five raised reloads without the prompt ever reaching Gemini. The
       // chat's tools were never fenced (that starts at the send), so nothing is stranded by
       // letting go; what would be stranded is the chat under a ticket it can never discharge.

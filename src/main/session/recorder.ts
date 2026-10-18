@@ -422,7 +422,7 @@ async function initializeSessionForConversation(
       conversationId,
       title: summary.title
     });
-    logInfo(`session started for a Gemini conversation (${summary.id})`);
+    logInfo(`session started for a provider conversation (${summary.id})`);
   }
   if (origin && known) await applyOrigin(summary.id, conversationId);
   if (known) await promoteGenericTitle(summary.id, title);
