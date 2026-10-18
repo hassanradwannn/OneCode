@@ -15265,7 +15265,7 @@ describe('the Compact & resume control', () => {
         if (message.sourceDispatch) { state = 'dispatched-unresolved'; return armed; }
         return { ok: true, data: { token: 'tok-slow-arm', prompt: 'Write the exact handoff', sourceSend: { state, messageId: null }, job: job() } };
       }
-    });
+    }, undefined, false, true); // Keep the real pre-Send deadline open while authorization is deliberately held.
     const sends = watchSend(live.document);
     const owner = live.hook.startCompact();
     await vi.waitFor(() => expect(state).toBe('dispatched-unresolved'));
