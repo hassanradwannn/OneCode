@@ -1,5 +1,17 @@
 # OneCode changelog
 
+## [0.3.5] — 2026-10-18
+
+Repair desktop compaction and successor authorization on both providers, repeated attachment confirmation, first-message tool access and completed chats remaining Thinking or Active. Reduce Tailscale startup waits and finish provider-neutral status/test-fixture cleanup. Windows x64 internal updates use compatibility version 0.3.500. See [0.3.5 release notes](docs/release-notes/v0.3.5.md) and [installed acceptance](docs/release-acceptance/v0.3.5.md).
+
+## [0.3.4.5] — 2026-10-18
+
+Repair handoff pickup, native provider checkpoints, successor placement, steering and approval-policy isolation. Expose read-only local session history and identify context counts as OneCode estimates. See [0.3.4.5 release notes](docs/release-notes/v0.3.4.5.md).
+
+## [0.3.4] — 2026-10-18
+
+Add the Computer use plugin with official CUA Driver discovery/download and shared-daemon support. Recognize native worker stops and use provider-neutral shared notices.
+
 ## [0.3.3] — 2026-10-17
 
 Repair Gemini worker recovery and model selection, account-specific native model discovery, task delivery receipts, connector discovery and Windows update/relaunch. See [0.3.3 release notes](docs/release-notes/v0.3.3.md).

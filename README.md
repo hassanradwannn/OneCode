@@ -2,24 +2,25 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**[Download OneCode for Windows](https://github.com/hassanradwannn/OneCode/releases/latest)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.500)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
-The configured macOS packaging targets require macOS 13 Ventura or newer. This repair candidate's installed acceptance is on Windows; a platform target alone does not establish a tested release for that platform.
+The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-Linux packaging uses unprivileged user namespaces for Chromium sandboxing. Hosts that prohibit them may require the AppImage's conditional `--no-sandbox` fallback, which reduces process isolation. Linux acceptance is separate from the Windows repair candidate.
+## What's new in 0.3.5
 
-## What's new in 0.3.3
+- **Compact & Resume:** repairs handoff delivery, successor authorization and completed responses that stayed marked Thinking or Active. Verified through the desktop flow on both providers.
+- **Attachments:** repeated ChatGPT uploads confirm correctly when the provider renames a duplicate file.
+- **First-message authorization:** preserves the exact task through browser preparation and enables tools in the resumed chat without requiring another “continue” message.
+- **Faster connections:** independent Tailscale readiness checks avoid waiting for a slow network route when another works.
+- **Clearer context and status:** the context meter is a local reference; shared notices use provider-neutral wording.
 
-- Gemini worker recovery preserves the same conversation across stale tab waiters and extension reinjection.
-- Worker model selection recognizes Gemini's current model. Refresh follows the selected native account, excludes locked models and shows one Automatic choice. ChatGPT retains native availability checks.
-- Worker delivery and tool attribution preserve exact task receipts. See [0.3.3 release notes](docs/release-notes/v0.3.3.md) for validation and Windows update details.
+See the [0.3.5 release notes](docs/release-notes/v0.3.5.md) and [changelog](CHANGELOG.md).
 
-- Shared settings and the Companion use provider/agent wording. Provider names remain in the selector and service-specific connection instructions.
-- Existing chats retain their provider, model choices and trust settings. Different providers use independent local MCP endpoints. Ordinary input in separate chats also runs independently when a call has no proven chat identifier; global update and compaction safety checks remain conservative.
-- Sign-in detection reads the selected provider's rendered account controls. A signed-out page's composer does not count as an authenticated account.
-- Custom device connector names are published exactly in MCP metadata. Native connector selection accepts a unique title-cased, dash-to-space presentation of that full name and refuses ambiguous or different-device matches.
-- The Companion dismisses the recognized English response-comparison feedback question. It requires the question, both options and a separate two-button feedback footer; thinking controls and unknown layouts are left untouched.
-- Manual update checks, verified Windows installation/relaunch and automatic Companion migration are included.
+## Work with your own provider account
+
+Keep chats and projects together, delegate workers, use account-available models, and access local files, terminals, plugins and skills. The model picker refreshes from the selected native account, excludes locked models and offers one Automatic choice.
+
+**Computer use** is available from Plugins. OneCode reuses an existing CUA Driver installation and daemon, or downloads the official driver during an explicit installation. Chats can also read locally saved session history through Core tools.
 
 ## Install
 
@@ -46,11 +47,11 @@ Cloudflare quick tunnels remain available as an alternative. Their address chang
 
 Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Windows can fall back from a differential download to the complete installer.
 
-Some old 0.2.9 installers omitted `resources/app-update.yml`. If an update check reports that missing file, install the current release manually once. Current packages include and validate it. The older compatibility build `0.2.905` displays as `0.2.9.5`; this release uses `0.3.2` consistently.
+If an old installation reports missing updater metadata, install the current release manually once. **0.3.5** uses package/updater version **0.3.500**, which upgrades correctly from **0.3.405** (displayed as 0.3.4.5). Updates preserve your profile and saved chats.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Current native acceptance covers sign-in, provider persistence, model discovery and ordinary file/terminal tools. Long-running Goal/Loop/Plan and compaction flows have not all received a fresh end-to-end acceptance run for this release. Some current ChatGPT MCP transports omit request IDs; exact per-chat local tool attribution and features requiring those IDs remain limited.
+The installed 0.3.5 Windows build was checked with repeated attachments and desktop Compact & Resume on both providers, including successor tool access and completed idle state. See [release acceptance](docs/release-acceptance/v0.3.5.md) for the scope of validation.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
@@ -64,3 +65,15 @@ Provider authors should use the [multi-provider compatibility audit](docs/MULTI-
 - Keep connector URLs private. They contain access credentials. See [Security](SECURITY.md).
 
 OneCode is open source under the [MIT license](LICENSE), adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) at commit d55f7a45331f0c84671d3b32c44588a40ca9457f. Original copyright notices and third-party licenses are retained.
+
+## Build from source
+
+```sh
+npm ci
+npm run typecheck
+npm run build
+```
+
+Use `npm run dev` for development or `npm run dist:x64` to package Windows x64. Required build, packaging and license-verification scripts are included. `npm run verify` checks the published source and build; the automated test suite, its configuration and manual UI fixtures are maintained locally and excluded from Git. Local development checkouts with those files can run `npm test`.
+
+macOS and Linux packaging configurations are present, but this release's installed acceptance covers Windows x64. Configured macOS targets require macOS 13 or newer. Linux AppImages may require their conditional `--no-sandbox` fallback on hosts that prohibit unprivileged user namespaces, reducing process isolation.

@@ -26,3 +26,15 @@ resources/updater/*
 *.pem
 *.p12
 *.pfx
+
+# Tests and manual development diagnostics are retained locally, not published.
+/test/
+/tests/
+/vitest.config.*
+/scripts/fixtures/
+/scripts/verify-composer-ui.cjs
+/scripts/verify-provider-switching.cjs
+/coverage/
+/.vitest/
+/test-results/
+/playwright-report/

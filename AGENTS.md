@@ -43,6 +43,8 @@ Goal/Loop/Steer, helper chats, native finals, silent recovery and Compact & Resu
 
 ## Validation and shipping
 
+The test suite, Vitest configuration, manual UI test scripts and their fixtures are maintained locally and ignored by Git at the user's request. Preserve those files when changing tracking. `npm test` uses that local suite; public `npm run verify` checks source prerequisites, privacy, notices, TypeScript and the production build without requiring unpublished tests. Public release acceptance documents retain the historical validation scope.
+
 Run meaningful focused tests for changed owners, TypeScript, build, packaged runtime smoke and relevant Electron UI checks. The full inherited test suite has known obsolete fixtures; do not mass-skip or weaken production behavior to claim parity.
 
 Signed-in native acceptance uses the user-requested CUA driver CLI. Do not substitute another computer-use surface or bypass daemon consent. Root owns the signed browser; bounded workers must not race it. During broad acceptance, at most two direct independent fix workers may run; no nested agents.
