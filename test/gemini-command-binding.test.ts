@@ -69,6 +69,23 @@ async function binding(id: string) {
 }
 
 describe('Gemini worker and Resume command warmup capabilities', () => {
+  it.each([
+    { model: 'gemini-current', effort: undefined, expected: null },
+    { model: '0123456789abcdef', effort: undefined, expected: { model: '0123456789abcdef', reasoningEffort: null } },
+    { model: 'gemini-current', effort: 'high', expected: { model: 'gemini-current', reasoningEffort: 'high' } }
+  ])('preserves resume intent without selecting Automatic as a concrete model: $model/$effort', async ({ model, effort, expected }) => {
+    const source = await createSession({ conversationId: CHAT_A });
+    await post('/events', { conversationId: CHAT_A, events: [{ kind: 'model_selection', time: Date.now(), model,
+      ...(effort ? { reasoningEffort: effort } : {}) }] });
+    const entry = await openContinuationNow(source.id, CHAT_A, false);
+    expect(continuationByToken(entry.token)?.requestedModel).toEqual(expected);
+    expect(await attachSummary(entry.token, SAMPLE_BRIEF)).not.toBeNull();
+    const command = queueResume(source.id, entry.token)!;
+    const redeemed = await post('/commands/redeem', { id: command.id, client: CLIENT });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.data.command.model).toBe(expected?.model ?? null);
+    expect(redeemed.data.command.reasoningEffort).toBe(expected?.reasoningEffort ?? null);
+  });
   it('leaves an MCP-saved handoff opening for its owning browser instead of discarding it in a tool reply', async () => {
     const source = await createSession({ conversationId: CHAT_A });
     await post('/status', { openConversations: [CHAT_A] });

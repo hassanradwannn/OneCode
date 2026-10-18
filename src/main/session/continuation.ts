@@ -211,6 +211,9 @@ function requestedModel(value: unknown): RequestedModel | null {
   const { model, reasoningEffort } = value as Record<string, unknown>;
   if (typeof model !== 'string' || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(model) ||
       (reasoningEffort != null && !isReasoningEffort(reasoningEffort))) return null;
+  // This compatibility ID means leave the provider's model alone, exactly like
+  // Automatic in a fresh desktop input. It is not a model-picker requirement.
+  if (model === 'gemini-current' && reasoningEffort == null) return null;
   return { model, reasoningEffort: isReasoningEffort(reasoningEffort) ? reasoningEffort : null };
 }
 
