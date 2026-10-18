@@ -2229,7 +2229,7 @@ describe('existing durable recorder with the Gemini adapter', () => {
     const ends = observations.filter((event: any) => event.kind === 'turn_end');
     expect(ends, JSON.stringify(observations.map((event: any) => ({ kind: event.kind, turnId: event.turnId, chars: event.text?.length, outcome: event.outcome })))).toHaveLength(outcome ? 1 : 0);
     if (outcome) expect(ends[0]).toMatchObject({ turnId: nativeTurnId, outcome });
-    if (mode === 'blank-complete') expect(ends[0].detail).toBe('Gemini completed the native response without visible answer text.');
+    if (mode === 'blank-complete') expect(ends[0].detail).toBe('The provider completed the native response without visible answer text.');
     expect(observations.filter((event: any) => event.kind === 'turn_start')).toHaveLength(0);
     expect(observations.some((event: any) => event.kind === 'tool_call')).toBe(false);
     expect(observations.some((event: any) => event.kind === 'assistant_message' && event.text === 'Historical completed answer' && event.turnId === nativeTurnId)).toBe(false);

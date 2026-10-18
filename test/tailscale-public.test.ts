@@ -50,8 +50,46 @@ it('verifies a working IPv6 ingress immediately while an IPv4 ingress hangs, the
     return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error('aborted')), {once:true}));
   });
   expect(await probeFunnelPublic(endpoint, signal(), {read})).toEqual({state:'ready'});
-  expect(signals.length).toBeLessThanOrEqual(4);
+  expect(signals.length).toBeLessThanOrEqual(8);
   expect(signals.every(signal => signal.aborted)).toBe(true);
+});
+
+it.each([1, 28])('verifies a working family without waiting for the other DNS lookup (working type: %s)', async type => {
+  const dnsSignals: AbortSignal[] = [];
+  const controller = new AbortController();
+  let ready = false;
+  const read = vi.fn(async (url: URL, options: { address?: string; signal: AbortSignal }): Promise<{ status: number; json: unknown }> => {
+    if (options.address) return { status: 200, json: { resource: endpoint } };
+    const asked = Number(url.searchParams.get('type'));
+    dnsSignals.push(options.signal);
+    if (asked === type) return { status: 200, json: dns(type, [type === 1 ? publicA : publicAAAA]) };
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error('aborted')), { once: true }));
+  });
+  const pending = probeFunnelPublic(endpoint, controller.signal, { read }).then(result => { ready = result.state === 'ready'; });
+  try {
+    await vi.waitFor(() => expect(ready).toBe(true));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(dnsSignals.every(signal => signal.aborted)).toBe(true);
+  } finally { controller.abort(); await pending.catch(() => {}); }
+});
+
+it('keeps the slower DNS family alive when the faster family has unusable ingress', async () => {
+  let release!: () => void;
+  let fastFailed = false, ready = false;
+  const read = vi.fn(async (url: URL, options: { address?: string; signal: AbortSignal }): Promise<{ status: number; json: unknown }> => {
+    if (!options.address) {
+      const type = Number(url.searchParams.get('type'));
+      if (type === 28) await new Promise<void>(resolve => { release = resolve; });
+      return { status: 200, json: dns(type, [type === 1 ? publicA : publicAAAA]) };
+    }
+    if (options.address === publicA) { fastFailed = true; throw Error('unreachable'); }
+    return { status: 200, json: { resource: endpoint } };
+  });
+  const pending = probeFunnelPublic(endpoint, signal(), { read }).then(result => { ready = result.state === 'ready'; });
+  await vi.waitFor(() => expect(fastFailed).toBe(true));
+  expect(ready).toBe(false);
+  release(); await pending;
+  expect(ready).toBe(true);
 });
 
 it.each([undefined, 3])('waits for public DNS propagation without probing a private/system answer: %s', async status => {

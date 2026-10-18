@@ -14238,11 +14238,11 @@ describe('the Compact & resume control', () => {
       label: 'Opened'
     });
     expect(
-      state({ job: { stage: 'failed', busy: false, error: 'Gemini never wrote the brief', handoffId: null } })
+      state({ job: { stage: 'failed', busy: false, error: 'The provider never wrote the brief', handoffId: null } })
     ).toMatchObject({
       mode: 'error',
       label: 'Failed',
-      hint: 'Gemini never wrote the brief',
+      hint: 'The provider never wrote the brief',
       action: 'start'
     });
     expect(state({ job: { stage: 'failed', busy: false, error: 'cancelled', handoffId: null } })).toMatchObject({
@@ -14413,8 +14413,8 @@ describe('the Compact & resume control', () => {
     expect(live.document.querySelector('.clf-pill-text')!.textContent).toContain('still running');
   });
 
-  it('outlives the recorder attribution grace before declaring a finished call stuck', async () => {
-    // An unattributed call can be finished from Gemini's point of view while the app keeps
+  it.each([false, true])('outlives the recorder attribution grace and reports actual Send acceptance (accepted: %s)', async accepted => {
+    // An unattributed call can be finished from the provider's point of view while the app keeps
     // it pending for up to 15 seconds so late request-id evidence can still attach its durable
     // record to the right conversation. The compaction deadline used to be only 20 seconds,
     // leaving almost no write/scheduling headroom and turning that normal recorder tail into
@@ -14443,13 +14443,22 @@ describe('the Compact & resume control', () => {
       })
     });
     live.hook.injectControl();
-    watchSend(live.document);
+    const sends = watchSend(live.document);
+    if (accepted) live.document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
+      userTurn(live!.document, 'recorder-tail-handoff', composerText(live!.document), { sent: false });
+      live!.document.querySelector('#prompt-textarea')!.textContent = '';
+    });
 
     await live.hook.startCompact();
 
     expect(polls).toBeGreaterThan(80);
     expect(startedCompactions(live)).toHaveLength(1);
-    expect((live.document.querySelector('.clf-composer') as HTMLElement).dataset.clfMode).toBe('busy');
+    expect(sends()).toBe(1);
+    expect(live.sent.filter(message => message.sourceDispatch)).toHaveLength(1);
+    // Waiting out the recorder tail permits one Send; a click without native acceptance
+    // must still surface ambiguity instead of pretending the handoff is underway.
+    expect((live.document.querySelector('.clf-composer') as HTMLElement).dataset.clfMode).toBe(accepted ? 'busy' : 'error');
+    if (!accepted) expect(live.document.querySelector('.clf-pill-text')!.textContent).toContain('ambiguous');
   });
 
   it('refuses to compact when the app cannot verify pending local tools', async () => {
@@ -14541,7 +14550,7 @@ describe('the Compact & resume control', () => {
     expect(sends()).toBe(0);
     const compacts = live.sent.filter((message) => message.type === 'compact');
     expect(compacts[compacts.length - 1]).toMatchObject({ token: 'manual-occupied-editor', sourceLost: true,
-      sourceError: expect.stringContaining('A draft is already in Gemini') });
+      sourceError: expect.stringContaining('A draft is already in the provider') });
     expect(compacts.some(message => message.cancel)).toBe(false);
   });
 
@@ -15474,7 +15483,7 @@ describe('truthful quiet operation status', () => {
     live = await harness();
     const job = { stage: 'handoff-pending', busy: true, sourceSend: { state: 'sent' } };
     expect(live.hook.stageView({ job })).toMatchObject({ stage: 'Waiting for the handoff response' });
-    expect(live.hook.stageView({ job, summary: { state: 'writing', detail: '' } })).toMatchObject({ stage: 'Gemini is writing the handoff' });
+    expect(live.hook.stageView({ job, summary: { state: 'writing', detail: '' } })).toMatchObject({ stage: 'The provider is writing the handoff' });
     expect(live.hook.controlState({ job, phase: 'waiting' })).toMatchObject({ label: 'Waiting…' });
     expect(live.hook.controlState({ job, phase: 'waiting', summary: { state: 'writing' } })).toMatchObject({ label: 'Writing…' });
   });

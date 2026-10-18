@@ -101,43 +101,43 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
       !['', '443', '8443', '10000'].includes(endpoint.port) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
       !/^\/onecode-[a-f0-9]{32}\/mcp\/core\/[A-Za-z0-9_-]{43}$/.test(endpoint.pathname)) return { state: 'metadata-error' };
   const deps = { read: readPublicJson, ...overrides };
-  const bounded = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
-  const answers = await Promise.all([1, 28].map(async type => {
-    const query = new URL(RESOLVER); query.searchParams.set('name', endpoint.hostname); query.searchParams.set('type', String(type));
-    try {
-      const response = await deps.read(query, { signal: bounded, accept: 'application/dns-json' });
-      return response.status === 200 ? dnsAddresses(response.json, endpoint.hostname, type as 1 | 28) : { addresses: [], error: true };
-    } catch { return { addresses: [], error: true }; }
-  }));
-  signal.throwIfAborted();
-  // Keep both families represented: four A answers must not crowd out working IPv6.
-  const addresses: string[] = [];
-  for (let index = 0; index < 4; index++) for (const answer of answers) {
-    const address = answer.addresses[index];
-    if (address && !addresses.includes(address) && addresses.length < 4) addresses.push(address);
-  }
-  if (!addresses.length) return { state: answers.some(answer => answer.error) ? 'dns-error' : 'dns-pending' };
   const metadata = new URL(endpoint.origin + METADATA + endpoint.pathname);
   const failures = new Set<TailscalePublicFailure>();
   const pending = new AbortController();
-  const probeSignal = AbortSignal.any([bounded, pending.signal]);
+  const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000), pending.signal]);
+  let hasAddresses = false, dnsError = false;
   try {
-    // A dead ingress must not hold a healthy one behind its socket timeout.
-    await Promise.any(addresses.map(async address => {
-    try {
-      const response = await deps.read(metadata, { signal: probeSignal, accept: 'application/json', address });
-      signal.throwIfAborted();
+    // Race the complete DNS -> HTTPS paths. Waiting for both DNS answers first made
+    // a working family wait for the other's resolver timeout on launch/resume.
+    // Keep the other family alive until exact metadata verifies, not just DNS success.
+    await Promise.any(([1, 28] as const).map(async type => {
+      const query = new URL(RESOLVER); query.searchParams.set('name', endpoint.hostname); query.searchParams.set('type', String(type));
+      let answer: ReturnType<typeof dnsAddresses>;
+      try {
+        const response = await deps.read(query, { signal: probeSignal, accept: 'application/dns-json' });
+        answer = response.status === 200 ? dnsAddresses(response.json, endpoint.hostname, type) : { addresses: [], error: true };
+      } catch { answer = { addresses: [], error: true }; }
+      dnsError ||= answer.error;
       probeSignal.throwIfAborted();
-      if (response.status !== 200) failures.add('http-error');
-      else if (!object(response.json) || response.json.resource !== endpoint.href) failures.add('metadata-error');
-      else return;
-    } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
-    throw new Error('Ingress did not verify');
+      const addresses = [...new Set(answer.addresses)].slice(0, 4);
+      hasAddresses ||= addresses.length > 0;
+      // Bounded to four addresses per family; a dead IPv4 route cannot crowd out IPv6.
+      await Promise.any(addresses.map(async address => {
+        try {
+          const response = await deps.read(metadata, { signal: probeSignal, accept: 'application/json', address });
+          probeSignal.throwIfAborted();
+          if (response.status !== 200) failures.add('http-error');
+          else if (!object(response.json) || response.json.resource !== endpoint.href) failures.add('metadata-error');
+          else return;
+        } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
+        throw new Error('Ingress did not verify');
+      }));
     }));
     signal.throwIfAborted();
     return { state: 'ready' };
   } catch {
     signal.throwIfAborted();
+    if (!hasAddresses) return { state: dnsError ? 'dns-error' : 'dns-pending' };
     return { state: failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : 'tls-error' };
   } finally { pending.abort(); }
 }

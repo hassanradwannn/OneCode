@@ -82,6 +82,23 @@ afterEach(async () => {
 const existing = () => ({ TCP: { '443': { HTTPS: true }, '8443': { HTTPS: true } }, Web: { [`${DNS}:443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4000' }, '/other': { Text: 'public' } } }, [`${DNS}:8443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:5000' } } } }, AllowFunnel: { [`${DNS}:443`]: true } });
 
 describe('system Tailscale Funnel custody', () => {
+  it('reads independent daemon status concurrently but waits for both before changing routes', async () => {
+    const f = fixture();
+    const run = f.run.getMockImplementation()!;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    f.run.mockImplementation(async (binary, args) => {
+      if (args[0] === 'status') await held;
+      return run(binary, args);
+    });
+    const starting = f.start();
+    try {
+      await vi.waitFor(() => expect(f.configReads).toBe(1));
+      expect(f.mutations()).toHaveLength(0);
+      expect(f.reports.some(report => report.state === 'connected')).toBe(false);
+    } finally { release(); await starting; }
+    expect(f.mutations()).toHaveLength(2);
+  });
   it('adds exactly two owned paths on already-public443, preserving root/bucket/private routes and path-specific cleanup', async () => {
     const initial = existing(); const f = fixture(initial);
     const { handle, stateDir } = await f.start();

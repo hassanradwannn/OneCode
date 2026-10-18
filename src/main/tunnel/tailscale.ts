@@ -153,10 +153,17 @@ function describeFailure(error: unknown): string {
 }
 /** Bounded, hidden native subprocess; no shell, auth key, raw-output logging or daemon signals. */
 async function runCli(binary: string, args: string[]): Promise<string> {
+  const startedAt = performance.now();
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv() });
     let stdout = '', stderr = '', done = false;
-    const finish = (error?: Error) => { if (done) return; done = true; clearTimeout(timer); error ? reject(error) : resolve(stdout); };
+    const finish = (error?: Error) => {
+      if (done) return; done = true; clearTimeout(timer);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      // Fixed command categories only: args/output contain private mounts and device data.
+      if (elapsedMs >= 1000) logInfo(`OneCode Funnel slow CLI command=${args[0] === 'version' ? 'version' : args[0] === 'status' ? 'node-status' : args[1] === 'status' ? 'route-status' : 'route-change'} elapsedMs=${elapsedMs} outcome=${error ? 'error' : 'ok'}`);
+      error ? reject(error) : resolve(stdout);
+    };
     const timer = setTimeout(() => { child.kill(); finish(new Error('Tailscale command timed out')); }, 30_000);
     for (const [stream, name] of [[child.stdout, 'out'], [child.stderr, 'err']] as const) stream.on('data', chunk => {
       if (name === 'out') stdout += String(chunk); else stderr += String(chunk);
@@ -168,6 +175,8 @@ async function runCli(binary: string, args: string[]): Promise<string> {
 }
 
 export async function startTailscale(opts: TunnelStartOptions, overrides: Partial<Dependencies> = {}): Promise<TunnelHandle> {
+  const startedAt = performance.now();
+  const startupTiming = (stage: string) => logInfo(`OneCode Funnel startup stage=${stage} elapsedMs=${Math.round(performance.now() - startedAt)}`);
   const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
     probe: probeFunnelPublic, now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, ...overrides };
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
@@ -207,13 +216,16 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     return { id: self.ID, dnsName };
   };
   const readConfig = async (): Promise<NativeConfig> => config(await deps.run(binary, ['funnel', 'status', '--json']));
+  // These are independent read-only daemon queries. Serial CLI process startup is
+  // costly on Windows, especially immediately after laptop sign-in. Keep every
+  // custody check and all route mutations ordered at their existing boundaries.
+  const readNative = () => Promise.all([readNode(), readConfig()]);
   const matchesNode = (node: { id: string; dnsName: string }, owned: FunnelCustody): boolean => node.id === owned.nodeId && node.dnsName === owned.dnsName;
   const removeOwned = async (): Promise<void> => {
     if (!custody || !nativeMutation) return;
     try {
       for (const route of ownedRoutes(custody).reverse()) {
-        const node = await readNode();
-        const current = await readConfig();
+        const [node, current] = await readNative();
         if (!matchesNode(node, custody) || !empty(current.Foreground) || !knownHandler(current, custody, route.mount)) {
           logWarn('OneCode Funnel cleanup skipped a path whose native custody changed.'); continue;
         }
@@ -227,8 +239,9 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     const version = /^(\d+)\.(\d+)\.(\d+)/.exec((await deps.run(binary, ['version'])).trim());
     if (!version || Number(version[1]) < 1 || (Number(version[1]) === 1 && Number(version[2]) < 52)) throw new FunnelSetupError('Install Tailscale 1.52 or newer before using OneCode Funnel.');
     check.version = version[0];
-    const node = await readNode();
-    const before = await readConfig();
+    startupTiming('cli-ready');
+    const [node, before] = await readNative();
+    startupTiming('native-ready');
     let previous: FunnelCustody | undefined;
     try {
       const stored: unknown = JSON.parse(await fs.readFile(custodyFile, 'utf8'));
@@ -256,8 +269,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       if (typeof metadata === 'string') custody.previousMetadataProxy = metadata.slice(0, -FUNNEL_METADATA_PREFIX.length);
     }
     if (normalizeProxy(custody.proxy) !== custody.proxy) throw new FunnelSetupError('OneCode Funnel relay address was invalid.');
-    const finalNode = await readNode();
-    const finalBefore = await readConfig();
+    const [finalNode, finalBefore] = await readNative();
     if (!matchesNode(finalNode, custody) || !same(before, finalBefore)) throw new FunnelSetupError('Tailscale routes changed during preparation. Nothing was overwritten; inspect the current routes before retrying.');
     assertFunnelRouteSafe(finalBefore, custody, samePortPrevious);
     // Persist exact intent before the one native change. Crashes/ambiguous CLI exits
@@ -274,8 +286,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     const installed = new Set<string>();
     for (const route of ownedRoutes(custody)) {
       if (installed.size) {
-        const liveNode = await readNode();
-        const live = await readConfig();
+        const [liveNode, live] = await readNative();
         if (!matchesNode(liveNode, custody) || !empty(live.Foreground) ||
             !same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody)) ||
             ownedRoutes(custody).some(expected => installed.has(expected.mount)
@@ -288,8 +299,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       installed.add(route.mount);
     }
     const verifyNative = async (): Promise<string | undefined> => {
-      const liveNode = await readNode();
-      const live = await readConfig();
+      const [liveNode, live] = await readNative();
       if (stopped) return;
       if (!custody || !matchesNode(liveNode, custody) || ownedRoutes(custody).some(route => !ownedHandler(live, custody!, route.mount)) || live.AllowFunnel?.[host(custody)] !== true || !same(live.TCP?.[String(custody.port)], { HTTPS: true })) {
         throw new FunnelSetupError('The owned Tailscale Funnel route is not public/current. Reconnect after checking Tailscale; OneCode will not recreate it automatically.');
@@ -307,8 +317,9 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     delete custody.previousMetadataProxy;
     await persist();
     check.publicIngress = { state: 'checking', checkedAt: null };
+    startupTiming('routes-configured');
     report('connecting-tunnel', 'The owned Funnel route is configured. Checking its exact connector through public DNS and HTTPS…', publicUrl);
-    let failedSince: number | null = null, failures = 0;
+    let failedSince: number | null = null, failures = 0, firstPublicReady = false;
     const details: Record<Exclude<FunnelPublicResult['state'], 'ready'>, string> = {
       'dns-pending': 'Public DNS has not published this device yet. Tailscale says propagation can take up to 10 minutes.',
       'dns-error': 'The Cloudflare public DNS check could not verify a public ingress address. Check network access to the DNS-over-HTTPS resolver.',
@@ -330,8 +341,9 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
         if (stopped) return;
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
         if (result.state === 'ready') {
+          if (!firstPublicReady) { firstPublicReady = true; startupTiming('public-ready'); }
           failedSince = null; failures = 0;
-          report('connected', 'The exact OneCode connector is reachable through public DNS and verified HTTPS. the provider installation and tool use are verified separately.', publicUrl);
+          report('connected', 'The exact OneCode connector is reachable through public DNS and verified HTTPS. Provider installation and tool use are verified separately.', publicUrl);
         } else {
           failedSince ??= deps.now(); failures++;
           if (deps.now() - failedSince >= deps.retryWindowMs) {

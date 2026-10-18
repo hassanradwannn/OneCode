@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 30;
+  const RECORDER_VERSION = 31;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -1467,7 +1467,7 @@
     const takeUtf8 = (value, budget) => {
       if (typeof value !== 'string') return value;
       if (utf8Bytes(value) <= budget) return value;
-      const marker = '\n\n[Chat On Steroids: browser observation truncated to fit transport.]';
+      const marker = '\n\n[OneCode: browser observation truncated to fit transport.]';
       const markerBytes = utf8Bytes(marker);
       let low = 0;
       let high = value.length;
@@ -2376,9 +2376,9 @@
       // a missing Stop button, and remains readable after a long-chat reload.
       if (turn && CLF_DOM.messageComplete?.({ node: turn.node }))
         return answerText(turn).length > 0 ? { outcome: 'completed' } : {
-          outcome: 'completed', detail: 'Gemini completed the native response without visible answer text.'
+          outcome: 'completed', detail: 'The provider completed the native response without visible answer text.'
         };
-      return turnStalled() ? { outcome: 'stalled', detail: 'The Gemini turn stopped producing observable progress.' } : { outcome: 'unknown' };
+      return turnStalled() ? { outcome: 'stalled', detail: 'The provider turn stopped producing observable progress.' } : { outcome: 'unknown' };
     }
     // Degraded fallback only. If the MAIN-world Fiber helper has ever answered on this page,
     // its end_turn bit is the authority on successful completion and mere visible prose is
@@ -7437,7 +7437,7 @@
       return {
         mode: 'off',
         label: t('content_compact', 'Compact'),
-        hint: t('content_browser_disconnected', 'Browser connection is disconnected in Chat On Steroids.'),
+        hint: t('content_browser_disconnected', 'Browser connection is disconnected in OneCode.'),
         action: 'none'
       };
     }
@@ -7445,7 +7445,7 @@
       return {
         mode: 'off',
         label: t('content_compact', 'Compact'),
-        hint: t('content_app_not_running', 'Chat On Steroids is not running on this PC.'),
+        hint: t('content_app_not_running', 'OneCode is not running on this PC.'),
         action: 'none'
       };
     }
@@ -8075,7 +8075,7 @@
       'data-clf-tip',
       t(
         'content_chat_blocked_tip',
-        'This chat is blocked in the Chat On Steroids app: its tool calls are refused and Goal, Loop and auto-compaction are off. To release it, open the app’s Chat tab, hover this chat in the sessions list and press its block symbol.'
+        'This chat is blocked in the OneCode app: its tool calls are refused and Goal, Loop and auto-compaction are off. To release it, open the app’s Chat tab, hover this chat in the sessions list and press its block symbol.'
       )
     );
     blocked.hidden = true;
@@ -8168,7 +8168,7 @@
     root.className = 'clf-menu';
     root.dataset.clfMenu = '1';
     root.setAttribute('role', 'dialog');
-    root.setAttribute('aria-label', t('content_settings_aria', 'Chat On Steroids settings'));
+    root.setAttribute('aria-label', t('content_settings_aria', 'OneCode settings'));
     root.hidden = true;
     (document.body || document.documentElement).append(root);
     return root;
@@ -8930,7 +8930,7 @@
     // Never disabled any more: it opens a sheet, and a sheet that explains why compaction is
     // unavailable is exactly what somebody clicking a dead button wanted to be told.
     control.button.disabled = false;
-    setAttr(control.button, 'aria-label', t('content_settings_aria', 'Chat On Steroids settings'));
+    setAttr(control.button, 'aria-label', t('content_settings_aria', 'OneCode settings'));
     setAttr(control.button, 'aria-haspopup', 'dialog');
     if (!control.button.hasAttribute('aria-expanded')) control.button.setAttribute('aria-expanded', 'false');
     // The meter only while the button is a button. During a run the control is saying what
@@ -11454,7 +11454,7 @@
     if (data.error) return String(data.error).slice(0, 160);
     if (reply.error === 'app_not_found') return t(
       'content_app_not_running',
-      'Chat On Steroids is not running on this PC.'
+      'OneCode is not running on this PC.'
     );
     return reply.error ? String(reply.error).slice(0, 160) : '';
   }
