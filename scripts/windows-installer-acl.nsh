@@ -48,12 +48,17 @@
       !insertmacro addDesktopLink "false"
     ${EndIf}
   !endif
-  # Older OneCode updaters delegate restart to --force-run. Keep a separate bounded
-  # observer alive after NSIS exits, because ExecShellAsUser can silently fail.
-  # New bootstraps omit --force-run and own their own checked restart.
-  ${If} ${isForceRun}
-  ${AndIf} ${Silent}
-    System::Call 'kernel32::GetCurrentProcessId() i .r1'
-    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\resources\updater\legacy-relaunch.ps1" -Executable "$INSTDIR\${APP_EXECUTABLE_FILENAME}" -InstallerPid $1 -ExpectedVersion "${VERSION}"'
+  # Already shipped bootstraps can reject Windows' valid default shortcut icon
+  # before relaunch. Only those callers use this bounded compatibility observer.
+  # New bootstraps explicitly retain restart custody with --onecode-bootstrap.
+  ${If} ${Silent}
+  ${AndIf} ${isUpdated}
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "--onecode-bootstrap" $R2
+    ${If} ${Errors}
+      System::Call 'kernel32::GetCurrentProcessId() i .r1'
+      Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\resources\updater\legacy-relaunch.ps1" -Executable "$INSTDIR\${APP_EXECUTABLE_FILENAME}" -InstallerPid $1 -ExpectedVersion "${VERSION}"'
+    ${EndIf}
   ${EndIf}
 !macroend

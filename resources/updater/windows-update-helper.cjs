@@ -57,9 +57,21 @@ function registration(target) {
 function processes(executable) {
   return JSON.parse(ps(`ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name='OneCode.exe'" | Where-Object {$_.ExecutablePath -eq ${quote(executable)}} | Select-Object ProcessId,ParentProcessId) -Compress`));
 }
-function shortcuts(executable) {
-  ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\OneCode.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'OneCode.lnk';if(-not(Test-Path -LiteralPath $menu)){throw 'OneCode Start-menu shortcut is missing'};foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);if(-not[string]::Equals($link.TargetPath,${quote(executable)},[StringComparison]::OrdinalIgnoreCase)){throw 'OneCode shortcut points outside the installed app'};if(-not[string]::Equals($link.IconLocation,${quote(executable + ',0')},[StringComparison]::OrdinalIgnoreCase)){throw 'OneCode shortcut icon points outside the installed app'}}}`);
+function ownedShortcutIcon(value, executable) {
+  const match = /^(.*),\s*0$/.exec(String(value).trim());
+  if (!match) return false;
+  const icon = match[1].trim().replace(/^"(.*)"$/, '$1');
+  // An empty icon path means the link target's own icon, not a foreign resource.
+  return !icon || same(icon, executable) || same(icon, path.win32.join(path.win32.dirname(executable), 'resources', 'runtime-icon.ico'));
 }
+function shortcuts(executable) {
+  const rows = JSON.parse(ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\OneCode.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'OneCode.lnk';if(-not(Test-Path -LiteralPath $menu)){throw 'OneCode Start-menu shortcut is missing'};$rows=@(foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);@{target=$link.TargetPath;icon=$link.IconLocation}}});ConvertTo-Json -InputObject $rows -Compress`));
+  for (const row of rows) {
+    if (!same(row.target, executable)) throw new Error('OneCode shortcut points outside the installed app');
+    if (!ownedShortcutIcon(row.icon, executable)) throw new Error('OneCode shortcut icon points outside the installed app');
+  }
+}
+
 function execute(file, args, elevate) {
   if (elevate) {
     // Only an explicit handoff can reach this permission prompt.
@@ -97,7 +109,7 @@ async function run(note, dependencies = {}) {
     if (digest !== record.digest) throw new Error('Staged installer digest changed');
     persist('installing');
     // NSIS /D is final and unquoted. The bootstrap owns restart; no --force-run.
-    await (dependencies.execute || execute)(record.installer, ['/S', '--updated', '/currentuser', `/D=${record.target}`], record.elevate === true);
+    await (dependencies.execute || execute)(record.installer, ['/S', '--updated', '--onecode-bootstrap', '/currentuser', `/D=${record.target}`], record.elevate === true);
     log('installer exited 0');
     noLinks(record.executable); registered(record.target);
     const installed = dependencies.version ? dependencies.version() : ps(`(Get-Item -LiteralPath ${quote(record.executable)}).VersionInfo.ProductVersion`);
@@ -134,5 +146,5 @@ async function run(note, dependencies = {}) {
     throw error;
   }
 }
-module.exports = { validate, run, readyWindow };
+module.exports = { validate, run, readyWindow, ownedShortcutIcon };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });
