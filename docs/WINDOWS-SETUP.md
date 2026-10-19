@@ -1,6 +1,8 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.3.7 candidate
+## Version 0.3.8
+
+Remote mobile settings wrap their category buttons and controls to the screen and scroll vertically. In **Settings → Remote**, copy the private link once and bookmark the complete address, including its fragment. That installation retains its encrypted key and private port across restarts, updates and turning Remote off and on. Open or reload the bookmark to renew a browser connection after a restart or session expiry. Turning Remote off closes access immediately without changing the bookmark. The host PC, OneCode and Tailscale must be running; changing the Tailscale device identity or hostname requires a new link. If another program replaces the saved route, OneCode reports the conflict rather than silently changing the address.
 
 Shared OneCode controls use **provider** or **agent** wording. Choose the actual service in **AI provider**; browser destinations, account checks and tool routing remain provider-specific. Existing chats keep their original provider.
 

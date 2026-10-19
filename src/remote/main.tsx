@@ -4,7 +4,7 @@ import type { RemoteBootstrap, RemotePreferences, RemoteSession, RemoteSessionDe
 import type { ControlApiEvents, ControlApiInput, ControlApiInputs } from '../shared/control-api.js';
 import type { ChatProvider } from '../shared/chat-provider.js';
 import type { ReasoningEffort } from '../shared/session.js';
-import { request, action, setRemoteToken, hasRemoteToken, RemoteRequestError, RemoteActionError } from './api.js';
+import { request, action, setRemoteToken, hasRemoteToken, hasRemoteLink, connectRemote, forgetRemoteLink, RemoteRequestError, RemoteActionError } from './api.js';
 import '../renderer/chat-content.css';
 import './remote.css';
 import './presentations.css';
@@ -23,12 +23,6 @@ function loadAppearance(): RemoteAppearance {
     theme: ['system', 'dark', 'light'].includes(value.theme) ? value.theme : 'system', textSize: ['default', 'large', 'extra'].includes(value.textSize) ? value.textSize : 'default' }; }
   catch { return { theme: 'system', textSize: 'default' }; }
 }
-
-// A URL fragment never reaches Serve, HTTP logs, or referrers. Exchange it once
-// for this browser's revocable session and remove it from the visible address.
-let launchKey = location.hash.slice(1);
-if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-if (!/^[A-Za-z0-9_-]{43}$/.test(launchKey)) launchKey = '';
 
 function Settings({ bootstrap, refresh, back, appearance, saveAppearance, disconnect }: { bootstrap: RemoteBootstrap; refresh(): Promise<RemoteBootstrap>; back(): void; appearance: RemoteAppearance; saveAppearance(value: RemoteAppearance): void; disconnect(): void }) {
   const [tab, setTab] = useState('Chats'), [draft, setDraft] = useState<RemotePreferences>(bootstrap.preferences), [revision, setRevision] = useState(bootstrap.preferencesRevision);
@@ -224,7 +218,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
       else attachmentDrafts.current.set(target ?? 'new', [...(attachmentDrafts.current.get(target ?? 'new') ?? []), ...uploaded]);
     } catch (error) { setError((error as Error).message); } finally { setUploading(false); if (files.current) files.current.value = ''; }
   };
-  if (!bootstrap) return <main className="pair"><h1>Loading OneCode…</h1><p role="alert">{error}</p><button onClick={disconnect}>Reconnect</button></main>;
+  if (!bootstrap) return <main className="pair"><h1>Loading OneCode…</h1><p role="alert">{error}</p><button onClick={() => location.reload()}>Reconnect</button></main>;
   return <div className="app" data-view={view} data-theme={bootstrap.preferences.theme} data-remote-theme={appearance.theme} data-text-size={appearance.textSize}><header className="top"><div className="brand">◈ OneCode <small>Remote</small></div><span className={connected ? 'connected' : 'muted'}>{connected ? '●' : '○'} {bootstrap.host} · {connected ? 'Connected' : 'Reconnecting'}</span></header><div className="body">
     <aside className={view === 'tasks' ? 'visible' : ''}><button onClick={() => select(null)}>＋ New chat</button><p className="eyebrow">Tasks</p><div className="task-list">{sessions.map(session => <button key={session.id} className={`task ${selected === session.id ? 'active' : ''}`} onClick={() => select(session.id)} title={session.title || 'Untitled chat'}><strong>{session.title || 'Untitled chat'}</strong><small>{session.activeTurnId ? '● Working' : 'Ready'}</small></button>)}{nextCursor && <button onClick={async () => { const page = await request<RemoteSessionList>(`sessions?limit=50&cursor=${encodeURIComponent(nextCursor)}`); setSessions(rows => [...rows, ...page.sessions.filter(row => !rows.some(existing => existing.id === row.id))]); setNextCursor(page.nextCursor); }}>Load more</button>}</div><button className="settings-link" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')}><Icon name="settings" /> Settings</button></aside>
     {view === 'settings' ? <Settings bootstrap={bootstrap} appearance={appearance} saveAppearance={saveAppearance} refresh={refreshBootstrap} back={() => setView('chat')} disconnect={() => { void request('disconnect', {}).catch(() => undefined).finally(() => { setRemoteToken(''); disconnect(); }); }} /> : <main className={view === 'tasks' ? 'mobile-hidden' : ''}><header className="chat-heading"><div className="heading-line"><h1>{selected ? summary?.title || 'Loading task…' : 'New chat'}</h1>{!selected && !sending && !pending ? <select aria-label="Provider for this chat" disabled={sending || !!pending} value={actualProvider ?? ''} onChange={event => { setProvider(event.target.value as ChatProvider); setModel(''); setEffort(''); setModelEdited(true); }}>{bootstrap.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select> : <span className="muted">{catalog?.label}</span>}</div>{selected && <button onClick={() => { setTitle(summary?.title ?? ''); setEditing(value => !value); }}>Edit task</button>}</header>
@@ -289,16 +283,14 @@ function App() {
     fit(); viewport?.addEventListener('resize', fit); viewport?.addEventListener('scroll', fit); window.addEventListener('resize', fit); document.addEventListener('focusin', focusChanged); document.addEventListener('focusout', focusChanged);
     return () => { viewport?.removeEventListener('resize', fit); viewport?.removeEventListener('scroll', fit); window.removeEventListener('resize', fit); document.removeEventListener('focusin', focusChanged); document.removeEventListener('focusout', focusChanged); };
   }, []);
-  const [connected, setConnected] = useState(() => !launchKey && hasRemoteToken());
-  const [connecting, setConnecting] = useState(!!launchKey), [error, setError] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(hasRemoteLink() || hasRemoteToken()), [error, setError] = useState('');
   useEffect(() => {
-    if (!launchKey) return;
-    const key = launchKey; launchKey = ''; setRemoteToken('');
-    const name = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 'Phone browser' : 'Browser';
-    void request<{ token: string }>('connect', { key, name }).then(result => { setRemoteToken(result.token); setConnected(true); })
+    if (!hasRemoteLink() && !hasRemoteToken()) return;
+    void connectRemote().then(() => setConnected(true))
       .catch(error => setError((error as Error).message)).finally(() => setConnecting(false));
   }, []);
-  return connected ? <Workspace disconnect={() => { setRemoteToken(''); setConnected(false); }} />
+  return connected ? <Workspace disconnect={() => { forgetRemoteLink(); setConnected(false); }} />
     : <main className="pair"><div className="brand">◈ OneCode <small>Remote</small></div><h1>{connecting ? 'Connecting…' : 'Open your remote link'}</h1>
       {!connecting && <p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>}</main>;
 }

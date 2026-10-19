@@ -72,10 +72,10 @@ export class PrivateServe {
     if (previous && (previous.version !== 1 || previous.nodeId !== node.ID || !previous.host.startsWith(`${dns}:`) ||
         !Number.isInteger(portOf(previous.host)) || portOf(previous.host) < 1024 || portOf(previous.host) > 65535 || !/^http:\/\/127\.0\.0\.1:\d+$/.test(previous.proxy)))
       throw new Error('The saved remote route belongs to another Tailscale node.');
-    // Reuse our unchanged route (or its empty crash receipt). A replaced route
-    // belongs to its current owner; leave it intact and allocate another port.
+    // Preserve the installation's address even when lower ports become free.
+    // A replaced route belongs to its current owner; never move a bookmark silently.
     let port: number | undefined;
-    if (previous) { try { safe(config, previous, true); port = portOf(previous.host); } catch { /* choose a free listener */ } }
+    if (previous) { safe(config, previous, true); port = portOf(previous.host); }
     port ??= freePort(config);
     const next: Custody = { version: 1, nodeId: node.ID, host: `${dns}:${port}`, proxy };
     safe(config, previous?.host === next.host ? previous : next, true);
@@ -106,12 +106,13 @@ export class PrivateServe {
     if (node.ID !== custody.nodeId) throw new Error('Remote route custody changed; no route was removed.');
     safe(config, custody, true);
     if (!Object.keys(object(object(config.TCP)[String(portOf(custody.host))])).length && !Object.keys(routes(config, custody.host)).length) {
-      this.custody = null; await this.deps.write(null); return;
+      this.custody = null; return;
     }
     await this.deps.run(['serve', `--https=${portOf(custody.host)}`, 'off']);
     const after = await this.inspect();
     if (after.node.ID !== custody.nodeId || Object.keys(routes(after.config, custody.host)).length ||
       !isDeepStrictEqual(unrelated(config, custody.host), unrelated(after.config, custody.host))) throw new Error('Remote route removal could not be verified.');
-    this.custody = null; await this.deps.write(null);
+    // Retain the empty route receipt so re-enabling/restarting uses this same port.
+    this.custody = null;
   }
 }

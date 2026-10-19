@@ -16,7 +16,7 @@ import { remotePreferences } from './preferences.js';
 import { RequestError, projectInput } from '../control-reads.js';
 import { listInputs } from '../session/input.js';
 import { remoteRead } from './views.js';
-import { getSecret, setSecret, clearSecret } from '../secrets.js';
+import { getSecret, setSecret } from '../secrets.js';
 import { readArtifact } from '../artifacts/service.js';
 import { getSession, readAsset, readEvents } from '../session/store.js';
 import { PreviewDocuments, ARTIFACT_DOCUMENT_CSP } from '../artifacts/preview-documents.js';
@@ -206,7 +206,7 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
         }
       }
     }
-    else { await closeListener(); await clearSecret('remoteAccessKey'); try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
+    else { await closeListener(); try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
     return remoteStatus();
   });
   lifecycle = operation.then(() => undefined, () => undefined); return operation;

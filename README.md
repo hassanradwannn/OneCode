@@ -2,21 +2,17 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.3.7.6](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-## What's new in 0.3.7.6
+## What's new in 0.3.8
 
-- Update waiting messages identify the actual blocker, including hidden terminal tabs. **Show open terminals** reveals existing terminals so you can close idle shells before restarting.
-- A more consistent **remote workspace on desktop and phones**, with formatted chats, grouped tool actions, outlined task rows and improved image and interactive-preview presentation.
-- Compact **model and effort controls**, slash commands, installed-skill suggestions, editable plans and visible plan steps.
-- Sent messages appear immediately. Thinking and delivery status follow the host, transient busy reads recover quietly, and **Load earlier** appears only when older history exists.
-- Scrollable settings, mobile keyboard layout fixes and preview fixes for the desktop sidebar and fullscreen view.
-- Windows shortcut branding, internal-update relaunch repairs and cache checks that avoid applying a differential download to the wrong installer.
-- OneCode branding across plugin instructions and app labels, while retaining compatibility identifiers and upstream notices.
+- Mobile remote settings fit the screen: category buttons wrap, controls stay reachable, and the page scrolls vertically without sideways panning.
+- Bookmark the remote link once. Its encrypted access key and private port are retained across restarts, updates, and turning Remote off and on.
+- Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
 
-See the [0.3.7.6 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706) or follow the [setup guide](docs/WINDOWS-SETUP.md). **0.3.7.6** is the public release name; the app, installers and update feed report the compatible version **0.3.706**.
+See the [0.3.8 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8**; installers and the update feed use the compatible version **0.3.800**.
 
 ## Work with your own provider account
 
@@ -52,7 +48,7 @@ On the host PC, open **Settings → Remote**, turn on Remote mode and copy its l
 
 The remote workspace provides chats, history, messages, Stop, plans, model and effort controls, local skill suggestions, images, interactive previews and supported preferences. It uses your host's existing provider connection and tool permissions. Desktop browsers and phones share the same interface with responsive navigation and settings.
 
-Remote mode uses a separate private Tailscale Serve route and access key. Keep its link private. Turning Remote off invalidates the link and browser sessions; **Settings → Remote access** in the remote browser can disconnect that browser alone. Provider MCP connectors keep their separate connection settings.
+Remote mode uses a separate private Tailscale Serve route and access key. Keep its link private. Bookmark the complete copied link, including its fragment. Turning Remote off closes access and browser sessions while preserving the link for re-enabling; **Settings → Remote access** in the remote browser can disconnect that browser alone. Provider MCP connectors keep their separate connection settings.
 
 ## Updates and longer tasks
 
@@ -62,7 +58,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.7.6 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706).
+Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

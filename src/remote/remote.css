@@ -20,3 +20,9 @@ aside{display:flex;flex-direction:column;min-height:0;overflow:hidden;gap:8px;pa
 @media(max-width:360px){.composer-toolbar{gap:1px}.composer-toolbar>.model-menu{max-width:110px}.dictation-control{display:none}.chat-heading .heading-line>.muted{max-width:68px;overflow:hidden;text-overflow:ellipsis}.model-popover{right:-39px;width:270px}.status{font-size:11px}}
 
 .optimistic small{display:block;text-align:right;color:var(--muted);font-size:12px;margin-top:6px}.activity-row,.thinking{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:14px;margin:14px 0;overflow-wrap:anywhere}.activity-row svg{width:16px;flex-shrink:0}.thinking-dot{width:8px;height:8px;border-radius:50%;background:var(--primary);animation:thinking-pulse 1.5s ease-in-out infinite}@keyframes thinking-pulse{50%{opacity:.35}}
+/* Settings own vertical scrolling; controls and categories fit the available pane. */
+.settings{width:100%;max-width:100%;overflow-x:hidden;overflow-y:auto;overflow-wrap:anywhere}
+.settings-tabs{flex-wrap:wrap;overflow:visible}
+.settings-tabs>button{max-width:100%;white-space:normal}
+.settings footer>button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:700px){.setting{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.setting:has(>input[type=checkbox]){grid-template-columns:minmax(0,1fr) auto}.setting>select,.setting>input[type=number],.setting>button{width:100%;max-width:100%}.settings footer>button{flex:1 1 160px}}
