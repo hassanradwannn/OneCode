@@ -1,5 +1,5 @@
 /** A read projection of existing work owners, never an alternate work scheduler. */
-export type UpdateBusyReason = 'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'preparation' | 'unavailable';
+export type UpdateBusyReason = NonNullable<import('../shared/types.js').UpdateStatus['busyReasons']>[number];
 export async function updateBusyReasons(): Promise<UpdateBusyReason[]> {
   const [calls, recorder, inputs, agents, goal, continuation, bridge, exec, tasks, terminals] = await Promise.all([
     import('./mcp/call-context.js'), import('./session/recorder.js'), import('./session/input.js'),
@@ -19,7 +19,8 @@ export async function updateBusyReasons(): Promise<UpdateBusyReason[]> {
       ['invited', 'active', 'detached', 'waking'].includes(row.state))) reasons.push('workers');
   if ([...conversations].some(id => goal.goalArmedFor(id) || goal.goalDraftBusy(id))) reasons.push('automation');
   if (continuation.anyContinuationOpen()) reasons.push('continuation');
-  if (bridge.pendingCommands().length || exec.unifiedExecManager.listProcesses().length || terminals.activeWorkspaceTerminals()) reasons.push('commands');
+  if (bridge.pendingCommands().length || exec.unifiedExecManager.listProcesses().length) reasons.push('commands');
+  if (terminals.activeWorkspaceTerminals()) reasons.push('terminals');
   if (tasks.activeTaskRequests()) reasons.push('preparation');
   return reasons;
 }

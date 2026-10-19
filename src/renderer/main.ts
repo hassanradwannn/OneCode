@@ -62,7 +62,7 @@ import {
 } from '../shared/types.js';
 import type { SwarmState } from '../shared/session.js';
 import { $, ago, disclosureChevron, el, icon, run, shortAgo, toast } from './dom.js';
-import { chatApply, chatSettingsPatch, chatVisible, initChat, openChatSearch, openChatView } from './chat.js';
+import { chatApply, chatSettingsPatch, chatVisible, initChat, openChatSearch, openChatView, revealUpdateTerminals } from './chat.js';
 import { publishStopNoticeTexts } from './stop-notices.js';
 import { publishMainTexts } from './main-texts.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
@@ -1238,7 +1238,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
         ? t("Checking for the latest update…")
         : update.stage === 'ready'
         ? update.installRequested
-          ? t("OneCode {0} will install when work finishes. Pause Goal or Loop, close terminals and finish or cancel queued messages first. You can cancel this restart.", [displayReleaseVersion(update.latest!)])
+          ? updateInstallWaitingText(update)
           : t("OneCode {0} is downloaded and ready. Choose Install when done to restart after your work finishes.", [displayReleaseVersion(update.latest!)])
         : update.stage === 'downloading'
           ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [displayReleaseVersion(update.latest), String(update.downloadPercent ?? 0)])
@@ -1269,6 +1269,18 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
 }
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
+function updateInstallWaitingText(update: AppState['update']): string {
+  const labels = {
+    tools: 'running tools', generation: 'a provider response', messages: 'queued messages', workers: 'active workers',
+    automation: 'Goal or Loop', continuation: 'Compact & Resume', commands: 'background commands',
+    terminals: 'open terminal tabs (including hidden panels)', preparation: 'message preparation', unavailable: 'checking activity'
+  };
+  const reasons = (update.busyReasons ?? []).map(reason => t(labels[reason]));
+  return reasons.length
+    ? t('OneCode {0} is waiting for: {1}. You can cancel this restart.', [displayReleaseVersion(update.latest!), reasons.join(', ')])
+    : t('OneCode {0} is preparing to restart.', [displayReleaseVersion(update.latest!)]);
+}
+
 function paintUpdate(next: AppState): void {
   const checkButton = $<HTMLButtonElement>('checkForUpdates');
   const checking = next.update.stage === 'checking' || next.update.stage === 'downloading' || checkButton.getAttribute('aria-busy') === 'true';
@@ -1286,6 +1298,7 @@ function paintUpdate(next: AppState): void {
     return;
   }
   const { update } = next;
+  $('updateShowTerminals').hidden = !update.installRequested || !update.busyReasons?.includes('terminals');
   ui($('updateText'), 'textContent', () => updateSummary(next)?.text ?? '');
   $('updateExtension').hidden = !summary.extensionAction;
   ui($('updateExtension'), 'textContent', () => updateSummary(next)?.extensionAction ?? t("Update extension"));
@@ -2681,6 +2694,7 @@ $('installUpdate').addEventListener('click', installUpdate);
 $('settingsInstallUpdate').addEventListener('click', installUpdate);
 $('cancelUpdateInstall').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('cancelUpdateInstallNotice').addEventListener('click', () => void run(api.cancelUpdateInstall()));
+$('updateShowTerminals').addEventListener('click', () => { showTab('chat'); revealUpdateTerminals(); });
 $('connectionPopoverToggle').addEventListener('click', () => void toggleConnection());
 $('wizConnect').addEventListener('click', () => void toggleConnection());
 $('readyStart').addEventListener('click', () => showTab('chat'));

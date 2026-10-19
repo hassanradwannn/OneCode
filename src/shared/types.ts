@@ -787,7 +787,7 @@ export interface UpdateStatus {
   downloadPercent?: number;
   /** Explicit, cancellable user intent for this exact staged version. Never restored at startup. */
   installRequested?: boolean;
-  busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'preparation' | 'unavailable'>;
+  busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'terminals' | 'preparation' | 'unavailable'>;
 }
 
 /** Receipt only; authoritative component state still establishes completion. */

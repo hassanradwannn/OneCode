@@ -2,12 +2,13 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.3.7.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.7.6](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-## What's new in 0.3.7.5
+## What's new in 0.3.7.6
 
+- Update waiting messages identify the actual blocker, including hidden terminal tabs. **Show open terminals** reveals existing terminals so you can close idle shells before restarting.
 - A more consistent **remote workspace on desktop and phones**, with formatted chats, grouped tool actions, outlined task rows and improved image and interactive-preview presentation.
 - Compact **model and effort controls**, slash commands, installed-skill suggestions, editable plans and visible plan steps.
 - Sent messages appear immediately. Thinking and delivery status follow the host, transient busy reads recover quietly, and **Load earlier** appears only when older history exists.
@@ -15,7 +16,7 @@ The current release is available for **Windows x64**, with **ChatGPT web and Gem
 - Windows shortcut branding, internal-update relaunch repairs and cache checks that avoid applying a differential download to the wrong installer.
 - OneCode branding across plugin instructions and app labels, while retaining compatibility identifiers and upstream notices.
 
-See the [0.3.7.5 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705) or follow the [setup guide](docs/WINDOWS-SETUP.md). The app displays **0.3.7.5**; installers and the update feed use the compatible version **0.3.705**.
+See the [0.3.7.6 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706) or follow the [setup guide](docs/WINDOWS-SETUP.md). The app displays **0.3.7.6**; installers and the update feed use the compatible version **0.3.706**.
 
 ## Work with your own provider account
 
@@ -61,7 +62,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.7.5 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705).
+Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.7.6 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

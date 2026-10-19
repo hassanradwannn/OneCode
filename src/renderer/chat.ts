@@ -299,6 +299,12 @@ function projectColorName(color: ProjectColor): string {
 let workspaceTerminal: ReturnType<typeof createWorkspaceTerminal> | null = null;
 let rightWorkspaceTerminal: ReturnType<typeof createWorkspaceTerminal> | null = null;
 let workspaceDocks: ReturnType<typeof createWorkspaceDocks> | null = null;
+/** Reveal existing shells without creating another terminal or stopping any command. */
+export function revealUpdateTerminals(): void {
+  if (workspaceTerminal?.tabs().some(tab => !tab.exited)) workspaceDocks?.setBottomOpen(true, false);
+  const right = rightWorkspaceTerminal?.tabs().find(tab => !tab.exited);
+  if (right) workspaceDocks?.activateSurface(`terminal:${right.id}`);
+}
 let artifactPanel: ReturnType<typeof createArtifactPanel> | null = null;
 let workbenchBrowserPanel: ReturnType<typeof createWorkbenchBrowserPanel> | null = null;
 let mediaPanel: ReturnType<typeof createMediaPanel> | null = null;
