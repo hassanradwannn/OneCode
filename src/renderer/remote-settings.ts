@@ -17,6 +17,7 @@ export function initRemoteSettings(): void {
     if (view.error) paintTailscaleRecovery(recovery, view.setup?.step, 'remote');
     document.getElementById('remoteStatus')!.textContent = view.error ?? t(view.ready ? 'On' : view.enabled ? 'Connecting…' : 'Off');
     address.value = view.url ?? '';
+    document.getElementById('remoteLinkConflict')!.hidden = !view.canRefreshLink;
     document.getElementById('remoteLink')!.hidden = !view.ready || !view.url;
     document.getElementById('remoteDevicesSection')!.hidden = !view.devices.length;
     const devices = document.getElementById('remoteDevices')!; devices.replaceChildren();
@@ -35,6 +36,13 @@ export function initRemoteSettings(): void {
     if (view) paint(view);
   };
   document.getElementById('remoteSetupAction')!.onclick = () => { const action = state?.setup && TAILSCALE_SETUP_ACTIONS[state.setup.step]; if (action) void run(window.api.openLink(action.url, { external: true })); };
+  document.getElementById('remoteRefreshLink')!.onclick = async () => {
+    if (busy || !state?.canRefreshLink) return;
+    busy = true; enable.disabled = true;
+    const button = document.getElementById('remoteRefreshLink') as HTMLButtonElement; button.disabled = true;
+    try { const view = await run(window.api.remoteRefreshLink()); if (view) { paint(view); if (view.ready) toast(t('Link refreshed. Copy the new link and update your bookmark.')); } }
+    finally { busy = false; enable.disabled = false; button.disabled = false; }
+  };
   document.getElementById('remoteCopyLink')!.onclick = async () => { if (state?.ready && state.url && await run(window.api.writeClipboard(state.url))) toast(t('Copied')); };
   document.querySelector<HTMLButtonElement>('[data-tab="remote"]')!.addEventListener('click', () => { void refresh(); });
   void refresh();

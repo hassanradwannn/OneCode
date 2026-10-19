@@ -31,18 +31,19 @@ const nativeRun = (args: string[]): Promise<string> => new Promise((resolve, rej
     ? reject(new Error('Tailscale Serve could not complete. Check that Tailscale is running and this user can access it.')) : resolve(stdout));
 });
 const defaults: Dependencies = { run: nativeRun, read: () => readDurable<Custody>('remote-serve', { strict: true }), write: value => writeDurableNow('remote-serve', value) };
+export class RemoteRouteConflict extends Error {}
 function parse(text: string): Row { return object(JSON.parse(text)); }
 function routes(config: Row, host: string): Row { return object(object(object(config.Web)[host]).Handlers); }
 function safe(config: Row, custody: Custody, emptyAllowed: boolean): void {
   const port = portOf(custody.host);
-  if (Object.values(object(config.Foreground)).some(value => occupied(object(value), port))) throw new Error('The remote Serve port belongs to a foreground route.');
+  if (Object.values(object(config.Foreground)).some(value => occupied(object(value), port))) throw new RemoteRouteConflict('The remote Serve port belongs to a foreground route.');
   const tcp = object(object(config.TCP)[String(port)]);
   const names = Object.keys(object(config.Web)).filter(name => name.endsWith(`:${port}`));
   if (Object.entries(object(config.AllowFunnel)).some(([name, enabled]) => name.endsWith(`:${port}`) && enabled !== false))
-    throw new Error('Remote access refuses a public Funnel listener.');
+    throw new RemoteRouteConflict('Remote access refuses a public Funnel listener.');
   if (!names.length && !Object.keys(tcp).length && emptyAllowed) return;
   if (names.length !== 1 || names[0] !== custody.host || !isDeepStrictEqual(tcp, { HTTPS: true }) ||
-      !isDeepStrictEqual(routes(config, custody.host), { '/': { Proxy: custody.proxy } })) throw new Error('The remote Serve port belongs to another route. No routes were changed.');
+      !isDeepStrictEqual(routes(config, custody.host), { '/': { Proxy: custody.proxy } })) throw new RemoteRouteConflict('The remote Serve port belongs to another route. No routes were changed.');
 }
 function unrelated(config: Row, host: string): Row {
   const copy = structuredClone(config); const web = object(copy.Web); delete web[host];
@@ -61,7 +62,8 @@ export class PrivateServe {
     return { node: object(state.Self), config: parse(config), status: state };
   }
   start(proxy: string): Promise<string> { return withTailscaleMutation(() => this.startOwned(proxy)); }
-  private async startOwned(proxy: string): Promise<string> {
+  refresh(proxy: string): Promise<string> { return withTailscaleMutation(() => this.startOwned(proxy, true)); }
+  private async startOwned(proxy: string, refresh = false): Promise<string> {
     if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(proxy)) throw new Error('Remote listener must be loopback-only.');
     const { node, config, status } = await this.inspect();
     // Prerequisites are read-only. Private Serve never requires Funnel approval.
@@ -75,7 +77,13 @@ export class PrivateServe {
     // Preserve the installation's address even when lower ports become free.
     // A replaced route belongs to its current owner; never move a bookmark silently.
     let port: number | undefined;
-    if (previous) { safe(config, previous, true); port = portOf(previous.host); }
+    if (refresh) {
+      if (!previous) throw new Error('No saved remote link needs refreshing.');
+      let conflict = false;
+      try { safe(config, previous, true); } catch (cause) { if (!(cause instanceof RemoteRouteConflict)) throw cause; conflict = true; }
+      if (!conflict) throw new Error('The remote route is available again. Use Refresh to reconnect with the existing link.');
+      // Explicit recovery may select a free port, but never removes the replaced route.
+    } else if (previous) { safe(config, previous, true); port = portOf(previous.host); }
     port ??= freePort(config);
     const next: Custody = { version: 1, nodeId: node.ID, host: `${dns}:${port}`, proxy };
     safe(config, previous?.host === next.host ? previous : next, true);

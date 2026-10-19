@@ -389,6 +389,7 @@ const api = {
   sendInput: (input: InputArgs) => call<InputEntry>('sessions:send', input),
   remoteStatus: () => call<RemoteStatus>('remote:status'),
   remoteEnabled: (enabled: boolean) => call<RemoteStatus>('remote:enabled', enabled),
+  remoteRefreshLink: () => call<RemoteStatus>('remote:refresh-link'),
   remoteRevoke: (id: string) => call<RemoteStatus>('remote:revoke', id),
   retryInputBrowser: (id: string) => call<InputEntry | null>('sessions:retryBrowser', { id }),
   listInputs: () => call<InputEntry[]>('sessions:outbox'),

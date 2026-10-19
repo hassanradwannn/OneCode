@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
 import { remoteAction, remoteActionSchema } from './actions.js';
-import { PrivateServe } from '../tunnel/tailscale-serve.js';
+import { PrivateServe, RemoteRouteConflict } from '../tunnel/tailscale-serve.js';
 import { readDurable, writeDurableNow } from '../durable.js';
 import { CHAT_PROVIDERS, chatProviderLabel } from '../../shared/chat-provider.js';
 import { APP_VERSION } from '../version.js';
@@ -39,13 +39,14 @@ async function retirePlaybacks(owner?: string): Promise<void> {
 let listener: http.Server | null = null, serve: PrivateServe | null = null, url: string | null = null, ready = false, enabled = false, error: string | null = null;
 let watcher: NodeJS.Timeout | null = null, verifying: Promise<void> | null = null, terminal = false;
 let accessKey: string | null = null;
+let canRefreshLink = false;
 let lifecycle = Promise.resolve();
 let setup: TailscaleSetupAction | undefined, setupRetry: NodeJS.Timeout | undefined;
 const assetRoot = path.resolve(__dirname, '../remote');
 function json(res: http.ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 async function checkRoute(): Promise<void> {
   if (!serve || !ready) throw new Error('Remote access is unavailable.');
-  if (!verifying) verifying = serve.verify().catch(cause => { ready = false; auth.clear(); error = (cause as Error).message; throw cause; }).finally(() => { verifying = null; });
+  if (!verifying) verifying = serve.verify().catch(cause => { ready = false; auth.clear(); error = (cause as Error).message; canRefreshLink = cause instanceof RemoteRouteConflict; throw cause; }).finally(() => { verifying = null; });
   return verifying;
 }
 async function body(req: http.IncomingMessage, limit = 128_000): Promise<unknown> {
@@ -157,7 +158,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const bytes = await fs.readFile(file).catch(() => { throw new RequestError(404, 'not_found'); }); const ext = path.extname(file);
   res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' } as Record<string, string>)[ext] ?? 'application/octet-stream' }); res.end(bytes);
 }
-async function start(): Promise<void> {
+async function start(refreshLink = false): Promise<void> {
   if (terminal || listener) return;
   // A missing production bundle must not publish an empty or development service.
   await fs.access(path.join(assetRoot, 'index.html'));
@@ -177,7 +178,8 @@ async function start(): Promise<void> {
   listener = server; serve = new PrivateServe();
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Remote listener did not start.');
-    url = await serve.start(`http://127.0.0.1:${address.port}`); ready = true; error = null;
+    const proxy = `http://127.0.0.1:${address.port}`;
+    url = await (refreshLink ? serve.refresh(proxy) : serve.start(proxy)); ready = true; error = null; canRefreshLink = false;
     watcher = setInterval(() => { void checkRoute().catch(() => undefined); }, 5_000); watcher.unref();
   } catch (cause) { await closeListener(); throw cause; }
 }
@@ -189,7 +191,7 @@ async function closeListener(): Promise<void> {
   url = null;
 }
 /** The remote-only link is deliberately exposed only through trusted desktop IPC. */
-export function remoteStatus(): RemoteStatus { return { enabled, ready, url: ready && url && accessKey ? `${url}/#${accessKey}` : null, error, devices: auth.list(), ...(setup ? { setup } : {}) }; }
+export function remoteStatus(): RemoteStatus { return { enabled, ready, url: ready && url && accessKey ? `${url}/#${accessKey}` : null, error, devices: auth.list(), ...(enabled && !ready && canRefreshLink ? { canRefreshLink: true } : {}), ...(setup ? { setup } : {}) }; }
 export function revokeRemoteDevice(id: string): void { auth.revoke(z.string().uuid().parse(id)); void retirePlaybacks(id); }
 export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
   const operation = lifecycle.then(async () => {
@@ -199,6 +201,7 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
       try { if (listener && !ready) await closeListener(); await start(); }
       catch (cause) {
         error = (cause as Error).message;
+        canRefreshLink = cause instanceof RemoteRouteConflict;
         if (cause instanceof TailscaleSetupRequired) {
           setup = cause.setup;
           void requestTailscaleSetup(cause.setup);
@@ -206,7 +209,19 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
         }
       }
     }
-    else { await closeListener(); try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
+    else { await closeListener(); canRefreshLink = false; try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
+    return remoteStatus();
+  });
+  lifecycle = operation.then(() => undefined, () => undefined); return operation;
+}
+/** Only trusted desktop UI can intentionally replace a conflicted bookmark address. */
+export function refreshRemoteLink(): Promise<RemoteStatus> {
+  const operation = lifecycle.then(async () => {
+    if (terminal || !enabled || ready || !canRefreshLink) return remoteStatus();
+    clearTimeout(setupRetry); setupRetry = undefined; setup = undefined;
+    await closeListener();
+    try { await start(true); }
+    catch (cause) { error = (cause as Error).message; canRefreshLink = cause instanceof RemoteRouteConflict; }
     return remoteStatus();
   });
   lifecycle = operation.then(() => undefined, () => undefined); return operation;

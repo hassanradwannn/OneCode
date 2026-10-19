@@ -9,7 +9,7 @@ import { setStopNoticeTranslations } from './stuck-notice.js';
 import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
-import { remoteStatus, setRemoteEnabled, revokeRemoteDevice } from './remote/server.js';
+import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink } from './remote/server.js';
 import { onRemotePreferencesChange } from './remote/preferences.js';
 import { desktopPreviews } from './artifacts/preview-documents.js';
 import { appearanceSchema } from './appearance-schema.js';
@@ -667,6 +667,7 @@ export async function openSessionChat(id: string): Promise<void> {
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
   handle('remote:status', async () => remoteStatus());
   handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)));
+  handle('remote:refresh-link', async () => refreshRemoteLink());
   handle('remote:revoke', async payload => { revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');

@@ -11,6 +11,7 @@ The current release is available for **Windows x64**, with **ChatGPT web and Gem
 - Mobile remote settings fit the screen: category buttons wrap, controls stay reachable, and the page scrolls vertically without sideways panning.
 - Bookmark the remote link once. Its encrypted access key and private port are retained across restarts, updates, and turning Remote off and on.
 - Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
+- If another route takes the saved port, **Settings → Remote → Refresh link** selects a free private port. Copy the replacement link and update your bookmark; the conflicting route is preserved.
 
 See the [0.3.8 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8**; installers and the update feed use the compatible version **0.3.800**.
 
