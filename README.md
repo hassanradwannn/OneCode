@@ -16,7 +16,7 @@ The current release is available for **Windows x64**, with **ChatGPT web and Gem
 - Windows shortcut branding, internal-update relaunch repairs and cache checks that avoid applying a differential download to the wrong installer.
 - OneCode branding across plugin instructions and app labels, while retaining compatibility identifiers and upstream notices.
 
-See the [0.3.7.6 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706) or follow the [setup guide](docs/WINDOWS-SETUP.md). The app displays **0.3.7.6**; installers and the update feed use the compatible version **0.3.706**.
+See the [0.3.7.6 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.706) or follow the [setup guide](docs/WINDOWS-SETUP.md). **0.3.7.6** is the public release name; the app, installers and update feed report the compatible version **0.3.706**.
 
 ## Work with your own provider account
 
