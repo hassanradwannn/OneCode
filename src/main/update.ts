@@ -206,9 +206,11 @@ export async function restoreUpdateHandoff(): Promise<void> {
   if (note?.schema === 1 && note.status !== 'failed' && typeof note.at === 'number' && Date.now() - note.at < 15 * 60_000) return;
   await rm(handoffNote(), { force: true }).catch(() => undefined);
   const version = typeof note?.version === 'string' && /^\d+\.\d+\.\d+$/.test(note.version) ? note.version : null;
-  if (version && (isNewer(version, APP_VERSION) || note?.status === 'failed')) {
+  if (version && isNewer(version, APP_VERSION)) {
     set({ notInstalled: version });
     logWarn(`update: ${version} installation did not finish; running ${APP_VERSION}${note?.error ? ` (${note.error})` : ''}`);
+  } else if (version && note?.status === 'failed') {
+    logWarn(`update: installed ${APP_VERSION} is running; prior bootstrap diagnostic${note.error ? ` (${note.error})` : ''}`);
   }
 }
 
