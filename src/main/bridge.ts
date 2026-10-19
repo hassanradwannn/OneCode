@@ -24,6 +24,8 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { injectedUserMessage, recordedRequestTurn, responseTurnId, type TimelineTurns } from '../shared/chronology.js';
 import type { SessionSummary } from '../shared/session.js';
 import { messageReferences } from '../shared/session.js';
+import type { ArtifactKind } from '../shared/artifact.js';
+import { admitNativeArtifactSnapshot, admitNativeOutputIdentity } from '../shared/native-output.js';
 import { turnTrace } from '../shared/turn-trace.js';
 import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy, collectRecordedBrowserDecision, fileRotationInput, type InputActivity } from './session/input.js';
 import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
@@ -251,6 +253,7 @@ import { conversationHasMcpCallSince, readHandoffResponse } from './session/stor
 import { sessionWorkingAt } from '../shared/session-activity.js';
 import { requestCorrelation } from './session/correlation.js';
 import { completeImageExport, IMAGE_EXPORT_BODY_BYTES, pendingImageExports } from './image-export.js';
+import { completeVideoExportChunk, pendingVideoExports, VIDEO_EXPORT_BODY_BYTES } from './video-export.js';
 import { bindAgentWorkspace } from './workspace.js';
 import { extensionUpdateOffer, prepareExtensionUpdate, shippedExtensionBuild } from './extension-path.js';
 
@@ -1565,7 +1568,9 @@ const OBSERVATION_KINDS = new Set([
   'conversation_title',
   'user_message',
   'assistant_message',
+  'provider_artifact',
   'native_image',
+  'native_video',
   'page_tool',
   // A turn's round outline: presentation stored beside the log (shared/turn-trace.ts).
   'turn_trace',
@@ -1670,7 +1675,7 @@ function parseCallEvidence(input: unknown, untooled = false): PageCallEvidence[]
  * a months-old chat is exactly when we need Gemini's own creation time so its messages can
  * be interleaved with already-recorded MCP calls instead of all appearing at reload time.
  */
-function parseObservations(input: unknown): ChatObservation[] {
+function parseObservations(input: unknown, expectedConversationId?: string): ChatObservation[] {
   if (!Array.isArray(input)) return [];
   const now = Date.now();
   const earliestChatGpt = Date.UTC(2022, 10, 30);
@@ -1696,6 +1701,64 @@ function parseObservations(input: unknown): ChatObservation[] {
           appName: typeof app?.['appName'] === 'string' ? app['appName'].slice(0, 200) : null });
       }
       observation.apps = apps;
+      out.push(observation);
+      continue;
+    }
+    if (kind === 'provider_artifact') {
+      if (typeof expectedConversationId !== 'string' || item['providerConversationId'] !== expectedConversationId) continue;
+      const snapshot = item['artifactNativeSurface'] !== undefined;
+      const statusSnapshot = snapshot && (item['artifactSnapshotStatus'] === 'generating' || item['artifactSnapshotStatus'] === 'failed');
+      if (snapshot && (item['providerArtifactId'] !== undefined || item['providerRevisionId'] !== undefined || item['providerParentRevisionId'] !== undefined)) continue;
+      const provider = snapshot ? admitNativeArtifactSnapshot({conversationId:expectedConversationId,provider:item['provider'],messageId:item['messageId'],surface:item['artifactNativeSurface']}) : admitNativeOutputIdentity({ kind: 'artifact', conversationId: expectedConversationId,
+        provider: item['provider'], messageId: item['messageId'], assetId: item['providerArtifactId'],
+        revisionId: item['providerRevisionId'], parentRevisionId: item['providerParentRevisionId'] });
+      if (!provider) continue;
+      const providerConversationId = item['providerConversationId'];
+      const messageId = item['messageId'] as string;
+      const providerArtifactId = item['providerArtifactId'] as string;
+      const providerRevisionId = item['providerRevisionId'] as string;
+      const providerParentRevisionId = item['providerParentRevisionId'] as string | undefined;
+      const providerArtifactKinds = new Set(['code', 'web', 'markdown', 'document', 'diagram', 'data']);
+      const artifactKind = typeof item['artifactKind'] === 'string' && providerArtifactKinds.has(item['artifactKind'])
+        ? item['artifactKind'] as ArtifactKind : null;
+      const safePath = (value: unknown): string | null => {
+        if (typeof value !== 'string' || !value || value.length > 1024 || value.startsWith('/') || value.includes('\0')) return null;
+        const parts = value.split('/');
+        return parts.some(part => !part || part === '.' || part === '..') ? null : value;
+      };
+      const artifactEntrypoint = safePath(item['artifactEntrypoint']);
+      if (!messageId || (!snapshot && (!providerArtifactId || !providerRevisionId)) || providerParentRevisionId === null || !artifactKind || !artifactEntrypoint) continue;
+      const artifactFiles: NonNullable<ChatObservation['artifactFiles']> = [];
+      const paths = new Set<string>();
+      let room = 240_000;
+      for (const rawFile of (Array.isArray(item['artifactFiles']) ? item['artifactFiles'] : []).slice(0, 8)) {
+        const file = rawFile && typeof rawFile === 'object' ? rawFile as Record<string, unknown> : null;
+        const path = safePath(file?.['path']);
+        const text = typeof file?.['text'] === 'string' && file['text'].length > 0 && file['text'].length <= room ? file['text'] : null;
+        if (!path || !text || paths.has(path)) { room = -1; break; }
+        paths.add(path); room -= text.length;
+        artifactFiles.push({ path, text,
+          ...(typeof file?.['mimeType'] === 'string' && file['mimeType'].length <= 128 ? { mimeType: file['mimeType'] } : {}),
+          ...(typeof file?.['language'] === 'string' && /^[a-z0-9_+.-]{1,64}$/i.test(file['language']) ? { language: file['language'] } : {}) });
+      }
+      if (room < 0 || (!statusSnapshot && (!artifactFiles.length || !artifactFiles.some(file => file.path === artifactEntrypoint)))) continue;
+      observation.provider = provider;
+      observation.providerConversationId = providerConversationId;
+      observation.messageId = messageId;
+      if(snapshot) observation.artifactNativeSurface = item['artifactNativeSurface'] as string;
+      else { observation.providerArtifactId = providerArtifactId; observation.providerRevisionId = providerRevisionId; }
+      if (providerParentRevisionId) observation.providerParentRevisionId = providerParentRevisionId;
+      observation.artifactKind = artifactKind;
+      observation.artifactEntrypoint = artifactEntrypoint;
+      observation.artifactFiles = artifactFiles;
+      if(statusSnapshot)observation.artifactSnapshotStatus=item['artifactSnapshotStatus'] as 'generating'|'failed';
+      if (typeof item['artifactTitle'] === 'string' && item['artifactTitle'].trim() && item['artifactTitle'].trim().length <= 200) {
+        observation.artifactTitle = item['artifactTitle'].trim();
+      }
+      if (typeof item['turnId'] === 'string' && item['turnId'].length <= 200) observation.turnId = item['turnId'];
+      if (item['authoredTime'] === true) observation.authoredTime = true;
+      if (typeof item['authoredAt'] === 'number' && Number.isFinite(item['authoredAt']) &&
+          item['authoredAt'] >= earliestChatGpt && item['authoredAt'] <= now + 60_000) observation.authoredAt = item['authoredAt'];
       out.push(observation);
       continue;
     }
@@ -1753,13 +1816,13 @@ function parseObservations(input: unknown): ChatObservation[] {
       observation.resolvedModel = item['resolvedModel'];
     }
     if (kind === 'native_image') {
-      if (typeof item['messageId'] !== 'string' ||
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item['messageId']) ||
-          typeof item['providerAssetId'] !== 'string' || !/^file_[A-Za-z0-9_-]{8,100}$/.test(item['providerAssetId']) ||
-          (item['providerRole'] !== 'tool' && item['providerRole'] !== 'assistant')) continue;
-      observation.messageId = item['messageId'];
-      observation.providerAssetId = item['providerAssetId'];
-      observation.providerRole = item['providerRole'];
+      const provider = admitNativeOutputIdentity({ kind: 'image', conversationId: expectedConversationId,
+        provider: item['provider'], messageId: item['messageId'], assetId: item['providerAssetId'], role: item['providerRole'] });
+      if (!provider) continue;
+      observation.provider = provider;
+      observation.messageId = item['messageId'] as string;
+      observation.providerAssetId = item['providerAssetId'] as string;
+      observation.providerRole = item['providerRole'] as 'tool' | 'assistant';
       if (item['providerChannel'] === 'final') observation.providerChannel = 'final';
       else if (item['providerChannel'] !== undefined) continue;
       if (item['providerStatus'] === 'in_progress' || item['providerStatus'] === 'finished_successfully') {
@@ -1772,7 +1835,7 @@ function parseObservations(input: unknown): ChatObservation[] {
       if ((item['width'] !== undefined && width === undefined) || (item['height'] !== undefined && height === undefined)) continue;
       if (width) observation.width = width;
       if (height) observation.height = height;
-      const previewErrors = new Set(['not_loaded', 'ambiguous', 'tainted', 'oversized', 'invalid', 'quota']);
+      const previewErrors = new Set(['not_mounted', 'not_loaded', 'ambiguous', 'tainted', 'oversized', 'invalid', 'quota']);
       if (item['previewStatus'] === 'pending' || item['previewStatus'] === 'available' || item['previewStatus'] === 'unavailable') {
         observation.previewStatus = item['previewStatus'];
       }
@@ -1805,6 +1868,36 @@ function parseObservations(input: unknown): ChatObservation[] {
           observation.previewStatus = 'unavailable';
           observation.previewError = 'invalid';
         }
+      }
+    }
+    if (kind === 'native_video') {
+      const provider = admitNativeOutputIdentity({ kind: 'video', conversationId: expectedConversationId,
+        provider: item['provider'], messageId: item['messageId'], assetId: item['providerAssetId'], role: item['providerRole'] });
+      if (!provider || (item['mediaMimeType'] !== 'video/mp4' && item['mediaMimeType'] !== 'video/webm')) continue;
+      observation.provider = provider;
+      observation.messageId = item['messageId'] as string; observation.providerAssetId = item['providerAssetId'] as string;
+      observation.providerRole = item['providerRole'] as 'tool' | 'assistant'; observation.mediaMimeType = item['mediaMimeType'];
+      if (item['providerChannel'] === 'final') observation.providerChannel = 'final';
+      else if (item['providerChannel'] !== undefined) continue;
+      if (item['providerStatus'] === 'in_progress' || item['providerStatus'] === 'finished_successfully') observation.providerStatus = item['providerStatus'];
+      else if (item['providerStatus'] !== undefined) continue;
+      const width = Number.isSafeInteger(item['width']) && Number(item['width']) > 0 && Number(item['width']) <= 30_000 ? Number(item['width']) : undefined;
+      const height = Number.isSafeInteger(item['height']) && Number(item['height']) > 0 && Number(item['height']) <= 30_000 ? Number(item['height']) : undefined;
+      const durationMs = Number.isSafeInteger(item['durationMs']) && Number(item['durationMs']) > 0 && Number(item['durationMs']) <= 3_600_000 ? Number(item['durationMs']) : undefined;
+      if ((item['width'] !== undefined && width === undefined) || (item['height'] !== undefined && height === undefined) ||
+          (item['durationMs'] !== undefined && durationMs === undefined)) continue;
+      if (width) observation.width = width; if (height) observation.height = height; if (durationMs) observation.durationMs = durationMs;
+      const previewErrors = new Set(['not_mounted', 'not_loaded', 'ambiguous', 'tainted', 'oversized', 'invalid', 'quota']);
+      if (item['previewStatus'] === 'pending' || item['previewStatus'] === 'available' || item['previewStatus'] === 'unavailable') observation.previewStatus = item['previewStatus'];
+      if (typeof item['previewError'] === 'string' && previewErrors.has(item['previewError'])) observation.previewError = item['previewError'] as ChatObservation['previewError'];
+      if (typeof item['previewDataUrl'] === 'string') {
+        const dataUrl = item['previewDataUrl'];
+        const previewWidth = Number.isSafeInteger(item['previewWidth']) && Number(item['previewWidth']) > 0 && Number(item['previewWidth']) <= 1600 ? Number(item['previewWidth']) : undefined;
+        const previewHeight = Number.isSafeInteger(item['previewHeight']) && Number(item['previewHeight']) > 0 && Number(item['previewHeight']) <= 1600 ? Number(item['previewHeight']) : undefined;
+        if (observation.providerStatus !== 'finished_successfully') { observation.previewStatus = 'pending'; delete observation.previewError; }
+        else if (/^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl) && dataUrl.length <= 512_100 && previewWidth && previewHeight && previewWidth * previewHeight <= 2_560_000) {
+          observation.previewDataUrl = dataUrl; observation.previewWidth = previewWidth; observation.previewHeight = previewHeight; observation.previewStatus = 'available';
+        } else { observation.previewStatus = 'unavailable'; observation.previewError = 'invalid'; }
       }
     }
     if (typeof item['turnId'] === 'string') observation.turnId = item['turnId'].slice(0, 100);
@@ -2860,8 +2953,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     let stalledConversations: string[] = [];
     let revealRequested = false;
     let imageExportRequested = false;
+    let videoExportRequested = false;
     if (req.method === 'POST') {
-      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown; provider?: unknown };
+      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; canExportVideos?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown; provider?: unknown };
       if (!Array.isArray(body?.openConversations) || body.openConversations.length > 10_000 || body.openConversations.some(id => !conversationId(id))) {
         return json(res, 400, { error: 'invalid_open_conversations' }, origin);
       }
@@ -2874,6 +2968,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       noteExtensionUpdateHold(body.updateHold);
       revealRequested = body.canReveal === true;
       imageExportRequested = body.canExportImages === true;
+      videoExportRequested = body.canExportVideos === true;
       if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
           externalExtension.browserId === browserOf(req)) {
         // Whether this browser may open chatgpt.com at all; older extensions say nothing (unknown).
@@ -2944,7 +3039,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // A message for the running turn goes in while a call runs: Gemini keeps that call's result (#1231).
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
-        inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || runningToolProgress(input.conversationId) === null) &&
+        inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || input.steerTurnId || runningToolProgress(input.conversationId) === null) &&
             (!input.conversationId || !tunnelRouteSettling()) &&
             !inputHeldElsewhere(input, browser)),
           ...inputRows.filter(row => row.lifetime === 'temporary-planner' && ['sent', 'cancelled', 'failed'].includes(row.state))
@@ -2967,6 +3062,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         ...(canReveal ? { reveals: takeReveals(browser) } : {}),
         ...(follow ? { follow } : {}),
         ...(req.method === 'POST' && imageExportRequested ? { imageExports: pendingImageExports() } : {}),
+        ...(req.method === 'POST' && videoExportRequested ? { videoExports: pendingVideoExports() } : {}),
         // A failure report closes this request. Reissuing the repair in the same response would
         // replace the visible failure with "Trying" before a renderer could ever observe it.
         repairs: repairFailed || repairHeld ? [] : await takePendingRepairs(Date.now(), browser),
@@ -2995,6 +3091,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 400, { error: 'bad_request' }, origin);
     }
     return json(res, 200, { ok: await completeImageExport(body) }, origin);
+  }
+  if (route === '/video-export/chunk' && req.method === 'POST') {
+    let body: unknown;
+    try { body = await readBody(req, VIDEO_EXPORT_BODY_BYTES); }
+    catch (err) { if ((err as Error).message === 'body_too_large') return tooLarge(res, origin); return json(res, 400, { error: 'bad_request' }, origin); }
+    return json(res, 200, { ok: await completeVideoExportChunk(body) }, origin);
   }
   if (route === '/core-plugin' && req.method === 'POST') {
     const body = await readBody(req) as Record<string, unknown>;
@@ -3259,7 +3361,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // This reports attachment only. The recorder below owns actual work and replay deduplication.
     const revived = noteAgentAlive(id, 'page');
     if (revived?.report) await recordAgentMessage(revived.report, 'sent', id);
-    const parsed = parseObservations(body['events']);
+    const parsed = parseObservations(body['events'], id);
     // App sightings only teach connector identity (proof: a request this app served). They are
     // never transcript content and on their own must not create or touch a session.
     const sightings = parsed.flatMap(item => item.kind === 'app_sightings' ? item.apps ?? [] : []);
@@ -8677,7 +8779,7 @@ async function noteRecoveryObservations(
   // control. That history backfill is not fresh activity, but its canonical
   // final still consumes the current work grant immediately.
   const observedFinal = observations.some(item => (item.kind === 'assistant_message' &&
-    (item.state === 'final' || item.final === true)) || item.kind === 'native_image');
+    (item.state === 'final' || item.final === true)) || item.kind === 'native_image' || item.kind === 'native_video');
   const completedFinal = (activity.terminal || observedFinal) && sessionId &&
     await readCompletedFinal(sessionId, conversationId, finalTurn);
   // A short native generation can start and end in one accepted batch. That is

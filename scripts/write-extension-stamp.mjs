@@ -55,6 +55,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const extensionDir = path.join(here, '..', 'extension');
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  const recorder = /const RECORDER_VERSION = (\d+);/.exec(readFileSync(path.join(extensionDir, 'content.js'), 'utf8'))?.[1];
+  const recovery = /const PAGE_RECORDER_VERSION = (\d+);/.exec(readFileSync(path.join(extensionDir, 'background.js'), 'utf8'))?.[1];
+  if (!recorder || recorder !== recovery) throw new Error('Companion recorder and recovery protocol revisions must match before packaging.');
   const stamp = extensionStamp(extensionDir);
   writeFileSync(path.join(extensionDir, STAMP_FILE), `${stamp}\n`, { encoding: 'utf8' });
   console.log(`extension build stamp: ${stamp} over ${extensionFiles(extensionDir).length} file(s)`);

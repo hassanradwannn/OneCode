@@ -60,9 +60,10 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
 
 /** Recorded membership, not a supplied filename, grants the renderer image access. */
 export async function recordedInputImage(sessionId: string, assetId: string): Promise<string | null> {
-  const events = await readEvents(sessionId, { kinds: ['user_message', 'native_image', 'tool_call'] });
+  const events = await readEvents(sessionId, { kinds: ['user_message', 'native_image', 'native_video', 'tool_call', 'progress'] });
   const referenced = events.flatMap(event => event.kind === 'user_message' ? event.assets ?? [] :
-    event.kind === 'native_image' ? event.asset ? [event.asset] : [] :
+    event.kind === 'native_image' || event.kind === 'native_video' ? event.asset ? [event.asset] : [] :
+    event.kind === 'progress' ? event.presentation?.asset ? [event.presentation.asset] : [] :
     event.kind === 'tool_call' ? event.call.assets ?? [] : [])
     .find(asset => asset.id === assetId && ['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType));
   if (!referenced) return null;

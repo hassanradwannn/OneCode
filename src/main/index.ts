@@ -1,5 +1,7 @@
 import { initGeminiBindings } from './gemini/bindings.js';
 import { stopInputStartup } from './session/start-input.js';
+import { registerArtifactPreviewScheme, installArtifactPreviewProtocol } from './artifacts/preview-protocol.js';
+registerArtifactPreviewScheme();
 import { browserExtensionRequired } from '../shared/types.js';
 import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js';
 /**
@@ -76,6 +78,7 @@ import {
 import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
 import { loadConnectorIdentity } from './connector-identity.js';
 import { initControlApiPath, shutdownControlApi, startControlApi } from './control-api.js';
+import { restoreRemote, shutdownRemote } from './remote/server.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
 import { restoreBlockedChats } from './session/blocked-chats.js';
 import { restoreTrustedChats } from './session/trusted-chats.js';
@@ -119,7 +122,7 @@ import {
   shouldQuitOnWindowAllClosed
 } from './window-lifecycle.js';
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
-import { browserWindowIconPath } from './window-icon.js';
+import { browserWindowIconPath, windowsTaskbarIconPath } from './window-icon.js';
 import { editContextMenuTemplate } from './edit-context-menu.js';
 import { observeWindowPresentation } from './window-presentation.js';
 import { showConnectionLossNotice } from './connection-loss-notice.js';
@@ -197,6 +200,10 @@ function createWindow(): void {
   });
 
   if (process.platform === 'win32') window.removeMenu();
+  if (process.platform === 'win32' && app.isPackaged) window.setAppDetails({
+    appId: APP_ID, appIconPath: windowsTaskbarIconPath(process.resourcesPath), appIconIndex: 0,
+    relaunchCommand: `"${process.execPath}"`, relaunchDisplayName: PRODUCT_NAME
+  });
   const owner = window;
   observeWindowPresentation(owner, observation => logInfo(`main window presentation ${JSON.stringify(observation)}`), () => quitting);
 
@@ -415,6 +422,7 @@ app.on('second-instance', (_event, argv) => {
 });
 
 void app.whenReady().then(async () => {
+  installArtifactPreviewProtocol();
   // This guard is intentionally before even app.getPath/init* calls. A secondary instance, or a
   // primary that was told to quit before ready, must never touch the primary's shared userData.
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
@@ -626,11 +634,12 @@ void app.whenReady().then(async () => {
 
   // Strict CSP for our own page. There is no remote content and no inline script.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (details.url.startsWith('onecode-artifact://')) { callback({ responseHeaders: details.responseHeaders }); return; }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src onecode-artifact:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
         ]
       }
     });
@@ -689,6 +698,7 @@ void app.whenReady().then(async () => {
   if (getConfig().controlApi.enabled) {
     startControlApi().catch((error: Error) => logWarn(`control API did not start: ${error.message}`));
   }
+  void restoreRemote().catch(() => logWarn('Remote access could not start. Open Settings on this PC.'));
   if (getConfig().ui.autoConnect) void connect();
   void resumeUpdateRefresh().catch((error: Error) => logWarn(`update refresh did not resume: ${error.message}`));
 
@@ -753,7 +763,7 @@ app.on('will-quit', (event) => {
       {
         name: 'admission/drain',
         budgetMs: 40_000,
-        run: () => [shutdownConnection(), shutdownBridge(), shutdownControlApi(), stopAgentRuntimeGc()]
+        run: () => [shutdownConnection(), shutdownBridge(), shutdownControlApi(), shutdownRemote(), stopAgentRuntimeGc()]
       },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {

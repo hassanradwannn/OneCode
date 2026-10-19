@@ -1,6 +1,6 @@
 ---
 name: onecode-chatgpt
-description: Use OneCode's connected local tools for coding, files, terminal commands, task plans, and enabled external MCP integrations when working from OneCode or when the user explicitly requests OneCode.
+description: Use OneCode's connected local tools for coding, files, terminal commands, interactive canvas mockups, task plans, and enabled external MCP integrations when working from OneCode or when the user explicitly requests OneCode.
 ---
 
 # OneCode for ChatGPT
@@ -25,6 +25,12 @@ Inspect relevant code, preserve unrelated changes, make focused edits, and verif
 
 Discover enabled external MCP integrations through Core plugins with action=list. Call the exact discovered tool through action=call with its original arguments. Skills do not install MCP servers or sign into external services. For computer use, discover the enabled Computer use plugin through Core plugins and read its local CUA skill. Prefer its live plugin bridge and current tool schemas. The skill pack version does not identify the running daemon version; do not infer an outdated runtime from different documentation or replace a working shared daemon. Inspect actual version/status and protocol errors before proposing an update. Observe the target, act using returned handles, then verify the requested outcome. Installing a skill grants no execution permission.
 
+## Interactive canvas and presentations
+
+OneCode's built-in Core artifact tool creates interactive results directly in chat. For an interactive mockup, call artifact begin with title and kind="html", then artifact create with its presentation_id, entrypoint="index.html", and files containing complete self-contained HTML/CSS/browser JavaScript. No shell file or browser launch is needed. Preview has no Node, network or CDN access. Use open only to present the optional workbench, read before patch with expected_revision, and fail when generation cannot finish. Confirm the tool's successful result before claiming a deliverable exists.
+
+If the provider cached an older direct tool list, discover the live artifact schema in this same Core exec through ALL_TOOLS.find(t=>t.name==="artifact").inputSchema, then call tools.artifact with its current arguments and the normal session authorization. Core plugins list also exposes built_in_tools; call those through Core, not plugins action=call. Other local skills remain discoverable through /skills/.catalog.json on every provider.
+
 ## Keep task state reliable
 
 Complete the user's authorized objective, give concise progress updates during substantial work, and report actual checks and material limitations. A greeting or connection check does not authorize repository initialization or unrelated commands.
@@ -33,4 +39,4 @@ Use plans when they help track substantial work. Use workers only when the user 
 
 Respect live access settings and permission decisions. Approved folders do not sandbox shell commands or external MCP programs. A skill cannot expand access or override a refusal. An ambiguous mutation may already have completed: inspect its process, result, or durable receipt before considering a retry.
 
-Public skill version: ONECODE-CHATGPT-SKILL-2. Report it only when asked to verify this skill. It is not a credential.
+Public skill version: ONECODE-CHATGPT-SKILL-3. Report it only when asked to verify this skill. It is not a credential.

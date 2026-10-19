@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 23;
+  const VERSION = 24;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -76,6 +76,12 @@
   const MAX_CALLS = 200;
   /** Public generated-image descriptors retained per turn. Pixels never cross this boundary. */
   const MAX_GENERATED_IMAGES = 200;
+  /** Public generated-video descriptors retained per turn. Original bytes never cross Fiber. */
+  const MAX_GENERATED_VIDEOS = 64;
+  /** Native Canvas revisions retained per turn. Content is public artifact text, never account state. */
+  const MAX_PROVIDER_ARTIFACTS = 32;
+  /** One exact Canvas revision must fit in one browser observation without bridge truncation. */
+  const MAX_PROVIDER_ARTIFACT_TEXT = 240_000;
   /** ChatGPT's own turn anchors, which is where a turn's message model hangs. */
   // Shell anchors and typed items adapted from @ehkogh's #318. Keep one wire format.
   const LEGACY_TURN_SECTION = 'section[data-testid^="conversation-turn"]';
@@ -87,6 +93,7 @@
   const MARKDOWN = '.markdown, [data-markdown-text-style="assistant-message"]';
   const TOOL = 'span[class*="tool-message"], div.pointer-events-none.contents, div:has(> [data-testid="cot-v5-tool-icon-pile"])';
   const GENERATED_IMAGE = '[class~="group/imagegen-image"] img, [class~="group/generated-image-preview"] img';
+  const GENERATED_VIDEO = 'video';
   const OWN_SURFACES = '.clf-stream, .clf-stage, .clf-composer, .clf-boot';
   const MAX_RENDERED_HTML = 120_000;
   // An exact, stable assistant final can have far more than 120k of decorative
@@ -874,6 +881,137 @@
       for (const node of nodes) exactImageNodes.set(node, descriptors[0]);
     }
     return out;
+  }
+
+  /**
+   * Provider-native generated videos from exact typed message parts. A mounted <video> alone is
+   * never identity: it is stamped only when its same-origin provider URL carries the exact typed
+   * file id. Blob-only playback therefore remains metadata-only until the provider exposes a
+   * provable asset mapping rather than being guessed from gallery position.
+   */
+  function generatedVideosOf(sections, messages, exactVideoNodes) {
+    const out = [], seen = new Set();
+    if (!Array.isArray(messages)) return out;
+    for (let index = 0; index < messages.length && out.length < MAX_GENERATED_VIDEOS; index++) {
+      const message = messages[index];
+      if (!message || typeof message !== 'object' || hiddenMessage(message) || analysisMessage(message)) continue;
+      const role = message.author && (message.author.role === 'tool' || message.author.role === 'assistant') ? message.author.role : null;
+      if (!role || message.recipient !== 'all' || neverTerminalChannel(message)) continue;
+      const messageId = str(message.id), content = message.content;
+      if (!messageId || !content || typeof content !== 'object' || content.content_type !== 'multimodal_text' || !Array.isArray(content.parts)) continue;
+      for (let partOrder = 0; partOrder < content.parts.length && out.length < MAX_GENERATED_VIDEOS; partOrder++) {
+        const part = content.parts[partOrder];
+        if (!part || typeof part !== 'object' || part.content_type !== 'video_asset_pointer') continue;
+        const pointer = str(part.asset_pointer), match = pointer && /^sediment:\/\/(file_[A-Za-z0-9_-]{8,100})$/.exec(pointer);
+        const mimeType = str(part.mime_type || part.mimeType);
+        if (!match || (mimeType !== 'video/mp4' && mimeType !== 'video/webm')) continue;
+        const assetId = match[1], key = `${messageId}\u0000${assetId}`; if (seen.has(key)) continue; seen.add(key);
+        const width = Number.isInteger(part.width) && part.width > 0 && part.width <= 30_000 ? part.width : null;
+        const height = Number.isInteger(part.height) && part.height > 0 && part.height <= 30_000 ? part.height : null;
+        const durationMs = Number.isInteger(part.duration_ms) && part.duration_ms > 0 && part.duration_ms <= 3_600_000 ? part.duration_ms : null;
+        out.push({ messageId, assetId, mimeType, providerRole: role, providerChannel: channelOf(message) || null,
+          providerStatus: message.status === 'finished_successfully' || message.status === 'in_progress' ? message.status : null,
+          order: index, partOrder, createTime: authoredTime(message), ...(width ? { width } : {}), ...(height ? { height } : {}),
+          ...(durationMs ? { durationMs } : {}) });
+      }
+    }
+    const descriptorsByAsset = new Map();
+    for (const video of out) { const list = descriptorsByAsset.get(video.assetId) || []; list.push(video); descriptorsByAsset.set(video.assetId, list); }
+    const nodesByAsset = new Map();
+    for (const section of sections) {
+      let nodes = []; try { nodes = section.querySelectorAll(GENERATED_VIDEO); } catch { nodes = []; }
+      for (const node of nodes) {
+        try {
+          const url = new URL(node.currentSrc || node.src, location.href);
+          if (url.origin !== location.origin) continue;
+          const assetId = url.pathname === '/backend-api/estuary/content' ? url.searchParams.get('id') : null;
+          if (!assetId || !descriptorsByAsset.has(assetId)) continue;
+          const list = nodesByAsset.get(assetId) || []; list.push(node); nodesByAsset.set(assetId, list);
+        } catch { /* An opaque/blob video has no asset authority here. */ }
+      }
+    }
+    for (const [assetId, descriptors] of descriptorsByAsset) {
+      const nodes = nodesByAsset.get(assetId) || []; if (descriptors.length !== 1 || nodes.length === 0) continue;
+      for (const node of nodes) exactVideoNodes.set(node, descriptors[0]);
+    }
+    return out;
+  }
+
+  /**
+   * ChatGPT-native Canvas artifacts from typed page-model metadata.
+   *
+   * metadata.canvas.textdoc_id + version are provider-owned identity. A Markdown fence,
+   * rendered <pre>, filename-like title, or visible Canvas button is never enough. Content comes
+   * only from the same public message object and unknown canvas shapes fail closed.
+   */
+  function providerArtifactsOf(messages) {
+    const out = [], byRevision = new Map(), conflicts = new Set();
+    if (!Array.isArray(messages)) return out;
+    const sameDescriptor = (left, right) => {
+      if (!left || !right || left.messageId !== right.messageId || left.providerArtifactId !== right.providerArtifactId ||
+          left.providerRevisionId !== right.providerRevisionId || left.providerParentRevisionId !== right.providerParentRevisionId ||
+          left.title !== right.title || left.kind !== right.kind || left.entrypoint !== right.entrypoint || left.order !== right.order ||
+          left.createTime !== right.createTime || left.files?.length !== 1 || right.files?.length !== 1) return false;
+      const a = left.files[0], b = right.files[0];
+      return a.path === b.path && a.text === b.text && a.mimeType === b.mimeType && a.language === b.language;
+    };
+    const fileSpec = textdocType => {
+      if (textdocType === 'document') return { kind: 'document', path: 'document.md', mimeType: 'text/markdown', language: 'markdown' };
+      const match = /^code\/([a-z0-9_+.-]{1,40})$/i.exec(textdocType || '');
+      if (!match) return null;
+      const language = match[1].toLowerCase();
+      if (language === 'html') return { kind: 'web', path: 'index.html', mimeType: 'text/html', language };
+      if (language === 'react' || language === 'jsx') return { kind: 'web', path: 'App.jsx', mimeType: 'text/jsx', language };
+      if (language === 'javascript' || language === 'js') return { kind: 'code', path: 'artifact.js', mimeType: 'text/javascript', language: 'javascript' };
+      if (language === 'typescript' || language === 'ts') return { kind: 'code', path: 'artifact.ts', mimeType: 'text/typescript', language: 'typescript' };
+      if (language === 'python' || language === 'py') return { kind: 'code', path: 'artifact.py', mimeType: 'text/x-python', language: 'python' };
+      if (language === 'css') return { kind: 'code', path: 'artifact.css', mimeType: 'text/css', language };
+      if (language === 'json') return { kind: 'data', path: 'artifact.json', mimeType: 'application/json', language };
+      if (language === 'markdown' || language === 'md') return { kind: 'markdown', path: 'artifact.md', mimeType: 'text/markdown', language: 'markdown' };
+      if (language === 'mermaid') return { kind: 'diagram', path: 'artifact.mmd', mimeType: 'text/plain', language };
+      return { kind: 'code', path: 'artifact.txt', mimeType: 'text/plain', language };
+    };
+    for (let order = 0; order < messages.length && out.length < MAX_PROVIDER_ARTIFACTS; order++) {
+      const message = messages[order];
+      if (!message || typeof message !== 'object' || hiddenMessage(message) || analysisMessage(message)) continue;
+      const role = message.author?.role;
+      if (role !== 'assistant' && role !== 'tool') continue;
+      const messageId = str(message.id), canvas = message.metadata?.canvas;
+      if (!messageId || !canvas || typeof canvas !== 'object') continue;
+      const providerArtifactId = str(canvas.textdoc_id);
+      if (!providerArtifactId || !/^[A-Za-z0-9_-]{8,160}$/.test(providerArtifactId)) continue;
+      const version = canvas.version;
+      if (!Number.isSafeInteger(version) || version < 0) continue;
+      const fromVersion = canvas.from_version;
+      if (fromVersion !== undefined && (!Number.isSafeInteger(fromVersion) || fromVersion < 0 || fromVersion >= version)) continue;
+      const textdocType = str(canvas.textdoc_type), spec = fileSpec(textdocType);
+      if (!spec) continue;
+      const content = message.content;
+      let text = null;
+      if (content?.content_type === 'code' && typeof content.text === 'string') text = content.text;
+      else if (content?.content_type === 'text') text = authoredText(message);
+      if (typeof text !== 'string' || text.length === 0 || text.length > MAX_PROVIDER_ARTIFACT_TEXT) continue;
+      const title = typeof canvas.title === 'string' && canvas.title.trim() ? canvas.title.trim().slice(0, 200) : null;
+      const descriptor = {
+        messageId,
+        providerArtifactId,
+        providerRevisionId: String(version),
+        ...(fromVersion !== undefined ? { providerParentRevisionId: String(fromVersion) } : {}),
+        ...(title ? { title } : {}),
+        kind: spec.kind,
+        entrypoint: spec.path,
+        files: [{ path: spec.path, text, mimeType: spec.mimeType, language: spec.language }],
+        order,
+        createTime: authoredTime(message)
+      };
+      const key = providerArtifactId + '\u0000' + version;
+      const prior = byRevision.get(key);
+      if (prior && !sameDescriptor(prior, descriptor)) { conflicts.add(key); continue; }
+      if (prior) continue;
+      byRevision.set(key, descriptor);
+      out.push(descriptor);
+    }
+    return conflicts.size ? out.filter(item => !conflicts.has(item.providerArtifactId + '\u0000' + item.providerRevisionId)) : out;
   }
 
   /**
@@ -2316,6 +2454,7 @@
     const desiredUserStamps = new Map();
     const desiredThoughtStamps = new Map();
     const desiredImageStamps = new Map();
+    const desiredVideoStamps = new Map();
     const groups = [];
     for (let at = 0; at < sections.length; at++) {
       const section = sections[at];
@@ -2388,12 +2527,15 @@
         const exactAnchors = new Map();
         const exactThoughtRows = new Map();
         const exactImageNodes = new Map();
+        const exactVideoNodes = new Map();
         const turnBudget = { remaining: Math.min(MAX_TURN_TEXT, responseBudget.remaining) };
         const before = turnBudget.remaining;
         const renderedMessages = renderedMessagesOf(group.sections, messages, turnBudget, exactAnchors, conversation.conversationId);
         const nativeActivities = shell ? shellPublicActivity(shell, metadata, renderedMessages, turnBudget, section, exactAnchors) : nativeActivitiesOf(group.sections, messages, exactThoughtRows);
         responseBudget.remaining -= before - turnBudget.remaining;
         const generatedImages = generatedImagesOf(group.sections, messages, exactImageNodes, shell?.images);
+        const generatedVideos = generatedVideosOf(group.sections, messages, exactVideoNodes);
+        const providerArtifacts = providerArtifactsOf(messages);
         const activities = nativeActivities.events;
         const endMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
         const trace = shell ? shellTurnTrace(shell) : [];
@@ -2408,7 +2550,7 @@
           codeModeCalls.length === 0 && calls.length === 0 &&
           requests.length === 0 &&
           renderedMessages.length === 0 &&
-          activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && !endMessageId && trace.length === 0
+          activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && generatedVideos.length === 0 && providerArtifacts.length === 0 && !endMessageId && trace.length === 0
         ) continue;
         const index = out.length;
         entry = {
@@ -2426,6 +2568,8 @@
           activities,
           thoughtNotifications: nativeActivities.notifications,
           images: generatedImages,
+          videos: generatedVideos,
+          artifacts: providerArtifacts,
           ...(trace.length ? { trace } : {}),
           ...(shellQuestion(shell) ? { question: shellQuestion(shell) } : {})
         };
@@ -2486,6 +2630,9 @@
         if (!conversation.conflict) for (const [node, image] of exactImageNodes) {
           desiredImageStamps.set(node, `${scanToken}:${index}:${encodeURIComponent(image.messageId)}:${encodeURIComponent(image.assetId)}`);
         }
+        if (!conversation.conflict) for (const [node, video] of exactVideoNodes) {
+          desiredVideoStamps.set(node, `${scanToken}:${index}:${encodeURIComponent(video.messageId)}:${encodeURIComponent(video.assetId)}`);
+        }
       } catch {
         // One unreadable turn must not cost the others their evidence.
         entry = null;
@@ -2531,6 +2678,11 @@
           if (blobSource === null) node.removeAttribute('data-clf-fiber-image-source');
           else if (node.getAttribute('data-clf-fiber-image-source') !== blobSource)
             node.setAttribute('data-clf-fiber-image-source', blobSource);
+        }
+        for (const node of section.querySelectorAll(`${GENERATED_VIDEO}, [data-clf-fiber-video]`)) {
+          const wantedVideo = desiredVideoStamps.get(node), currentVideo = node.getAttribute('data-clf-fiber-video');
+          if (wantedVideo === undefined) { if (currentVideo !== null) node.removeAttribute('data-clf-fiber-video'); }
+          else if (currentVideo !== wantedVideo) node.setAttribute('data-clf-fiber-video', wantedVideo);
         }
         if (!desiredTurnStamps.has(section)) {
           section.removeAttribute('data-clf-shell-running');

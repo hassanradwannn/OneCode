@@ -1,11 +1,20 @@
-import type { ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { t, ui } from './i18n.js';
+
+export function populateProviderPicker(select: HTMLSelectElement): void {
+  const selected = select.value;
+  select.replaceChildren(...CHAT_PROVIDERS.map(provider => {
+    const option = document.createElement('option'); option.value = provider; option.textContent = chatProviderLabel(provider); return option;
+  }));
+  if (CHAT_PROVIDERS.some(provider => provider === selected)) select.value = selected;
+}
 
 /** Both selectors enter the same durable settings queue exactly once. */
 export function initProviderSettings(save: () => void | Promise<void>): void {
   const settings = document.getElementById('chatProvider') as HTMLSelectElement;
   const setup = document.getElementById('setupChatProvider') as HTMLSelectElement;
+  populateProviderPicker(settings); populateProviderPicker(setup);
   settings.addEventListener('change', () => { setup.value = settings.value; void save(); });
   setup.addEventListener('change', () => { settings.value = setup.value; void save(); });
 }

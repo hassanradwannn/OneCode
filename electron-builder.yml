@@ -73,6 +73,10 @@ extraResources:
       - '!**/*.d.ts'
   - from: docs/WINDOWS-SETUP.md
     to: WINDOWS-SETUP.md
+  - from: build/runtime-icon.png
+    to: runtime-icon.png
+  - from: build/icon.ico
+    to: runtime-icon.ico
   - from: skills/onecode-chatgpt/SKILL.md
     to: skills/onecode-chatgpt/SKILL.md
   - from: resources/skills/gemini-code/SKILL.md
@@ -197,8 +201,6 @@ linux:
       to: node_modules
       filter: ['**/*']
   extraResources:
-    - from: build/runtime-icon.png
-      to: runtime-icon.png
     - from: resources/packaging/native/linux/${arch}/node_modules/@img/sharp-libvips-linux-${arch}/README.md
       to: THIRD-PARTY-NOTICES-sharp-libvips-linux-${arch}.md
     - from: resources/packaging/tunnel/linux/${arch}

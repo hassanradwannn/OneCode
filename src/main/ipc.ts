@@ -1,5 +1,5 @@
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, chatProviderConversationUrl, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
 import { approvalCardView, requestApprovalAnswer } from './approval-wait.js';
@@ -9,6 +9,9 @@ import { setStopNoticeTranslations } from './stuck-notice.js';
 import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
+import { remoteStatus, setRemoteEnabled, revokeRemoteDevice } from './remote/server.js';
+import { onRemotePreferencesChange } from './remote/preferences.js';
+import { desktopPreviews } from './artifacts/preview-documents.js';
 import { appearanceSchema } from './appearance-schema.js';
 import { mergeAppearance } from '../shared/appearance.js';
 import { prepareSessionPrompt, prepareSkillFollowup } from './session/prompt.js';
@@ -36,13 +39,13 @@ import { recordDeliveredInput, recordedInputImage } from './session/input-histor
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
 import { readProviderUsage } from './provider-usage.js';
-import { inputArgs, listInputs, editQueuedInput, sendQueuedInputNow, reorderQueuedInputs, setInputAutomation, configureInputDelivery, pausedBrowserHelpers, cancelFinishInputs } from './session/input.js';
+import { inputArgs, listInputs, editQueuedInput, reorderQueuedInputs, setInputAutomation, configureInputDelivery, pausedBrowserHelpers, cancelFinishInputs } from './session/input.js';
 import { draftOpeningMessage, onGoalChange, nativeGoalFailure } from './goal.js';
 import { cancelTaskRequest, runTaskRequest } from './task-request.js';
 import { randomUUID } from 'node:crypto';
 import { retryGoalBrowserHelper } from './goal.js';
 import { requestBrowserPreferences } from './browser-preferences.js';
-import { sendDesktopInput, cancelDesktopInput, retryQueuedInputBrowser } from './session/start-input.js';
+import { sendDesktopInput, sendQueuedDesktopInputNow, cancelDesktopInput, retryQueuedInputBrowser } from './session/start-input.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 import { registerPluginIpc } from './plugins-ipc.js';
 import { deletePet, importPet, loadPetAsset, petLibraryState, setPetEnabled, setPetFavorite } from './pet-library.js';
@@ -96,6 +99,11 @@ import { addProject, expireArmedProjectCreates, getSessionProject, listProjects,
 import { createProjectEntry, listProjectDirectory, previewProjectFile, projectFileTarget, renameProjectEntry, revalidateProjectFileTarget, saveProjectTextFile } from './project-files.js';
 import { ProjectFileWatchSet } from './project-file-watcher.js';
 import { ProjectGitWatchSet, readProjectGitDiff, readProjectGitSnapshot } from './project-git.js';
+import { listArtifacts, patchArtifact, readArtifact } from './artifacts/service.js';
+import { onArtifactOpen } from './artifacts/events.js';
+import { exportArtifactToProject } from './artifacts/export.js';
+import { nativeMediaConversation, listNativeMedia, prepareNativeVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback, saveNativeMediaToProject } from './native-media.js';
+import { WorkbenchBrowserController } from './workbench-browser.js';
 import { hasSecret, isEncryptionAvailable, secureStorageStatus, setAsideUnreadableSecrets, setSecret, storedSecretsUnreadable } from './secrets.js';
 import { setupApiKeySlot } from '../shared/setup-profile.js';
 import { addSetupProfile, removeSetupProfile, switchSetupProfile } from './setup-profiles.js';
@@ -657,12 +665,21 @@ export async function openSessionChat(id: string): Promise<void> {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
+  handle('remote:status', async () => remoteStatus());
+  handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)));
+  handle('remote:revoke', async payload => { revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');
     await requestPluginRefreshes(version, ['core']);
   });
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
+  const workbenchBrowser = new WorkbenchBrowserController(getWindow);
+  workbenchBrowser.onChange(sessionId => {
+    const target = getWindow();
+    if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+    target.webContents.send('workbenchBrowser:changed', { sessionId });
+  });
   // A session row remains visible until its delete IPC resolves. Fence Trust while deletion is
   // in flight so a second click cannot recreate permission after the row's durable revoke.
   const deletingSessionIds = new Set<string>();
@@ -676,6 +693,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const target = getWindow();
     if (!target || target !== watchedWindow || target.isDestroyed() || target.webContents.isDestroyed()) return;
     target.webContents.send('projectGit:changed', event);
+  });
+  onArtifactOpen(request => {
+    const target = getWindow();
+    if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+    target.webContents.send('artifacts:open', request);
   });
   let projectWatchRequest = 0;
   const closeProjectWatches = (): void => {
@@ -1159,6 +1181,118 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (checked.real !== target.real) throw new Error('The project file changed location');
     return stageInputAttachment(checked.real, retained);
   });
+  const artifactSessionId = z.string().min(8).max(64).regex(/^[0-9a-z-]+$/i);
+  const artifactId = z.string().uuid();
+  const artifactPath = z.string().min(1).max(1024);
+  handle('artifacts:previewDocument', async payload => {
+    const request = z.object({ sessionId: artifactSessionId, artifactId, revision: z.number().int().min(1).optional(), document: z.string().min(1).max(4 * 1024 * 1024) }).strict().parse(payload);
+    if (!await readArtifact(request.sessionId, request.artifactId, request.revision)) throw new Error('Artifact revision is unavailable');
+    const id = desktopPreviews.create(request.document, request.sessionId);
+    return { id, url: `onecode-artifact://preview/${id}` };
+  });
+  handle('artifacts:releasePreview', async payload => {
+    const request = z.object({ sessionId: artifactSessionId, id: z.string().uuid() }).strict().parse(payload);
+    desktopPreviews.release(request.id, request.sessionId); return true;
+  });
+  const artifactPatchOperation = z.discriminatedUnion('op', [
+    z.object({ op: z.literal('upsert'), path: artifactPath, text: z.string().max(2 * 1024 * 1024),
+      mimeType: z.string().min(1).max(128).optional(), language: z.string().min(1).max(64).optional() }).strict(),
+    z.object({ op: z.literal('delete'), path: artifactPath }).strict()
+  ]);
+  handle('artifacts:list', async payload => {
+    const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload);
+    return listArtifacts(sessionId);
+  });
+  handle('artifacts:read', async payload => {
+    const { sessionId, artifactId: id, revision } = z.object({ sessionId: artifactSessionId, artifactId,
+      revision: z.number().int().min(1).optional() }).strict().parse(payload);
+    return readArtifact(sessionId, id, revision);
+  });
+  handle('artifacts:patch', async payload => {
+    const request = z.object({ sessionId: artifactSessionId, artifactId, expectedRevision: z.number().int().min(1),
+      operations: z.array(artifactPatchOperation).max(128).optional(), title: z.string().min(1).max(200).optional(),
+      entrypoint: artifactPath.optional() }).strict().parse(payload);
+    return patchArtifact({ ...request, source: 'user' });
+  });
+  handle('artifacts:export', async payload => {
+    const request = z.object({ sessionId: artifactSessionId, artifactId, revision: z.number().int().min(1).optional() }).strict().parse(payload);
+    return exportArtifactToProject(request.sessionId, request.artifactId, request.revision);
+  });
+  handle('nativeMedia:list', async payload => {
+    const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload);
+    return listNativeMedia(sessionId);
+  });
+  handle('nativeMedia:saveToProject', async payload => {
+    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId,
+      messageId: z.string().uuid(), assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    return saveNativeMediaToProject(sessionId, messageId, assetId);
+  });
+  handle('nativeMedia:openProvider', async payload => {
+    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId,
+      messageId: z.string().uuid(), assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    const conversationId = await nativeMediaConversation(sessionId, messageId, assetId);
+    if (!await revealChatInBrowser(conversationId)) await openInPreferredBrowser(chatProviderConversationUrl(chatProviderForConversation(conversationId), conversationId), { reveal: true });
+    return true;
+  });
+  handle('nativeMedia:prepareVideo', async payload => {
+    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId, messageId: z.string().uuid(),
+      assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    return prepareNativeVideoPlayback(sessionId, messageId, assetId);
+  });
+  handle('nativeMedia:videoChunk', async payload => {
+    const { sessionId, token, offset, maxBytes } = z.object({ sessionId: artifactSessionId, token: z.string().uuid(),
+      offset: z.number().int().min(0), maxBytes: z.number().int().min(1).max(1024 * 1024).optional() }).strict().parse(payload);
+    return readNativeVideoPlaybackChunk(sessionId, token, offset, maxBytes);
+  });
+  handle('nativeMedia:releaseVideo', async payload => {
+    const { sessionId, token } = z.object({ sessionId: artifactSessionId, token: z.string().uuid() }).strict().parse(payload);
+    return releaseNativeVideoPlayback(sessionId, token);
+  });
+  const browserTabId = z.number().int().positive();
+  const browserBounds = z.object({ x: z.number().finite().min(0).max(20000), y: z.number().finite().min(0).max(20000),
+    width: z.number().finite().min(0).max(20000), height: z.number().finite().min(0).max(20000) }).strict();
+  const browserSession = async (sessionId: string): Promise<void> => { if (!await getSession(sessionId)) throw new Error('Session was not found'); };
+  const workbenchPresentationEpoch = new Map<string, number>();
+  handle('workbenchBrowser:state', async payload => {
+    const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload); await browserSession(sessionId); return workbenchBrowser.state(sessionId);
+  });
+  handle('workbenchBrowser:ensure', async payload => {
+    const { sessionId, url } = z.object({ sessionId: artifactSessionId, url: z.string().max(8192).optional() }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.ensure(sessionId, url);
+  });
+  handle('workbenchBrowser:new', async payload => {
+    const { sessionId, url } = z.object({ sessionId: artifactSessionId, url: z.string().max(8192).optional() }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.newTab(sessionId, url);
+  });
+  handle('workbenchBrowser:select', async payload => {
+    const { sessionId, tabId } = z.object({ sessionId: artifactSessionId, tabId: browserTabId }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.select(sessionId, tabId);
+  });
+  handle('workbenchBrowser:close', async payload => {
+    const { sessionId, tabId } = z.object({ sessionId: artifactSessionId, tabId: browserTabId }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.close(sessionId, tabId);
+  });
+  handle('workbenchBrowser:navigate', async payload => {
+    const { sessionId, tabId, url } = z.object({ sessionId: artifactSessionId, tabId: browserTabId, url: z.string().min(1).max(8192) }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.navigate(sessionId, tabId, url);
+  });
+  handle('workbenchBrowser:history', async payload => {
+    const { sessionId, tabId, action } = z.object({ sessionId: artifactSessionId, tabId: browserTabId,
+      action: z.enum(['back', 'forward', 'reload', 'stop']) }).strict().parse(payload);
+    await browserSession(sessionId); return workbenchBrowser.history(sessionId, tabId, action);
+  });
+  handle('workbenchBrowser:present', async payload => {
+    const { sessionId, tabId, bounds, visible } = z.object({ sessionId: artifactSessionId, tabId: browserTabId, bounds: browserBounds, visible: z.boolean() }).strict().parse(payload);
+    const epoch = workbenchPresentationEpoch.get(sessionId) ?? 0;
+    await browserSession(sessionId);
+    if ((workbenchPresentationEpoch.get(sessionId) ?? 0) !== epoch) return workbenchBrowser.state(sessionId);
+    return workbenchBrowser.present(sessionId, tabId, bounds, visible);
+  });
+  handle('workbenchBrowser:hide', async payload => {
+    const { sessionId } = z.object({ sessionId: artifactSessionId.optional() }).strict().parse(payload);
+    if (sessionId) workbenchPresentationEpoch.set(sessionId, (workbenchPresentationEpoch.get(sessionId) ?? 0) + 1);
+    workbenchBrowser.hide(sessionId); return true;
+  });
 
   /**
    * Stores one of the defined provider keys by name.
@@ -1563,7 +1697,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { id, intent } = z.object({ id: z.string().uuid(), intent: z.object({
       delivery: z.enum(['tool', 'direct', 'idle']), turnId: z.string().min(1).max(256).nullable()
     }).strict().optional() }).strict().parse(payload);
-    const sent = await sendQueuedInputNow(id, intent);
+    const sent = await sendQueuedDesktopInputNow(id, intent);
     if (sent) wakeBrowserWork();
     return sent;
   });
@@ -2075,6 +2209,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     });
   };
   onStatusChange(pushState);
+  onRemotePreferencesChange(pushState);
   onRecordingStorageFullChange(pushState);
   onBridgeChange(pushState);
   onCosBrowserSignInChange(pushState);

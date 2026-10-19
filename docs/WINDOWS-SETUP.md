@@ -1,10 +1,12 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.3.2
+## Version 0.3.7 candidate
 
 Shared OneCode controls use **provider** or **agent** wording. Choose the actual service in **AI provider**; browser destinations, account checks and tool routing remain provider-specific. Existing chats keep their original provider.
 
 Use **Settings → General → Check for updates**, then **Install when done**. The app waits for active work before restarting. The matching Companion reloads when its chats are idle. If an older 0.2.9 install reports a missing `resources/app-update.yml`, install the current release manually once.
+
+Interactive web previews have a **Preview viewport** selector: **16:9 · Desktop** simulates a 1600×900 browser, and **9:16 · Phone** simulates a 450×800 browser. The page scales to fit its preview or expanded area; expanding keeps the same layout and interactive state. Pages that scroll in a browser still scroll inside that simulated viewport.
 
 For multiple computers, set **Name for this computer** before adding each device's MCP URL. Both MCP identity fields publish the configured full name. OneCode accepts a unique native title-cased/dash-to-space presentation only after selecting and verifying its real menu token. Different-device and ambiguous duplicate names are refused. Existing native connectors are not renamed by this update.
 
@@ -100,7 +102,20 @@ Google controls Skills availability and requires Keep Activity to be on. If your
 
 ## Troubleshooting
 
-- **No tools / disconnected:** check the app connection, current Core URL, selected signed-in browser profile, companion build and fresh Gemini page. A restarted quick tunnel often needs a reconnect. A stale native chat can retain old connector namespaces; test a new app chat.
+### Automatic Tailscale setup and recovery
+
+OneCode detects the system Tailscale executable, including normal per-user installations, and configures its own routes. After an installation or account prerequisite is fixed, it checks again and continues automatically. It opens the required Tailscale setup page once; the same action and an expandable **Setup recovery steps** guide remain in Setup and Remote settings.
+
+1. Keep Tailscale running and connected using your own account. If its Windows service is stopped, open PowerShell as Administrator and run `Start-Service -Name Tailscale`.
+2. If OneCode reports MagicDNS or HTTPS approval, open the [Tailscale DNS console](https://login.tailscale.com/admin/dns), enable **MagicDNS**, then enable **HTTPS Certificates** and approve Tailscale's certificate notice. A tailnet administrator may need to do this. OneCode detects approval automatically.
+3. A provider connector needs **public Funnel**, including the tailnet's Funnel permission. Private Serve by itself cannot make a connector reachable by Gemini's servers. OneCode verifies public DNS, TLS, the exact connector metadata and MCP initialization before making its connector link ready. Wait for these checks; then copy the current Core URL into the provider. [Funnel setup](https://tailscale.com/docs/features/tailscale-funnel).
+4. Browser Remote uses a separate **private Serve** route. Turn on **Settings → Remote**, then copy its link to another device connected to the same Tailscale account. OneCode chooses a free port and preserves unrelated routes. Tailnet policy must allow access between the devices.
+5. If automatic setup cannot finish, follow the numbered in-app recovery guide. `tailscale status`, `tailscale serve status` and `tailscale netcheck` help identify sign-in, route and network problems. If the executable is not on PATH, use the full path detected in OneCode's Advanced settings.
+
+Tailscale normally needs no manual firewall change. For restricted networks, the recovery guide includes a copyable Administrator PowerShell command that locates the installed Tailscale service and permits its default direct tunnel on UDP 41641, scoped to that service executable. Use the configured port instead if its default was changed. It does not open OneCode's loopback HTTP listener or disable the firewall. A network that restricts outbound traffic must permit Tailscale's TCP 443 and UDP 3478 traffic. [Official firewall guidance](https://tailscale.com/docs/reference/faq/firewall-ports).
+
+- **No tools / disconnected:** check the app connection, current Core URL, selected signed-in browser profile and companion build. Full access in OneCode and attachment of its Core connector in the provider are separate requirements. Core's live `plugins` discovery now returns built-in file, terminal and canvas methods too, so an existing chat can discover newly enabled commands without relying on its cached direct schemas. ChatGPT refuses an ordinary tools-enabled Send if this installation's required Core cannot be attached. Native image generation keeps its separate tool-free path.
+- **Cloudflare:** an assigned quick-tunnel URL is checked with a public MCP initialization before OneCode reports Connected, then rechecked periodically. Its current URL must be the one saved in the provider connector; quick-tunnel hostnames change when restarted. On restricted networks, allow outbound port 7844 over UDP (QUIC) or TCP (HTTP/2), as described in [Cloudflare's firewall guidance](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/tunnel-with-firewall/). A valid URL alone does not prove the origin is reachable or its connector is selected in the provider.
 - **Tailscale cannot connect:** read the actual check rows in Setup, including **Public HTTPS reachability**. Public DNS can take about 10 minutes to become available after first enabling Funnel. OneCode resolves only this device's hostname through Cloudflare public DNS; it does not send connector paths or session keys to DNS. It checks the exact connector metadata directly through the public ingress with normal TLS validation. This is separate from Gemini installation or a successful tool call. It performs bounded rechecks without recreating the stable address. If the status asks you to retry, use Disconnect then Connect. Install or sign in using Tailscale itself, keep its service running, and ask the tailnet administrator if Funnel is restricted. Do not reset somebody else's Funnel settings or disable secure storage to bypass a conflict.
 - **A plugin fails to start:** check that its host program is installed and the executable/arguments are valid on this PC. npm plugins have a private fallback runtime; reinstall OneCode if its bundled runtime is missing. Remote services can require separate sign-in.
 - **Uploads or a mode stalls:** keep the paired browser running, inspect the app's queued delivery/error and Gemini's actual state. Refresh only when no ambiguous send is pending. Do not repeatedly resend an operation whose receipt is unknown.

@@ -35,6 +35,9 @@ import { autoSelectManagedSkills } from '../skill-routing.js';
 import { asksForImage } from './image-request.js';
 
 export const inputArgs = z.object({
+  provider: z.enum(CHAT_PROVIDERS).optional(),
+  /** Explicit interruption of this exact native turn; never tool-result injection. */
+  steerTurnId: z.string().min(1).max(256).optional(),
   projectId: z.string().uuid().nullable().optional(),
   automation: z.enum(['off', 'goal', 'loop']).optional(),
   loopAfterTurn: z.boolean().optional(),
@@ -58,6 +61,7 @@ export const inputArgs = z.object({
 });
 export type InputArgs = z.infer<typeof inputArgs>;
 const entrySchema = inputArgs.extend({
+  steerReady: z.literal(true).optional(),
   /** This exact outbox row owns the first native send of its reserved local session. */
   opening: z.literal(true).optional(),
   /** An explicit retry can keep its unbound local chat instead of reserving another. */
@@ -238,6 +242,14 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
     settled: settled && !executing && (!!completed || (session.lastToolCallAt ?? 0) <= (end?.time ?? 0)) };
 }
 async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
+  if (entry.steerTurnId) {
+    if (!entry.steerReady || !entry.sessionId) return false;
+    const session = await getSession(entry.sessionId);
+    const [end] = await readRecentEvents(entry.sessionId, 1, { kinds: ['turn_start', 'turn_end'] });
+    return !!entry.steerReady && !entry.error?.startsWith('Local chat setup failed:') && !session?.activeTurnId && session?.conversationId === entry.conversationId &&
+      end?.kind === 'turn_end' && ['completed', 'stopped', 'failed', 'interrupted'].includes(end.outcome) && end.turnId === entry.steerTurnId &&
+      !isChatBlocked(entry.conversationId!) && !await conversationWasSuperseded(entry.conversationId!);
+  }
   if (entry.error?.startsWith('Local chat setup failed:')) return false;
   // Authored Inject-now custody never changes transports. Its exact turn either
   // offers it from an MCP response or expires it visibly below.
@@ -293,6 +305,7 @@ export function hasEligibleToolInput(sessionId: string, finishBoundary = false):
     const steerSession = current.some(row => row.sessionId === sessionId && row.toolSteer && row.state === 'queued') ? await getSession(sessionId) : null;
     for (const row of current) {
       if (row.sessionId !== sessionId || row.dueAt > Date.now()) continue;
+      if (row.steerTurnId) continue;
       if (row.toolSteer && row.state === 'queued' && steerSession?.activeTurnId !== row.toolTurnId) continue;
       if (row.attachments?.length && row.attachmentDelivery !== 'tool' && row.delivery !== 'tool') continue;
       if (row.mode === 'after-turn' || (row.mode === 'finish' && !finishBoundary)) continue;
@@ -652,7 +665,7 @@ async function transition(current: InputEntry[], next: InputEntry[], automated: 
   await commit(next);
 }
 /** Freeze the exact transport bytes with its durable claim, never the authored enqueue payload. */
-async function prepare(entry: InputEntry, suffix = ''): Promise<InputEntry> {
+async function prepare(entry: InputEntry, suffix = '', nativeMedia = false): Promise<InputEntry> {
   if (entry.purpose === 'decision') return entry;
   // Generated openings and plans cannot replace the user's complete request.
   // Keep the authored text intact; freeze the complete objective in the same
@@ -672,7 +685,7 @@ async function prepare(entry: InputEntry, suffix = ''): Promise<InputEntry> {
   // enter this preparation path at all.
   const frozen = entry.deliveryText && (!proof || hasCurrentChatgptBinding(entry.deliveryText, proof)) ? entry.deliveryText : undefined;
   const routing = !frozen && proof ? chatgptBindingInstructions(proof) : '';
-  const deliveryText = frozen ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
+  const deliveryText = nativeMedia ? text + suffix : frozen ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
     maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
   }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text, routing) ?? text + suffix + (routing ? '\n\n' + routing : '');
   // A single input must fit the tool envelope by itself. Aggregate batching below
@@ -799,7 +812,7 @@ export function fileRotationInput(sessionId: string, turnId: string): Promise<In
 }
 
 export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwner']): Promise<InputEntry> {
-  const selectedProvider = getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  const selectedProvider = raw.provider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   return serial(async () => {
     const input = inputArgs.parse(raw);
     if (input.stages !== undefined && JSON.stringify([input.text, ...input.stages]).length > 12000)
@@ -812,6 +825,10 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
       return { ...prior };
     }
     const requestedSession = input.sessionId ? await getSession(input.sessionId) : null;
+    if (input.provider && requestedSession?.conversationId && chatProviderForConversation(requestedSession.conversationId) !== input.provider)
+      throw new Error('An existing chat keeps its provider');
+    if (input.steerTurnId && (!requestedSession?.conversationId || requestedSession.activeTurnId !== input.steerTurnId || input.mode !== 'auto' ||
+        input.delivery || input.attachmentDelivery || input.stages?.length || finishOwner)) throw new Error('The turn selected for steering changed');
     // Explicit injection has its own recipient and can never spend a browser completion.
     const activity = requestedSession && input.delivery !== 'tool' && input.attachmentDelivery !== 'tool'
       ? deliveryHooks?.activity?.(requestedSession) : null;
@@ -820,6 +837,8 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
       ? { conversationId: requestedSession.conversationId, turnId: sourceTurn } : undefined;
     let policy = input.sessionId ? await sessionInputPolicy(input.sessionId) : null;
     const previousOpening = [...current].reverse().find(row => row.opening && row.sessionId === input.sessionId);
+    if (input.provider && previousOpening?.chatProvider && !requestedSession?.conversationId && previousOpening.chatProvider !== input.provider)
+      throw new Error('An opening chat keeps its provider');
     // An explicit reviewed resend may replace a proven pre-send failure in the same
     // local chat. An ambiguous native Send still owns its receipt; never replay it.
     const retryOpening = !!(input.sessionId && requestedSession?.origin?.kind === 'desktop' && !requestedSession.conversationId &&
@@ -850,7 +869,7 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
       await validateInputAttachments(input.attachments);
       // Native files belong to the next browser message, never a tool-result injection.
       if (finishOwner) throw new Error('Automatic finish messages cannot attach files');
-      if (input.mode === 'finish' || (input.mode === 'auto' && (policy?.canInject || policy?.directTurn))) input.mode = 'after-turn';
+      if (input.mode === 'finish' || (!input.steerTurnId && input.mode === 'auto' && (policy?.canInject || policy?.directTurn))) input.mode = 'after-turn';
     } else if (input.mode === 'after-turn' && policy?.queueAtFinish) input.mode = 'finish';
     if (input.mode === 'finish' || input.stages?.length) {
       const session = input.sessionId ? await getSession(input.sessionId) : null;
@@ -858,9 +877,9 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     }
     // Unattributed work can fence browser Send without making this chat a tool recipient.
     // Leave that input neutral until the existing serialized claim selects a safe transport.
-    const transportIntent = toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
+    const transportIntent = input.steerTurnId ? 'browser' as const : toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
       ? policy?.canInject ? 'tool' as const : !policy || policy.browserAllowed || policy.directTurn ? 'browser' as const : undefined : undefined;
-    const directTurn = !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null;
+    const directTurn = !input.steerTurnId && !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null;
     const entry: InputEntry = { ...input, chatProvider: chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
       ...(injectionOwner ? { toolTurnId: injectionOwner.turnId } : {}), ...(transportIntent ? { transportIntent } : {}),
       ...(requestedMode !== input.mode ? { requestedMode } : {}), ...(finishOwner ? { finishOwner } : {}), state: 'queued', owner: null, createdAt: Date.now(), conversationId: null };
@@ -1143,9 +1162,8 @@ export function editQueuedInput(id: string, text: string, afterTurn?: boolean): 
 }
 
 /**
- * An explicit action on one unclaimed plain-text follow-up. Gemini Steer pins it to the
- * same current generation's next tool response. A canonically settled idle chat instead
- * accepts a new browser message. Neither path stops a turn or replays a claimed Send.
+ * Convert an unclaimed follow-up into a real browser message. Live steering first
+ * stops its exact native turn through the shared startup owner; it never waits for a tool.
  */
 export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): Promise<boolean> {
   return serial(async () => {
@@ -1157,22 +1175,33 @@ export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): P
     const policy = await sessionInputPolicy(row.sessionId!);
     const session = await getSession(row.sessionId!);
     if (!session?.conversationId || session.conversationId !== row.conversationId) return false;
-    const toolTurn = (intent?.delivery === 'tool' || geminiInput(session.conversationId)) &&
-      (policy.canInject || !!policy.directTurn) && session.activeTurnId &&
-      policy.injectionTurnId === session.activeTurnId && row.queuedTurn?.turnId === session.activeTurnId &&
-      row.queuedTurn.conversationId === session.conversationId ? session.activeTurnId : null;
+    const turnId = session.activeTurnId;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
-    if (!policy.directTurn && !toolTurn && !idle) return false;
-    if (geminiInput(session.conversationId) && !intent) return false;
-    if (intent && (intent.delivery === 'tool' ? !toolTurn || intent.turnId !== toolTurn
-      : intent.delivery === 'direct' ? !policy.directTurn || intent.turnId !== policy.directTurn.id
-      : !idle || intent.turnId !== null)) return false;
+    if (!turnId && !idle) return false;
+    if (turnId && (row.queuedTurn?.turnId !== turnId || row.queuedTurn.conversationId !== session.conversationId)) return false;
+    if (intent && (intent.delivery === 'idle' ? !idle || intent.turnId !== null : !turnId || intent.turnId !== turnId)) return false;
     // The person chose immediate delivery for this message; it is no longer an after-turn request.
-    const { requestedMode: _requested, silenceBoundary: _silence, ...rest } = row;
+    const { requestedMode: _requested, silenceBoundary: _silence, directTurn: _direct, delivery: _delivery, toolSteer: _toolSteer, toolTurnId: _toolTurn, ...rest } = row;
     await commit(current.map(entry => entry === row ? { ...rest, mode: 'auto' as const,
-      ...(toolTurn ? { delivery: 'tool' as const, toolSteer: true as const, toolTurnId: toolTurn, transportIntent: 'tool' as const }
-        : { ...(policy.directTurn ? { directTurn: policy.directTurn } : {}), transportIntent: 'browser' as const }),
+      ...(turnId ? { steerTurnId: turnId } : {}), transportIntent: 'browser' as const,
       dueAt: Math.min(row.dueAt, Date.now()) } : entry));
+    return true;
+  });
+}
+
+/** Native turn-end evidence, rather than a Stop click ACK, releases this same durable input. */
+export function releaseSteeringInput(id: string): Promise<boolean> {
+  return serial(async () => {
+    const current = await load();
+    const row = current.find(entry => entry.id === id && entry.state === 'queued' && entry.owner === null && entry.steerTurnId && entry.sessionId);
+    if (!row) throw new Error('Steering input is no longer queued');
+    if (row.steerReady) return true;
+    const session = await getSession(row.sessionId!);
+    const [end] = await readRecentEvents(row.sessionId!, 1, { kinds: ['turn_start', 'turn_end'] });
+    if (session?.activeTurnId || session?.conversationId !== row.conversationId || end?.kind !== 'turn_end' ||
+      !['completed', 'stopped', 'failed', 'interrupted'].includes(end.outcome) || end.turnId !== row.steerTurnId) return false;
+    await commit(current.map(entry => entry === row ? { ...entry, steerReady: true as const } : entry));
+    wakeBrowserWork();
     return true;
   });
 }
@@ -1623,9 +1652,9 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return turnId;
 }
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
+    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; recovery?: { questionId: string; stop: boolean }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
     const current = await load();
     for (const entry of ordered(current)) {
       if (companionOf(current, entry)) continue;
@@ -1647,6 +1676,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
           ...(entry.recovery ? { recovery: { questionId: entry.recovery.questionId, stop: entry.silenceBoundary?.nativeBusy === true && entry.recovery.phase === 'ready' } } : {}),
           ...(silenceTurnId ? { silenceTurnId } : {}),
           ...(entry.directTurn ? { directTurn: entry.directTurn } : {}),
+          ...(entry.steerTurnId ? { steerTurnId: entry.steerTurnId } : {}),
           ...(entry.state === 'queued' && entry.purpose !== 'decision' && entry.sessionId && entry.conversationId && entry.conversationId !== conversationId
             ? { supersededConversationId: entry.conversationId } : {}),
           ...(entry.lifetime ? { lifetime: entry.lifetime } : {}),
@@ -1683,6 +1713,7 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     // The completion appendix is mandatory text too: budget it before optional AGENTS.md,
     // then freeze the complete message once. A repeated claim keeps those exact bytes.
     const session = entry.sessionId ? await getSession(entry.sessionId) : null;
+    const withoutMention = await imageRequestWithoutMention(entry, session);
     // Freeze at most the visible next checkpoint into the same exclusive browser
     // claim. Both authored rows remain intact and share one acceptance receipt.
     const queueHead = session && manualInput(entry) && entry.silenceBoundary && (entry.silenceBoundary.listenUntil ?? 0) <= Date.now() && entry.state === 'queued' &&
@@ -1707,7 +1738,8 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     const prepareClaim = (checkpoint?: InputEntry) => prepare({ ...combinedInput(entry, checkpoint), ...(checkpoint ? { companionInputId: checkpoint.id } : {}), ...(completedTurnId ? { completedTurnId } : {}),
       ...(entry.transportIntent === 'tool' ? { transportIntent: 'browser' } : {}),
       state: 'browser', owner, conversationId, offeredAt: entry.offeredAt ?? Date.now(), requiresAuthorization,
-      claimedBrowser: browser ?? undefined }, suffix);
+      claimedBrowser: browser ?? undefined }, suffix, withoutMention && !checkpoint &&
+        chatProviderForConversation(conversationId, entry.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'gemini');
     try {
       try { claimed = await prepareClaim(companion); }
       catch (error) {
@@ -1730,10 +1762,10 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     if (!requiresAuthorization && completedTurnId && entry.sessionId && conversationId)
       await consumeGoalReplyForInputNow(conversationId, entry.sessionId, completedTurnId);
     logInfo(`input ${id}: browser claimed after ${Math.max(0, Date.now() - entry.createdAt)} ms`);
-    const withoutMention = await imageRequestWithoutMention(entry, session, companion);
-    if (withoutMention) logInfo(`input ${id}: asks for an image, so it goes out without the Core mention`);
+    const omitMention = withoutMention && !companion;
+    if (omitMention) logInfo(`input ${id}: asks for an image, so it goes out without the Core mention`);
     return { ...combinedInput(claimed, companion), ...selection, text: claimed.deliveryText ?? claimed.text,
-      ...(withoutMention ? { coreMention: false as const } : {}) };
+      ...(omitMention ? { coreMention: false as const } : {}) };
   });
 }
 /**
@@ -1986,6 +2018,7 @@ export function offerToolInput(sessionId: string | null | undefined, conversatio
     const observedActivity = deliveryHooks?.activity?.(session);
     const activeToolTurn = session.activeTurnId ?? (observedActivity?.exact ? observedActivity.turnId : undefined);
     const prepareEntry = async (entry: InputEntry): Promise<InputEntry> => {
+      if (entry.steerTurnId) return entry;
       if (entry.state === 'tool' && !toolInputScopeMatches(entry, binding)) return entry;
       if (entry.toolSteer && entry.state === 'queued' && session.activeTurnId !== entry.toolTurnId) return entry;
       if (entry.sessionId !== sessionId || entry.dueAt > Date.now()) return entry;

@@ -62,7 +62,10 @@ export function commonBinaryDirsForPlatform(
       platformPath.join(programFiles, 'tunnel-client'),
       platformPath.join(programFiles, 'cloudflared'),
       platformPath.join(programFiles, 'Tailscale'),
-      ...(env.ProgramW6432 ? [platformPath.join(env.ProgramW6432, 'Tailscale')] : [])
+      platformPath.join(env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Tailscale'),
+      ...(env.ProgramW6432 ? [platformPath.join(env.ProgramW6432, 'Tailscale')] : []),
+      localAppData && platformPath.join(localAppData, 'Programs', 'Tailscale'),
+      localAppData && platformPath.join(localAppData, 'Tailscale')
     ].filter((d): d is string => d.length > 0);
   }
 
@@ -103,7 +106,7 @@ export function locateBinary(name: BinaryName, hint?: string): string | null {
   const fileName = tunnelExecutableName(name);
 
   if (hint && hint.trim() !== '') {
-    const trimmed = hint.trim();
+    const trimmed = hint.trim().replace(/^"(.*)"$/, '$1');
     if (existsSync(trimmed)) {
       // Accept a folder as well as the exe itself, since users paste both.
       const asDir = path.join(trimmed, fileName);
@@ -149,6 +152,13 @@ export function locateBinary(name: BinaryName, hint?: string): string | null {
     if (isExecutableFile(candidate)) {
       locateCache.set(key, candidate);
       return candidate;
+    }
+  }
+  // The macOS app ships its CLI inside the bundle, usually outside GUI PATH.
+  if (name === 'tailscale' && process.platform === 'darwin') {
+    for (const base of ['/Applications', path.join(os.homedir(), 'Applications')]) {
+      const candidate = path.join(base, 'Tailscale.app', 'Contents', 'MacOS', 'Tailscale');
+      if (isExecutableFile(candidate)) return candidate;
     }
   }
   locateCache.set(key, null);

@@ -35,6 +35,7 @@ run(node, ['scripts/make-icon.mjs']);
 // extension both read this one file to tell which extension build a browser is running.
 run(node, ['scripts/write-extension-stamp.mjs']);
 run(node, [path.join('node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build']);
+run(node, [path.join('node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', 'remote.vite.config.ts']);
 
 for (const arch of arches) {
   const targetArgs = ['--platform', platform, '--arch', arch];

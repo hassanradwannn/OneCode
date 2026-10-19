@@ -11,6 +11,12 @@ interface Pending {
   allowed: () => Promise<boolean>;
   finish: (result: BrowserResult) => void;
 }
+export interface InternalBrowserClient {
+  id: string;
+  name: string;
+  enabled: boolean;
+  execute(command: BrowserCommand, allowed: () => Promise<boolean>): Promise<BrowserResult>;
+}
 const uuid = /^[a-f\d-]{36}$/i;
 const tabHandle = /^([a-f\d-]{36}):(\d+)$/i;
 
@@ -18,13 +24,26 @@ export class BrowserControlBroker {
   private epoch = randomUUID();
   private clients = new Map<string, { name: string; seen: number; enabled: boolean }>();
   private pending = new Map<string, Pending>();
+  private internal = new Map<string, InternalBrowserClient>();
 
   constructor(private wake = () => wakeBrowserWork('browser-control')) {}
 
   browsers(): Array<{ id: string; name: string; enabled: boolean }> {
     const now = Date.now();
-    return [...this.clients].filter(([, client]) => now - client.seen < BROWSER_LIMITS.presenceMs)
+    const external = [...this.clients].filter(([, client]) => now - client.seen < BROWSER_LIMITS.presenceMs)
       .map(([id, { name, enabled }]) => ({ id, name, enabled }));
+    return [...external, ...[...this.internal.values()].map(({ id, name, enabled }) => ({ id, name, enabled }))];
+  }
+
+  /**
+   * Registers one app-owned browser implementation beside extension clients. The handle remains
+   * browser-lifetime scoped: removing this client immediately makes all of its tab handles stale.
+   */
+  registerInternalClient(client: InternalBrowserClient): () => void {
+    if (!uuid.test(client.id)) throw new Error('Invalid browser identity');
+    if (this.internal.has(client.id) || this.clients.has(client.id)) throw new Error('Browser identity already registered');
+    this.internal.set(client.id, client);
+    return () => { if (this.internal.get(client.id) === client) this.internal.delete(client.id); };
   }
 
   poll(browserId: string, name: string, enabled: boolean): { epoch: string; requests: string[] } {
@@ -91,10 +110,24 @@ export class BrowserControlBroker {
     const client = browsers.find(b => b.id === browserId);
     if (!client) return { error: 'BROWSER_OFFLINE: this browser incarnation is no longer connected. List browsers again.' };
     if (!client.enabled) return { error: 'BROWSER_EXTENSION_PERMISSION: Chrome must grant the companion its debugger and tabs permissions. Reload/update the extension.' };
-    if (this.pending.size >= BROWSER_LIMITS.pending) return { error: 'BROWSER_BUSY: too many pending requests; no operation was dispatched.' };
     delete args.browserId;
     const id = randomUUID();
     const command: BrowserCommand = { id, epoch: this.epoch, owner, conversationId, tool, args, expiresAt: Date.now() + BROWSER_LIMITS.timeoutMs };
+    const internal = this.internal.get(browserId);
+    if (internal) {
+      if (!await allowed().catch(() => false)) return { error: 'BROWSER_PERMISSION_REVOKED: request was not dispatched.' };
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          internal.execute(command, allowed),
+          new Promise<BrowserResult>(resolve => {
+            timer = setTimeout(() => resolve({ error: 'BROWSER_RESULT_UNCONFIRMED: the app-owned browser did not finish before its deadline. Inspect before repeating any action.' }), BROWSER_LIMITS.timeoutMs);
+            timer.unref?.();
+          })
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    }
+    if (this.pending.size >= BROWSER_LIMITS.pending) return { error: 'BROWSER_BUSY: too many pending requests; no operation was dispatched.' };
     return new Promise(resolve => {
       const timer = setTimeout(() => p.finish({ error: p.claimed
         ? 'BROWSER_RESULT_UNCONFIRMED: the operation was dispatched but its result was not received. Inspect the tab before repeating any action.'

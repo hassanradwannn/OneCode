@@ -325,13 +325,15 @@ function mergedRetiredAssetIds(...groups: Array<readonly string[] | undefined>):
 
 type MessageEvent = Extract<SessionEvent, { kind: 'user_message' | 'assistant_message' }>;
 type NativeImageEvent = Extract<SessionEvent, { kind: 'native_image' }>;
-type CanonicalEvent = MessageEvent | NativeImageEvent | Extract<SessionEvent, { kind: 'tool_call' }>;
+type NativeVideoEvent = Extract<SessionEvent, { kind: 'native_video' }>;
+type CanonicalEvent = MessageEvent | NativeImageEvent | NativeVideoEvent | Extract<SessionEvent, { kind: 'tool_call' | 'progress' }>;
 type NewMessageEvent = MessageEvent extends infer Event
   ? Event extends MessageEvent
     ? Omit<Event, 'seq'>
     : never
   : never;
 type NewNativeImageEvent = Omit<NativeImageEvent, 'seq' | 'origin'>;
+type NewNativeVideoEvent = Omit<NativeVideoEvent, 'seq' | 'origin'>;
 
 /** Internal checkpoint field persisted beside the public summary projection. */
 const META_HISTORY_SEQ = '__historySeq';
@@ -352,10 +354,13 @@ interface MetaCheckpoint {
   activityBoundaryMissing: boolean;
 }
 
-function messageKey(event: SessionEvent | Omit<MessageEvent, 'seq'> | NewNativeImageEvent): string | null {
+function messageKey(event: SessionEvent | Omit<MessageEvent, 'seq'> | NewNativeImageEvent | NewNativeVideoEvent): string | null {
+  if (event.kind === 'progress' && event.presentation) return `presentation\u0000${event.presentation.id}`;
   if (event.kind === 'tool_call') return event.call?.callId ? `tool_call\u0000${event.call.callId}` : null;
   if (event.kind === 'native_image') return event.messageId && event.providerAssetId
     ? `native_image\u0000${event.messageId}\u0000${event.providerAssetId}` : null;
+  if (event.kind === 'native_video') return event.messageId && event.providerAssetId
+    ? `native_video\u0000${event.messageId}\u0000${event.providerAssetId}` : null;
   return (event.kind === 'user_message' || event.kind === 'assistant_message') && event.messageId
     ? `${event.kind}\u0000${event.messageId}` : null;
 }
@@ -706,7 +711,7 @@ async function readCanonicalMessages(id: string, aliasesCollapsed?: () => void):
     for (const [key, value] of Object.entries(parsed)) {
       if (!value || typeof value !== 'object') continue;
       const event = value as CanonicalEvent;
-      if ((event.kind !== 'user_message' && event.kind !== 'assistant_message' && event.kind !== 'native_image' && event.kind !== 'tool_call') || typeof event.seq !== 'number') continue;
+      if ((event.kind !== 'user_message' && event.kind !== 'assistant_message' && event.kind !== 'native_image' && event.kind !== 'native_video' && event.kind !== 'tool_call' && event.kind !== 'progress') || typeof event.seq !== 'number') continue;
       const expected = messageKey(event);
       if (!expected || expected !== key) continue;
       out.set(key, event);
@@ -1255,6 +1260,9 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
           assets: admittedAssets(sessionId, event.call.assets),
           ...(denied.length ? { retiredImageAssetIds: mergedRetiredAssetIds(event.call.retiredImageAssetIds, denied) } : {})
         } };
+      } else if (event.kind === 'progress' && event.presentation?.asset) {
+        const asset = admittedAssets(sessionId, [event.presentation.asset])?.[0];
+        admitted = { ...event, presentation: { ...event.presentation, asset } };
       } else if (event.kind === 'user_message') {
         const denied = deniedAssetIds(sessionId, event.assets);
         admitted = {
@@ -1334,7 +1342,7 @@ export function upsertMessageEvent(
         : [];
       const key = !entry.messages.has(directKey) && providerMatches.length === 1 ? providerMatches[0]![0] : directKey;
       const candidate = entry.messages.get(key);
-      const previous = candidate?.kind === 'tool_call' ? undefined : candidate;
+      const previous = candidate?.kind === 'user_message' || candidate?.kind === 'assistant_message' ? candidate : undefined;
       // A changed provider timestamp caused this alias; it is not a correction of
       // the original anchor. Same-key DOM-to-Fiber timestamp promotion still applies.
       const preferTime = options.preferTime === true && key === directKey;
@@ -1547,6 +1555,7 @@ export function upsertNativeImageEvent(
       if (
         previous &&
         (previous.providerRole !== event.providerRole ||
+          (previous.conversationId && event.conversationId && previous.conversationId !== event.conversationId) ||
           (previous.agent && event.agent && previous.agent !== event.agent))
       ) return { event: previous, changed: false, accepted: false };
       // Explicit image-storage cleanup is a durable decision for this exact provider tuple.
@@ -1571,6 +1580,7 @@ export function upsertNativeImageEvent(
           : event.previewStatus;
       const next: NewNativeImageEvent = {
         ...event,
+        conversationId: previous?.conversationId ?? event.conversationId,
         time: previous?.time ?? event.time,
         ...(previous?.turnId ? { turnId: previous.turnId } : event.turnId ? { turnId: event.turnId } : {}),
         ...(previous?.agent && !event.agent ? { agent: previous.agent } : {}),
@@ -1592,7 +1602,7 @@ export function upsertNativeImageEvent(
       };
       if (previous) {
         const unchanged =
-          previous.turnId === next.turnId && previous.agent === next.agent &&
+          previous.turnId === next.turnId && previous.agent === next.agent && previous.conversationId === next.conversationId &&
           previous.providerChannel === next.providerChannel && previous.providerStatus === next.providerStatus &&
           previous.width === next.width && previous.height === next.height &&
           previous.previewWidth === next.previewWidth && previous.previewHeight === next.previewHeight &&
@@ -1618,6 +1628,63 @@ export function upsertNativeImageEvent(
       () => undefined,
       (err: Error) => logError(`session native image upsert failed: ${err.message}`)
     );
+    return write;
+  });
+}
+
+/** Creates or enriches one provider-native generated video by exact provider tuple. */
+export function upsertNativeVideoEvent(
+  sessionId: string,
+  event: NewNativeVideoEvent
+): Promise<{ event: NativeVideoEvent; changed: boolean; accepted: boolean }> {
+  const key = messageKey(event);
+  if (!key) throw new Error('Canonical native video requires provider message and asset ids');
+  return ensureOpen(sessionId).then((entry) => {
+    const write = entry.queue.then(async () => {
+      const candidate = entry.messages.get(key);
+      const previous = candidate?.kind === 'native_video' ? candidate : undefined;
+      if (candidate && !previous) throw new Error('Canonical native video identity collision');
+      if (previous && (previous.providerRole !== event.providerRole || previous.mimeType !== event.mimeType ||
+          (previous.conversationId && event.conversationId && previous.conversationId !== event.conversationId) ||
+          (previous.agent && event.agent && previous.agent !== event.agent))) {
+        return { event: previous, changed: false, accepted: false };
+      }
+      if (previous?.previewError === 'removed' && !previous.asset) return { event: previous, changed: false, accepted: false };
+      const incomingAsset = event.asset ? admittedAssets(sessionId, [event.asset])?.[0] : undefined;
+      const staleAsset = Boolean(event.asset && !incomingAsset);
+      const asset = previous?.asset ?? incomingAsset;
+      const previewError = previous?.previewError === 'quota' && !asset
+        ? 'quota' : staleAsset ? 'removed' : event.previewError ?? previous?.previewError;
+      const previewStatus = asset ? 'available' : previewError ? 'unavailable' : event.previewStatus;
+      const next: NewNativeVideoEvent = {
+        ...event,
+        conversationId: previous?.conversationId ?? event.conversationId,
+        time: previous?.time ?? event.time,
+        ...(previous?.turnId ? { turnId: previous.turnId } : event.turnId ? { turnId: event.turnId } : {}),
+        ...(previous?.agent && !event.agent ? { agent: previous.agent } : {}),
+        providerChannel: previous?.providerChannel ?? event.providerChannel,
+        providerStatus: previous?.providerStatus === 'finished_successfully' ? previous.providerStatus : event.providerStatus ?? previous?.providerStatus,
+        width: previous?.width ?? event.width, height: previous?.height ?? event.height,
+        durationMs: previous?.durationMs ?? event.durationMs,
+        asset: undefined, previewStatus, previewError,
+        ...(asset ? { asset, previewStatus: 'available', previewWidth: previous?.previewWidth ?? event.previewWidth,
+          previewHeight: previous?.previewHeight ?? event.previewHeight, previewError: undefined } : {})
+      };
+      if (previous) {
+        const unchanged = previous.turnId === next.turnId && previous.agent === next.agent && previous.conversationId === next.conversationId &&
+          previous.providerChannel === next.providerChannel && previous.providerStatus === next.providerStatus &&
+          previous.width === next.width && previous.height === next.height && previous.durationMs === next.durationMs &&
+          previous.previewWidth === next.previewWidth && previous.previewHeight === next.previewHeight &&
+          previous.previewStatus === next.previewStatus && previous.previewError === next.previewError &&
+          previous.asset?.id === next.asset?.id && previous.asset?.mimeType === next.asset?.mimeType && previous.asset?.bytes === next.asset?.bytes;
+        if (unchanged) return { event: previous, changed: false, accepted: true };
+      }
+      const full: NativeVideoEvent = { ...next, origin: previous?.origin ?? previous?.seq ?? entry.nextSeq, seq: entry.nextSeq };
+      await writeCanonicalMessage(sessionId, key, full); entry.messages.set(key, full); entry.nextSeq += 1; entry.historySeq = full.seq;
+      if (!previous) applyToSummary(entry.summary, full); scheduleMeta(entry);
+      return { event: full, changed: true, accepted: true };
+    });
+    entry.queue = write.then(() => undefined, (err: Error) => logError(`session native video upsert failed: ${err.message}`));
     return write;
   });
 }
@@ -2158,7 +2225,7 @@ async function readRecentEventsFromDisk(
   const active = open.get(sessionId);
   const needsMessages =
     !options.kinds || options.kinds.includes('user_message') || options.kinds.includes('assistant_message') ||
-    options.kinds.includes('native_image') || options.kinds.includes('tool_call');
+    options.kinds.includes('native_image') || options.kinds.includes('native_video') || options.kinds.includes('tool_call');
   const messages = needsMessages ? active?.messages ?? (await readCanonicalMessages(sessionId)) : new Map<string, CanonicalEvent>();
   const canonicalKeys = new Set(messages.keys());
   // Pre-canonical sessions could append every streaming revision of one stable website
@@ -3356,9 +3423,10 @@ export async function reopenSession(id: string, pageObservedAt?: number): Promis
   });
 }
 
-export async function renameSession(id: string, title: string, source: SessionSummary['titleSource'] = 'manual', conversationId?: string): Promise<void> {
+export async function renameSession(id: string, title: string, source: SessionSummary['titleSource'] = 'manual', conversationId?: string, expectedTitle?: string): Promise<void> {
   const entry = await ensureOpen(id);
   await enqueueSessionOperation(entry, 'rename', async () => {
+    if (expectedTitle !== undefined && entry.summary.title !== expectedTitle) throw new Error('Task title changed. Reload before editing.');
     if (source !== 'manual' && entry.summary.titleSource === 'manual') {
       // The user's name stays; Gemini's newer title is kept for when the name is cleared.
       // The same rules as an unnamed chat: worker and helper chats keep their origin's title, a
@@ -3921,14 +3989,18 @@ async function deleteSelectedImage(file: StoredImageFile): Promise<number> {
 }
 
 function referencedAssetIds(event: SessionEvent): readonly AssetRef[] {
-  if (event.kind === 'native_image') return event.asset ? [event.asset] : [];
+  if (event.kind === 'progress' && event.presentation?.asset) return [event.presentation.asset];
+  if (event.kind === 'native_image' || event.kind === 'native_video') return event.asset ? [event.asset] : [];
   if (event.kind === 'user_message') return event.assets ?? [];
   if (event.kind === 'tool_call') return event.call.assets ?? [];
   return [];
 }
 
 function retireImageReferences(event: CanonicalEvent, selected: ReadonlySet<string>): CanonicalEvent | null {
-  if (event.kind === 'native_image') {
+  if (event.kind === 'progress' && event.presentation?.asset && selected.has(event.presentation.asset.id)) {
+    const { asset: _asset, ...presentation } = event.presentation; return { ...event, presentation };
+  }
+  if (event.kind === 'native_image' || event.kind === 'native_video') {
     if (!event.asset || !selected.has(event.asset.id)) return null;
     const { asset: _asset, ...withoutAsset } = event;
     return { ...withoutAsset, previewStatus: 'unavailable', previewError: 'removed' };
@@ -3994,7 +4066,7 @@ async function retireSessionAssets(sessionId: string, images: ReadonlySet<string
     const textIds = texts.size ? mentionedTextAssetIds(event).filter((id) => texts.has(id)) : [];
     if (!imageIds.length && !textIds.length) continue;
     const key = messageKey(event);
-    if (!key || !['user_message', 'native_image', 'tool_call'].includes(event.kind) && !(textIds.length && event.kind === 'assistant_message')) {
+    if (!key || !['user_message', 'native_image', 'native_video', 'tool_call', 'progress'].includes(event.kind) && !(textIds.length && event.kind === 'assistant_message')) {
       for (const id of [...imageIds, ...textIds]) safe.delete(id);
       continue;
     }

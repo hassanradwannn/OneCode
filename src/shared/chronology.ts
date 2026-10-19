@@ -316,7 +316,8 @@ export function projectTimeline<T extends Chronological>(
       const owner = turnOpenAt(turns, written);
       if (owner) boundary = turns[owner];
     }
-    if (!boundary && requestOwner === undefined && !entry.turnId && entry.kind !== 'user_message' && entry.kind !== 'assistant_message' && entry.kind !== 'native_image') {
+    if (!boundary && requestOwner === undefined && !entry.turnId && entry.kind !== 'user_message' && entry.kind !== 'assistant_message' &&
+        entry.kind !== 'native_image' && entry.kind !== 'native_video') {
       let low = 0, high = starts.length;
       while (low < high) {
         const mid = (low + high) >>> 1;

@@ -4,11 +4,13 @@ import { startBridge } from '../bridge.js';
 import { wakeBrowserUrl, resetBrowserStartupForTests } from '../browser-startup.js';
 import { getConfig } from '../config.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl } from '../../shared/chat-provider.js';
-import { enqueueInput, cancelInput, listInputs, noteInputStartupError, type InputArgs, type InputEntry } from './input.js';
+import { enqueueInput, cancelInput, listInputs, noteInputStartupError, releaseSteeringInput, sendQueuedInputNow, type InputArgs, type InputEntry } from './input.js';
+import { getSession } from './store.js';
+import type { QueuedInputNowIntent } from '../../shared/input.js';
 
 function wakeBrowser(entry: InputEntry, retry = false): Promise<void> {
   const marker = `cos-input=${encodeURIComponent(entry.id)}`;
-  const provider = chatProviderForConversation(entry.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const provider = chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const home = chatProviderHomeUrl(provider);
   return wakeBrowserUrl(entry.conversationId ? chatProviderConversationUrl(provider, entry.conversationId)
     : `${home}${home.includes('?') ? '&' : '?'}${marker}#${marker}`, retry, getConfig().ui.backgroundChats === true);
@@ -66,6 +68,21 @@ export async function cancelDesktopInput(id: string): Promise<boolean> {
 }
 async function startAcceptedInput(entry: InputEntry, controller: AbortController): Promise<void> {
   try {
+    if (entry.steerTurnId && !entry.steerReady && entry.sessionId) {
+      const { stopSessionTurn, STOP_COMMAND_TIMEOUT_MS } = await import('../bridge.js');
+      const source = await getSession(entry.sessionId);
+      if (source?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId);
+      else if (source?.activeTurnId) throw new Error('The turn selected for steering changed');
+      const deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
+      while (!await releaseSteeringInput(entry.id)) {
+        controller.signal.throwIfAborted();
+        const session = await getSession(entry.sessionId);
+        if (session?.conversationId !== entry.conversationId || (session.activeTurnId && session.activeTurnId !== entry.steerTurnId))
+          throw new Error('The turn selected for steering changed');
+        if (Date.now() >= deadline) throw new Error('Native Stop was not confirmed. Your steering message has not been sent.');
+        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 200); timer.unref?.(); });
+      }
+    }
     await ready(controller.signal);
     controller.signal.throwIfAborted();
     const current = (await listInputs()).find(row => row.id === entry.id);
@@ -76,6 +93,15 @@ async function startAcceptedInput(entry: InputEntry, controller: AbortController
   } finally {
     if (starting.get(entry.id) === controller) starting.delete(entry.id);
   }
+}
+/** Explicit queue steering uses the same startup and exact native Stop barrier as a fresh send. */
+export async function sendQueuedDesktopInputNow(id: string, intent?: QueuedInputNowIntent): Promise<boolean> {
+  if (stopped || starting.has(id) || !await sendQueuedInputNow(id, intent)) return false;
+  const entry = (await listInputs()).find(row => row.id === id);
+  if (!entry) return false;
+  const controller = new AbortController(); starting.set(id, controller);
+  void startAcceptedInput(entry, controller).catch(() => undefined);
+  return true;
 }
 export async function sendDesktopInput(input: InputArgs): Promise<InputEntry> {
   if (stopped) throw new Error('The app is shutting down');

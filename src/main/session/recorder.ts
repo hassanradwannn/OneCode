@@ -32,6 +32,8 @@ import type {
   TurnOutcome
 } from '../../shared/session.js';
 import { estimateTokens, originTitle } from '../../shared/session.js';
+import type { ArtifactKind } from '../../shared/artifact.js';
+import type { ChatProvider } from '../../shared/chat-provider.js';
 import { chatErrorMessageKey } from '../../shared/chat-error.js';
 import { continuedRequestTurn, overlappingRequestTurns, recordedRequestTurn, responseTurnId, turnOpenAt } from '../../shared/chronology.js';
 import { getConfig } from '../config.js';
@@ -66,6 +68,7 @@ import {
   setSessionOrigin,
   upsertMessageEvent,
   upsertNativeImageEvent,
+  upsertNativeVideoEvent,
   writeAsset,
   writeOverflowText,
   writeTurnTrace
@@ -80,6 +83,7 @@ import {
 import { RESUME_CLAIM_WINDOW_MS, resumeOpeningChat } from './resume-gate.js';
 import { summarizeToolCall, toolResultHeadline } from './summarize.js';
 import type { GeminiInputTurn } from '../gemini/bindings.js';
+import { beginNativeArtifactSnapshot, failNativeArtifactSnapshot, importProviderArtifactRevision, importProviderArtifactSnapshot } from '../artifacts/service.js';
 
 interface LiveConversation {
   conversationId: string;
@@ -1764,7 +1768,9 @@ export interface ChatObservation {
     | 'conversation_title'
     | 'user_message'
     | 'assistant_message'
+    | 'provider_artifact'
     | 'native_image'
+    | 'native_video'
     | 'page_tool'
     | 'turn_trace'
     | 'turn_start'
@@ -1801,15 +1807,31 @@ export interface ChatObservation {
   references?: import('../../shared/session.js').MessageReference[];
   /** Exact non-secret provider asset id for a native generated image. */
   providerAssetId?: string;
+  /** Exact generated-video container admitted by the bridge. */
+  mediaMimeType?: 'video/mp4' | 'video/webm';
+  /** Provider-native artifact import. Only exact typed provider identities are admitted. */
+  provider?: ChatProvider;
+  providerConversationId?: string;
+  providerArtifactId?: string;
+  providerRevisionId?: string;
+  /** Exact response-scoped native surface captured as local revisions, without provider revision ids. */
+  artifactNativeSurface?: string;
+  artifactSnapshotStatus?: 'generating' | 'failed';
+  providerParentRevisionId?: string;
+  artifactTitle?: string;
+  artifactKind?: ArtifactKind;
+  artifactEntrypoint?: string;
+  artifactFiles?: Array<{ path: string; text: string; mimeType?: string; language?: string }>;
   providerRole?: 'tool' | 'assistant';
   providerChannel?: 'final';
   providerStatus?: 'in_progress' | 'finished_successfully';
   width?: number;
   height?: number;
+  durationMs?: number;
   previewWidth?: number;
   previewHeight?: number;
   previewStatus?: 'pending' | 'available' | 'unavailable';
-  previewError?: 'not_loaded' | 'ambiguous' | 'tainted' | 'oversized' | 'invalid' | 'quota';
+  previewError?: 'not_mounted' | 'not_loaded' | 'ambiguous' | 'tainted' | 'oversized' | 'invalid' | 'quota';
   previewDataUrl?: string;
   turnId?: string;
   /** A `turn_trace` observation's round outline (shared/turn-trace.ts). */
@@ -1868,7 +1890,7 @@ export interface PageCallEvidence {
 async function recordNativeImage(
   sessionId: string,
   item: ChatObservation,
-  base: { time: number; source: 'extension'; turnId?: string; agent?: string }
+  base: { time: number; source: 'extension'; turnId?: string; agent?: string; conversationId?: string }
 ): Promise<number> {
   if (!item.messageId || !item.providerAssetId || !item.providerRole) return 0;
   const metadata = await upsertNativeImageEvent(sessionId, {
@@ -1935,6 +1957,46 @@ async function recordNativeImage(
       previewStatus: 'unavailable',
       previewError: reason
     });
+    if (unavailable.changed) changed += 1;
+  }
+  return changed;
+}
+
+/** Metadata-first persistence for one exact provider-native generated video. */
+async function recordNativeVideo(
+  sessionId: string,
+  item: ChatObservation,
+  base: { time: number; source: 'extension'; turnId?: string; agent?: string; conversationId?: string }
+): Promise<number> {
+  if (!item.messageId || !item.providerAssetId || !item.providerRole || !item.mediaMimeType) return 0;
+  const common = {
+    ...base, kind: 'native_video' as const, messageId: item.messageId, providerAssetId: item.providerAssetId,
+    providerRole: item.providerRole, mimeType: item.mediaMimeType,
+    ...(item.providerChannel ? { providerChannel: item.providerChannel } : {}),
+    ...(item.providerStatus ? { providerStatus: item.providerStatus } : {}),
+    ...(item.width ? { width: item.width } : {}), ...(item.height ? { height: item.height } : {}),
+    ...(item.durationMs ? { durationMs: item.durationMs } : {})
+  };
+  const metadata = await upsertNativeVideoEvent(sessionId, { ...common, previewStatus: item.previewDataUrl ? 'pending' : item.previewStatus ?? 'pending',
+    ...(item.previewError ? { previewError: item.previewError } : {}) });
+  if (!metadata.accepted) return 0;
+  let changed = metadata.changed ? 1 : 0;
+  if (!item.previewDataUrl || metadata.event.asset) return changed;
+  try {
+    if (!/^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(item.previewDataUrl) || item.previewDataUrl.length > 512_100) throw new Error('invalid native video poster');
+    const data = Buffer.from(item.previewDataUrl.slice(item.previewDataUrl.indexOf(',') + 1), 'base64');
+    if (data.length === 0 || data.length > 384_000) throw new Error('invalid native video poster');
+    const decoded = sharp(data, { limitInputPixels: 2_560_000, animated: false }); const info = await decoded.metadata();
+    if (info.format !== 'webp' || !info.width || !info.height || info.width > 1600 || info.height > 1600 ||
+        info.width * info.height > 2_560_000 || info.width !== item.previewWidth || info.height !== item.previewHeight) throw new Error('invalid native video poster');
+    await decoded.stats();
+    const asset = await writeAsset(sessionId, data, 'image/webp');
+    const enriched = await upsertNativeVideoEvent(sessionId, { ...common, previewStatus: 'available', previewWidth: info.width, previewHeight: info.height, asset });
+    if (enriched.changed) changed += 1;
+  } catch (error) {
+    const reason = /quota/i.test((error as Error).message) ? 'quota' : 'invalid';
+    logWarn(`native generated video poster unavailable: ${(error as Error).message}`);
+    const unavailable = await upsertNativeVideoEvent(sessionId, { ...common, previewStatus: 'unavailable', previewError: reason });
     if (unavailable.changed) changed += 1;
   }
   return changed;
@@ -2087,15 +2149,16 @@ async function supersededLineage(conversationId: string): Promise<string | null>
 }
 
 /**
- * What a replaced chat may still add to its session: its messages, and nothing else.
+ * What a replaced chat may still add to its session: its content, and nothing else.
  *
  * The session's live turn, activity clock, Goal obligations and title belong to the chat
- * that replaced it, so a lingering page on the old chat records prose only — the brief's
- * final rendering arriving after the commit, or the user carrying on in the old tab — and
+ * that replaced it, so a lingering page on the old chat records messages and exact provider
+ * artifacts only — the brief's final rendering arriving after the commit, or the user carrying on in the old tab — and
  * moves none of the projections the replacement now owns.
  */
 async function recordSupersededMessages(
   sessionId: string,
+  conversationId: string,
   observations: readonly ChatObservation[]
 ): Promise<number> {
   let stored = 0;
@@ -2145,11 +2208,47 @@ async function recordSupersededMessages(
     } else if (item.kind === 'native_image') {
       stored += await recordNativeImage(sessionId, item, base);
       continue;
+    } else if (item.kind === 'native_video') {
+      stored += await recordNativeVideo(sessionId, item, base);
+      continue;
+    } else if (item.kind === 'provider_artifact') {
+      stored += await recordProviderArtifact(sessionId, conversationId, item);
+      continue;
     }
     if (written?.changed) stored++;
   }
   if (stored > 0) notifyChanged(sessionId);
   return stored;
+}
+
+async function recordProviderArtifact(sessionId: string, conversationId: string, item: ChatObservation): Promise<number> {
+  if (item.kind !== 'provider_artifact' || !item.provider || !item.messageId ||
+      (!item.artifactNativeSurface && (!item.providerArtifactId || !item.providerRevisionId)) || !item.artifactKind || !item.artifactEntrypoint || (!item.artifactSnapshotStatus && !item.artifactFiles?.length) ||
+      item.providerConversationId !== conversationId) return 0;
+  if(item.artifactNativeSurface){
+    if(item.providerArtifactId || item.providerRevisionId || item.providerParentRevisionId)return 0;
+    if(item.artifactSnapshotStatus)return await (item.artifactSnapshotStatus==='failed'?failNativeArtifactSnapshot:beginNativeArtifactSnapshot)({sessionId,provider:item.provider,conversationId,messageId:item.messageId,nativeSurface:item.artifactNativeSurface,
+      ...(item.turnId?{turnId:item.turnId}:{}),...(item.artifactTitle?{title:item.artifactTitle}:{}),kind:item.artifactKind})?1:0;
+    const result=await importProviderArtifactSnapshot({sessionId,provider:item.provider,conversationId,messageId:item.messageId,nativeSurface:item.artifactNativeSurface,
+      ...(item.turnId?{turnId:item.turnId}:{}),...(item.artifactTitle?{title:item.artifactTitle}:{}),kind:item.artifactKind,entrypoint:item.artifactEntrypoint,files:item.artifactFiles!});
+    return result.changed?1:0;
+  }
+  const result = await importProviderArtifactRevision({
+    sessionId,
+    provider: item.provider,
+    conversationId,
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+    messageId: item.messageId,
+    providerArtifactId: item.providerArtifactId!,
+    providerRevisionId: item.providerRevisionId!,
+    ...(item.providerParentRevisionId ? { providerParentRevisionId: item.providerParentRevisionId } : {}),
+    ...(item.artifactTitle ? { title: item.artifactTitle } : {}),
+    kind: item.artifactKind,
+    entrypoint: item.artifactEntrypoint,
+    files: item.artifactFiles!,
+    createdAt: item.time
+  });
+  return result.changed ? 1 : 0;
 }
 
 async function recordChatObservationsNow(
@@ -2167,7 +2266,7 @@ async function recordChatObservationsNow(
   if (!conversations.has(conversationId)) {
     const lineage = await supersededLineage(conversationId);
     if (lineage) {
-      const stored = await recordSupersededMessages(lineage, observations);
+      const stored = await recordSupersededMessages(lineage, conversationId, observations);
       return { sessionId: lineage, stored, activity, goalCandidates: [] };
     }
   }
@@ -2357,7 +2456,16 @@ async function recordChatObservationsNow(
       case 'native_image': {
         // Native media is transcript content only. It does not renew activity, close a turn,
         // create a Goal candidate, or masquerade as a locally executed tool call.
-        stored += await recordNativeImage(sessionId, item, base);
+        stored += await recordNativeImage(sessionId, item, { ...base, conversationId });
+        continue;
+      }
+      case 'native_video': {
+        stored += await recordNativeVideo(sessionId, item, { ...base, conversationId });
+        continue;
+      }
+      case 'provider_artifact': {
+        // Provider artifacts are durable content, not model activity or turn-completion evidence.
+        stored += await recordProviderArtifact(sessionId, conversationId, item);
         continue;
       }
       case 'turn_trace': {

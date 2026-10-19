@@ -23,6 +23,7 @@ export function tailscaleSetupView(next: Pick<AppState, 'config' | 'status' | 'r
       : check?.publicIngress?.state === 'tls-error' ? 'Public TLS connection failed'
       : check?.publicIngress?.state === 'http-error' ? 'Connector metadata path unavailable'
       : check?.publicIngress?.state === 'metadata-error' ? 'Current connector not verified'
+      : check?.publicIngress?.state === 'mcp-error' ? 'Public MCP handshake failed'
       : check?.publicIngress?.state === 'retry-required' ? 'Automatic checks paused; retry Connect' : 'Not checked',
     version: check?.version ?? '',
     checkedAt: check?.checkedAt ?? null,

@@ -12,7 +12,7 @@
  * extension does nothing" into a diagnosable mismatch.
  */
 
-export const APP_VERSION = '0.3.600';
+export const APP_VERSION = '0.3.701';
 
 /**
  * Standalone extension recovery must stay on the app's own release. Using GitHub's moving
@@ -76,4 +76,5 @@ export function extensionDownloadUrl(_version = APP_VERSION): string {
 // companion ignores that selection and silently opens Gemini, so it must be reloaded.
 // 18 — model discovery requests name their provider independently of the new-chat default.
 // Older companions ignore that owner and can publish the other provider's models.
-export const BRIDGE_PROTOCOL = 18;
+// 19 — provider artifacts and native video are durable journal content. Old apps cannot ACK and discard them.
+export const BRIDGE_PROTOCOL = 19;

@@ -804,13 +804,13 @@ var CLF_DOM = (() => {
     // Keep the same text comparison used by send receipts; editor identity and
     // trusted edits still revoke the lease even when a user only changes spacing.
     const compact = text => String(text || '').replace(/\s+/g, '');
-    const insertedText = compact(box?.textContent);
+    const insertedText = box ? promptWithoutMentions(box) : '';
     let touched = false;
     let files = [];
     const events = ['input', 'change', 'keydown', 'pointerdown', 'paste', 'drop'];
     const changed = event => { if (event.isTrusted) touched = true; };
     for (const name of events) host?.addEventListener(name, changed, true);
-    const same = () => !touched && stillCurrent() && composer() === box && box?.isConnected && compact(box.textContent) === insertedText;
+    const same = () => !touched && stillCurrent() && composer() === box && box?.isConnected && promptWithoutMentions(box) === insertedText;
     const ownsAttachments = () => {
       if (!same() || !host) return false;
       const current = [...host.querySelectorAll('button[aria-label]')].filter(node => composerFileName(node));
@@ -848,7 +848,7 @@ var CLF_DOM = (() => {
       rebind() {
         if (rebound || touched || files.length || !stillCurrent() || same()) return false;
         const next = composer(), nextHost = composerBox() || composerActions()?.host;
-        if (!next?.isConnected || next === box || compact(next.textContent) !== insertedText || hasComposerAttachments()) return false;
+        if (!next?.isConnected || next === box || promptWithoutMentions(next) !== insertedText || hasComposerAttachments()) return false;
         for (const name of events) host?.removeEventListener(name, changed, true);
         box = next; host = nextHost; rebound = true;
         for (const name of events) host?.addEventListener(name, changed, true);
@@ -863,7 +863,7 @@ var CLF_DOM = (() => {
       withdraw() {
         if (touched || files.length || hasComposerAttachments()) return false;
         let current = composer();
-        if (!current?.isConnected || compact(current.textContent) !== insertedText) return false;
+        if (!current?.isConnected || promptWithoutMentions(current) !== insertedText) return false;
         if (current !== box) {
           if (withdrawRebound) return false;
           const nextHost = composerBox() || composerActions()?.host;
@@ -872,7 +872,7 @@ var CLF_DOM = (() => {
           for (const name of events) host?.addEventListener(name, changed, true);
         }
         current = composer();
-        if (touched || current !== box || !box?.isConnected || compact(box.textContent) !== insertedText || hasComposerAttachments()) return false;
+        if (touched || current !== box || !box?.isConnected || promptWithoutMentions(box) !== insertedText || hasComposerAttachments()) return false;
         return clearPromptExact(value);
       },
       dispose() { for (const name of events) host?.removeEventListener(name, changed, true); }
@@ -2429,7 +2429,7 @@ var CLF_DOM = (() => {
     return safe(() => {
       const box = composer();
       const compact = (text) => String(text || '').replace(/\s+/g, '');
-      if (!box || compact(box.textContent) !== compact(value)) return false;
+      if (!box || promptWithoutMentions(box) !== compact(value)) return false;
       box.focus();
       document.execCommand('selectAll', false);
       document.execCommand('delete', false);
@@ -2502,7 +2502,7 @@ var CLF_DOM = (() => {
     channel.port2.postMessage(null);
   }
 
-  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false } = {}) {
+  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null } = {}) {
     // Why a Send ended without acceptance, as one short code for the caller's diagnostics (#820).
     // It names the first refusal only and never changes what Send does.
     const refused = (why) => { try { explain?.(why); } catch { /* Diagnostics never change Send. */ } return false; };
@@ -2689,7 +2689,7 @@ var CLF_DOM = (() => {
                 timer = setTimeout(() => { check(); finish(false); }, receiptTimeoutMs);
             }
             clickedAt = Date.now();
-            try { control.click(); } catch { return finish(false); }
+            try { onSendAttempt?.(); control.click(); } catch { return finish(false); }
             check(); // Synchronous navigation/cancellation during click also re-proves ownership.
           };
           if (!beforeSend) return click();

@@ -24,7 +24,7 @@ export function isPublicIngressAddress(address: string): boolean {
 }
 
 interface JsonResponse { status: number; json: unknown }
-interface ReadOptions { signal: AbortSignal; accept: string; address?: string }
+interface ReadOptions { signal: AbortSignal; accept: string; address?: string; body?: string; headers?: Record<string, string> }
 interface Dependencies { read(url: URL, options: ReadOptions): Promise<JsonResponse> }
 class ProbeReadError extends Error { constructor(readonly kind: 'transport' | 'response') { super(kind); } }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -39,8 +39,9 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
       if (error) reject(error); else resolve(response!);
     };
     const requestOptions: https.RequestOptions = {
-      method: 'GET', agent: false, signal: options.signal, servername: url.hostname, rejectUnauthorized: true,
-      headers: { accept: options.accept, host: url.host, 'cache-control': 'no-cache', 'accept-encoding': 'identity' }
+      method: options.body ? 'POST' : 'GET', agent: false, signal: options.signal, servername: url.hostname, rejectUnauthorized: true,
+      headers: { ...options.headers, accept: options.accept, host: url.host, 'cache-control': 'no-cache', 'accept-encoding': 'identity',
+        ...(options.body ? { 'content-type': 'application/json', 'mcp-protocol-version': '2025-06-18' } : {}) }
     };
     if (options.address) {
       const address = options.address, family = isIP(address);
@@ -53,7 +54,7 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
     const request = https.request(url, requestOptions, response => {
       if (response.statusCode !== 200) { response.destroy(); finish(undefined, { status: response.statusCode ?? 0, json: null }); return; }
       const contentType = response.headers['content-type']?.split(';')[0]?.trim();
-      if (contentType !== options.accept) { response.destroy(); finish(new ProbeReadError('response')); return; }
+      if (!contentType || !options.accept.split(',').map(type => type.trim()).includes(contentType)) { response.destroy(); finish(new ProbeReadError('response')); return; }
       let body = '', bytes = 0;
       response.on('data', chunk => {
         bytes += Buffer.byteLength(chunk);
@@ -63,13 +64,13 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
       response.once('error', () => finish(new ProbeReadError('transport')));
       response.once('aborted', () => finish(new ProbeReadError('transport')));
       response.once('end', () => {
-        try { finish(undefined, { status: 200, json: JSON.parse(body) }); }
+        try { finish(undefined, { status: 200, json: JSON.parse(contentType === 'text/event-stream' ? /^data:\s*(.+)$/m.exec(body)?.[1] ?? '' : body) }); }
         catch { finish(new ProbeReadError('response')); }
       });
     });
     request.once('error', () => finish(new ProbeReadError('transport')));
     timer = setTimeout(() => { request.destroy(); finish(new ProbeReadError('transport')); }, 4_000);
-    request.end();
+    request.end(options.body);
   });
 }
 
@@ -94,7 +95,7 @@ function dnsAddresses(value: unknown, hostname: string, type: 1 | 28): { address
 
 export type FunnelPublicResult = { state: 'ready' | TailscalePublicFailure };
 
-export async function probeFunnelPublic(value: string, signal: AbortSignal, overrides: Partial<Dependencies> = {}): Promise<FunnelPublicResult> {
+export async function probeFunnelPublic(value: string, signal: AbortSignal, overrides: Partial<Dependencies> = {}, headers?: Record<string, string>): Promise<FunnelPublicResult> {
   let endpoint: URL;
   try { endpoint = new URL(value); } catch { return { state: 'metadata-error' }; }
   if (endpoint.protocol !== 'https:' || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(endpoint.hostname) ||
@@ -128,7 +129,15 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
           probeSignal.throwIfAborted();
           if (response.status !== 200) failures.add('http-error');
           else if (!object(response.json) || response.json.resource !== endpoint.href) failures.add('metadata-error');
-          else return;
+          else {
+            failures.add('mcp-error');
+            const initialized = await deps.read(endpoint, { signal: probeSignal, address, accept: 'application/json, text/event-stream', headers,
+              body: JSON.stringify({ jsonrpc: '2.0', id: 'onecode-ingress', method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'OneCode ingress check', version: '1' } } }) });
+            const rpc = initialized.json;
+            if (initialized.status === 200 && object(rpc) && rpc.jsonrpc === '2.0' && rpc.id === 'onecode-ingress' && object(rpc.result) &&
+                typeof rpc.result.protocolVersion === 'string' && object(rpc.result.serverInfo) && typeof rpc.result.serverInfo.name === 'string') return;
+            failures.add('mcp-error');
+          }
         } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
         throw new Error('Ingress did not verify');
       }));
@@ -138,6 +147,6 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
   } catch {
     signal.throwIfAborted();
     if (!hasAddresses) return { state: dnsError ? 'dns-error' : 'dns-pending' };
-    return { state: failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : 'tls-error' };
+    return { state: failures.has('mcp-error') ? 'mcp-error' : failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : 'tls-error' };
   } finally { pending.abort(); }
 }

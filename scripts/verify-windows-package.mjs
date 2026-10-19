@@ -30,7 +30,7 @@ export function assertWindowsPackageIsolation(resources) {
     }
   }
   const allowed = new Set(['app.asar', 'app.asar.unpacked', 'app-update.yml', 'extension', 'node', 'pets', 'rg', 'tunnel', 'skills', 'updater',
-    'LICENSE', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'THIRD-PARTY-NOTICES.txt', 'WINDOWS-SETUP.md']);
+    'LICENSE', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'THIRD-PARTY-NOTICES.txt', 'WINDOWS-SETUP.md', 'runtime-icon.png', 'runtime-icon.ico']);
   for (const name of readdirSync(resources)) if (!allowed.has(name) && !/^THIRD-PARTY-NOTICES-sharp-win32-(?:x64|arm64)\.md$/.test(name))
     throw new Error(`Unapproved resource input: ${name}`);
   if (readdirSync(resources).includes('app-update.yml')) {

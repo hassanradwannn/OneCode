@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTROL_EVENTS_PAGE_SIZE } from '../shared/control-limits.js';
 import type {
   ControlApiAgents,
   ControlApiEvent,
@@ -50,7 +51,7 @@ const TASK_CAP = 1_000;
 const SUMMARY_CAP = 300;
 const CHANGES_CAP = 20;
 const CHANGE_PATH_CAP = 200;
-const MAX_EVENTS = 100;
+const MAX_EVENTS = CONTROL_EVENTS_PAGE_SIZE;
 /** A chat holds a handful of waits at once; the cap only bounds what a bad owner could hand over. */
 const MAX_RECOVERY = 10;
 
@@ -128,7 +129,7 @@ function csv<V extends string>(allowed: readonly V[]) {
 
 /** Each table is exhaustive by type: a new value cannot appear in an owner without a decision here. */
 const EVENT_KINDS: Record<SessionEventKind, true> = {
-  session_start: true, user_message: true, assistant_message: true, native_image: true, progress: true,
+  session_start: true, user_message: true, assistant_message: true, native_image: true, native_video: true, progress: true,
   page_tool: true, turn_start: true, turn_end: true, chat_error: true, tool_call: true, note: true,
   agent_message: true, handoff: true
 };
@@ -312,8 +313,11 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
     case 'assistant_message':
       return { ...base, message: stored(event.message), messageId: event.messageId, final: event.final, state: event.state, resolvedModel: event.resolvedModel };
     case 'native_image':
-      return { ...base, previewStatus: event.previewStatus, width: event.width, height: event.height };
+    case 'native_video':
+      return { ...base, previewStatus: event.previewStatus, providerStatus: event.providerStatus, messageId: event.messageId,
+        providerAssetId: event.providerAssetId, ...(event.asset ? { asset: { id: event.asset.id, mimeType: event.asset.mimeType } } : {}), width: event.width, height: event.height };
     case 'progress':
+      return { ...base, message: stored(event.message), ...(event.presentation ? { presentation: event.presentation } : {}) };
     case 'note':
       return { ...base, message: stored(event.message) };
     case 'page_tool':

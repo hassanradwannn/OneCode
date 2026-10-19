@@ -1,11 +1,11 @@
 /**
- * Saves the original of an image Gemini generated in a chat into an approved folder (#889).
+ * Saves the original of an image ChatGPT generated in a chat into an approved folder (#889).
  *
  * The recording keeps only a bounded preview of a generated image (WebP, at most 1600 px), so the
- * original has to come from Gemini itself. The page that shows the image already holds it: its
- * `<img>` loads Gemini's own same-origin URL (or a page `blob:`), and the page script fetches
+ * original has to come from ChatGPT itself. The page that shows the image already holds it: its
+ * `<img>` loads ChatGPT's own same-origin URL (or a page `blob:`), and the page script fetches
  * exactly that, with the page's own session. No signed URL, cookie or file credential reaches this
- * app or the model, and the app never contacts Gemini for it.
+ * app or the model, and the app never contacts ChatGPT for it.
  *
  * Flow: the tool call registers one export here; `/status` hands it to the browser, which routes
  * it to the tab showing that chat; the page posts the bytes to `/image-export`; this module checks
@@ -18,6 +18,7 @@ import sharp from 'sharp';
 import { rawPromises as fs } from './rawfs.js';
 import { wakeBrowserWork } from './browser-wake.js';
 import { logInfo } from './logger.js';
+import { canExportNativeOutput, nativeOutputExportRepresentation } from '../shared/native-output.js';
 
 /** The largest original accepted; generated images are a few megabytes. */
 export const MAX_IMAGE_EXPORT_BYTES = 25 * 1024 * 1024;
@@ -32,12 +33,13 @@ const FORMATS: Record<string, string> = { png: '.png', jpeg: '.jpg', webp: '.web
 const EXTENSIONS: Record<string, string> = { '.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.webp': 'webp' };
 
 export interface ImageExportTarget {
+  validate?: () => Promise<void>;
   /** Real destination path, already resolved inside an approved root. */
   real: string;
   /** The same path as the model and the user see it. */
   virtual: string;
 }
-export interface ImageExportResult { virtual: string; format: string; width: number; height: number; bytes: number }
+export interface ImageExportResult { virtual: string; format: string; width: number; height: number; bytes: number; representation?: 'original' | 'rendered' }
 
 /** Page-side refusals, in words a person can act on. */
 const PAGE_ERRORS: Record<string, string> = {
@@ -46,10 +48,13 @@ const PAGE_ERRORS: Record<string, string> = {
   fetch_failed: 'The provider did not hand out the image file.',
   not_image: 'The provider answered with something that is not an image.',
   too_large: `the image is larger than ${MAX_IMAGE_EXPORT_BYTES / 1024 / 1024} MB.`,
+  identity_changed: 'The provider page changed before the exact image could be transferred.',
   unsupported: 'this browser companion cannot save images yet. Update the browser extension and try again.'
 };
 
 interface Pending {
+  completing: boolean;
+  timer: ReturnType<typeof setTimeout>;
   nonce: string;
   conversationId: string;
   messageId: string;
@@ -64,7 +69,7 @@ export class ImageExportError extends Error {}
 
 /** Exports waiting for the browser, without their destinations: those never leave the app. */
 export function pendingImageExports(now = Date.now()): Array<{ nonce: string; conversationId: string; messageId: string; assetId: string }> {
-  for (const entry of [...pending.values()]) if (now >= entry.expiresAt) entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in the provider and try again.'));
+  for (const entry of [...pending.values()]) if (!entry.completing && now >= entry.expiresAt) entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in the provider and try again.'));
   return [...pending.values()].map(({ nonce, conversationId, messageId, assetId }) => ({ nonce, conversationId, messageId, assetId }));
 }
 
@@ -86,12 +91,13 @@ export function exportImage(
   target: ImageExportTarget,
   timeoutMs = IMAGE_EXPORT_TIMEOUT_MS
 ): Promise<ImageExportResult> {
+  if (!canExportNativeOutput(image.conversationId, 'image')) return Promise.reject(new ImageExportError('Original image export is not available for this provider yet.'));
   return new Promise((resolve, reject) => {
     const nonce = randomUUID();
     const timer = setTimeout(() => entry.settle(new ImageExportError('the browser did not deliver the image in time. Make sure the chat is open in the provider and try again.')), timeoutMs);
     timer.unref?.();
     const entry: Pending = {
-      nonce, ...image, target, expiresAt: Date.now() + timeoutMs,
+      nonce, ...image, target, completing: false, timer, expiresAt: Date.now() + timeoutMs,
       settle: (result) => {
         if (pending.get(nonce) !== entry) return;
         pending.delete(nonce);
@@ -112,7 +118,7 @@ export function exportImage(
 export async function completeImageExport(raw: unknown): Promise<boolean> {
   const body = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const entry = typeof body.nonce === 'string' ? pending.get(body.nonce) : undefined;
-  if (!entry) return false;
+  if (!entry || entry.completing) return false;
   if (typeof body.error === 'string') {
     entry.settle(new ImageExportError(PAGE_ERRORS[body.error] ?? 'the browser could not read the image.'));
     return true;
@@ -122,14 +128,17 @@ export async function completeImageExport(raw: unknown): Promise<boolean> {
     return true;
   }
   try {
-    entry.settle(await save(Buffer.from(body.data, 'base64'), entry.target));
+    entry.completing = true; clearTimeout(entry.timer);
+    const representation = nativeOutputExportRepresentation(entry.conversationId, 'image') || 'original';
+    const result = await save(Buffer.from(body.data, 'base64'), entry.target, representation);
+    entry.settle({ ...result, representation });
   } catch (error) {
     entry.settle(error instanceof ImageExportError ? error : new ImageExportError(`the image could not be saved: ${(error as Error).message}`));
   }
   return true;
 }
 
-async function save(bytes: Buffer, target: ImageExportTarget): Promise<ImageExportResult> {
+async function save(bytes: Buffer, target: ImageExportTarget, representation: 'original' | 'rendered'): Promise<ImageExportResult> {
   if (bytes.length === 0) throw new ImageExportError('The provider handed out an empty image file.');
   if (bytes.length > MAX_IMAGE_EXPORT_BYTES) throw new ImageExportError(PAGE_ERRORS.too_large!);
   let metadata: Awaited<ReturnType<ReturnType<typeof sharp>["metadata"]>>;
@@ -139,14 +148,17 @@ async function save(bytes: Buffer, target: ImageExportTarget): Promise<ImageExpo
     await sharp(bytes, { limitInputPixels: 100_000_000 }).stats();
   } catch { throw new ImageExportError('The provider handed out a file that is not a readable image.'); }
   const format = metadata.format ?? 'unknown';
+  if (representation === 'rendered' && format !== 'png') throw new ImageExportError('The provider-rendered image must be a PNG.');
   const file = exportFileName(target.real, format);
   const virtual = exportFileName(target.virtual, format);
+  await target.validate?.();
   await fs.mkdir(path.dirname(file), { recursive: true });
   // Written beside the destination, then linked into place: a link never replaces an existing
   // file, so a name taken meanwhile fails instead of being overwritten, and no half file appears.
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.part`);
   await fs.writeFile(temporary, bytes, { flag: 'wx' });
   try {
+    await target.validate?.();
     try {
       await fs.link(temporary, file);
     } catch (error) {

@@ -4,6 +4,8 @@ OneCode connects a cloud chat to your local Windows account. Approve only the fo
 
 File tools check approved folders. Shell commands run with your normal Windows privileges and are not a filesystem sandbox. Optional desktop tools can observe or control your desktop. Enable these capabilities only when you intend to use them.
 
+Linux packages rely on unprivileged user namespaces for Chromium sandboxing. The AppImage's conditional `--no-sandbox` fallback reduces process isolation on hosts that prohibit those namespaces; it does not provide an equivalent sandbox. Prefer a host configuration that supports Chromium's sandbox.
+
 MCP services bind to loopback. Tailscale Funnel or your chosen tunnel supplies public HTTPS reachability; it does not authenticate the cloud caller. Secret connector paths and revocable per-conversation capabilities protect local tool dispatch. Keep connector URLs private. OneCode does not implement an OAuth authorization server.
 
 The browser companion is paired separately. Its required debugger permission supports scoped background rendering of its owned Gemini tabs. Automatic tool approvals apply only to enabled tools on the exact OneCode connector involved. The companion does not grant extra local permissions or bypass provider usage limits.

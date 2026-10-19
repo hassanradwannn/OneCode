@@ -23,6 +23,8 @@
 import { createBrowserControl } from './browser-control.js';
 import { createActiveTabs } from './active-tabs.js';
 import { createGeminiRouting } from './gemini-routing.js';
+import { readGeminiCanvasSnapshot } from './gemini-native.js';
+import { streamNativeVideoDownload } from './native-video-transfer.js';
 // Side-effect import: CLF_I18N serves catalogs to content scripts, which cannot read them.
 import './i18n.js';
 
@@ -157,7 +159,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 18;
+const BRIDGE_PROTOCOL = 19;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -3182,8 +3184,11 @@ async function followApp(data) {
  */
 /** Exports this worker has already handed to a page, so the next /status does not hand them out twice. */
 const imageExportsInFlight = new Set();
+const videoExportsInFlight = new Set();
+const videoExportClaims = new Map();
 /** How long a page may take to fetch and encode one original image. */
 const IMAGE_EXPORT_PAGE_MS = 45_000;
+const VIDEO_EXPORT_PAGE_MS = 170_000;
 
 /**
  * A generated image's original for the app's image export (#889): the tab showing the chat fetches
@@ -3194,8 +3199,8 @@ async function runImageExports(jobs) {
   for (const job of jobs.slice(0, 4)) {
     const nonce = typeof job?.nonce === 'string' && /^[0-9a-f-]{36}$/i.test(job.nonce) ? job.nonce : null;
     const conversationId = cleanConversationId(job?.conversationId);
-    const messageId = typeof job?.messageId === 'string' ? job.messageId.slice(0, 200) : '';
-    const assetId = typeof job?.assetId === 'string' ? job.assetId.slice(0, 200) : '';
+    const messageId = typeof job?.messageId === 'string' && /^[A-Za-z0-9_:.-]{1,190}$/.test(job.messageId) ? job.messageId : '';
+    const assetId = typeof job?.assetId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(job.assetId) ? job.assetId : '';
     if (!nonce || !conversationId || !messageId || !assetId || imageExportsInFlight.has(nonce)) continue;
     imageExportsInFlight.add(nonce);
     void (async () => {
@@ -3212,6 +3217,36 @@ async function runImageExports(jobs) {
         : { nonce, error: typeof answer?.error === 'string' ? answer.error.slice(0, 40) : 'not_rendered' };
       await call('/image-export', { method: 'POST', body: JSON.stringify(body) });
     })().catch(() => undefined).finally(() => setTimeout(() => imageExportsInFlight.delete(nonce), 120_000));
+  }
+}
+
+/** Original generated videos are streamed by the exact chat document in bounded chunks. */
+async function runVideoExports(jobs) {
+  if (!Array.isArray(jobs)) return;
+  for (const job of jobs.slice(0, 2)) {
+    const nonce = typeof job?.nonce === 'string' && /^[0-9a-f-]{36}$/i.test(job.nonce) ? job.nonce : null;
+    const conversationId = cleanConversationId(job?.conversationId);
+    const messageId = typeof job?.messageId === 'string' && /^[A-Za-z0-9_:.-]{1,190}$/.test(job.messageId) ? job.messageId : '';
+    const assetId = typeof job?.assetId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(job.assetId) ? job.assetId : '';
+    const mimeType = job?.mimeType === 'video/mp4' || job?.mimeType === 'video/webm' ? job.mimeType : null;
+    const maxBytes = Number.isSafeInteger(job?.maxBytes) && job.maxBytes > 0 && job.maxBytes <= 256 * 1024 * 1024 ? job.maxBytes : 0;
+    const chunkBytes = Number.isSafeInteger(job?.chunkBytes) && job.chunkBytes >= 64 * 1024 && job.chunkBytes <= 1024 * 1024 ? job.chunkBytes : 0;
+    if (!nonce || !conversationId || !messageId || !assetId || !mimeType || !maxBytes || !chunkBytes || videoExportsInFlight.has(nonce)) continue;
+    videoExportsInFlight.add(nonce);
+    void (async () => {
+      let answer = null;
+      try {
+        const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+        const [tab] = tabs.filter(candidate => conversationForTab(candidate) === conversationId).sort((a, b) => a.id - b.id);
+        const source=tab?{tab:tab.id,documentId:tabDocuments[String(tab.id)],navigationEpoch:tabEpochs[String(tab.id)]}:null;
+        if(source&&ownsDocument(source)){
+          const claim={...source,nonce,conversationId,messageId,assetId,mimeType,maxBytes,chunkBytes,provider:providerForUrl(tab.url)};
+          videoExportClaims.set(nonce,claim);
+          answer=await tabReply(tab.id,{type:'clf-video-export',nonce,conversationId,messageId,assetId,mimeType,maxBytes,chunkBytes},{documentId:source.documentId},VIDEO_EXPORT_PAGE_MS);
+        }else answer={error:'not_open'};
+      } catch { answer = null; }
+      if (!answer?.ok) await call('/video-export/chunk', { method: 'POST', body: JSON.stringify({ nonce, error: typeof answer?.error === 'string' ? answer.error.slice(0, 40) : 'not_rendered' }) });
+    })().catch(() => undefined).finally(() => {videoExportClaims.delete(nonce);setTimeout(() => videoExportsInFlight.delete(nonce), 240_000)});
   }
 }
 
@@ -3400,7 +3435,9 @@ async function maintainOnce() {
   const chatgptAccess = typeof chrome.permissions?.contains === 'function'
     ? await chrome.permissions.contains({ origins: [selectedOrigin] }).catch(() => undefined) : undefined;
   if (intent !== connectionEpoch || !token || disconnected) return;
-  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: selectedProvider === 'chatgpt',
+  // Transport support is independent of the preference for NEW chats. The app's native-output
+  // registry gates each provider exporter; switching that preference cannot disable old media.
+  const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: true, canExportVideos: true,
     provider: selectedProvider, chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
@@ -3420,6 +3457,7 @@ async function maintainOnce() {
   void revealChats(reply.data.reveals).catch(() => undefined);
   void followChat(reply.data.follow).catch(() => undefined);
   void runImageExports(reply.data.imageExports).catch(() => undefined);
+  void runVideoExports(reply.data.videoExports).catch(() => undefined);
   const renderingWanted = tab => {
     if (intent !== connectionEpoch || !token || disconnected) return false;
     if (liveChats.has(conversationForTab(tab))) return true;
@@ -4139,6 +4177,50 @@ async function geminiApprovalReceipts(message, _sender, source) {
 }
 
 const HANDLERS = {
+  async native_video_export(message, sender, source) {
+    const claim=videoExportClaims.get(message.nonce);
+    if(!claim||claim.provider!=='gemini'||claim.tab!==source?.tab||claim.documentId!==source?.documentId||claim.conversationId!==message.conversationId||claim.messageId!==message.messageId||claim.assetId!==message.assetId||claim.mimeType!==message.mimeType)return{error:'identity_changed'};
+    if(claim.transferStarted)return{error:'identity_changed'};
+    claim.transferStarted=true;
+    const current=async()=>{
+      if(videoExportClaims.get(claim.nonce)!==claim||!ownsDocument(source)||!await currentConversationDocument(source,claim.conversationId))return false;
+      const reply=await tabReply(source.tab,{type:'clf-video-export-verify',nonce:claim.nonce,conversationId:claim.conversationId},{documentId:source.documentId});
+      return reply?.ok===true&&videoExportClaims.get(claim.nonce)===claim&&ownsDocument(source);
+    };
+    return streamNativeVideoDownload(claim,message.sourceUrl,{current,fetch:(...args)=>fetch(...args),send:async body=>{
+      const reply=await call('/video-export/chunk',{method:'POST',body:JSON.stringify(body)});return{ok:!!(reply.ok&&reply.data?.ok)};
+    }});
+  },
+  async native_canvas_snapshot(message, sender, source) {
+    const id = cleanConversationId(message.conversationId), responseId = message.responseId;
+    if (!id || !/^[0-9a-f]{16}$/i.test(id) || !/^[0-9a-f]{16}$/i.test(responseId || '') || !ownsDocument(source) || !await currentConversationDocument(source,id)) return {ok:false};
+    try {
+      const result=await chrome.scripting.executeScript({target:{tabId:source.tab,documentIds:[source.documentId]},world:'MAIN',func:readGeminiCanvasSnapshot,args:[{conversationId:id,responseId}]});
+      if (!ownsDocument(source) || !await currentConversationDocument(source,id) || result.length!==1) return {ok:false};
+      return {ok:true,snapshot:result[0].result};
+    } catch { return {ok:false}; }
+  },
+  async video_export_chunk(message, sender, source) {
+    if (!ownsDocument(source)) return { ok: false, error: 'document_mismatch' };
+    const conversationId = cleanConversationId(message.conversationId);
+    if (!conversationId || !await currentConversationDocument(source, conversationId)) return { ok: false, error: 'conversation_changed' };
+    const nonce = typeof message.nonce === 'string' && /^[0-9a-f-]{36}$/i.test(message.nonce) ? message.nonce : null;
+    if (!nonce) return { ok: false, error: 'invalid_nonce' };
+    const claim=videoExportClaims.get(nonce);
+    if(!claim||claim.tab!==source.tab||claim.documentId!==source.documentId||claim.conversationId!==conversationId)return{ok:false,error:'document_mismatch'};
+    const body = { nonce };
+    if (typeof message.error === 'string') body.error = message.error.slice(0, 40);
+    else if (message.done === true) {
+      if (!Number.isSafeInteger(message.totalBytes) || message.totalBytes <= 0) return { ok: false, error: 'invalid_total' };
+      body.done = true; body.totalBytes = message.totalBytes;
+    } else {
+      if (!Number.isSafeInteger(message.offset) || message.offset < 0 || typeof message.data !== 'string' || message.data.length > 1_500_000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(message.data))
+        return { ok: false, error: 'invalid_chunk' };
+      body.offset = message.offset; body.data = message.data;
+    }
+    const reply = await call('/video-export/chunk', { method: 'POST', body: JSON.stringify(body) });
+    return reply.ok && reply.data?.ok ? { ok: true } : { ok: false, error: 'app_rejected' };
+  },
   gemini_approval_receipts: geminiApprovalReceipts,
   /** Only Chrome's current Gemini document may request its scoped MCP credential. */
   async gemini_binding(message, sender, source) {
@@ -5156,6 +5238,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'load_failure',
     'conversation_deleted',
     'usage_observation',
+    'video_export_chunk', 'native_canvas_snapshot', 'native_video_export',
     'events',
     'bind',
     'activity',
@@ -5187,7 +5270,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return handler(message, sender, source);
   };
   const id = tabId(sender);
-  const operation = owned.has(message.type) || message.type === 'register_document' ? serializeTab(id, run) : run();
+  // A bounded media stream revalidates its document/claim at every chunk. Holding the ordinary
+  // per-tab mutation queue for its lifetime would delay Stop, steering ACKs and observations.
+  const operation = (owned.has(message.type) || message.type === 'register_document') && message.type !== 'native_video_export' ? serializeTab(id, run) : run();
   operation.then(sendResponse, (err) =>
     sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
   );
@@ -5388,7 +5473,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 50;
+const PAGE_RECORDER_VERSION = 57;
 
 let deferredRecoveryWork = null;
 

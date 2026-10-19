@@ -3,25 +3,46 @@ import { t, ui } from './i18n.js';
 import { attachWorkPanelResize } from './work-panel-resize.js';
 import { moveWorkDock } from './panel-motion.js';
 import { enableTabReorder, reorderKey } from './tab-reorder.js';
+import type { WorkbenchLayoutState, WorkbenchSurfaceRef } from '../shared/workbench.js';
 
 export type DockView = 'review' | 'files' | 'agents' | 'terminal';
 type AdoptableView = Exclude<DockView, 'terminal'>;
-type DockTab = AdoptableView | `terminal:${string}`;
-type View = { label: string; glyph: string; available: () => boolean;
-  show: (mount: HTMLElement) => void; hide: () => void };
+type DockTab = string;
+type View = { ref: WorkbenchSurfaceRef; label: string; glyph: string; available: () => boolean;
+  show: (mount: HTMLElement) => void; hide: () => void; unavailableTitle?: () => string };
 type TerminalView = { show: (mount: HTMLElement, createIfEmpty: boolean) => void;
   hide: () => void; canCreate: () => boolean; newTab: () => string | null;
   tabs: () => { id: string; title: string; exited: boolean }[];
   selectTab: (id: string) => void; closeTab: (id: string) => void };
 type BottomTerminalView = Pick<TerminalView, 'show' | 'hide'>;
 
+const LAYOUT_KEY = 'chat-on-steroids.workbench-layout';
+const BUILTIN_SHORTCUTS: Record<DockView, number> = { review: 1, terminal: 2, files: 3, agents: 4 };
+
+function readLayoutState(view: Window | null): WorkbenchLayoutState | null {
+  try {
+    const value = JSON.parse(view?.localStorage.getItem(LAYOUT_KEY) ?? 'null') as Partial<WorkbenchLayoutState> | null;
+    if (!value || !Array.isArray(value.opened) || !value.opened.every(id => typeof id === 'string')) return null;
+    return {
+      opened: [...new Set(value.opened)].slice(0, 64),
+      active: typeof value.active === 'string' ? value.active : null,
+      rightOpen: value.rightOpen === true,
+      expanded: value.expanded === true
+    };
+  } catch { return null; }
+}
+
 /** The right dock owns tool selection; the bottom dock owns its own terminal view. */
 export function createWorkspaceDocks(host: HTMLElement) {
   const app = document.querySelector<HTMLElement>('.app')!;
-  const views = new Map<AdoptableView, View>();
+  const view = host.ownerDocument.defaultView;
+  const views = new Map<string, View>();
+  const launchers = new Map<string, { menu: HTMLButtonElement; quick: HTMLButtonElement }>();
   let rightTerminal: TerminalView | null = null, bottomTerminal: BottomTerminalView | null = null;
   let rightOpen = false, bottomOpen = false, expanded = false;
   let opened: DockTab[] = [], active: DockTab | null = null, tabSignature = '';
+  const restoredLayout = readLayoutState(view);
+  let restoreApplied = false, layoutChangedSinceRestore = false;
   const terminalId = (key: DockTab): string | null => key.startsWith('terminal:') ? key.slice('terminal:'.length) : null;
   const terminalKey = (id: string): DockTab => `terminal:${id}`;
   const iconButton = (glyph: string, label: string): HTMLButtonElement => {
@@ -108,29 +129,40 @@ export function createWorkspaceDocks(host: HTMLElement) {
   window.addEventListener('resize', () => setHeight(bottom.offsetHeight || saved));
   const bottomBody = el('div', 'work-dock-body'); bottom.append(resize, bottomBody); app.append(bottom);
 
+  const surfaceRef = (key: DockTab): WorkbenchSurfaceRef | null => {
+    const id = terminalId(key);
+    if (id) {
+      const terminal = rightTerminal?.tabs().find(tab => tab.id === id);
+      return terminal ? { id: key, kind: 'terminal', title: terminal.title, icon: 'i-terminal', closable: true } : null;
+    }
+    return views.get(key)?.ref ?? null;
+  };
   const available = (key: DockTab): boolean => {
     const id = terminalId(key);
-    return id ? rightTerminal?.tabs().some(tab => tab.id === id) ?? false : views.get(key as AdoptableView)?.available() ?? false;
+    return id ? rightTerminal?.tabs().some(tab => tab.id === id) ?? false : views.get(key)?.available() ?? false;
   };
   const hideView = (key: DockTab): void => {
-    if (terminalId(key)) rightTerminal?.hide(); else views.get(key as AdoptableView)?.hide();
+    if (terminalId(key)) rightTerminal?.hide(); else views.get(key)?.hide();
   };
   const showView = (key: DockTab): void => {
     const id = terminalId(key);
     if (id) { rightTerminal?.selectTab(id); rightTerminal?.show(body, false); }
-    else views.get(key as AdoptableView)?.show(body);
+    else views.get(key)?.show(body);
+  };
+  const persistLayout = (): void => {
+    const value: WorkbenchLayoutState = { opened, active, rightOpen, expanded };
+    try { view?.localStorage.setItem(LAYOUT_KEY, JSON.stringify(value)); } catch { /* Layout persistence is optional. */ }
   };
   const refreshControls = (): void => {
-    for (const kind of ['review', 'terminal', 'files', 'agents'] as DockView[]) {
-      const enabled = kind === 'terminal' ? rightTerminal?.canCreate() ?? false : views.get(kind)?.available() ?? false;
+    for (const button of [...menu.querySelectorAll<HTMLButtonElement>('[data-surface-id]'), ...launch.querySelectorAll<HTMLButtonElement>('[data-surface-id]')]) {
+      const key = button.dataset.surfaceId!;
+      const view = views.get(key);
+      const enabled = key === 'terminal' ? rightTerminal?.canCreate() ?? false : view?.available() ?? false;
       // A greyed-out entry says why, instead of leaving the user to guess.
-      for (const button of [menu, launch].map(root => root.querySelector<HTMLButtonElement>(`[data-view="${kind}"]`))) {
-        if (!button) continue;
-        button.toggleAttribute('disabled', !enabled);
-        // Bound, so the reason follows a language change; an enabled entry has no title.
-        ui(button, 'title', () => enabled ? '' : kind === 'agents' ? t('Open a chat to see its sub-agents') : t('Open a project to use Files and Review'));
-        if (enabled) button.removeAttribute('title');
-      }
+      button.toggleAttribute('disabled', !enabled);
+      // Bound, so the reason follows a language change; an enabled entry has no title.
+      ui(button, 'title', () => enabled ? '' : view?.unavailableTitle?.() ?? '');
+      if (enabled) button.removeAttribute('title');
     }
   };
   const paint = (): void => {
@@ -162,7 +194,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
       tabSignature = signature; tabs.replaceChildren();
       for (const key of opened) {
         const id = terminalId(key), terminal = id ? terminalTabs.find(entry => entry.id === id) : null;
-        const view = id ? null : views.get(key as AdoptableView);
+        const view = id ? null : views.get(key);
         if (!terminal && !view) continue;
         const tab = el('div', `work-dock-tab${active === key ? ' is-selected' : ''}`);
         tab.dataset.key = key;
@@ -176,6 +208,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
         pick.setAttribute('aria-selected', String(active === key)); pick.tabIndex = active === key ? 0 : -1;
         pick.addEventListener('click', () => activateKey(key));
         const remove = iconButton('i-x', id ? 'Close terminal' : 'Close tab');
+        remove.hidden = surfaceRef(key)?.closable === false;
         remove.addEventListener('click', () => {
           if (id) { rightTerminal?.closeTab(id); if (active === key) rightTerminal?.hide(); }
           else view?.hide();
@@ -185,7 +218,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
             const previous = [...opened].reverse().find(available);
             if (previous) activateKey(previous);
           }
-          paint();
+          paint(); persistLayout();
           (tabs.querySelector<HTMLButtonElement>('[aria-selected="true"]')
             ?? (bar.hidden ? launch.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? rightToggle : plus)).focus();
         });
@@ -212,6 +245,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
     }, () => { if (leaving && !rightOpen && active === leaving) hideView(leaving); });
     paint();
     if (value && active) showView(active);
+    persistLayout();
   };
   const setBottomOpen = (value: boolean, createIfEmpty = true): void => {
     if (bottomOpen === value) return;
@@ -224,12 +258,14 @@ export function createWorkspaceDocks(host: HTMLElement) {
   };
   const activateKey = (key: DockTab): void => {
     if (!available(key)) return;
+    if (restoreApplied) layoutChangedSinceRestore = true;
     if (active && active !== key) hideView(active);
     if (!opened.includes(key)) opened.push(key);
     active = key;
     if (!rightOpen) layout(() => { rightOpen = true; host.classList.add('has-work-dock'); });
     paint();
     showView(key);
+    persistLayout();
   };
   const newRightTerminal = (): void => {
     if (!rightTerminal?.canCreate()) return;
@@ -242,34 +278,93 @@ export function createWorkspaceDocks(host: HTMLElement) {
       if (previous) activateKey(previous); else newRightTerminal();
     } else activateKey(kind);
   };
-  const adopt = (kind: AdoptableView): void => {
-    if (active && active !== kind) hideView(active);
-    if (!opened.includes(kind)) opened.push(kind);
-    active = kind;
+  const adoptSurface = (id: string): void => {
+    if (active && active !== id) hideView(active);
+    if (!opened.includes(id)) opened.push(id);
+    active = id;
     if (!rightOpen) layout(() => { rightOpen = true; host.classList.add('has-work-dock'); });
-    paint();
+    paint(); persistLayout();
   };
-  const addAction = (kind: DockView, label: string, glyph: string): void => {
+  const adopt = (kind: AdoptableView): void => adoptSurface(kind);
+  const removeAction = (id: string): void => {
+    const current = launchers.get(id);
+    if (!current) return;
+    current.menu.remove(); current.quick.remove(); launchers.delete(id);
+  };
+  const addAction = (id: string, label: string, glyph: string, shortcut?: number): void => {
+    removeAction(id);
     const item = el('button', 'btn work-dock-menu-item', () => t(label)) as HTMLButtonElement;
-    item.type = 'button'; item.dataset.view = kind; item.prepend(icon(glyph));
+    item.type = 'button'; item.dataset.surfaceId = id; item.dataset.view = id; item.prepend(icon(glyph));
     item.addEventListener('click', () => {
       add.open = false;
-      if (kind === 'terminal') newRightTerminal(); else activate(kind);
+      if (id === 'terminal') newRightTerminal(); else activateKey(id);
     }); menu.append(item);
     const quick = el('button', 'btn work-dock-quick') as HTMLButtonElement;
-    quick.type = 'button'; quick.dataset.view = kind;
+    quick.type = 'button'; quick.dataset.surfaceId = id; quick.dataset.view = id;
     quick.append(icon(glyph), el('span', '', () => t(label)));
-    quick.append(el('kbd', '', `Ctrl+Shift+${['review', 'terminal', 'files', 'agents'].indexOf(kind) + 1}`));
-    quick.addEventListener('click', () => activate(kind)); launch.append(quick);
+    if (shortcut) quick.append(el('kbd', '', `Ctrl+Shift+${shortcut}`));
+    quick.addEventListener('click', () => id === 'terminal' ? activate('terminal') : activateKey(id)); launch.append(quick);
+    launchers.set(id, { menu: item, quick });
     refreshControls();
+  };
+  const registerSurface = (ref: WorkbenchSurfaceRef, show: (mount: HTMLElement) => void, hide: () => void,
+    available: () => boolean, unavailableTitle?: () => string,
+    options: { launcher?: boolean; shortcut?: number } = {}): void => {
+    if (!ref.id || ref.id.startsWith('terminal:')) throw new Error('Workbench surface id is reserved or empty');
+    const existing = views.get(ref.id);
+    views.set(ref.id, { ref, label: ref.title, glyph: ref.icon, show, hide, available, unavailableTitle });
+    if (options.launcher) addAction(ref.id, ref.title, ref.icon, options.shortcut);
+    else if (existing) removeAction(ref.id);
+    if (!existing && restoreApplied && !layoutChangedSinceRestore && restoredLayout?.opened.includes(ref.id) && available()) {
+      const desired = restoredLayout.opened.indexOf(ref.id);
+      const before = opened.findIndex(id => restoredLayout.opened.indexOf(id) > desired);
+      if (!opened.includes(ref.id)) opened.splice(before < 0 ? opened.length : before, 0, ref.id);
+      if (restoredLayout.active === ref.id) {
+        active = ref.id;
+        if (restoredLayout.rightOpen) {
+          rightOpen = true; right.hidden = false; host.classList.add('has-work-dock');
+          expanded = restoredLayout.expanded; host.classList.toggle('is-work-dock-expanded', expanded);
+        }
+      }
+    }
+    paint();
+    if (!existing && active === ref.id && rightOpen) showView(ref.id);
+  };
+  const unregisterSurface = (id: string): boolean => {
+    const current = views.get(id);
+    if (!current) return false;
+    const wasActive = active === id;
+    if (wasActive) current.hide();
+    views.delete(id); removeAction(id); opened = opened.filter(entry => entry !== id);
+    if (wasActive) active = [...opened].reverse().find(available) ?? null;
+    paint();
+    if (wasActive && rightOpen && active) showView(active);
+    persistLayout();
+    return true;
   };
   const register = (kind: AdoptableView, label: string, glyph: string,
     show: (mount: HTMLElement) => void, hide: () => void, available: () => boolean): void => {
-    views.set(kind, { label, glyph, show, hide, available }); addAction(kind, label, glyph); paint();
+    registerSurface({ id: kind, kind, title: label, icon: glyph, closable: true }, show, hide, available,
+      () => kind === 'agents' ? t('Open a chat to see its sub-agents') : t('Open a project to use Files and Review'),
+      { launcher: true, shortcut: BUILTIN_SHORTCUTS[kind] });
   };
   const registerTerminal = (right: TerminalView, bottom: BottomTerminalView): void => {
     rightTerminal = right; bottomTerminal = bottom;
-    addAction('terminal', 'Terminal', 'i-terminal'); paint();
+    addAction('terminal', 'Terminal', 'i-terminal', BUILTIN_SHORTCUTS.terminal); paint();
+  };
+  const restore = (): void => {
+    restoreApplied = true;
+    if (!restoredLayout) return;
+    opened = restoredLayout.opened.filter(available);
+    active = restoredLayout.active && opened.includes(restoredLayout.active) && available(restoredLayout.active)
+      ? restoredLayout.active : [...opened].reverse().find(available) ?? null;
+    rightOpen = restoredLayout.rightOpen && active !== null;
+    expanded = restoredLayout.expanded && rightOpen;
+    right.hidden = !rightOpen;
+    host.classList.toggle('has-work-dock', rightOpen);
+    host.classList.toggle('is-work-dock-expanded', expanded);
+    paint();
+    if (rightOpen && active) showView(active);
   };
 
   rightToggle.addEventListener('click', () => setRightOpen(!rightOpen));
@@ -277,7 +372,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
   expandToggle.addEventListener('click', () => {
     if (!rightOpen) return;
     layout(() => { expanded = !expanded; host.classList.toggle('is-work-dock-expanded', expanded); });
-    paint();
+    paint(); persistLayout();
   });
   add.addEventListener('keydown', event => {
     if (event.key === 'Escape') { add.open = false; plus.focus(); return; }
@@ -290,8 +385,9 @@ export function createWorkspaceDocks(host: HTMLElement) {
   });
   document.addEventListener('click', event => { if (add.open && !add.contains(event.target as Node)) add.open = false; });
   const moveTab = (key: DockTab, index: number): void => {
+    if (restoreApplied) layoutChangedSinceRestore = true;
     const from = opened.indexOf(key); if (from < 0) return;
-    opened.splice(from, 1); opened.splice(Math.max(0, Math.min(opened.length, index)), 0, key); paint();
+    opened.splice(from, 1); opened.splice(Math.max(0, Math.min(opened.length, index)), 0, key); paint(); persistLayout();
   };
   enableTabReorder(tabs, { item: '.work-dock-tab', key: node => node.dataset.key, move: (key, index) => moveTab(key as DockTab, index) });
   tabs.addEventListener('keydown', event => {
@@ -319,6 +415,7 @@ export function createWorkspaceDocks(host: HTMLElement) {
     event.preventDefault(); activate((['review', 'terminal', 'files', 'agents'] as DockView[])[Number(digit) - 1]!);
   });
   paint();
-  return { body, bottomBody, rightToggle, bottomToggle, register, registerTerminal, activate, adopt,
+  return { body, bottomBody, rightToggle, bottomToggle, register, registerSurface, unregisterSurface, registerTerminal, activate,
+    activateSurface: activateKey, adopt, adoptSurface, restore, surfaceRef,
     setOpen: setRightOpen, setBottomOpen, toggleBottomTerminal: () => setBottomOpen(!bottomOpen), sync: paint };
 }

@@ -7,6 +7,7 @@
  */
 import { workerOwnTask } from './worker-brief.js';
 import type { ContinuationSourceReceipt } from './continuation-receipt.js';
+import type { ArtifactPresentation } from './artifact.js';
 
 /** Where an event came from. The extension is untrusted UI observation; mcp is ours. */
 export type EventSource = 'extension' | 'mcp' | 'app';
@@ -442,11 +443,13 @@ export type SessionEvent =
       contentSeq?: number;
     })
   | (BaseEvent & {
-      /** ChatGPT-native generated media, independent of assistant prose and local MCP calls. */
+      /** Provider-native generated media, independent of assistant prose and local MCP calls. */
       kind: 'native_image';
-      /** Exact provider message UUID that owns this output. */
+      /** Native conversation witnessed by the recorder; survives Compact & Resume. */
+      conversationId?: string;
+      /** Exact message identity validated by the owning provider's native-output adapter. */
       messageId: string;
-      /** Stable non-secret id from the typed sediment image pointer. */
+      /** Native asset id or provider-declared attachment index, scoped by its exact response. */
       providerAssetId: string;
       providerRole: 'tool' | 'assistant';
       providerChannel?: 'final';
@@ -459,7 +462,33 @@ export type SessionEvent =
       previewWidth?: number;
       previewHeight?: number;
       previewStatus: 'pending' | 'available' | 'unavailable';
-      previewError?: 'not_loaded' | 'ambiguous' | 'tainted' | 'oversized' | 'invalid' | 'quota' | 'removed';
+      previewError?: 'not_mounted' | 'not_loaded' | 'ambiguous' | 'tainted' | 'oversized' | 'invalid' | 'quota' | 'removed';
+      asset?: AssetRef;
+      /** First sequence assigned to this exact provider-message/asset tuple. */
+      origin?: number;
+    })
+  | (BaseEvent & {
+      /** Provider-native generated video. The original is never retained in session history. */
+      kind: 'native_video';
+      conversationId?: string;
+      /** Exact message identity validated by the owning provider's native-output adapter. */
+      messageId: string;
+      /** Native asset id or exact response-scoped singleton declared by its adapter. */
+      providerAssetId: string;
+      providerRole: 'tool' | 'assistant';
+      providerChannel?: 'final';
+      providerStatus?: 'in_progress' | 'finished_successfully';
+      /** Provider-declared original container. Only these two are admitted initially. */
+      mimeType: 'video/mp4' | 'video/webm';
+      width?: number;
+      height?: number;
+      /** Provider-declared duration, for truthful player layout only. */
+      durationMs?: number;
+      /** Bounded poster retained locally; never the original video bytes. */
+      previewWidth?: number;
+      previewHeight?: number;
+      previewStatus: 'pending' | 'available' | 'unavailable';
+      previewError?: 'not_mounted' | 'not_loaded' | 'ambiguous' | 'tainted' | 'oversized' | 'invalid' | 'quota' | 'removed';
       asset?: AssetRef;
       /** First sequence assigned to this exact provider-message/asset tuple. */
       origin?: number;
@@ -480,7 +509,7 @@ export type SessionEvent =
    * event written before this model existed, or by a page whose commentary had no readable
    * identity, is still a plain standalone caption.
    */
-  | (BaseEvent & { kind: 'progress'; message: StoredText; progressId?: string; origin?: number; finishControl?: { state: 'released' | 'notified' | 'decision'; conversationId: string; revision?: string; inputRevision?: string; workSeq?: number } })
+  | (BaseEvent & { kind: 'progress'; message: StoredText; progressId?: string; origin?: number; presentation?: ArtifactPresentation; finishControl?: { state: 'released' | 'notified' | 'decision'; conversationId: string; revision?: string; inputRevision?: string; workSeq?: number } })
   /**
    * Visible ChatGPT-native tool activity that never passed through this MCP server.
    *
@@ -1255,7 +1284,7 @@ export function foldProgress(events: readonly SessionEvent[]): SessionEvent[] {
     }
     const held = out[at];
     if (held && held.kind === 'progress' && event.kind === 'progress') {
-      out[at] = { ...held, message: event.message };
+      out[at] = { ...held, message: event.message, ...(event.presentation ? { presentation: event.presentation } : {}) };
     } else if (held && held.kind === 'page_tool' && event.kind === 'page_tool') {
       out[at] = { ...held, label: event.label };
     } else if (held && held.kind === 'tool_call' && event.kind === 'tool_call') {

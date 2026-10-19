@@ -40,7 +40,9 @@ The browser bridge and MCP listener have separate authentication. Companion pair
 | --- | --- | --- |
 | Product and profiles | `src/main/app-identity.ts`, `index.ts` | OneCode identity, startup, profile migration and shutdown |
 | Provider contract | `src/shared/chat-provider.ts`, `src/main/chat-models.ts` | Provider keys, identities, URLs, observed model availability and capabilities |
+| Native output admission | `src/shared/native-output.ts`, `src/main/bridge.ts` | Registered provider message/asset/revision contracts, exact conversation envelope and explicit original-export capability |
 | Desktop UI | `src/renderer`, `src/preload`, `src/main/ipc.ts` | User actions, settings, workspace/timeline projections; no independent execution authority |
+| Remote UI | `src/remote`, `src/main/remote`, `src/main/tunnel/tailscale-serve.ts` | Bundled React UI on private Serve, explicit app actions and safe projections; uses the same outbox and exact native-turn owners as desktop |
 | Input and browser commands | `session/input.ts`, `bridge.ts`, `extension/background.js`, `content.js` | Durable intent, exact claim/lease, Send authorization and native receipt; no replay after an ambiguous Send |
 | ChatGPT adapter | `extension/chatgpt-dom.js`, `fiber.js` | Native composer, conversation, message and tool-call observations |
 | Gemini adapter | `extension/gemini-dom.js`, `gemini-markdown.js`, `gemini-routing.js` | Native UI, Markdown, account/document routing and provider-specific binding warm-up |
@@ -55,6 +57,10 @@ The browser bridge and MCP listener have separate authentication. Companion pair
 | Updates | `update.ts`, `update-all.ts`, `resources/updater/windows-update-helper.cjs` | Verified artifacts, install intent, safe shutdown, profile preservation and visible relaunch |
 
 ## Identity and concurrency
+
+Core artifact presentations are durable app progress events owned by the exact session/provider. `artifact begin` records generating state; `create` or the approved-local-file `image` action publishes the completed inline result. `open` is an explicit workbench presentation, separate from creation. The session store owns image bytes, reference retirement and cleanup. Presentation images use the same recorded-membership check as other renderer images. This provider-independent path does not imply that Gemini-native Canvas or generated-media observation/export adapters exist.
+
+Interactive artifact documents use short-lived, bounded capabilities: the desktop's `onecode-artifact` protocol or the private remote listener's preview route. Each document has a sandboxed opaque origin, inline artifact scripts/styles and no network, parent bridge, Node, form or child-frame access. The main desktop/remote renderers retain their own strict script policy. Preview handles release documents on replacement/navigation. Background model presentation requests never change the selected desktop chat.
 
 A local session is the durable work identity. A provider conversation is its current native frontend, and a turn belongs to an exact authored question/generation. A worker is a member of one verified parent family. A device connector suffix is presentation and selection, never proof of a tool caller.
 
@@ -75,6 +81,10 @@ Model Refresh prefers the selected native page on both providers. Gemini account
 Refreshing native approval policy must preserve an existing task capability, including a dormant command grant. A policy read cannot replace the key already carried in the authored task, remove its Send-ACK requirement, or revive a cancelled command. The worker command binding tests exercise policy reads on both sides of ACK and after cancellation.
 
 New outbox entries capture their provider when enqueued, before asynchronous preparation. Binding an opening to a foreign provider is rejected before changing its session or outbox identity. The provider picker is not routing authority for work already queued.
+
+Desktop and remote hide the new-chat provider switch as soon as the first input is submitted. Provider-scoped model observations replace the visible catalog on switching; a prior provider's edited model or default cannot become a new provider's Send choice. Existing chats derive provider from their stored conversation or opening outbox.
+
+Remote mode configures its dedicated private Serve route from Settings. Its remote-only key lives in OS-encrypted secret storage; the copied URL carries it in a fragment, which the bundled UI exchanges for an independent revocable browser session and immediately removes. The HTTP service validates its exact private origin and route custody, exposes only explicit actions and projections, and never forwards arbitrary IPC, provider credentials or connector URLs. Durable operation receipts prevent replay after an uncertain reply. Serve and provider MCP Funnel serialize routing mutations while retaining separate port custody.
 
 An accepted Gemini input immediately re-observes and flushes its exact native question after ACK. Escaped provider readback may be recognized by the Send verifier before the ordinary recorder can match composer text; the ACK supplies the frozen native message identity to that existing observer. A hidden page timer is not a prerequisite for publishing the input's turn. Changed text, message, route or lifetime cannot spend that receipt.
 
@@ -128,7 +138,13 @@ The controlled Gemini warm-up can transfer its existing edit transition once whe
 
 Context counts are local recorder estimates. The configured reference controls presentation and the automatic-compaction trigger; exceeding it cannot revoke a caller, stop a turn, or block authored input. A history-load HTTP 429 is separate transport evidence. Its retry deadline can include OneCode's own conservative backoff, so the interface must not attribute that deadline to the model or describe it as the provider's context capacity.
 
-Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Future work includes receiving native generated images and other model outputs in OneCode, including Gemini image generation. This requires real media export, ingestion and validation; it is not implemented by changing tool descriptions.
+Native provider capabilities remain explicit: model selection, native projects, approval layouts, file uploads and generated-media export differ. Gemini generated images are admitted only through their exact response and native declared attachment index. The adapter captures already-loaded pixels and exports a rendered PNG; it does not claim the provider's separate full-size original download. Generated video uses the exact response-scoped native singleton, MIME, download control and rendered download URL. Ambiguous resources and ordinary embedded media are refused.
+
+Native output ingestion uses one normalized image/video/artifact pipeline. `CHAT_PROVIDER_DEFINITIONS` owns provider keys and routing; `NATIVE_OUTPUT_ADAPTERS` requires an explicit identity, export-representation and snapshot-surface contract for each key. The bridge validates observations against their conversation envelope. Gemini requires its exact rendered assistant identity and an explicit provider stamp; document-position fallbacks and foreign conversations are refused. Companion transfer support is independent of the default provider for new chats.
+
+Gemini's rendered video download blocks page-origin fetches. A browser-only relay has narrowly scoped permission for the witnessed native download host. It accepts only an app-issued export nonce for the exact elected tab/document/message/resource, rechecks page ownership around every awaited chunk, and sends only bounded acknowledged bytes to the existing app export owner. Signed URLs remain inside the browser companion and never enter app RPCs, history or tool results. The long stream does not hold the per-tab mutation queue, so observations, Stop and steering receipts continue normally. The app validates MP4/WebM structure and publishes exclusively to the authorized destination.
+
+Native HTML Canvas snapshots are distinct from provider-native artifact revisions. The adapter temporarily selects the native Code view under a route/document/user-interaction guard, reads Monaco's complete source only from the editor mounted inside that exact response, and restores Preview when its lease is unchanged. The native editor's transient URI/version is never treated as a Gemini resource or revision id. OneCode retains response-scoped source snapshots with local immutable revisions, one Generating-to-ready inline anchor, and no automatic workbench opening. Ordinary code fences are never promoted. Replays cannot overwrite local edits. Unsupported or oversized source fails the presentation; unknown or incomplete source remains unclaimed. Future providers register their own exact surface and export contracts without adding provider-specific chat UI branches.
 
 ## Reading and validation
 

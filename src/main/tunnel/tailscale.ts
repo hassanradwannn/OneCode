@@ -16,6 +16,9 @@ import type { TunnelHandle, TunnelStartOptions } from './index.js';
 import { locateBinary } from './locate.js';
 import { createTailscaleRelay, type TailscaleRelay } from './tailscale-relay.js';
 import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.js';
+import { withTailscaleMutation } from './tailscale-mutation.js';
+import { TailscaleSetupRequired, tailscalePrerequisites } from './tailscale-prerequisites.js';
+import { requestTailscaleSetup } from './tailscale-setup.js';
 
 class FunnelSetupError extends Error {}
 type Row = Record<string, unknown>;
@@ -155,7 +158,7 @@ function describeFailure(error: unknown): string {
 async function runCli(binary: string, args: string[]): Promise<string> {
   const startedAt = performance.now();
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv() });
+    const child = spawn(binary, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...childEnv(), TAILSCALE_BE_CLI: '1' } });
     let stdout = '', stderr = '', done = false;
     const finish = (error?: Error) => {
       if (done) return; done = true; clearTimeout(timer);
@@ -175,17 +178,39 @@ async function runCli(binary: string, args: string[]): Promise<string> {
 }
 
 export async function startTailscale(opts: TunnelStartOptions, overrides: Partial<Dependencies> = {}): Promise<TunnelHandle> {
+  let stopped = false, active: TunnelHandle | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  const attempt = async (initial = false): Promise<void> => {
+    if (stopped) return;
+    try {
+      const handle = await withTailscaleMutation(() => startTailscaleOwned({ ...opts, report: report => { if (!stopped) opts.report(report); } }, overrides));
+      if (stopped) await handle.stop(); else active = handle;
+    } catch (error) {
+      if (stopped) return;
+      if (!(error instanceof TailscaleSetupRequired)) { if (initial) throw error; return; }
+      void requestTailscaleSetup(error.setup);
+      // No route mutation has started. Re-read installation/account/capabilities;
+      // never replay an uncertain CLI mutation or recreate a replaced route.
+      timer = setTimeout(() => { void attempt().catch(() => undefined); }, overrides.watchMs ?? 5_000); timer.unref?.();
+    }
+  };
+  await attempt(true);
+  return { stop: async () => { stopped = true; clearTimeout(timer); await active?.stop(); } };
+}
+async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<Dependencies>): Promise<TunnelHandle> {
   const startedAt = performance.now();
   const startupTiming = (stage: string) => logInfo(`OneCode Funnel startup stage=${stage} elapsedMs=${Math.round(performance.now() - startedAt)}`);
   const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
-    probe: probeFunnelPublic, now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, ...overrides };
+    probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, ...overrides };
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
   const report = (state: 'connecting-tunnel' | 'connected' | 'offline' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
     check.checkedAt = Date.now(); check.detail = detail;
     opts.report({ state, detail, publicUrl, tailscale: { ...check } });
   };
   const binary = deps.locate(opts.settings.binaryPath);
-  if (!binary) { report('tunnel-unavailable', 'Tailscale was not found. Install Tailscale, sign in using its own app, then retry Connect.'); throw new FunnelSetupError(check.detail); }
+  if (!binary) {
+    const problem = new TailscaleSetupRequired('install', 'Tailscale could not be located. Install it or choose its executable in Advanced settings; OneCode will detect it automatically.');
+    check.setup = problem.setup; report('connecting-tunnel', problem.message); throw problem;
+  }
   check.cli = 'ready'; report('connecting-tunnel', 'Checking Tailscale sign-in and existing Funnel routes…');
   let relay: TailscaleRelay | undefined;
   let custody: FunnelCustody | undefined;
@@ -197,23 +222,15 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
   const custodyFile = path.join(deps.stateDir, `tailscale-funnel-${createHash('sha256').update(opts.settings.profileId ?? 'default').digest('hex').slice(0, 24)}.json`);
   const readNode = async (): Promise<{ id: string; dnsName: string }> => {
     const status = parse(await deps.run(binary, ['status', '--json']));
-    const self = object(status.Self);
-    if (status.BackendState !== 'Running' || status.AuthURL) {
-      check.account = /NeedsLogin|NoState|NeedsMachineAuth/.test(String(status.BackendState)) || !!status.AuthURL ? 'signed-out' : 'unknown';
-      throw new FunnelSetupError('Tailscale is not ready. Sign in/approve this device and bring it online using the Tailscale app, then retry Connect.');
+    try { const node = tailscalePrerequisites(status, true); check.account = 'ready'; return node; }
+    catch (error) {
+      if (error instanceof TailscaleSetupRequired) {
+        check.setup = error.setup;
+        check.account = error.setup.step === 'login' ? 'signed-out' : 'ready';
+        if (error.setup.step === 'dns' || error.setup.step === 'funnel') check.funnel = 'permission-required';
+      }
+      throw error;
     }
-    if (self.Online !== true) throw new FunnelSetupError('Tailscale reports this device offline. Bring it online in Tailscale, then retry Connect.');
-    check.account = 'ready';
-    const dnsName = typeof self.DNSName === 'string' ? self.DNSName.toLowerCase().replace(/\.$/, '') : '';
-    if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(dnsName) || typeof self.ID !== 'string' || !/^[\w-]{1,128}$/.test(self.ID)) {
-      throw new FunnelSetupError('Tailscale has no usable device HTTPS name. Enable MagicDNS/HTTPS in your Tailscale account, then retry Connect.');
-    }
-    const capabilities = new Set([...Object.keys(object(self.CapMap)), ...(Array.isArray(self.Capabilities) ? self.Capabilities : [])]);
-    if (!capabilities.has('funnel') || !capabilities.has('https')) {
-      check.funnel = 'permission-required';
-      throw new FunnelSetupError('Open Funnel permission help in Setup and follow Tailscale’s Enable Funnel approval for this device, including HTTPS, then retry Connect. OneCode does not change tailnet policy.');
-    }
-    return { id: self.ID, dnsName };
   };
   const readConfig = async (): Promise<NativeConfig> => config(await deps.run(binary, ['funnel', 'status', '--json']));
   // These are independent read-only daemon queries. Serial CLI process startup is
@@ -298,13 +315,17 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       await deps.run(binary, ['funnel', '--bg', `--https=${custody.port}`, `--set-path=${route.mount}`, '--yes', route.proxy]);
       installed.add(route.mount);
     }
+    let published = false;
     const verifyNative = async (): Promise<string | undefined> => {
       const [liveNode, live] = await readNative();
       if (stopped) return;
       if (!custody || !matchesNode(liveNode, custody) || ownedRoutes(custody).some(route => !ownedHandler(live, custody!, route.mount)) || live.AllowFunnel?.[host(custody)] !== true || !same(live.TCP?.[String(custody.port)], { HTTPS: true })) {
         throw new FunnelSetupError('The owned Tailscale Funnel route is not public/current. Reconnect after checking Tailscale; OneCode will not recreate it automatically.');
       }
-      if (!same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody))) {
+      assertFunnelRouteSafe(live, custody, custody);
+      // Publication must preserve all other routes. Later liveness owns only this port;
+      // independent private Serve ports may be added or removed while MCP stays connected.
+      if (!published && !same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody))) {
         throw new FunnelSetupError('Other Tailscale routes changed. OneCode will not overwrite or restore another service’s configuration. Inspect Tailscale before reconnecting.');
       }
       check.funnel = 'ready';
@@ -316,6 +337,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     delete custody.previousProxy;
     delete custody.previousMetadataProxy;
     await persist();
+    published = true;
     check.publicIngress = { state: 'checking', checkedAt: null };
     startupTiming('routes-configured');
     report('connecting-tunnel', 'The owned Funnel route is configured. Checking its exact connector through public DNS and HTTPS…', publicUrl);
@@ -325,7 +347,8 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       'dns-error': 'The Cloudflare public DNS check could not verify a public ingress address. Check network access to the DNS-over-HTTPS resolver.',
       'tls-error': 'Public DNS resolves, but verified TLS to the Funnel ingress failed. Local Tailscale readiness does not prove public reachability.',
       'http-error': 'Public HTTPS answered, but the exact connector metadata path did not return HTTP 200. Check the current OneCode URL and Funnel routing.',
-      'metadata-error': 'Public HTTPS did not return metadata for this exact current connector. A different or stale mount cannot verify this connection.'
+      'metadata-error': 'Public HTTPS did not return metadata for this exact current connector. A different or stale mount cannot verify this connection.',
+      'mcp-error': 'Public HTTPS works, but the MCP initialize handshake failed. Keep OneCode running and use the current Core URL after this check passes.'
     };
     const cycle = async (initial = false): Promise<void> => {
       if (stopped || checking || !publicUrl) return;
@@ -366,7 +389,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     };
     // Return the existing handle before networking so Disconnect can abort the first probe.
     void cycle(true);
-    return { stop: async () => { if (stopped) return; stopped = true; publicProbe.abort(); clearTimeout(timer); await removeOwned(); await relay?.stop(); } };
+    return { stop: async () => { if (stopped) return; stopped = true; publicProbe.abort(); clearTimeout(timer); await withTailscaleMutation(removeOwned); await relay?.stop(); } };
   } catch (error) {
     publicProbe.abort(); clearTimeout(timer);
     check.publicIngress = undefined;
@@ -374,8 +397,10 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     await relay?.stop();
     if (check.funnel !== 'permission-required') check.funnel = 'error';
     if (!check.version) check.cli = 'error';
-    const message = error instanceof FunnelSetupError ? error.message : describeFailure(error);
-    report('tunnel-unavailable', message);
+    const pendingSetup = error instanceof TailscaleSetupRequired && !nativeMutation;
+    const message = error instanceof FunnelSetupError || error instanceof TailscaleSetupRequired ? error.message : describeFailure(error);
+    report(pendingSetup ? 'connecting-tunnel' : 'tunnel-unavailable', message);
+    if (pendingSetup) throw error;
     throw new FunnelSetupError(message);
   }
 }

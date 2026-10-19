@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 50;
+  const RECORDER_VERSION = 57;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -409,11 +409,19 @@
   const traceCallsSeen = new Map();
   /** Last metadata ownership emitted for each exact provider-message/generated-asset tuple. */
   const nativeImagesReported = new Map();
+  /** Last metadata ownership emitted for each exact provider-message/generated-video tuple. */
+  const nativeVideosReported = new Map();
+  /** Exact provider/conversation/message/artifact/revision Canvas imports already emitted. */
+  const providerArtifactsReported = new Map();
   /** Disposable pixel-capture state. Durable receipt/storage remains in the browser journal/app. */
   const nativeImageCaptures = new Map();
   /** Source-ordered, document-local preview work. Metadata is emitted independently first. */
   const nativeImageCaptureQueue = new Map();
   const nativeImageCaptureActiveTasks = new Set();
+  /** Disposable generated-video poster capture state. Original bytes are streamed only on demand. */
+  const nativeVideoCaptures = new Map();
+  const nativeVideoCaptureQueue = new Map();
+  const nativeVideoCaptureActiveTasks = new Set();
 
   let generating = false;
   /**
@@ -1027,11 +1035,26 @@
    * Continue keep it regardless, and Goal's helper never gets it: it must not use tools.
    */
   let mentionCore = true;
-  function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
+  async function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
                              matchesUser = matchesSubmittedUser, receiptTimeoutMs = null, explain = null, mention = currentCoreMention(), sentRequest = null,
-                             whileGenerating = false, initialDraft = null, prepareAttachments = null) {
+                             whileGenerating = false, initialDraft = null, prepareAttachments = null, nativeMedia = false, onSendAttempt = null,
+                             requireCore = mention !== null) {
+    // Missing discovery is not permission to send a tools-enabled task without
+    // Core. Wait only before authorization, under the existing draft lease.
+    if (CLF_DOM.provider === 'chatgpt' && requireCore && !mention) {
+      const deadline = Date.now() + 5000;
+      while (alive && stillCurrent() && (!initialDraft || initialDraft.current()) && !corePluginList && Date.now() < deadline) {
+        mention = currentCoreMention();
+        if (mention) break;
+        await sleep(100);
+      }
+      mention = currentCoreMention();
+      if (!mention || !stillCurrent() || (initialDraft && !initialDraft.current())) {
+        explain?.('core-connector-unavailable'); return false;
+      }
+    }
     return CLF_DOM.send({ stillCurrent, clearAcceptedDraft, beforeSend, acceptUserReceipt, matchesUser, receiptTimeoutMs, mention, explain, sentRequest, whileGenerating, initialDraft,
-      prepareAttachments,
+      prepareAttachments, nativeMedia, onSendAttempt,
       observeEvidence: check => { pageViewChecks.add(check); return () => pageViewChecks.delete(check); } });
   }
   const GOAL_MARKER_INSTRUCTION = '\n\nFor this Goal session only: at the end of each final reply, write exactly one separate last line: [[COS_GOAL:COMPLETE]] if the entire requested task is finished, or [[COS_GOAL:CONTINUE]] if requested work remains. Do not claim completion for partial work. If user input is required, explain it and omit both markers.';
@@ -2043,8 +2066,12 @@
     steeredTurns.clear();
     pageToolsReported.clear();
     nativeImagesReported.clear();
+    nativeVideosReported.clear();
+    providerArtifactsReported.clear();
     nativeImageCaptures.clear();
     nativeImageCaptureQueue.clear();
+    nativeVideoCaptures.clear();
+    nativeVideoCaptureQueue.clear();
     nativeImageCaptureActiveTasks.clear();
     callsReported.clear();
     requestOwnersConfirmed.clear();
@@ -3148,6 +3175,7 @@
       pageTurnIds.set(turnId, turn.id);
       if (pageTurnIds.size > 500) pageTurnIds.delete(pageTurnIds.keys().next().value);
     }
+    observeNativeOutputs(observedTurns);
 
     // Progress lines are only meaningful while they are moving. Captured live they
     // give the one thing a page reloaded from history can never reconstruct: the
@@ -3770,7 +3798,8 @@
   // 11: adds exact typed thought-notification ids and ephemeral DOM stamps for selective
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
-  const FIBER_VERSION = 23;
+  // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
+  const FIBER_VERSION = 24;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -3780,6 +3809,9 @@
   const FIBER_MAX_MESSAGES = 200;
   const FIBER_MAX_ACTIVITIES = 200;
   const FIBER_MAX_IMAGES = 200;
+  const FIBER_MAX_VIDEOS = 64;
+  const FIBER_MAX_ARTIFACTS = 32;
+  const FIBER_MAX_ARTIFACT_TEXT = 240_000;
   const TOOL_NAME = /^[a-z0-9_.-]{1,64}$/i;
   const FIBER_BUSY_CAPTIONS = new Set(['thinking', 'thinking about it', 'reasoning', 'working', 'loading', 'done', 'called tool']);
   const FIBER_TIMER_CAPTION = /^(?:worked|thought|reasoned|thinking)\s+for\s+[\d.,]+\s*(?:s|m|h|sec|secs|seconds?|min|mins|minutes?|hours?)\b/;
@@ -4045,6 +4077,51 @@
     }
     const keptMessages = messages.filter((message) => !conflictingMessages.has(message.messageId));
 
+    const artifacts = [], artifactIndex = new Map(), conflictingArtifacts = new Set();
+    const artifactKinds = new Set(['code', 'web', 'markdown', 'document', 'diagram', 'data']);
+    const artifactPath = value => {
+      if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || value.startsWith('/') || value.includes('\u0000')) return null;
+      const parts = value.split('/');
+      return parts.some(part => !part || part === '.' || part === '..') ? null : value;
+    };
+    for (const entry of (Array.isArray(raw.artifacts) ? raw.artifacts : []).slice(0, FIBER_MAX_ARTIFACTS)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const messageId = typeof entry.messageId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.messageId) ? entry.messageId : null;
+      const providerArtifactId = typeof entry.providerArtifactId === 'string' && /^[A-Za-z0-9_-]{8,160}$/.test(entry.providerArtifactId)
+        ? entry.providerArtifactId : null;
+      const providerRevisionId = typeof entry.providerRevisionId === 'string' && /^\d{1,16}$/.test(entry.providerRevisionId)
+        ? entry.providerRevisionId : null;
+      const providerParentRevisionId = entry.providerParentRevisionId === undefined ? null
+        : typeof entry.providerParentRevisionId === 'string' && /^\d{1,16}$/.test(entry.providerParentRevisionId)
+          ? entry.providerParentRevisionId : undefined;
+      const kind = typeof entry.kind === 'string' && artifactKinds.has(entry.kind) ? entry.kind : null;
+      const entrypoint = artifactPath(entry.entrypoint);
+      if (!messageId || !providerArtifactId || !providerRevisionId || providerParentRevisionId === undefined || !kind || !entrypoint) continue;
+      const files = [], paths = new Set(); let textRoom = FIBER_MAX_ARTIFACT_TEXT;
+      for (const file of (Array.isArray(entry.files) ? entry.files : []).slice(0, 8)) {
+        const path = artifactPath(file?.path);
+        const text = typeof file?.text === 'string' && file.text.length > 0 && file.text.length <= textRoom ? file.text : null;
+        if (!path || !text || paths.has(path)) { textRoom = -1; break; }
+        paths.add(path); textRoom -= text.length;
+        files.push({ path, text,
+          ...(typeof file.mimeType === 'string' && file.mimeType.length <= 128 ? { mimeType: file.mimeType } : {}),
+          ...(typeof file.language === 'string' && /^[a-z0-9_+.-]{1,64}$/i.test(file.language) ? { language: file.language } : {}) });
+      }
+      if (textRoom < 0 || !files.length || !files.some(file => file.path === entrypoint)) continue;
+      const artifact = { messageId, providerArtifactId, providerRevisionId,
+        ...(providerParentRevisionId ? { providerParentRevisionId } : {}),
+        ...(typeof entry.title === 'string' && entry.title.trim() ? { title: entry.title.trim().slice(0, 200) } : {}),
+        kind, entrypoint, files,
+        order: Number.isInteger(entry.order) && entry.order >= 0 && entry.order < FIBER_MAX_MESSAGES * 4 ? entry.order : null,
+        createTime: typeof entry.createTime === 'number' && Number.isFinite(entry.createTime) && entry.createTime > 0 ? entry.createTime : null };
+      const key = providerArtifactId + '\u0000' + providerRevisionId;
+      const signature = JSON.stringify(artifact), priorAt = artifactIndex.get(key);
+      if (priorAt === undefined) { artifactIndex.set(key, artifacts.length); artifacts.push(artifact); continue; }
+      if (JSON.stringify(artifacts[priorAt]) !== signature) conflictingArtifacts.add(key);
+    }
+    const keptArtifacts = artifacts.filter(artifact => !conflictingArtifacts.has(artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId));
+
     const activities = [];
     const activityIndex = new Map();
     const conflictingActivities = new Set();
@@ -4117,6 +4194,41 @@
       images.push(image);
     }
     const keptImages = images.filter(image => !conflictingImages.has(`${image.messageId}\u0000${image.assetId}`));
+    const videos = [];
+    const videoKeys = new Set();
+    const conflictingVideos = new Set();
+    for (const entry of (Array.isArray(raw.videos) ? raw.videos : []).slice(0, FIBER_MAX_VIDEOS)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const messageId = typeof entry.messageId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.messageId)
+        ? entry.messageId : null;
+      const assetId = typeof entry.assetId === 'string' && /^file_[A-Za-z0-9_-]{8,100}$/.test(entry.assetId)
+        ? entry.assetId : null;
+      const mimeType = entry.mimeType === 'video/mp4' || entry.mimeType === 'video/webm' ? entry.mimeType : null;
+      const providerRole = entry.providerRole === 'tool' || entry.providerRole === 'assistant' ? entry.providerRole : null;
+      const providerChannel = entry.providerChannel === 'final' ? 'final' : null;
+      const providerStatus = entry.providerStatus === 'in_progress' || entry.providerStatus === 'finished_successfully'
+        ? entry.providerStatus : null;
+      if (!messageId || !assetId || !mimeType || !providerRole || (entry.providerChannel && !providerChannel) ||
+          (entry.providerStatus && !providerStatus)) continue;
+      const width = Number.isInteger(entry.width) && entry.width > 0 && entry.width <= 30_000 ? entry.width : null;
+      const height = Number.isInteger(entry.height) && entry.height > 0 && entry.height <= 30_000 ? entry.height : null;
+      const durationMs = Number.isInteger(entry.durationMs) && entry.durationMs > 0 && entry.durationMs <= 3_600_000 ? entry.durationMs : null;
+      const key = `${messageId}\u0000${assetId}`;
+      const video = {
+        messageId, assetId, mimeType, providerRole,
+        ...(providerChannel ? { providerChannel } : {}),
+        ...(providerStatus ? { providerStatus } : {}),
+        order: Number.isInteger(entry.order) && entry.order >= 0 && entry.order < FIBER_MAX_MESSAGES * 4 ? entry.order : null,
+        partOrder: Number.isInteger(entry.partOrder) && entry.partOrder >= 0 && entry.partOrder < FIBER_MAX_VIDEOS ? entry.partOrder : 0,
+        createTime: typeof entry.createTime === 'number' && Number.isFinite(entry.createTime) && entry.createTime > 0 ? entry.createTime : null,
+        ...(width ? { width } : {}), ...(height ? { height } : {}), ...(durationMs ? { durationMs } : {})
+      };
+      if (videoKeys.has(key)) { conflictingVideos.add(key); continue; }
+      videoKeys.add(key);
+      videos.push(video);
+    }
+    const keptVideos = videos.filter(video => !conflictingVideos.has(`${video.messageId}\u0000${video.assetId}`));
     const endMessageId = cap(raw.endMessageId, 200);
     const codeModeCalls = [], codeIds = new Set();
     for (const entry of (Array.isArray(raw.codeModeCalls) ? raw.codeModeCalls : []).slice(0, FIBER_MAX_CALLS)) {
@@ -4128,7 +4240,7 @@
     }
     const trace = turnTraceOf(raw.trace);
     if (codeModeCalls.length === 0 && kept.length === 0 && requests.length === 0 && keptMessages.length === 0 && keptActivities.length === 0 &&
-        keptThoughtNotifications.length === 0 && keptImages.length === 0 && !endMessageId && !trace && sightings.length === 0) {
+        keptThoughtNotifications.length === 0 && keptImages.length === 0 && keptVideos.length === 0 && keptArtifacts.length === 0 && !endMessageId && !trace && sightings.length === 0) {
       return null;
     }
     return {
@@ -4146,6 +4258,8 @@
       activities: keptActivities,
       thoughtNotifications: keptThoughtNotifications,
       images: keptImages,
+      videos: keptVideos,
+      artifacts: keptArtifacts,
       trace,
       // #1301: the user message that opened this page turn; files its outline under the right turn.
       ...(cap(raw.question, 200) ? { question: cap(raw.question, 200) } : {})
@@ -4191,6 +4305,7 @@
   const nativeImageKey = image => `${image.messageId}\u0000${image.assetId}`;
 
   function nativeImageNode(image) {
+    if (typeof CLF_DOM.nativeImageNode === 'function') return CLF_DOM.nativeImageNode(image);
     if (!fiberPresent || !fiberScanToken) return null;
     const suffix = `:${encodeURIComponent(image.messageId)}:${encodeURIComponent(image.assetId)}`;
     const found = [];
@@ -4221,6 +4336,20 @@
       return loaded(right) - loaded(left) || area(right) - area(left);
     });
     return found[0] || null;
+  }
+
+  // A missing exact pixel node is retryable when Fiber has one unique typed owner for the
+  // asset in the descriptor frame: ChatGPT may simply have virtualised/unmounted its gallery.
+  // Two typed descriptors for one provider asset remain true ambiguity and fail closed. This
+  // only classifies absence; it does not admit any DOM node that nativeImageNode rejected.
+  function nativeImageMissingReason(image) {
+    if (typeof CLF_DOM.nativeImageNode === 'function') return 'not_mounted';
+    const key = nativeImageKey(image);
+    const owners = [...fiberTurns.values()].filter(turn =>
+      (turn.images || []).some(entry => nativeImageKey(entry) === key));
+    if (owners.length !== 1) return 'ambiguous';
+    return owners[0].images.filter(entry => entry.assetId === image.assetId).length === 1
+      ? 'not_mounted' : 'ambiguous';
   }
 
   function nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation) {
@@ -4262,20 +4391,31 @@
     const assetId = typeof message.assetId === 'string' ? message.assetId : '';
     if (!messageId || !assetId || !conversationId || message.conversationId !== conversationId ||
         CLF_DOM.conversationId() !== conversationId) return { error: 'not_open' };
+    if (typeof CLF_DOM.exportNativeImage === 'function') {
+      const heldEpoch = epoch, heldConversation = conversationId;
+      return CLF_DOM.exportNativeImage(message, () => epoch === heldEpoch && conversationId === heldConversation);
+    }
     const image = { messageId, assetId };
     let node = nativeImageNode(image);
     if (!node) { await refreshFiber(); node = nativeImageNode(image); }
     if (!node || !node.complete || !(node.naturalWidth > 0)) return { error: 'not_rendered' };
+    const heldEpoch = epoch, heldConversation = conversationId, sourceUrl = node.currentSrc || node.src;
+    const current = () => epoch === heldEpoch && conversationId === heldConversation && CLF_DOM.conversationId() === heldConversation &&
+      nativeImageNode(image) === node && node.isConnected && (node.currentSrc || node.src) === sourceUrl;
+    if (!current()) return { error: 'identity_changed' };
     let blob;
     try {
-      const response = await fetch(node.currentSrc || node.src);
+      const response = await fetch(sourceUrl);
+      if (!current()) return { error: 'identity_changed' };
       if (!response.ok) return { error: 'fetch_failed' };
       blob = await response.blob();
     } catch { return { error: 'fetch_failed' }; }
+    if (!current()) return { error: 'identity_changed' };
     if (!/^image\//.test(blob.type || '')) return { error: 'not_image' };
     if (blob.size <= 0) return { error: 'fetch_failed' };
     if (blob.size > 25 * 1024 * 1024) return { error: 'too_large' };
     const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (!current()) return { error: 'identity_changed' };
     let binary = '';
     for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
     return { data: btoa(binary) };
@@ -4286,7 +4426,7 @@
     const { key, image, observation, heldEpoch, heldConversation } = task;
     if (!nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation)) return;
     const node = nativeImageNode(image);
-    if (!node) return nativeImageUnavailable(key, image, observation, 'ambiguous', 'missing', heldEpoch, heldConversation);
+    if (!node) return nativeImageUnavailable(key, image, observation, nativeImageMissingReason(image), 'missing', heldEpoch, heldConversation);
     const sourceWidth = node.naturalWidth;
     const sourceHeight = node.naturalHeight;
     const sourceUrl = node.currentSrc || node.src;
@@ -4375,6 +4515,243 @@
     if (nativeImageCaptureQueue.has(key)) return;
     nativeImageCaptureQueue.set(key, { key, image, observation, heldEpoch: epoch, heldConversation });
     pumpNativeImageCaptures();
+  }
+
+  /** Adapter observations enter the same metadata/capture/journal owners as typed Fiber output. */
+  let nativeArtifactSnapshotBusy = false;
+  function observeNativeOutputs(snapshot) {
+    if (typeof CLF_DOM.nativeOutputs !== 'function' || !conversationId || CLF_DOM.conversationId() !== conversationId) return;
+    const outputs = CLF_DOM.nativeOutputs(snapshot);
+    for (const image of (outputs?.images || []).slice(0, 128)) {
+      const key = nativeImageKey(image), prior = nativeImagesReported.get(key);
+      const owner = turnId && pageTurnIds.get(turnId) === image.messageId ? turnId : prior?.owner || '';
+      const observation = { provider: CLF_DOM.provider, ...(owner ? { turnId: owner } : {}) };
+      const signature = `${owner}\u0000${image.providerRole}\u0000${image.providerChannel || ''}\u0000${image.providerStatus || ''}\u0000${image.width || ''}\u0000${image.height || ''}`;
+      if (prior?.signature !== signature) {
+        nativeImagesReported.set(key, { signature, owner, conflicted: false });
+        emit({ ...observation, kind: 'native_image', messageId: image.messageId, providerAssetId: image.assetId,
+          providerRole: image.providerRole, providerChannel: image.providerChannel, providerStatus: image.providerStatus,
+          ...(image.width ? { width: image.width } : {}), ...(image.height ? { height: image.height } : {}), previewStatus: 'pending' });
+      }
+      if (image.providerStatus === 'finished_successfully') queueNativeImageCapture(image, observation);
+    }
+    while (nativeImagesReported.size > 512) nativeImagesReported.delete(nativeImagesReported.keys().next().value);
+    for (const video of (outputs?.videos || []).slice(0, 128)) {
+      const key = nativeVideoKey(video), prior = nativeVideosReported.get(key);
+      const owner = turnId && pageTurnIds.get(turnId) === video.messageId ? turnId : prior?.owner || '';
+      const observation = { provider: CLF_DOM.provider, ...(owner ? { turnId: owner } : {}) };
+      const signature = `${owner}\u0000${video.providerRole}\u0000${video.providerChannel || ''}\u0000${video.providerStatus || ''}\u0000${video.mimeType}\u0000${video.width || ''}\u0000${video.height || ''}\u0000${video.durationMs || ''}`;
+      if (prior?.signature !== signature) {
+        nativeVideosReported.set(key, { signature, owner, conflicted: false });
+        emit({ ...observation, kind: 'native_video', messageId: video.messageId, providerAssetId: video.assetId,
+          providerRole: video.providerRole, providerChannel: video.providerChannel, providerStatus: video.providerStatus, mediaMimeType: video.mimeType,
+          ...(video.width ? { width: video.width } : {}), ...(video.height ? { height: video.height } : {}),
+          ...(video.durationMs ? { durationMs: video.durationMs } : {}), previewStatus: 'pending' });
+      }
+      if (video.providerStatus === 'finished_successfully') queueNativeVideoCapture(video, observation);
+    }
+    while (nativeVideosReported.size > 512) nativeVideosReported.delete(nativeVideosReported.keys().next().value);
+    for(const artifact of (outputs?.artifacts||[]).slice(0,16)){
+      const key=`${conversationId}\u0000${artifact.messageId}\u0000${artifact.nativeSurface}\u0000generating`;
+      if(providerArtifactsReported.has(key))continue;providerArtifactsReported.set(key,'generating');
+      emit({kind:'provider_artifact',provider:CLF_DOM.provider,providerConversationId:conversationId,messageId:artifact.messageId,
+        artifactNativeSurface:artifact.nativeSurface,artifactSnapshotStatus:'generating',artifactTitle:artifact.title,artifactKind:artifact.kind,artifactEntrypoint:artifact.entrypoint,
+        ...(turnId&&pageTurnIds.get(turnId)===artifact.messageId?{turnId}:{})});
+    }
+    if(typeof CLF_DOM.readNativeArtifacts==='function'&&!nativeArtifactSnapshotBusy){
+      nativeArtifactSnapshotBusy=true;
+      const heldEpoch=epoch,heldConversation=conversationId,current=()=>epoch===heldEpoch&&conversationId===heldConversation&&CLF_DOM.conversationId()===heldConversation;
+      void CLF_DOM.readNativeArtifacts(current).then(artifacts=>{
+        if(!current())return;
+        for(const artifact of artifacts){
+          const key=`${heldConversation}\u0000${artifact.messageId}\u0000${artifact.nativeSurface}`,signature=JSON.stringify(artifact);
+          if(providerArtifactsReported.get(key)===signature)continue;
+          providerArtifactsReported.set(key,signature);
+          emit({kind:'provider_artifact',provider:CLF_DOM.provider,providerConversationId:heldConversation,messageId:artifact.messageId,
+            artifactNativeSurface:artifact.nativeSurface,artifactTitle:artifact.title,artifactKind:artifact.kind,artifactEntrypoint:artifact.entrypoint,artifactFiles:artifact.files,
+            ...(artifact.status==='failed'?{artifactSnapshotStatus:'failed'}:{}),
+            ...(turnId&&pageTurnIds.get(turnId)===artifact.messageId?{turnId}:{})});
+        }
+        while(providerArtifactsReported.size>512)providerArtifactsReported.delete(providerArtifactsReported.keys().next().value);
+        if(artifacts.length)void flush();
+      }).catch(()=>{}).finally(()=>{nativeArtifactSnapshotBusy=false});
+    }
+  }
+
+  const nativeVideoKey = video => `${video.messageId}\u0000${video.assetId}`;
+
+  function nativeVideoNode(video) {
+    if (typeof CLF_DOM.nativeVideoNode === 'function') return CLF_DOM.nativeVideoNode(video);
+    if (!fiberPresent || !fiberScanToken) return null;
+    const suffix = `:${encodeURIComponent(video.messageId)}:${encodeURIComponent(video.assetId)}`, found = [];
+    for (const node of document.querySelectorAll('[data-clf-fiber-video]')) {
+      const stamp = node.getAttribute('data-clf-fiber-video') || '';
+      if (!stamp.startsWith(`${fiberScanToken}:`) || !stamp.endsWith(suffix)) continue;
+      const middle = stamp.slice(fiberScanToken.length + 1, stamp.length - suffix.length);
+      if (!/^\d+$/.test(middle)) continue;
+      const turn = fiberTurns.get(Number(middle));
+      if (!turn || !(turn.videos || []).some(entry => nativeVideoKey(entry) === nativeVideoKey(video) && entry.mimeType === video.mimeType)) continue;
+      try {
+        const url = new URL(node.currentSrc || node.src, location.href);
+        if (url.origin !== location.origin || url.pathname !== '/backend-api/estuary/content' || url.searchParams.get('id') !== video.assetId || !node.isConnected) continue;
+      } catch { continue; }
+      found.push(node);
+    }
+    found.sort((left, right) => {
+      const ready = node => node.readyState >= 2 && node.videoWidth > 0 && node.videoHeight > 0 ? 1 : 0;
+      const area = node => { try { const rect = node.getBoundingClientRect(); return Math.max(0, rect.width) * Math.max(0, rect.height); } catch { return 0; } };
+      return ready(right) - ready(left) || area(right) - area(left);
+    });
+    return found[0] || null;
+  }
+
+  function nativeVideoDescriptorCurrent(video) {
+    if (typeof CLF_DOM.nativeVideoDescriptorCurrent === 'function') return CLF_DOM.nativeVideoDescriptorCurrent(video);
+    let found = null, count = 0;
+    for (const turn of fiberTurns.values()) for (const entry of turn.videos || []) {
+      if (nativeVideoKey(entry) !== nativeVideoKey(video)) continue; count++; found = entry;
+    }
+    return count === 1 && found?.mimeType === video.mimeType ? found : null;
+  }
+
+  function nativeVideoMissingReason(video) {
+    if (typeof CLF_DOM.nativeVideoDescriptorCurrent === 'function') return CLF_DOM.nativeVideoDescriptorCurrent(video) ? 'not_mounted' : 'ambiguous';
+    const owners = [...fiberTurns.values()].filter(turn => (turn.videos || []).some(entry => nativeVideoKey(entry) === nativeVideoKey(video)));
+    if (owners.length !== 1) return 'ambiguous';
+    return owners[0].videos.filter(entry => entry.assetId === video.assetId).length === 1 ? 'not_mounted' : 'ambiguous';
+  }
+
+  function nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation) {
+    if (epoch !== heldEpoch || conversationId !== heldConversation) return false;
+    const reported = nativeVideosReported.get(nativeVideoKey(video)), owner = observation.turnId || '';
+    const signature = `${owner}\u0000${video.providerRole}\u0000${video.providerChannel || ''}\u0000${video.providerStatus || ''}\u0000${video.mimeType}\u0000${video.width || ''}\u0000${video.height || ''}\u0000${video.durationMs || ''}`;
+    return Boolean(reported && !reported.conflicted && reported.owner === owner && reported.signature === signature &&
+      key === `${heldConversation || ''}\u0000${nativeVideoKey(video)}` && nativeVideoDescriptorCurrent(video));
+  }
+
+  function nativeVideoUnavailable(key, video, observation, reason, fingerprint, heldEpoch, heldConversation) {
+    if (!nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation)) return;
+    const prior = nativeVideoCaptures.get(key);
+    const same = prior?.fingerprint === fingerprint || Boolean(prior?.fingerprint?.node && fingerprint?.node && prior.fingerprint.node === fingerprint.node &&
+      prior.fingerprint.width === fingerprint.width && prior.fingerprint.height === fingerprint.height && prior.fingerprint.readyState === fingerprint.readyState &&
+      prior.fingerprint.sourceUrl === fingerprint.sourceUrl);
+    if (prior?.status === 'unavailable' && prior.reason === reason && same) return;
+    nativeVideoCaptures.set(key, { status: 'unavailable', reason, fingerprint });
+    emit({ ...observation, kind: 'native_video', messageId: video.messageId, providerAssetId: video.assetId, providerRole: video.providerRole,
+      mediaMimeType: video.mimeType, ...(video.providerChannel ? { providerChannel: video.providerChannel } : {}),
+      ...(video.providerStatus ? { providerStatus: video.providerStatus } : {}), ...(video.width ? { width: video.width } : {}),
+      ...(video.height ? { height: video.height } : {}), ...(video.durationMs ? { durationMs: video.durationMs } : {}),
+      previewStatus: 'unavailable', previewError: reason });
+    void flush();
+  }
+
+  async function captureNativeVideo(task) {
+    const { key, video, observation, heldEpoch, heldConversation } = task;
+    if (!nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation)) return;
+    const node = nativeVideoNode(video);
+    if (!node) return nativeVideoUnavailable(key, video, observation, nativeVideoMissingReason(video), 'missing', heldEpoch, heldConversation);
+    const width = node.videoWidth, height = node.videoHeight, sourceUrl = node.currentSrc || node.src;
+    const fingerprint = { node, width, height, readyState: node.readyState, sourceUrl };
+    if (node.readyState < 2 || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0)
+      return nativeVideoUnavailable(key, video, observation, 'not_loaded', fingerprint, heldEpoch, heldConversation);
+    if (width * height > 30_000_000) return nativeVideoUnavailable(key, video, observation, 'oversized', fingerprint, heldEpoch, heldConversation);
+    const prior = nativeVideoCaptures.get(key);
+    if (prior?.status === 'available' || prior?.status === 'pending' || (prior?.status === 'unavailable' && prior.fingerprint?.node === node &&
+      prior.fingerprint.width === width && prior.fingerprint.height === height && prior.fingerprint.readyState === node.readyState && prior.fingerprint.sourceUrl === sourceUrl)) return;
+    const pendingCapture = { status: 'pending', fingerprint, task }; nativeVideoCaptures.set(key, pendingCapture);
+    const scale = Math.min(1, 1600 / Math.max(width, height)), previewWidth = Math.max(1, Math.round(width * scale)), previewHeight = Math.max(1, Math.round(height * scale));
+    if (previewWidth * previewHeight > 2_560_000) return nativeVideoUnavailable(key, video, observation, 'oversized', fingerprint, heldEpoch, heldConversation);
+    try {
+      const canvas = document.createElement('canvas'); canvas.width = previewWidth; canvas.height = previewHeight; const context = canvas.getContext('2d');
+      if (!context) throw new Error('tainted'); context.drawImage(node, 0, 0, previewWidth, previewHeight);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.8));
+      if (!nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation) || nativeVideoNode(video) !== node ||
+          node.readyState < 2 || node.videoWidth !== width || node.videoHeight !== height || (node.currentSrc || node.src) !== sourceUrl) {
+        if (nativeVideoCaptures.get(key) === pendingCapture) nativeVideoCaptures.delete(key); return;
+      }
+      if (!blob) throw new Error('tainted'); if (blob.type !== 'image/webp' || blob.size <= 0 || blob.size > 384_000) throw new Error('oversized');
+      const bytes = new Uint8Array(await blob.arrayBuffer()); let binary = '';
+      for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+      const previewDataUrl = `data:image/webp;base64,${btoa(binary)}`; if (previewDataUrl.length > 512_100) throw new Error('oversized');
+      if (!nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation) || nativeVideoNode(video) !== node) {
+        if (nativeVideoCaptures.get(key) === pendingCapture) nativeVideoCaptures.delete(key); return;
+      }
+      emit({ ...observation, kind: 'native_video', messageId: video.messageId, providerAssetId: video.assetId, providerRole: video.providerRole, mediaMimeType: video.mimeType,
+        ...(video.providerChannel ? { providerChannel: video.providerChannel } : {}), ...(video.providerStatus ? { providerStatus: video.providerStatus } : {}),
+        ...(video.width ? { width: video.width } : {}), ...(video.height ? { height: video.height } : {}), ...(video.durationMs ? { durationMs: video.durationMs } : {}),
+        previewStatus: 'available', previewWidth, previewHeight, previewDataUrl });
+      nativeVideoCaptures.set(key, { status: 'available', fingerprint }); void flush();
+    } catch (error) {
+      if (!nativeVideoCaptureOwnerCurrent(key, video, observation, heldEpoch, heldConversation) || nativeVideoNode(video) !== node) {
+        if (nativeVideoCaptures.get(key) === pendingCapture) nativeVideoCaptures.delete(key); return;
+      }
+      nativeVideoUnavailable(key, video, observation, String(error?.message || error) === 'oversized' ? 'oversized' : 'tainted', fingerprint, heldEpoch, heldConversation);
+    }
+  }
+
+  function pumpNativeVideoCaptures() {
+    while (nativeVideoCaptureActiveTasks.size < 1 && nativeVideoCaptureQueue.size) {
+      const [key, task] = nativeVideoCaptureQueue.entries().next().value; nativeVideoCaptureQueue.delete(key); nativeVideoCaptureActiveTasks.add(task);
+      void captureNativeVideo(task).finally(() => { nativeVideoCaptureActiveTasks.delete(task); pumpNativeVideoCaptures(); });
+    }
+  }
+
+  function queueNativeVideoCapture(video, observation) {
+    const heldConversation = conversationId, key = `${heldConversation || ''}\u0000${nativeVideoKey(video)}`, prior = nativeVideoCaptures.get(key);
+    if (prior?.status === 'available' || prior?.status === 'pending') { nativeVideoCaptures.delete(key); nativeVideoCaptures.set(key, prior); return; }
+    if (nativeVideoCaptureQueue.has(key)) return; nativeVideoCaptureQueue.set(key, { key, video, observation, heldEpoch: epoch, heldConversation }); pumpNativeVideoCaptures();
+  }
+
+  const nativeVideoTransferClaims = new Map();
+  async function exportNativeVideo(message) {
+    const messageId = typeof message.messageId === 'string' ? message.messageId : '', assetId = typeof message.assetId === 'string' ? message.assetId : '';
+    const mimeType = message.mimeType === 'video/mp4' || message.mimeType === 'video/webm' ? message.mimeType : null;
+    const maxBytes = Number.isSafeInteger(message.maxBytes) && message.maxBytes > 0 && message.maxBytes <= 256 * 1024 * 1024 ? message.maxBytes : 0;
+    const chunkBytes = Number.isSafeInteger(message.chunkBytes) && message.chunkBytes >= 64 * 1024 && message.chunkBytes <= 1024 * 1024 ? message.chunkBytes : 0;
+    const nonce = typeof message.nonce === 'string' && /^[0-9a-f-]{36}$/i.test(message.nonce) ? message.nonce : null;
+    if (!messageId || !assetId || !mimeType || !maxBytes || !chunkBytes || !nonce || !conversationId || message.conversationId !== conversationId || CLF_DOM.conversationId() !== conversationId)
+      return { error: 'not_open' };
+    const heldConversation = conversationId, heldEpoch = epoch, video = { messageId, assetId, mimeType };
+    let descriptor = nativeVideoDescriptorCurrent(video); if (!descriptor) { await refreshFiber(); descriptor = nativeVideoDescriptorCurrent(video); }
+    if (!descriptor || descriptor.providerStatus !== 'finished_successfully') return { error: 'not_rendered' };
+    let node = nativeVideoNode(video); if (!node) { await refreshFiber(); node = nativeVideoNode(video); }
+    if (!node || node.readyState < 2 || !(node.videoWidth > 0)) return { error: 'not_rendered' };
+    const sourceUrl = node.currentSrc || node.src;
+    const stillOwned = () => epoch === heldEpoch && conversationId === heldConversation && CLF_DOM.conversationId() === heldConversation &&
+      nativeVideoDescriptorCurrent(video)?.providerStatus === 'finished_successfully' && nativeVideoNode(video) === node && (node.currentSrc || node.src) === sourceUrl;
+    if(CLF_DOM.provider==='gemini'){
+      nativeVideoTransferClaims.set(nonce,stillOwned);
+      try{return await chrome.runtime.sendMessage({type:'native_video_export',conversationId:heldConversation,nonce,messageId,assetId,mimeType,sourceUrl});}
+      catch{return{error:stillOwned()?'fetch_failed':'identity_changed'};}
+      finally{nativeVideoTransferClaims.delete(nonce);}
+    }
+    let response; try { response = await fetch(sourceUrl); } catch { return { error: 'fetch_failed' }; }
+    if (!stillOwned()) { try { await response.body?.cancel(); } catch {} return { error: 'identity_changed' }; }
+    if (!response.ok || !response.body) return { error: 'fetch_failed' };
+    const contentType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase(); if (contentType !== mimeType) { try { await response.body.cancel(); } catch {} return { error: 'not_video' }; }
+    const declared = Number(response.headers.get('content-length')); if (Number.isFinite(declared) && declared > maxBytes) { try { await response.body.cancel(); } catch {} return { error: 'too_large' }; }
+    const reader = response.body.getReader(), packet = new Uint8Array(chunkBytes); let packetLength = 0, total = 0;
+    const sendPacket = async length => {
+      let binary = ''; for (let at = 0; at < length; at += 0x8000) binary += String.fromCharCode(...packet.subarray(at, Math.min(length, at + 0x8000)));
+      let reply;
+      try { reply = await chrome.runtime.sendMessage({ type: 'video_export_chunk', conversationId: heldConversation, nonce, offset: total - length, data: btoa(binary) }); }
+      catch { if (!stillOwned()) throw new Error('identity_changed'); throw new Error('fetch_failed'); }
+      if (!stillOwned()) throw new Error('identity_changed');
+      if (!reply?.ok) throw new Error('app_rejected');
+    };
+    try {
+      while (true) {
+        const { value, done } = await reader.read(); if (!stillOwned()) throw new Error('identity_changed'); if (done) break;
+        if (!(value instanceof Uint8Array)) throw new Error('fetch_failed');
+        if (total + value.length > maxBytes) throw new Error('too_large');
+        let at = 0; while (at < value.length) { const take = Math.min(packet.length - packetLength, value.length - at); packet.set(value.subarray(at, at + take), packetLength); packetLength += take; total += take; at += take;
+          if (packetLength === packet.length) { await sendPacket(packetLength); if (!stillOwned()) throw new Error('identity_changed'); packetLength = 0; } }
+      }
+      if (total <= 0) throw new Error('fetch_failed'); if (packetLength) { await sendPacket(packetLength); if (!stillOwned()) throw new Error('identity_changed'); }
+      const final = await chrome.runtime.sendMessage({ type: 'video_export_chunk', conversationId: heldConversation, nonce, done: true, totalBytes: total });
+      if (!final?.ok) throw new Error('app_rejected'); return { ok: true };
+    } catch (error) { try { await reader.cancel(); } catch {} const reason = String(error?.message || error);
+      return { error: reason === 'identity_changed' ? 'identity_changed' : reason === 'too_large' ? 'too_large' : 'fetch_failed' }; }
   }
 
   /**
@@ -5068,9 +5445,53 @@
           serial: serial++
         });
       }
+      for (const video of turn.videos || []) {
+        items.push({
+          type: 'video',
+          value: video,
+          order: Number.isInteger(video.order) ? video.order : FIBER_MAX_MESSAGES + serial,
+          partOrder: Number.isInteger(video.partOrder) ? video.partOrder : 0,
+          serial: serial++
+        });
+      }
+      for (const artifact of turn.artifacts || []) {
+        items.push({
+          type: 'artifact',
+          value: artifact,
+          order: Number.isInteger(artifact.order) ? artifact.order : FIBER_MAX_MESSAGES + serial,
+          serial: serial++
+        });
+      }
       items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) || left.serial - right.serial);
 
       for (const item of items) {
+        if (item.type === 'artifact') {
+          // ChatGPT only: current Gemini adapters expose no stable provider artifact/revision id.
+          // Do not synthesize one from a Gemini DOM card, filename, code block, or visible label.
+          const artifact = item.value;
+          const pageConversation = concreteConversation(turn.conversationId);
+          if (!pageConversation || pageConversation !== askedConversation) continue;
+          const key = pageConversation + '\u0000' + artifact.messageId + '\u0000' + artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId;
+          const signature = JSON.stringify(artifact);
+          if (providerArtifactsReported.get(key) === signature) continue;
+          providerArtifactsReported.delete(key); providerArtifactsReported.set(key, signature);
+          emit({
+            kind: 'provider_artifact',
+            provider: 'chatgpt',
+            providerConversationId: pageConversation,
+            messageId: artifact.messageId,
+            providerArtifactId: artifact.providerArtifactId,
+            providerRevisionId: artifact.providerRevisionId,
+            ...(artifact.providerParentRevisionId ? { providerParentRevisionId: artifact.providerParentRevisionId } : {}),
+            ...(artifact.title ? { artifactTitle: artifact.title } : {}),
+            artifactKind: artifact.kind,
+            artifactEntrypoint: artifact.entrypoint,
+            artifactFiles: artifact.files,
+            ...(localOwner ? { turnId: localOwner } : {}),
+            ...(artifact.createTime ? { time: artifact.createTime, authoredTime: true, authoredAt: artifact.createTime } : {})
+          });
+          continue;
+        }
         if (item.type === 'image') {
           const image = item.value;
           const key = nativeImageKey(image);
@@ -5100,6 +5521,22 @@
           // Each tuple captures independently. The helper itself fences route/epoch and exact
           // current Fiber ownership after every await, so one slow image cannot overwrite another.
           if (image.providerStatus === 'finished_successfully') queueNativeImageCapture(image, observation);
+          continue;
+        }
+        if (item.type === 'video') {
+          const video = item.value, key = nativeVideoKey(video), prior = nativeVideosReported.get(key);
+          const ownerConflict = Boolean(prior?.conflicted || (localOwner && prior?.owner && prior.owner !== localOwner));
+          const owner = ownerConflict ? '' : localOwner || prior?.owner || '', historical = !owner && video.createTime;
+          const observation = { ...(owner ? { turnId: owner } : {}), ...(historical ? { time: video.createTime, authoredTime: true } : {}) };
+          const signature = `${owner}\u0000${video.providerRole}\u0000${video.providerChannel || ''}\u0000${video.providerStatus || ''}\u0000${video.mimeType}\u0000${video.width || ''}\u0000${video.height || ''}\u0000${video.durationMs || ''}`;
+          if (prior?.signature !== signature) {
+            nativeVideosReported.delete(key); nativeVideosReported.set(key, { signature, owner, conflicted: ownerConflict });
+            emit({ ...observation, kind: 'native_video', messageId: video.messageId, providerAssetId: video.assetId, providerRole: video.providerRole,
+              mediaMimeType: video.mimeType, ...(video.providerChannel ? { providerChannel: video.providerChannel } : {}),
+              ...(video.providerStatus ? { providerStatus: video.providerStatus } : {}), ...(video.width ? { width: video.width } : {}),
+              ...(video.height ? { height: video.height } : {}), ...(video.durationMs ? { durationMs: video.durationMs } : {}), previewStatus: 'pending' });
+          } else { nativeVideosReported.delete(key); nativeVideosReported.set(key, prior); }
+          if (video.providerStatus === 'finished_successfully') queueNativeVideoCapture(video, observation);
           continue;
         }
         if (item.type === 'activity') {
@@ -5278,6 +5715,12 @@
     if (callsReported.size > 4000) callsReported.clear();
     if (messagesReported.size > 4000) messagesReported.clear();
     if (pageToolsReported.size > 4000) pageToolsReported.clear();
+    if (providerArtifactsReported.size > 2000) {
+      for (const key of providerArtifactsReported.keys()) {
+        providerArtifactsReported.delete(key);
+        if (providerArtifactsReported.size <= 1500) break;
+      }
+    }
     while (tracesReported.size > 64) tracesReported.delete(tracesReported.keys().next().value);
     if (nativeImagesReported.size > 2000) {
       for (const key of nativeImagesReported.keys()) {
@@ -5285,11 +5728,24 @@
         if (nativeImagesReported.size <= 1500) break;
       }
     }
+    if (nativeVideosReported.size > 1000) {
+      for (const key of nativeVideosReported.keys()) {
+        nativeVideosReported.delete(key);
+        if (nativeVideosReported.size <= 750) break;
+      }
+    }
     if (nativeImageCaptures.size > 2000) {
       for (const [key, state] of nativeImageCaptures) {
         if (state?.status === 'pending' || nativeImageCaptureQueue.has(key)) continue;
         nativeImageCaptures.delete(key);
         if (nativeImageCaptures.size <= 1500) break;
+      }
+    }
+    if (nativeVideoCaptures.size > 1000) {
+      for (const [key, state] of nativeVideoCaptures) {
+        if (state?.status === 'pending' || nativeVideoCaptureQueue.has(key)) continue;
+        nativeVideoCaptures.delete(key);
+        if (nativeVideoCaptures.size <= 750) break;
       }
     }
     if (userAuthoredTimesReported.size > 4000) userAuthoredTimesReported.clear();
@@ -13414,7 +13870,7 @@
        * "the same message" means. Attachments still block regardless: an attachment draft is not
        * something this delivery could have produced.
        */
-      const ownResidue = sendText(composer.textContent) === sendText(input.text);
+      const ownResidue = sendText(CLF_DOM.composerAuthoredText()) === sendText(input.text);
       if ((!ownsFreshPage() && (composer.textContent || '').trim() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_existing_draft',
         "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
@@ -13472,7 +13928,7 @@
       // model selection and the writability wait sit between the two and can replace the editor.
       if (!onTarget() || (CLF_DOM.generating() && !message.directTurn) ||
           (!ownsFreshPage() && (CLF_DOM.composer()?.textContent || '').trim() &&
-            sendText(CLF_DOM.composer()?.textContent) !== sendText(input.text)) ||
+            sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text)) ||
           CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_composer_changed',
         "The provider composer changed before sending"
@@ -13486,11 +13942,12 @@
         ));
       const sendingTarget = submittedSendLifetime(target, forEpoch);
       draft = CLF_DOM.captureComposerDraft(input.text, () => sendAttempted ? sendingTarget() : onTarget());
-      // #744: a recovery's own text survives a composer remount before Send is authorized. The
-      // lease may follow it once; after authorization a lost editor stays a failure.
+      // The exact app draft may follow one native editor remount before Send
+      // authorization. Stop and native preparation can replace the editor too.
+      // Trusted edits, changed text or attachments revoke that lease as before.
       let authorizing = false;
       const draftCurrent = () => draft.current() ||
-        (withdrawableRecoveryDraft && !authorizing && !sendAttempted && draft.rebind() && draft.current());
+        (!authorizing && !sendAttempted && draft.rebind() && draft.current());
       const files = [];
       for (const attachment of input.attachments || []) {
         const parts = [];
@@ -13531,7 +13988,7 @@
       } : null;
       if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files))) return uploadUnconfirmed();
       await Promise.resolve();
-      if (!onTarget() || !draftCurrent() || sendText(CLF_DOM.composer()?.textContent) !== sendText(input.text)) return fail(t(
+      if (!onTarget() || !draftCurrent() || sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text)) return fail(t(
         'content_delivery_draft_preserved',
         'The composer changed; your draft was preserved'
       ));
@@ -13560,7 +14017,6 @@
         if (authorized?.data?.ok !== true) noteWithdraw('app-refused');
         if (!sendCurrent() || authorized?.data?.ok !== true || !onTarget() || !draft.current()) { noteWithdraw(onTarget() ? 'lease-lost' : offTarget()); return false; }
         if (input.recovery && !await recoveryPageUnfinished(() => sendCurrent() && onTarget() && draft.current(), withdrawWhy)) return false;
-        sendAttempted = true;
         return true;
       }, (user, conversation) => {
         if ((!conversation && !temporary) || (target && !onTarget())) return false;
@@ -13582,7 +14038,11 @@
       // ChatGPT switches its own image tool off for a message that mentions an app).
       input.purpose === 'decision' || (input.coreMention === false && !input.recovery && !agent) ? null
         : input.recovery || agent || mentionCore ? currentCoreMention() : null,
-      since => sentRequestSince(since, forEpoch), !!message.directTurn, draft, prepareAttachments);
+      since => sentRequestSince(since, forEpoch), !!message.directTurn, draft, prepareAttachments,
+      input.coreMention === false && !input.recovery && !agent,
+      () => { sendAttempted = true; },
+      input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
+        Boolean(input.recovery || agent || mentionCore));
       // #744: one retry when the editor was replaced before anything asked to send it.
       if (!(await nativeSend()) &&
           !(!authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
@@ -13602,6 +14062,8 @@
           }
           return fail('Native Send receipt was not confirmed.');
         }
+        if (!authorizing && !sendAttempted && !receipt && nativeSendRefusal === 'core-connector-unavailable')
+          return fail('The current OneCode Core connector is not available in this ChatGPT account. Connect the current Core URL in OneCode Setup using this browser account, then retry. Nothing was submitted for this task.');
         // The Gemini adapter reports these only before its actual task click.
         // Retire the existing claim with a useful error instead of silently
         // reclaiming it until preparation timeout. A possibly granted Send or
@@ -13742,7 +14204,7 @@
       if (draft) {
         try {
           const cleared = !sendAttempted ? await draft.clear() : false;
-          if (!sendAttempted && !cleared && withdrawableRecoveryDraft) draft.withdraw();
+          if (!sendAttempted && !cleared) draft.withdraw();
         }
         catch { /* Unprovable cleanup preserves the draft; never keep the input slot busy. */ }
         finally { draft.dispose(); }
@@ -14234,6 +14696,13 @@
         void exportNativeImage(message).then(sendResponse).catch(() => sendResponse({ error: 'fetch_failed' }));
         return true;
       }
+      if (message.type === 'clf-video-export') {
+        void exportNativeVideo(message).then(sendResponse).catch(() => sendResponse({ error: 'fetch_failed' }));
+        return true;
+      }
+      if(message.type==='clf-video-export-verify'){
+        sendResponse({ok:message.conversationId===conversationId&&nativeVideoTransferClaims.get(message.nonce)?.()===true});return false;
+      }
       if (message.type === 'clf-resume-compaction') {
         const accepted = resumePendingCompactionFromRepair(message.conversationId);
         if (accepted || job?.stage === 'handoff-pending' || !alive || !message.conversationId || conversationId !== message.conversationId) {
@@ -14558,6 +15027,7 @@
       cancelCompact,
       refreshFiber,
       fiberFor,
+      readTurnCalls,
       readDescriptor,
       /** Reading order, so a test can pin it against `src/shared/chronology.ts` directly. */
       chronological,

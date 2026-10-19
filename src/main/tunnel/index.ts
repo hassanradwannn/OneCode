@@ -24,6 +24,7 @@ import { locateBinary } from './locate.js';
 import { proxyEnvironment, proxyForLog } from './proxy.js';
 import { noteTunnelClientConnected } from './route-settle.js';
 import { startTailscale } from './tailscale.js';
+import { probeCloudflareMcp } from './cloudflare-public.js';
 
 type ProxyResolver = (url: string) => Promise<string>;
 let resolveSystemProxy: ProxyResolver | null = null;
@@ -803,17 +804,30 @@ async function startCloudflared(opts: TunnelStartOptions): Promise<TunnelHandle>
   let stopped = false;
   let lastError = '';
 
+  const probing = new AbortController();
+  let probeTimer: ReturnType<typeof setTimeout> | undefined;
+  const verify = async (publicUrl: string): Promise<void> => {
+    const ready = await probeCloudflareMcp(publicUrl, probing.signal, opts.discoveryHeaders);
+    if (stopped || probing.signal.aborted) return;
+    opts.report({ state: ready ? 'connected' : 'tunnel-unavailable', publicUrl,
+      detail: ready ? 'Public MCP connection verified. Use the current URL in the provider connector.'
+        : 'Cloudflare URL exists, but its MCP handshake failed. Waiting for the route; check internet access and outbound TCP/UDP port 7844. A new quick-tunnel URL must also be updated in the provider connector.' });
+    probeTimer = setTimeout(() => { void verify(publicUrl); }, ready ? 30000 : 5000);
+    probeTimer.unref?.();
+  };
+
   const handleLine = (line: string): void => {
     const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(line);
     if (match && !settled) {
       settled = true;
       const publicUrl = `${match[0]}${local.pathname}`;
-      logInfo('quick tunnel connected');
+      logInfo('quick tunnel URL assigned; checking public MCP');
       opts.report({
-        state: 'connected',
-        detail: 'Connected. Paste the URL below into the provider as a custom connector.',
+        state: 'connecting-tunnel',
+        detail: 'Cloudflare URL assigned. Checking its public MCP connection…',
         publicUrl
       });
+      void verify(publicUrl);
       return;
     }
     if (/\berr\b|\berror\b|\bfatal\b/i.test(line)) {
@@ -826,6 +840,7 @@ async function startCloudflared(opts: TunnelStartOptions): Promise<TunnelHandle>
   child.stderr.on('data', lineReader(handleLine));
 
   child.on('exit', (code) => {
+    probing.abort(); clearTimeout(probeTimer);
     if (stopped) return;
     settled = true;
     opts.report({
@@ -834,6 +849,7 @@ async function startCloudflared(opts: TunnelStartOptions): Promise<TunnelHandle>
     });
   });
   child.on('error', (err) => {
+    probing.abort(); clearTimeout(probeTimer);
     settled = true;
     opts.report({ state: 'tunnel-unavailable', detail: `Could not start cloudflared: ${err.message}` });
   });
@@ -851,6 +867,7 @@ async function startCloudflared(opts: TunnelStartOptions): Promise<TunnelHandle>
   return {
     stop: async () => {
       stopped = true;
+      probing.abort(); clearTimeout(probeTimer);
       clearTimeout(startupTimer);
       await stopTree(child);
     }

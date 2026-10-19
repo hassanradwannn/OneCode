@@ -1,6 +1,20 @@
 /** Provider identity and URL routing shared by the app, renderer and browser companion. */
-export type ChatProvider = 'gemini' | 'chatgpt';
-export const CHAT_PROVIDERS = ['gemini', 'chatgpt'] as const satisfies readonly ChatProvider[];
+export const CHAT_PROVIDER_DEFINITIONS = {
+  gemini: {
+    label: 'Gemini', homeUrl: 'https://gemini.google.com/app', conversationPrefix: 'https://gemini.google.com/app/',
+    conversationId: /^[0-9a-f]{16}$/i,
+    capabilities: { maxMessageChars: 96_000, nativeProjects: false, nativePluginRefresh: false, generatedImageExport: true,
+      handoff: 'markdown-tool' as const, receipt: 'native-question' as const }
+  },
+  chatgpt: {
+    label: 'ChatGPT', homeUrl: 'https://chatgpt.com/', conversationPrefix: 'https://chatgpt.com/c/',
+    conversationId: /^(?![0-9a-f]{16}$)[0-9a-z-]{8,64}$/i,
+    capabilities: { maxMessageChars: 96_000, nativeProjects: true, nativePluginRefresh: true, generatedImageExport: true,
+      handoff: 'native-answer' as const, receipt: 'fiber-question' as const }
+  }
+} as const;
+export type ChatProvider = keyof typeof CHAT_PROVIDER_DEFINITIONS;
+export const CHAT_PROVIDERS: readonly ChatProvider[] = Object.freeze(Object.keys(CHAT_PROVIDER_DEFINITIONS) as ChatProvider[]);
 export const DEFAULT_CHAT_PROVIDER: ChatProvider = 'gemini';
 
 export interface ProviderTrustSettings {
@@ -9,24 +23,18 @@ export interface ProviderTrustSettings {
   strictChatAllowlistByProvider?: Partial<Record<ChatProvider, boolean>>;
 }
 
-const GEMINI_CONVERSATION_ID = /^[0-9a-f]{16}$/i;
-const CHATGPT_CONVERSATION_ID = /^[0-9a-z-]{8,64}$/i;
-
 /** Identifies a stored provider conversation without consulting the new-chat preference. */
 export function chatProviderForStoredConversation(value: unknown): ChatProvider | null {
   const id = typeof value === 'string' ? value.trim() : '';
-  if (GEMINI_CONVERSATION_ID.test(id)) return 'gemini';
-  if (CHATGPT_CONVERSATION_ID.test(id)) return 'chatgpt';
-  return null;
+  const matches = CHAT_PROVIDERS.filter(provider => CHAT_PROVIDER_DEFINITIONS[provider].conversationId.test(id));
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /** Applies the selected provider's conversation-id contract at trust and block boundaries. */
 export function isChatProviderConversationId(value: unknown, provider?: ChatProvider): value is string {
   const id = typeof value === 'string' ? value.trim() : '';
   const expected = provider ?? chatProviderForStoredConversation(id);
-  if (expected === 'gemini') return GEMINI_CONVERSATION_ID.test(id);
-  if (expected === 'chatgpt') return CHATGPT_CONVERSATION_ID.test(id) && !GEMINI_CONVERSATION_ID.test(id);
-  return false;
+  return !!expected && CHAT_PROVIDER_DEFINITIONS[expected].conversationId.test(id);
 }
 
 /**
@@ -38,17 +46,15 @@ export function chatProviderForConversation(value: unknown, fallback: ChatProvid
 }
 
 export function chatProviderHomeUrl(provider: ChatProvider): string {
-  return provider === 'chatgpt' ? 'https://chatgpt.com/' : 'https://gemini.google.com/app';
+  return CHAT_PROVIDER_DEFINITIONS[provider].homeUrl;
 }
 
 export function chatProviderConversationUrl(provider: ChatProvider, conversationId: string): string {
-  return provider === 'chatgpt'
-    ? `https://chatgpt.com/c/${encodeURIComponent(conversationId)}`
-    : `https://gemini.google.com/app/${encodeURIComponent(conversationId)}`;
+  return CHAT_PROVIDER_DEFINITIONS[provider].conversationPrefix + encodeURIComponent(conversationId);
 }
 
 export function chatProviderLabel(provider: ChatProvider): string {
-  return provider === 'chatgpt' ? 'ChatGPT' : 'Gemini';
+  return CHAT_PROVIDER_DEFINITIONS[provider].label;
 }
 
 /** Reads the independent trust-validation switch for one provider, with legacy migration. */
@@ -57,12 +63,6 @@ export function providerTrustValidationEnabled(settings: ProviderTrustSettings, 
 }
 
 export function chatProviderCapabilities(provider: ChatProvider) {
-  switch (provider) {
-    // Conservative application transport budgets; these are not model context sizes or account quotas.
-    case 'gemini': return { maxMessageChars: 96_000, nativeProjects: false, nativePluginRefresh: false, generatedImageExport: false,
-      handoff: 'markdown-tool' as const, receipt: 'native-question' as const };
-    case 'chatgpt': return { maxMessageChars: 96_000, nativeProjects: true, nativePluginRefresh: true, generatedImageExport: true,
-      handoff: 'native-answer' as const, receipt: 'fiber-question' as const };
-    default: throw new Error('Unsupported chat provider');
-  }
+  // Conservative application transport budgets; these are not model context sizes or account quotas.
+  return CHAT_PROVIDER_DEFINITIONS[provider].capabilities;
 }

@@ -19,6 +19,7 @@ import { withManagedSkills } from '../skill-access.js';
 import { canAddCodeMode, CODE_MODE_INSTRUCTIONS } from './code-mode-tool.js';
 import { pluginManager } from '../plugins/manager.js';
 import { pluginDiscoveryInstructions } from './plugin-discovery.js';
+import { artifactDiscoveryInstructions } from './artifact-discovery.js';
 import { mcpProvider } from './provider-context.js';
 import { effectiveCapabilities, getConfig, MAX_MCP_INSTRUCTIONS_CHARS } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
@@ -112,6 +113,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     `; Core plugins action=list then action=call for enabled external apps and services (the separate ${surfaceDefinition('plugins').connectorName} connector also exposes their native tools).`,
     'For external MCPs, discover with plugins {action:"list",query:"optional literal search"}; then call plugins {action:"call",name:"exact_listed_name",arguments:{...}} using the returned inputSchema. Use arguments, not args. No separate @Plugins mention is needed. This bridge does not install, enable, sign in or import another app\'s MCP settings. Live plugin admission and this chat\'s binding, Block and Trust still apply.',
     pluginDiscoveryInstructions(configuredConnectorName('core'), mcpProvider()),
+    artifactDiscoveryInstructions(caps),
     `Host: ${host}. Roots: ${roots}`,
     `Current Core authority (informational; live guards decide): ${authority}; read-only=${ctx.readOnly ? 'on' : 'off'}; plans=${sessionTools ? 'on' : 'off'}; workers=${agentTools ? 'on' : 'off'}.`,
     ctx.readOnly ? 'The local tools are read-only.' : 'Use the tools listed in this conversation.',

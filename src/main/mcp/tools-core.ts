@@ -1,11 +1,14 @@
 import { toolDeclaration } from './tool-declarations.js';
 import { registerPlanTool } from './plan-tool.js';
 import { registerHandoffTool } from './handoff-tool.js';
+import { registerArtifactTool } from './artifact-tool.js';
 import { registerPluginBridge } from './plugin-bridge-tool.js';
 import { readSkillCatalog, SKILL_CATALOG_PATH } from '../skill-library.js';
 import { readSessionHistoryFile } from '../session/history-files.js';
 import { goalWorkerChat, imageExportCapable } from '../bridge.js';
 import { exportImage, ImageExportError } from '../image-export.js';
+import { nativeMediaConversation } from '../native-media.js';
+import { NATIVE_OUTPUT_ADAPTERS } from '../../shared/native-output.js';
 import { awaitRequestCorrelation } from '../session/correlation.js';
 import { announceSessionFinish, sessionFinishDeadline } from '../session/finish.js';
 import { getConfig } from '../config.js';
@@ -254,6 +257,7 @@ function execPrincipal(): string | null {
 export function registerCoreTools(reg: SurfaceRegistrar): void {
   const { ctx, caps, exposedCaps } = reg;
   registerPluginBridge(reg);
+  registerArtifactTool(reg);
   // Named from the live roots, never from a `/project` that may not exist: a worked example the
   // model cannot act on costs a refused call and a retry. What followed the root had the same
   // problem and cost more of them. `/<root>/src/main.ts` is a project's shape, so it read as a
@@ -477,12 +481,13 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   // -------------------------------------------------------------- save_image
   //
-  // Only an adapter with native original-file evidence may advertise image export.
-  if (exposedCaps.create && mcpProvider() === 'chatgpt') {
+  // The endpoint provider's adapter declares the representation it can actually export.
+  if (exposedCaps.create && NATIVE_OUTPUT_ADAPTERS[mcpProvider()].exports.image) {
     reg.register(
       'save_image',
       toolDeclaration('save_image', () => ({
-        description: 'Save the original file of an image ChatGPT generated in this chat (not a screenshot or preview) to a new file in an approved folder. ' +
+        description: 'Save an image generated in this chat to a new file in an approved folder. ' +
+          (NATIVE_OUTPUT_ADAPTERS[mcpProvider()].exports.image === 'rendered' ? 'Exports the exact provider-rendered pixels as PNG; this is separate from its full-size download. ' : 'Exports the provider original file, not a screenshot or preview. ') +
           'Never replaces an existing file. The chat must be open in the browser with the image on its page.',
         inputSchema: z
           .object({
@@ -496,7 +501,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       async ({ path, nth }) =>
         guard('save_image', async () => {
           if (!caps.create) {
-            return fail('TOOL_DISABLED: save_image is disabled by the current Chat On Steroids permissions. Ask the user to enable creating files in the app.');
+            return fail('TOOL_DISABLED: save_image is disabled by the current OneCode permissions. Ask the user to enable creating files in the app.');
           }
           const caller = currentCaller();
           const conversationId = caller.conversationId ??
@@ -513,8 +518,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           if (!imageExportCapable()) {
             return fail('save_image needs the Chat On Steroids browser extension to be connected and up to date, so the chat\'s page can hand over the image.');
           }
-          const session = await findSessionByConversation(conversationId);
-          const recorded = session ? await readRecentEvents(session.id, 400, { kinds: ['native_image'] }) : [];
+          const session = await findSessionByConversation(conversationId, { requireUnique: true });
+          const recorded = session ? await readRecentEvents(session.id, 400, { kinds: ['native_image'], orderByOrigin: true }) : [];
           const images = recorded.filter((event): event is Extract<typeof event, { kind: 'native_image' }> =>
             event.kind === 'native_image' && event.providerStatus !== 'in_progress');
           const chosen = images.at(-(nth ?? 1));
@@ -531,9 +536,10 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           }
           try {
-            const saved = await exportImage({ conversationId, messageId: chosen.messageId, assetId: chosen.providerAssetId }, target);
+            const sourceConversation = await nativeMediaConversation(session!.id, chosen.messageId, chosen.providerAssetId);
+            const saved = await exportImage({ conversationId: sourceConversation, messageId: chosen.messageId, assetId: chosen.providerAssetId }, target);
             logInfo(`tool save_image ${saved.virtual} (${formatBytes(saved.bytes)})`);
-            return ok(`Saved ${saved.virtual} (${saved.width}x${saved.height} ${saved.format.toUpperCase()}, ${formatBytes(saved.bytes)}), the original file ChatGPT generated.`);
+            return ok(`Saved ${saved.virtual} (${saved.width}x${saved.height} ${saved.format.toUpperCase()}, ${formatBytes(saved.bytes)}), ${saved.representation === 'rendered' ? 'the provider-rendered image as PNG' : 'the original file the provider generated'}.`);
           } catch (error) {
             if (error instanceof ImageExportError) return fail(`save_image did not save the image: ${error.message}`);
             throw error;

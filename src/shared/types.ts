@@ -516,8 +516,10 @@ export interface ConnectionStatus {
   surfaces: SurfaceStatus[];
 }
 
-export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error';
+export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error' | 'mcp-error';
 export interface TailscaleStatus {
+  /** Desktop setup action; static first-party URL, never CLI output. */
+  setup?: import('./tailscale-setup.js').TailscaleSetupAction;
   cli: 'missing' | 'ready' | 'error';
   account: 'unknown' | 'signed-out' | 'ready';
   funnel: 'unknown' | 'permission-required' | 'ready' | 'error';

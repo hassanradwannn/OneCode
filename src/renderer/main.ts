@@ -1,5 +1,6 @@
 import { displayReleaseVersion } from '../shared/release-version.js';
 import { initProviderCopy, initProviderSettings } from './provider-settings.js';
+import { initRemoteSettings } from './remote-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
@@ -66,6 +67,8 @@ import { publishStopNoticeTexts } from './stop-notices.js';
 import { publishMainTexts } from './main-texts.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
 import { tailscalePublicReady, tailscaleSetupView } from './tailscale-setup.js';
+import { TAILSCALE_SETUP_ACTIONS } from '../shared/tailscale-setup.js';
+import { paintTailscaleRecovery } from './tailscale-recovery.js';
 
 declare global {
   interface Window {
@@ -1821,6 +1824,11 @@ function apply(next: AppState): void {
   const tailscale = tailscaleSetupView(next);
   $('tailscaleSetup').hidden = tailscale === null;
   if (tailscale) {
+    const action = next.status.tailscale?.setup && TAILSCALE_SETUP_ACTIONS[next.status.tailscale.setup.step];
+    const setupButton = $<HTMLButtonElement>('tailscaleSetupAction'); setupButton.hidden = !action;
+    const recovery = $('tailscaleRecovery'); recovery.hidden = !action && !['tunnel-unavailable', 'offline'].includes(next.status.state);
+    if (!recovery.hidden) paintTailscaleRecovery(recovery, next.status.tailscale?.setup?.step, 'tunnel');
+    if (action) { setupButton.textContent = t(action.label); setupButton.onclick = () => { void run(api.openLink(action.url, { external: true })); }; }
     ui($('tailscaleCli'), 'textContent', () => t(tailscale.cli) + (tailscale.version ? ` (${tailscale.version})` : ''));
     ui($('tailscaleAccount'), 'textContent', () => t(tailscale.account));
     ui($('tailscaleFunnel'), 'textContent', () => t(tailscale.funnel));
@@ -2684,6 +2692,7 @@ function chooseChatBrowser(browser: ChatBrowser): void {
   choice.dispatchEvent(new Event('change', { bubbles: true }));
 }
 initProviderSettings(save);
+initRemoteSettings();
 $('pickBinary').addEventListener('click', async () => {
   const next = await run(api.pickBinary());
   if (next) apply(next);

@@ -524,33 +524,37 @@ function paintStatus(): void {
 /** Refresh and Send share one request; state pushes complete waiting sends without polling. */
 function discoverModels(): Promise<void> {
   if (discovery) return discovery;
+  const provider = activeProvider;
   const requested = ++generation;
   catalog = { ...catalog, state: 'pending', requestedAt: Date.now(), error: undefined };
   paintStatus();
   const work = (async () => {
-    const result = await run(window.api.requestChatModels(activeProvider)).catch(() => null);
+    const result = await run(window.api.requestChatModels(provider)).catch(() => null);
     if (requested !== generation) return;
     catalog = result ?? { ...catalog, state: 'unavailable', error: t("Model discovery could not start.") };
-    catalogs[activeProvider] = catalog;
+    catalogs[provider] = catalog;
     for (const [modelId, effortId, allowEmpty] of pairs) paintPair(modelId, effortId, undefined, undefined, allowEmpty);
     paintComposerContext(); paintStatus();
   })();
-  discovery = work.finally(() => { discovery = null; });
+  const flight = work.finally(() => { if (discovery === flight) discovery = null; });
+  discovery = flight;
   return discovery;
 }
 
 export async function ensureComposerModel(refresh = false): Promise<SendModel | null> {
+  const provider = activeProvider;
   // Automatic never waits for the list; only an exact request does.
   if (!refresh && automaticApplies()) return composerSendModel();
   if (!refresh && catalog.models.length && catalog.state !== 'pending') return confirmedComposerModel();
   const ready = new Promise<void>(resolve => {
     const finish = () => { clearTimeout(timer); catalogWaiters.delete(check); resolve(); };
-    const check = () => { if (catalog.state === 'ready' || catalog.state === 'unavailable') finish(); };
+    const check = () => { if (provider !== activeProvider || catalog.state === 'ready' || catalog.state === 'unavailable') finish(); };
     const timer = setTimeout(finish, 125000);
     catalogWaiters.add(check);
   });
   await discoverModels();
   await ready;
+  if (provider !== activeProvider) return null;
   // A refresh that failed confirms nothing, even with older choices still on screen.
   return catalog.state === 'ready' && !catalog.error ? composerSendModel() : automaticApplies() ? { ...AUTOMATIC } : null;
 }
@@ -559,17 +563,27 @@ export function applyChatModels(config: Config, previous?: Config, provider: Cha
   settingsProvider = config.ui?.chatProvider ?? 'gemini';
   const providerChanged = provider !== activeProvider;
   activeProvider = provider;
-  if (providerChanged) { catalog = catalogs[provider] ?? { state: 'unknown', requestedAt: null, observedAt: null, models: [] }; ++generation; }
+  if (providerChanged) {
+    catalog = catalogs[provider] ?? { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
+    ++generation; discovery = null;
+    // An edited model belongs to its provider. Navigation restores existing chat
+    // observations below; a new provider starts from its own defaults.
+    composerContext = null;
+  }
   // Preserve configured values even before an observation arrives; unrelated saves must not erase them.
   const chosen = (id: string, value: string, prior?: string) => {
     const select = document.getElementById(id) as HTMLSelectElement | null;
     return select && document.activeElement === select && previous && select.value !== (prior ?? '') ? select.value : value;
   };
-  ordinaryDefaults = { model: config.ui?.defaultChatModel ?? '', reasoningEffort: config.ui?.defaultChatReasoning ?? '' };
-  paintPair('defaultChatModel', 'defaultChatReasoning', chosen('defaultChatModel', ordinaryDefaults.model, previous?.ui?.defaultChatModel), chosen('defaultChatReasoning', ordinaryDefaults.reasoningEffort, previous?.ui?.defaultChatReasoning), true);
+  ordinaryDefaults = provider === settingsProvider
+    ? { model: config.ui?.defaultChatModel ?? '', reasoningEffort: config.ui?.defaultChatReasoning ?? '' }
+    : { model: '', reasoningEffort: '' };
+  if (providerChanged) paintPair('composerModel', 'composerReasoning', ordinaryDefaults.model, ordinaryDefaults.reasoningEffort);
+  paintPair('defaultChatModel', 'defaultChatReasoning', chosen('defaultChatModel', config.ui?.defaultChatModel ?? '', previous?.ui?.defaultChatModel), chosen('defaultChatReasoning', config.ui?.defaultChatReasoning ?? '', previous?.ui?.defaultChatReasoning), true);
   paintPair('workerModel', 'workerReasoning', chosen('workerModel', config.multiAgent.defaultModel ?? '', previous?.multiAgent.defaultModel), chosen('workerReasoning', config.multiAgent.defaultReasoning ?? '', previous?.multiAgent.defaultReasoning));
   paintPair('helperModel', 'helperReasoning', chosen('helperModel', config.goal.helperModel ?? DEFAULT_HELPER_CHAT_MODEL, previous?.goal.helperModel ?? DEFAULT_HELPER_CHAT_MODEL), chosen('helperReasoning', config.goal.helperReasoning ?? 'high', previous?.goal.helperReasoning ?? 'high'));
   paintComposerContext();
+  if (providerChanged) paintStatus();
   if (catalogSubscribed && catalog.state !== 'unknown' && !providerChanged) return;
   const requested = ++generation;
   void window.api.getChatModels(provider).then(result => {

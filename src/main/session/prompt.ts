@@ -167,7 +167,8 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = [compact ? (chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)), scope.routingInstructions].filter(Boolean).join('\n\n');
+  const core = [compact ? (chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
+    scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
   const agents = await projectInstructions(scope);

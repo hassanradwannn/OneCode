@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extension_name__",
-  "version": "0.3.600",
-  "version_name": "0.3.6",
+  "version": "0.3.701",
+  "version_name": "0.3.7.1",
   "description": "__MSG_extension_description__",
   "default_locale": "en",
   "minimum_chrome_version": "125",
@@ -20,6 +20,7 @@
   ],
   "host_permissions": [
     "https://gemini.google.com/*",
+    "https://contribution.usercontent.google.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "http://127.0.0.1:28765/*",

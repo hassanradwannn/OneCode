@@ -11,6 +11,10 @@ export async function writeUpdateMetadata(directory, arch, version) {
   const blockmap = await fs.stat(path.join(directory, name + '.blockmap'));
   if (!installer.length || !blockmap.isFile() || !blockmap.size) throw new Error('Update artifacts are incomplete');
   const sha512 = createHash('sha512').update(installer).digest('base64');
+  // A rebuild must not leave a previous candidate's downloadable checksum behind.
+  const checksum = path.join(directory, name + '.sha256');
+  await fs.writeFile(checksum + '.tmp', `${createHash('sha256').update(installer).digest('hex')}  ${name}\n`, 'utf8');
+  await fs.rename(checksum + '.tmp', checksum);
   const metadata = { version, files: [{ url: name, sha512, size: installer.length }], path: name, sha512,
     releaseDate: new Date().toISOString() };
   const target = path.join(directory, `latest-${arch}.yml`), pending = `${target}.tmp`;

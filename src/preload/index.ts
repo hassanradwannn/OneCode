@@ -1,4 +1,5 @@
 import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/workspace-terminal.js';
+import type { RemoteStatus } from '../shared/remote.js';
 import type { ApprovalCardView } from '../shared/approval-wait.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
@@ -15,6 +16,9 @@ import type { InputArgs, InputEntry } from '../main/session/input.js';
 import type { LocalProject, ProjectColor } from '../shared/projects.js';
 import type { ProjectDirectoryListing, ProjectFileMutationResult, ProjectFilePreview, ProjectFileSaveResult, ProjectFilesChanged } from '../shared/project-files.js';
 import type { ProjectGitChanged, ProjectGitDiff, ProjectGitSnapshot } from '../shared/project-git.js';
+import type { ArtifactExportResult, ArtifactOpenRequest, ArtifactPatchOperation, ArtifactSnapshot, ArtifactSummary } from '../shared/artifact.js';
+import type { NativeMediaItem, NativeMediaSaveResult, NativeVideoPlayback, NativeVideoPlaybackChunk } from '../shared/native-media.js';
+import type { WorkbenchBrowserBounds, WorkbenchBrowserState } from '../shared/workbench-browser.js';
 import type { PetLibraryState, PetOverlayControlState, PetRuntimeAsset } from '../shared/pets.js';
 import type { SkillSummary, ManagedSkill, GitHubSkillUpdateCheck, SkillLibrary, SkillsDraftScope } from '../shared/skills.js';
 import type { RunningToolActivity, SessionChange, SessionSearchReply, SessionSearchLocation, ToolEditReview } from '../shared/session.js';
@@ -299,6 +303,48 @@ const api = {
   deleteProjectFileEntry: (projectId: string, path: string) => call<boolean>('projectFiles:delete', { projectId, path }),
   revealProjectFileEntry: (projectId: string, path = '') => call<boolean>('projectFiles:reveal', { projectId, path }),
   attachProjectFile: (projectId: string, path: string) => call<InputAttachment>('projectFiles:attach', { projectId, path }),
+  listArtifacts: (sessionId: string) => call<ArtifactSummary[]>('artifacts:list', { sessionId }),
+  createArtifactPreviewDocument: (sessionId: string, artifactId: string, revision: number | undefined, document: string) =>
+    call<{ id: string; url: string }>('artifacts:previewDocument', { sessionId, artifactId, ...(revision !== undefined ? { revision } : {}), document }),
+  releaseArtifactPreviewDocument: (sessionId: string, id: string) => call<boolean>('artifacts:releasePreview', { sessionId, id }),
+  readArtifact: (sessionId: string, artifactId: string, revision?: number) =>
+    call<ArtifactSnapshot | null>('artifacts:read', { sessionId, artifactId, ...(revision !== undefined ? { revision } : {}) }),
+  patchArtifact: (sessionId: string, artifactId: string, expectedRevision: number, patch: {
+    operations?: ArtifactPatchOperation[]; title?: string; entrypoint?: string
+  }) => call<ArtifactSnapshot>('artifacts:patch', { sessionId, artifactId, expectedRevision, ...patch }),
+  exportArtifact: (sessionId: string, artifactId: string, revision?: number) =>
+    call<ArtifactExportResult>('artifacts:export', { sessionId, artifactId, ...(revision !== undefined ? { revision } : {}) }),
+  listNativeMedia: (sessionId: string) => call<NativeMediaItem[]>('nativeMedia:list', { sessionId }),
+  saveNativeMediaToProject: (sessionId: string, messageId: string, assetId: string) =>
+    call<NativeMediaSaveResult>('nativeMedia:saveToProject', { sessionId, messageId, assetId }),
+  openNativeMediaProvider: (sessionId: string, messageId: string, assetId: string) =>
+    call<boolean>('nativeMedia:openProvider', { sessionId, messageId, assetId }),
+  prepareNativeVideoPlayback: (sessionId: string, messageId: string, assetId: string) =>
+    call<NativeVideoPlayback>('nativeMedia:prepareVideo', { sessionId, messageId, assetId }),
+  readNativeVideoPlaybackChunk: (sessionId: string, token: string, offset: number, maxBytes?: number) =>
+    call<NativeVideoPlaybackChunk>('nativeMedia:videoChunk', { sessionId, token, offset, ...(maxBytes ? { maxBytes } : {}) }),
+  releaseNativeVideoPlayback: (sessionId: string, token: string) => call<boolean>('nativeMedia:releaseVideo', { sessionId, token }),
+  onArtifactOpen: (listener: (request: ArtifactOpenRequest) => void): (() => void) => {
+    const wrapped = (_event: unknown, request: ArtifactOpenRequest): void => listener(request);
+    ipcRenderer.on('artifacts:open', wrapped);
+    return () => ipcRenderer.removeListener('artifacts:open', wrapped);
+  },
+  workbenchBrowserState: (sessionId: string) => call<WorkbenchBrowserState>('workbenchBrowser:state', { sessionId }),
+  workbenchBrowserEnsure: (sessionId: string, url?: string) => call<WorkbenchBrowserState>('workbenchBrowser:ensure', { sessionId, ...(url ? { url } : {}) }),
+  workbenchBrowserNew: (sessionId: string, url?: string) => call<WorkbenchBrowserState>('workbenchBrowser:new', { sessionId, ...(url ? { url } : {}) }),
+  workbenchBrowserSelect: (sessionId: string, tabId: number) => call<WorkbenchBrowserState>('workbenchBrowser:select', { sessionId, tabId }),
+  workbenchBrowserClose: (sessionId: string, tabId: number) => call<WorkbenchBrowserState>('workbenchBrowser:close', { sessionId, tabId }),
+  workbenchBrowserNavigate: (sessionId: string, tabId: number, url: string) => call<WorkbenchBrowserState>('workbenchBrowser:navigate', { sessionId, tabId, url }),
+  workbenchBrowserHistory: (sessionId: string, tabId: number, action: 'back' | 'forward' | 'reload' | 'stop') =>
+    call<WorkbenchBrowserState>('workbenchBrowser:history', { sessionId, tabId, action }),
+  workbenchBrowserPresent: (sessionId: string, tabId: number, bounds: WorkbenchBrowserBounds, visible: boolean) =>
+    call<WorkbenchBrowserState>('workbenchBrowser:present', { sessionId, tabId, bounds, visible }),
+  workbenchBrowserHide: (sessionId?: string) => call<boolean>('workbenchBrowser:hide', { ...(sessionId ? { sessionId } : {}) }),
+  onWorkbenchBrowserChanged: (listener: (event: { sessionId: string }) => void): (() => void) => {
+    const wrapped = (_event: unknown, change: { sessionId: string }): void => listener(change);
+    ipcRenderer.on('workbenchBrowser:changed', wrapped);
+    return () => ipcRenderer.removeListener('workbenchBrowser:changed', wrapped);
+  },
   getProjectGitSnapshot: (projectId: string, baseRef?: string) => call<ProjectGitSnapshot>('projectGit:snapshot', { projectId, ...(baseRef ? { baseRef } : {}) }),
   getProjectGitDiff: (projectId: string, path: string, baseRef?: string, expectedRevision?: string) => call<ProjectGitDiff>('projectGit:diff', {
     projectId, path, ...(baseRef ? { baseRef } : {}), ...(expectedRevision ? { expectedRevision } : {})
@@ -341,6 +387,9 @@ const api = {
   cancelSessionCompaction: (id: string) => call<SessionControlsView>('sessions:cancelCompaction', { id }),
   draftTaskPlan: (text: string, backend: 'api' | 'chatgpt', requestId?: string) => call<string[]>('sessions:plan', { text, backend, requestId }),
   sendInput: (input: InputArgs) => call<InputEntry>('sessions:send', input),
+  remoteStatus: () => call<RemoteStatus>('remote:status'),
+  remoteEnabled: (enabled: boolean) => call<RemoteStatus>('remote:enabled', enabled),
+  remoteRevoke: (id: string) => call<RemoteStatus>('remote:revoke', id),
   retryInputBrowser: (id: string) => call<InputEntry | null>('sessions:retryBrowser', { id }),
   listInputs: () => call<InputEntry[]>('sessions:outbox'),
   listPausedHelpers: () => call<Array<{ id: string; sourceSessionId: string }>>('sessions:pausedHelpers'),

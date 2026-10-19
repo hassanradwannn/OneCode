@@ -67,6 +67,14 @@ function required(relative) {
   return target;
 }
 
+if (targetPlatform === 'win32' || targetPlatform === 'linux') {
+  const icon = readFileSync(required('runtime-icon.png'));
+  if (!icon.equals(readFileSync(path.join(repository, 'build/runtime-icon.png')))) throw new Error('Packaged window/taskbar icon differs from OneCode branding');
+}
+if (targetPlatform === 'win32' && !readFileSync(required('runtime-icon.ico')).equals(readFileSync(path.join(repository, 'build/icon.ico')))) {
+  throw new Error('Packaged Explorer taskbar icon differs from OneCode branding');
+}
+
 for (const relative of [
   'app.asar',
   'LICENSE',
@@ -76,6 +84,9 @@ for (const relative of [
   'extension/manifest.json',
   'extension/background.js',
   'extension/chatgpt-dom.js',
+  'extension/gemini-dom.js',
+  'extension/gemini-native.js',
+  'extension/native-video-transfer.js',
   'extension/content.js',
   'extension/fiber.js',
   'extension/overlay.css',

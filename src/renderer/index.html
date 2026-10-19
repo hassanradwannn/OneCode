@@ -52,6 +52,7 @@
           <i class="ico ph ph-house" aria-hidden="true"></i>Workspace
         </button>
         <button data-tab="general" type="button"><i class="ico ph ph-sliders-horizontal" aria-hidden="true"></i>General</button>
+        <button data-tab="remote" type="button"><i class="ico ph ph-globe-hemisphere-west" aria-hidden="true"></i>Remote</button>
         <button data-tab="usage" type="button"><i class="ico ph ph-chart-line" aria-hidden="true"></i>Usage</button>
 <button data-tab="setup" type="button">
           <i class="ico ph ph-list-checks" aria-hidden="true"></i>Setup
@@ -225,6 +226,24 @@
           </div>
         </section>
 
+        <section class="panel appearance-panel scroll" data-panel="remote" aria-labelledby="remoteTitle">
+          <div class="appearance-content settings-page-content">
+            <header class="settings-page-head appearance-page-head"><div><h1 id="remoteTitle">Remote</h1><p>Use OneCode from another device connected to your Tailscale.</p></div></header>
+            <section class="appearance-section" id="remoteSettings">
+              <div class="settings-surface pane appearance-settings-card">
+                <label class="setting"><span class="setting-text"><b>Remote mode</b><em>Open your chats from a browser on your Tailscale.</em></span><input type="checkbox" id="remoteEnable" /></label>
+                <div class="setting"><span class="setting-text"><b>Status</b><em id="remoteStatus" role="status">Off</em></span><button class="btn" type="button" id="remoteRefresh">Refresh</button></div>
+                <div id="remoteSetup" hidden><button class="btn btn-solid" type="button" id="remoteSetupAction">Finish Tailscale setup</button><p class="hint">OneCode will continue automatically after you finish in Tailscale.</p></div>
+                <div id="remoteRecovery" hidden></div>
+                <div id="remoteLink" hidden><div class="remote-link-row"><input type="text" id="remoteAddress" aria-label="Remote link" readonly translate="no" /><button class="btn btn-solid" type="button" id="remoteCopyLink">Copy link</button></div></div>
+              </div>
+            </section>
+            <section class="appearance-section" id="remoteDevicesSection" hidden>
+              <header class="settings-section-head"><div><h2>Connected browsers</h2></div></header>
+              <div class="settings-surface pane appearance-settings-card" id="remoteDevices"></div>
+            </section>
+          </div>
+        </section>
         <section class="panel appearance-panel scroll" data-panel="appearance" id="appearancePanel" aria-labelledby="appearanceTitle">
           <div class="appearance-content settings-page-content">
             <header class="settings-page-head appearance-page-head">
@@ -583,7 +602,7 @@
                 <div class="step-mark"><i class="ico tick ph ph-check" aria-hidden="true"></i></div>
                 <div class="step-body browser-setup">
                   <div class="browser-setup-header">
-                    <label class="setting"><span class="setting-text"><b>AI provider</b><em>New chats use this provider immediately. Existing Gemini and ChatGPT chats keep working with their original provider.</em></span><select id="setupChatProvider"><option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option></select></label>
+                    <label class="setting"><span class="setting-text"><b>AI provider</b><em>New chats use this provider immediately. Existing Gemini and ChatGPT chats keep working with their original provider.</em></span><select id="setupChatProvider"></select></label>
                     <ol class="browser-phases" aria-label="Connect your Gemini">
                     <li id="browserPhaseExtension" aria-current="step"><span class="phase-number" aria-hidden="true" translate="no">A</span><span>Install the extension</span></li>
                     <li id="browserPhaseLocation"><span class="phase-number" aria-hidden="true" translate="no">B</span><span>Where Gemini runs</span></li>
@@ -778,6 +797,7 @@
                     <div class="step-actions">
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/install/windows">Install and sign in</button>
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/features/tailscale-funnel">Funnel permission help</button>
+                      <button class="btn btn-solid" type="button" id="tailscaleSetupAction" hidden>Finish Tailscale setup</button>
                     </div>
                     <p class="hint">Click Connect to check Tailscale and the exact connector through public DNS and HTTPS. Installation, sign-in or a local Funnel route alone does not connect Gemini.</p>
                     <p class="hint"><b>Tailscale CLI:</b> <span id="tailscaleCli">Not checked</span></p>
@@ -787,6 +807,7 @@
                     <p class="hint"><b>Configured HTTPS address:</b> <span id="tailscalePublished">Not published</span></p>
                     <p class="hint" id="tailscaleChecked" hidden></p>
                     <p class="hint" id="tailscaleDetail" role="status" hidden></p>
+                    <div id="tailscaleRecovery" hidden></div>
                     <p class="hint is-warn" id="tailscaleStorageWarning" hidden>Secure storage is unavailable. Tailscale cannot connect until this computer can safely keep its connector URLs.</p>
                     <p class="hint">Connector URLs stay the same across restarts while the Tailscale device name, tailnet and saved app paths stay the same. Tailscale Funnel makes this HTTPS service public; keep its secret connector URLs private.</p>
                   </section>
@@ -977,6 +998,7 @@
                  column runs from the title bar to the bottom, and expanding the panel hides it with the chat. -->
             <header class="chat-head">
               <span id="chatTitle">New chat</span>
+              <select id="newChatProvider" class="new-chat-provider" aria-label="Provider for this new chat" hidden></select>
               <span id="chatProjectContext" class="chat-project-context" hidden>
                 <span aria-hidden="true">/</span>
                 <span id="chatProjectName"></span>
@@ -1181,7 +1203,7 @@
                   </div>
                 <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Browser & history</h2><p>Manage background tabs, browser preferences, and history compaction.</p></div></header>
                 <div class="settings-surface pane">
-                  <label class="setting"><span class="setting-text"><b>AI provider</b><em>Applies to new chats as soon as it is saved. Open chats retain their provider and remain functional.</em></span><select id="chatProvider"><option value="gemini">Gemini</option><option value="chatgpt">ChatGPT</option></select></label>
+                  <label class="setting"><span class="setting-text"><b>AI provider</b><em>Applies to new chats as soon as it is saved. Open chats retain their provider and remain functional.</em></span><select id="chatProvider"></select></label>
                   <label class="setting"><span class="setting-text"><b id="providerBrowserTitle">Gemini browser</b><em id="providerBrowserHint">Choose a full browser for Google sign-in. Install the companion and sign in to Gemini in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their browser and account.</em></span><select id="chatBrowser"><option value="chrome">Google Chrome / Chromium</option><option value="edge">Microsoft Edge</option><option value="brave">Brave Browser</option><option value="firefox">Mozilla Firefox</option><option value="cos" disabled hidden>Unsupported embedded browser — choose a full browser</option></select></label>
                   <label class="setting" id="cosBrowserMinimizeRow" hidden><span class="setting-text"><b>Legacy embedded window preference</b><em>Retained for older profiles. Embedded Google sign-in is not supported.</em></span><select id="cosBrowserMinimize"><option value="taskbar" id="cosBrowserMinimizeTaskbar">Taskbar</option><option value="tray" id="cosBrowserMinimizeTray">Tray</option></select></label>
                   <div class="setting"><span class="setting-text"><b>Browser extension</b><em>Disconnect the browser extension from this app.</em></span><button class="btn" id="bridgeUnpair" type="button">Disconnect browser</button></div>

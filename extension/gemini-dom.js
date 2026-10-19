@@ -403,11 +403,165 @@ var CLF_DOM = (() => {
     if (seen.has(id)) return [];
     seen.add(id);
     const copy = turn.role === 'assistant' ? node.cloneNode(true) : null;
-    if (copy) for (const drop of copy.querySelectorAll('action-card,remy-confirmation-card,button,script,style')) drop.remove();
+    // Native output has its own exact identity/byte pipeline. Its controls, temporary editor
+    // lines and signed media sources must never become assistant prose when Code/Preview flips.
+    // Ordinary code-block/code/pre content remains part of the authored reply.
+    if (copy) for (const drop of copy.querySelectorAll('action-card,remy-confirmation-card,button,script,style,generated-image,generated-video,immersive-entry-chip')) drop.remove();
     return [{ id, role: turn.role, text: turn.role === 'user' ? authored(node) :
       typeof CLF_GEMINI_MARKDOWN !== 'undefined' ? CLF_GEMINI_MARKDOWN.render(copy) : blockText(copy), turnId: id, node: turn.node, interrupted: false }];
   }
   const messages = () => { const seen = new Set(); return turns().flatMap((turn, at) => messagesIn(turn, at, seen)); };
+  /**
+   * Gemini's generated-image component declares the attachment index within its exact native
+   * response. This is not a DOM-order index. The native exchange and rendered response id must
+   * agree before that response/index tuple may own pixels. URLs stay inside this adapter.
+   */
+  function nativeImageEntries(snapshot = turns()) {
+    const conversation = conversationId();
+    if (!conversation) return [];
+    const entries = [];
+    for (const turn of snapshot.filter(row => row.role === 'assistant').slice(-64)) {
+      const roots = all('[id^="model-response-message-contentr_"]', turn.node);
+      if (roots.length !== 1) continue;
+      const response = /^model-response-message-contentr_([0-9a-f]{16})$/i.exec(roots[0].id);
+      if (!response || turn.id !== `gemini:${conversation}:assistant:${response[1].toLowerCase()}`) continue;
+      const cards = all('generated-image single-image.generated-image[data-image-attachment-index]', roots[0]);
+      const indexes = cards.map(card => card.getAttribute('data-image-attachment-index'));
+      for (const card of cards.slice(0, 16)) {
+        const index = card.getAttribute('data-image-attachment-index');
+        if (!/^(?:0|[1-9]\d{0,3})$/.test(index || '') || indexes.filter(value => value === index).length !== 1) continue;
+        const images = all('img.image', card);
+        // Download may be hover-hidden. Its native ownership, not its visibility, proves the
+        // generated-image surface; ordinary reply images and uploaded images never qualify.
+        if (images.length !== 1 || all('button[aria-label="Download full-sized image"]', card).length !== 1) continue;
+        const node = images[0];
+        if (!node.isConnected || node.closest('single-image') !== card || card.closest('model-response') !== turn.node) continue;
+        const width = node.naturalWidth, height = node.naturalHeight;
+        const complete = Boolean(turn.node.querySelector('.response-footer.complete')) && !pendingApprovalIn(turn.node);
+        entries.push({ node, card, root: turn.node, image: { messageId: turn.id, assetId: `image_${index}`,
+          providerRole: 'assistant', providerChannel: 'final', providerStatus: complete ? 'finished_successfully' : 'in_progress',
+          ...(width > 0 ? { width } : {}), ...(height > 0 ? { height } : {}) } });
+      }
+    }
+    return entries;
+  }
+  function nativeVideoEntries(snapshot = turns()) {
+    const conversation = conversationId();
+    if (!conversation) return [];
+    const entries = [];
+    for (const turn of snapshot.filter(row => row.role === 'assistant').slice(-64)) {
+      const roots = all('[id^="model-response-message-contentr_"]', turn.node);
+      if (roots.length !== 1) continue;
+      const response = /^model-response-message-contentr_([0-9a-f]{16})$/i.exec(roots[0].id);
+      if (!response || turn.id !== `gemini:${conversation}:assistant:${response[1].toLowerCase()}`) continue;
+      // Gemini exposes one native generated video per response, without a file id. The
+      // response-scoped singleton is the identity; ambiguous/multiple resources fail closed.
+      const cards = all('generated-video', roots[0]);
+      if (cards.length !== 1 || cards[0].closest('model-response') !== turn.node ||
+          all('button[aria-label="Download video"]', cards[0]).length !== 1) continue;
+      const nodes = all('video-player video', cards[0]);
+      if (nodes.length !== 1 || !nodes[0].isConnected) continue;
+      const node = nodes[0]; let mimeType;
+      try {
+        const url = new URL(node.currentSrc || node.src, location.href);
+        if (url.protocol !== 'https:' || url.origin !== 'https://contribution.usercontent.google.com' || url.pathname !== '/download') continue;
+        const extension = /\.(mp4|webm)$/i.exec(url.searchParams.get('filename') || '')?.[1]?.toLowerCase();
+        mimeType = extension === 'mp4' ? 'video/mp4' : extension === 'webm' ? 'video/webm' : null;
+        const declared = node.getAttribute('type') || node.querySelector('source[type]')?.getAttribute('type');
+        if (!mimeType || (declared && declared !== mimeType)) continue;
+      } catch { continue; }
+      const complete = Boolean(turn.node.querySelector('.response-footer.complete')) && !pendingApprovalIn(turn.node);
+      entries.push({ node, video: { messageId: turn.id, assetId: 'video', mimeType,
+        providerRole: 'assistant', providerChannel: 'final', providerStatus: complete ? 'finished_successfully' : 'in_progress',
+        ...(node.videoWidth > 0 ? { width: node.videoWidth } : {}), ...(node.videoHeight > 0 ? { height: node.videoHeight } : {}),
+        ...(Number.isFinite(node.duration) && node.duration > 0 ? { durationMs: Math.round(node.duration * 1000) } : {}) } });
+    }
+    return entries;
+  }
+  function nativeCanvasEntries(snapshot = turns()) {
+    const conversation=conversationId();if(!conversation)return[];
+    return snapshot.filter(turn=>turn.role==='assistant').slice(-16).flatMap(turn=>{
+      const roots=all('[id^="model-response-message-contentr_"]',turn.node),id=roots.length===1?/^model-response-message-contentr_([0-9a-f]{16})$/i.exec(roots[0].id)?.[1]?.toLowerCase():null;
+      if(!id||turn.id!==`gemini:${conversation}:assistant:${id}`)return[];
+      const cards=all('immersive-entry-chip inline-preview',roots[0]);if(cards.length!==1)return[];
+      const card=cards[0];if(!card.querySelector('mat-button-toggle[value="code"] button')||!card.querySelector('mat-button-toggle[value="preview"] button'))return[];
+      return[{messageId:turn.id,nativeSurface:'canvas',title:text(card.querySelector('.title')).slice(0,200)||'Canvas',kind:'web',entrypoint:'index.html'}];
+    });
+  }
+  const nativeOutputs = snapshot => ({ images: nativeImageEntries(snapshot).map(entry => entry.image), videos: nativeVideoEntries(snapshot).map(entry => entry.video), artifacts:nativeCanvasEntries(snapshot) });
+  function nativeVideoEntry(video) {
+    const found = nativeVideoEntries().filter(entry => entry.video.messageId === video.messageId && entry.video.assetId === video.assetId && entry.video.mimeType === video.mimeType);
+    return found.length === 1 ? found[0] : null;
+  }
+  const nativeVideoNode = video => nativeVideoEntry(video)?.node ?? null;
+  const nativeVideoDescriptorCurrent = video => nativeVideoEntry(video)?.video ?? null;
+  const capturedCanvases = new WeakSet();
+  async function readNativeArtifacts(current = () => true) {
+    const conversation = conversationId(), route = location.href, results = [];
+    if (!conversation || generating() || !current()) return results;
+    for (const turn of turns().filter(row=>row.role==='assistant').slice(-16)) {
+      const roots=all('[id^="model-response-message-contentr_"]',turn.node);
+      const responseId=roots.length===1?/^model-response-message-contentr_([0-9a-f]{16})$/i.exec(roots[0].id)?.[1]?.toLowerCase():null;
+      if(!responseId || turn.id!==`gemini:${conversation}:assistant:${responseId}` || !turn.node.querySelector('.response-footer.complete') || pendingApprovalIn(turn.node))continue;
+      const cards=all('immersive-entry-chip inline-preview',roots[0]);
+      if(cards.length!==1 || capturedCanvases.has(cards[0]))continue;
+      const card=cards[0], code=unique(all('mat-button-toggle[value="code"] button',card)), preview=unique(all('mat-button-toggle[value="preview"] button',card));
+      if(!enabled(code)||!enabled(preview)||!card.querySelector('button[aria-label="Changes saved"]'))continue;
+      const wasPreview=preview.getAttribute('aria-checked')==='true'; let interrupted=false;
+      const touched=event=>{if(event.isTrusted)interrupted=true};
+      const owns=()=>current()&&!interrupted&&location.href===route&&conversationId()===conversation&&card.isConnected&&card.closest('model-response')===turn.node&&!generating();
+      document.addEventListener('pointerdown',touched,true);document.addEventListener('keydown',touched,true);
+      try {
+        if(wasPreview)code.click();
+        if(!await waitFor(()=>code.getAttribute('aria-checked')==='true'&&card.querySelector('.monaco-editor'),owns,3000))continue;
+        const reply=await chrome.runtime.sendMessage({type:'native_canvas_snapshot',conversationId:conversation,responseId});
+        const snapshot=reply?.ok&&reply.snapshot;
+        if(owns()&&snapshot?.messageId===turn.id&&snapshot.nativeSurface==='canvas'&&snapshot.kind==='web'&&snapshot.entrypoint==='index.html'&&['unsupported','oversized'].includes(snapshot.error)){
+          results.push({...snapshot,status:'failed',files:undefined});capturedCanvases.add(card);continue;
+        }
+        if(!owns()||!snapshot||snapshot.messageId!==turn.id||snapshot.nativeSurface!=='canvas'||snapshot.kind!=='web'||snapshot.entrypoint!=='index.html'||
+            snapshot.files?.length!==1||snapshot.files[0].path!=='index.html'||typeof snapshot.files[0].text!=='string'||!snapshot.files[0].text||snapshot.files[0].text.length>240_000)continue;
+        results.push(snapshot);capturedCanvases.add(card);
+      } finally {
+        if(wasPreview&&owns()&&code.getAttribute('aria-checked')==='true')preview.click();
+        document.removeEventListener('pointerdown',touched,true);document.removeEventListener('keydown',touched,true);
+      }
+      if(results.length>=4||!current())break;
+    }
+    return results;
+  }
+  function nativeImageEntry(image) {
+    const found = nativeImageEntries().filter(entry => entry.image.messageId === image.messageId && entry.image.assetId === image.assetId);
+    return found.length === 1 ? found[0] : null;
+  }
+  const nativeImageNode = image => nativeImageEntry(image)?.node ?? null;
+  async function exportNativeImage(message, current = () => true) {
+    const conversation = conversationId(), entry = nativeImageEntry(message);
+    if (!conversation || message.conversationId !== conversation || !current()) return { error: 'not_open' };
+    if (!entry || entry.image.providerStatus !== 'finished_successfully') return { error: 'not_rendered' };
+    const { node } = entry, source = node.currentSrc || node.src, width = node.naturalWidth, height = node.naturalHeight;
+    if (!node.complete || !width || !height) return { error: 'not_rendered' };
+    if (width * height > 30_000_000) return { error: 'too_large' };
+    const valid = () => current() && conversationId() === conversation && nativeImageNode(message) === node &&
+      node.isConnected && (node.currentSrc || node.src) === source && node.naturalWidth === width && node.naturalHeight === height;
+    try {
+      // Gemini revokes the rendered blob URL after loading. Canvas reads those exact loaded
+      // pixels without fetching a private/signed endpoint. This is explicitly a rendered PNG,
+      // not a claim that the provider's separate full-size download was retrieved.
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d'); if (!context || !valid()) return { error: 'identity_changed' };
+      context.drawImage(node, 0, 0);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!valid()) return { error: 'identity_changed' };
+      if (!blob || blob.type !== 'image/png' || !blob.size) return { error: 'not_image' };
+      if (blob.size > 25 * 1024 * 1024) return { error: 'too_large' };
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (!valid()) return { error: 'identity_changed' };
+      let binary = '';
+      for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+      return { data: btoa(binary), representation: 'rendered' };
+    } catch { return { error: 'not_image' }; }
+  }
   const turnIdOf = node => { const turn = node?.closest?.(TURN);
     return turn && !(turn.tagName === 'USER-QUERY' && (approvalReplyIds.has(nativeId(turn, 'user')) || provisionalApprovalReplyIds.has(nativeId(turn, 'user'))))
       ? nativeId(turn, turn.tagName === 'USER-QUERY' ? 'user' : 'assistant') : null; };
@@ -779,7 +933,7 @@ var CLF_DOM = (() => {
   /** One native Send, then exact new user-row evidence. Never resend after an ambiguous click. */
   async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, clearAcceptedDraft = true,
     beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, whileGenerating = false, initialDraft = null,
-    prepareAttachments = null } = {}) {
+    prepareAttachments = null, nativeMedia = false, onSendAttempt = null } = {}) {
     const refused = reason => {
       console.info('[OneCode Send] ' + JSON.stringify({ reason, callerCurrent: stillCurrent(),
         conversationPresent: Boolean(conversationId()), preparedConversation: Boolean(preparedConversation()),
@@ -864,7 +1018,10 @@ var CLF_DOM = (() => {
     }
     const binding = id && !localHelper ? await bindingFor(id, current) : null;
     if (id && !localHelper && !binding) return refused('session-binding-unavailable');
-    const connector = localHelper ? null : binding?.connector_name || mention?.name || ownNames[0];
+    // Native image generation cannot run with an app selected. Still resolve the
+    // exact opening/input binding above; transport identity and Send admission
+    // remain unchanged, but this message exposes no local connector or key.
+    const connector = localHelper || nativeMedia ? null : binding?.connector_name || mention?.name || ownNames[0];
     let connectorRefusal = null;
     if (connector && !await selectConnector(connector, current, reason => { connectorRefusal = reason; }))
       return refused(connectorRefusal || 'connector-not-selected');
@@ -874,7 +1031,7 @@ var CLF_DOM = (() => {
     if (prepareAttachments && (!current() || await prepareAttachments(current) !== true || !current() ||
         compact(composerAuthoredText()) !== compact(submitted))) return refused('attachment-upload-unconfirmed');
     if (connector && !confirmedMention(connector, box)) return refused('connector-token-unconfirmed');
-    if (binding && !appendSessionFrame(box, binding)) return refused('session-context-not-inserted');
+    if (binding && !nativeMedia && !appendSessionFrame(box, binding)) return refused('session-context-not-inserted');
     const draftReady = stage => {
       const callerCurrent = current(), editor = composer(), authoredText = composerAuthoredText(), raw = blockText(editor);
       const authoredMatches = compact(authoredText) === compact(submitted), sendEnabled = enabled(sendButton());
@@ -902,7 +1059,7 @@ var CLF_DOM = (() => {
     if (!await waitDraftReady('after-authorization')) return refused('draft-changed');
     const button = sendButton();
     if (connector && provenMention(box)) outgoingMention = { name: provenMention(box).name, expected: submitted, conversationId: id, priorIds: prior };
-    cancelApprovalReplyProofs('new-send'); button.click();
+    cancelApprovalReplyProofs('new-send'); onSendAttempt?.(); button.click();
     const accepted = await waitFor(() => {
       const now = conversationId();
       if (id && now !== id) return null;
@@ -1232,6 +1389,7 @@ var CLF_DOM = (() => {
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
     conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt,
+    nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,
     composerStack: () => { const box = composerBox(); return box?.parentElement ? { host: box.parentElement, before: box } : null; },

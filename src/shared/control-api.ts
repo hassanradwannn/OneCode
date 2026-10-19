@@ -6,6 +6,7 @@
  * nothing here is decided by the API itself. Secret-bearing fields (MCP path tokens, public
  * URLs, tunnel ids, plugin sources and config values) are deliberately absent, not masked.
  */
+import type { ArtifactPresentation } from './artifact.js';
 export const CONTROL_API_PROTOCOL = 1;
 
 /** Listed in every health reply, so a caller learns what this build serves without guessing. */
@@ -259,6 +260,10 @@ export type ControlApiEvent = {
   label?: string;
   /** `native_image`. */
   previewStatus?: string;
+  providerStatus?: string;
+  providerAssetId?: string;
+  asset?: { id: string; mimeType: string };
+  presentation?: ArtifactPresentation;
   width?: number;
   height?: number;
   /** `tool_call`. */
