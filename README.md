@@ -2,19 +2,20 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.3.6](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.600)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.7.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-## What's new in 0.3.6
+## What's new in 0.3.7.5
 
-- Improved **Compact & Resume** for ChatGPT and Gemini.
-- Smoother **computer use and screenshots**.
-- More consistent **tool confirmations** and chat status.
-- Cleaner progress messages after a task finishes.
-- An optional **ChatGPT skill** that reduces repeated instructions. Export it from Setup, enable it in ChatGPT, then turn on the matching OneCode option.
+- A more consistent **remote workspace on desktop and phones**, with formatted chats, grouped tool actions, outlined task rows and improved image and interactive-preview presentation.
+- Compact **model and effort controls**, slash commands, installed-skill suggestions, editable plans and visible plan steps.
+- Sent messages appear immediately. Thinking and delivery status follow the host, transient busy reads recover quietly, and **Load earlier** appears only when older history exists.
+- Scrollable settings, mobile keyboard layout fixes and preview fixes for the desktop sidebar and fullscreen view.
+- Windows shortcut branding, internal-update relaunch repairs and cache checks that avoid applying a differential download to the wrong installer.
+- OneCode branding across plugin instructions and app labels, while retaining compatibility identifiers and upstream notices.
 
-See the [release notes](docs/release-notes/v0.3.6.md) or follow the [setup guide](docs/WINDOWS-SETUP.md).
+See the [0.3.7.5 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705) or follow the [setup guide](docs/WINDOWS-SETUP.md). The app displays **0.3.7.5**; installers and the update feed use the compatible version **0.3.705**.
 
 ## Work with your own provider account
 
@@ -44,15 +45,23 @@ Tailscale Funnel gives your PC a stable HTTPS address. Once connected, ordinary 
 
 Cloudflare quick tunnels remain available as an alternative. Their address changes when the tunnel restarts, so switching to one requires updating the URL in the selected provider.
 
+## Remote access from a browser
+
+On the host PC, open **Settings → Remote**, turn on Remote mode and copy its link. Open that link in a browser on another device connected to your Tailscale. The host PC, OneCode and Tailscale must stay running.
+
+The remote workspace provides chats, history, messages, Stop, plans, model and effort controls, local skill suggestions, images, interactive previews and supported preferences. It uses your host's existing provider connection and tool permissions. Desktop browsers and phones share the same interface with responsive navigation and settings.
+
+Remote mode uses a separate private Tailscale Serve route and access key. Keep its link private. Turning Remote off invalidates the link and browser sessions; **Settings → Remote access** in the remote browser can disconnect that browser alone. Provider MCP connectors keep their separate connection settings.
+
 ## Updates and longer tasks
 
-Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Windows can fall back from a differential download to the complete installer.
+Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Version 0.3.7.5 includes Windows relaunch repairs and validates the cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
 
 Updates preserve your profile and saved chats. If an older installation cannot update, run the latest installer once.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find validation details in the [release acceptance notes](docs/release-acceptance/v0.3.6.md).
+Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.7.5 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.705).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
