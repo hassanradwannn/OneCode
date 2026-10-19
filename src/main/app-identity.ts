@@ -3,6 +3,8 @@ import path from 'node:path';
 
 export const PRODUCT_NAME = 'OneCode';
 export const APP_ID = 'io.onecode.desktop';
+/** Development Electron must never register itself as the installed product. */
+export function windowsAppId(packaged: boolean): string { return packaged ? APP_ID : `${APP_ID}.development`; }
 
 /** Keep an existing installation in place so encrypted settings and chats survive the rename. */
 export function appDataDirectory(

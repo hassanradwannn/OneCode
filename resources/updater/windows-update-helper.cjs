@@ -110,7 +110,8 @@ async function run(note, dependencies = {}) {
     if (!listing(record.executable).length) {
       // An explicit Update and restart must show the GUI successor. Only the
       // helper/installer are hidden; do not pass SW_HIDE to the app itself.
-      const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false });
+      const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+      const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false, env });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref();
       log(`launched installed executable pid ${child.pid}`);

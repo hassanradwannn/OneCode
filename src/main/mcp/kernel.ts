@@ -143,7 +143,7 @@ const UNTRUSTED_WORKER_NOTICE =
 const UNPROVEN_WORKER_NOTICE =
   'A tool call from an app-created worker was refused because no unique owning prime is currently proven. Return to the owning prime in the chat list; once its row is known, hover it in the sidebar and choose Trust (✓), or Release there if it is blocked, then retry after the worker is attached or recovered there.';
 const WORKER_CONNECTION_PROFILE_REFUSAL =
-  'WORKER_CONNECTION_PROFILE_MISMATCH: this worker belongs to a different Chat On Steroids Setup profile. ' +
+  'WORKER_CONNECTION_PROFILE_MISMATCH: this worker belongs to a different OneCode Setup profile. ' +
   'No local tool was run. Return to the owning prime and switch back to the connection that created this worker family; ' +
   'cross-profile worker routing is not automatic.';
 
@@ -1568,7 +1568,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     },
     featureDisabled(feature, setting) {
       return fail(
-        `FEATURE_DISABLED: ${feature} is switched off in Chat On Steroids. ` +
+        `FEATURE_DISABLED: ${feature} is switched off in OneCode. ` +
           `Ask the user to enable "${setting}" in the app, then try again.`
       );
     }

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Executable,[Parameter(Mandatory=$true)][int]$InstallerPid)
+param([Parameter(Mandatory=$true)][string]$Executable,[Parameter(Mandatory=$true)][int]$InstallerPid,[Parameter(Mandatory=$true)][string]$ExpectedVersion)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $directory=Join-Path $env:LOCALAPPDATA 'onecode-updater'
@@ -16,11 +16,13 @@ try {
   if((Get-Item -LiteralPath $Executable).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Redirected executable'}
   for($node=Get-Item -LiteralPath $target;$node;$node=$node.Parent){if($node.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Redirected install path'}}
   $version=(Get-Item -LiteralPath $Executable).VersionInfo.ProductVersion
-  if($version -ne '0.2.905.0'){throw "Unexpected installed version $version"}
+  if($ExpectedVersion -notmatch '^\d+\.\d+\.\d+$' -or $version -ne ($ExpectedVersion+'.0')){throw "Unexpected installed version $version"}
   Start-Sleep -Seconds 3
   $live=@(Get-CimInstance Win32_Process -Filter "Name='OneCode.exe'" | Where-Object {$_.ExecutablePath -eq $Executable})
   if(-not $live.Count){
-    $started=Start-Process -FilePath $Executable -ArgumentList '--updated' -WindowStyle Hidden -PassThru
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+    # The explicit update requests a visible successor. Only this observer is hidden.
+    $started=Start-Process -FilePath $Executable -ArgumentList '--updated' -PassThru
     Write-Diagnostic "installer completed; launched exact installed $version pid $($started.Id)"
   }else{Write-Diagnostic "installer completed; exact installed $version already running"}
   Start-Sleep -Seconds 8

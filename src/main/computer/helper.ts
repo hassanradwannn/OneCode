@@ -335,7 +335,7 @@ public static class Clf {
     if (!GetWindowRect(h, out r) || r.Right - r.Left <= 0 || r.Bottom - r.Top <= 0) return "";
     uint pid;
     GetWindowThreadProcessId(h, out pid);
-    if (OwnPid != 0 && pid == OwnPid) return ""; // CoS's own windows are not listed or targeted.
+    if (OwnPid != 0 && pid == OwnPid) return ""; // OneCode's own windows are not listed or targeted.
     string[] identity = CosWindowsAppIdentity.Read(handle, pid);
     if (identity[0].Length == 0) return ""; // Unknown app identity cannot be targeted by the window API.
     string proc = System.IO.Path.GetFileNameWithoutExtension(identity[1]);

@@ -937,7 +937,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return setPetOverlayVisible(visible);
   });
   handle('pets:import', async () => {
-    const options: Electron.OpenDialogOptions = { title: 'Import CoS Pet folder', properties: ['openDirectory'] };
+    const options: Electron.OpenDialogOptions = { title: 'Import OneCode Pet folder', properties: ['openDirectory'] };
     const owner = getWindow();
     const selected = owner && !owner.isDestroyed()
       ? await dialog.showOpenDialog(owner, options)
@@ -1535,7 +1535,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   // Setup's first step: the CoS browser on screen, on Gemini's login when signed out.
   handle('cosBrowser:show', async () => {
-    if (getConfig().ui.chatBrowser !== 'cos') throw new Error('The CoS browser is not the selected provider browser');
+    if (getConfig().ui.chatBrowser !== 'cos') throw new Error('The OneCode browser is not the selected provider browser');
     await (await loadCosBrowser()).showSignIn();
     return true;
   });

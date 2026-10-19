@@ -1,4 +1,4 @@
-/** Google sign-in card over a CoS browser tab. It only paints state from main and reports clicks. */
+/** Google sign-in card over a OneCode browser tab. It only paints state from main and reports clicks. */
 import { currentLanguage, setLanguage, t, type Language } from './i18n.js';
 
 type BrowserId = 'chrome' | 'edge' | 'brave';

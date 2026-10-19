@@ -1,7 +1,7 @@
 /**
  * The title bar's View menu: one icon button opening the same menu as a sidebar row's (its look,
  * motion and keyboard), with each action's icon and shortcut. Zoom steps keep it open, their value
- * updating in place once the zoom is applied (`refresh`). Show browser (the built-in CoS browser,
+ * updating in place once the zoom is applied (`refresh`). Show browser (the built-in OneCode browser,
  * as the tray says it) is there only while that browser is the one Gemini runs in.
  */
 import { t, ui } from './i18n.js';
@@ -10,7 +10,7 @@ import { primaryShortcut } from './shortcuts.js';
 
 export interface ViewMenuActions {
   search(): void;
-  /** Whether the built-in CoS browser is the selected Gemini browser. */
+  /** Whether the built-in OneCode browser is the selected Gemini browser. */
   cosBrowser(): boolean;
   showCosBrowser(): void;
   pets: { toggle(): void; visible(): boolean };

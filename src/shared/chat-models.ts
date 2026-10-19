@@ -6,6 +6,8 @@ export function isAstraModel(model: string | null | undefined, effort?: Reasonin
     (/^(?:gpt-?)?6(?:\.0)?$/.test(normalized) && effort === 'pro');
 }
 export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[] };
+export const EFFORT_NAMES: Record<string, string> = { none: 'Instant', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra', pro: 'Pro' } satisfies Record<ReasoningEffort, string>;
+export const COMPOSER_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
 /**
  * The Gemini model Goal and Loop decisions run on unless Settings chose another: the GPT-6 family.
  * With the default High effort that is its thinking lane (`gpt-6-thinking`), the lane a decision

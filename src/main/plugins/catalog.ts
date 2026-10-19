@@ -1,6 +1,6 @@
 import type { PluginCatalogEntry, PluginSource } from '../../shared/plugins.js';
 
-/** Reviewed upstream recipes; versions are pinned until an explicit update. Icons are original CoS artwork. */
+/** Reviewed upstream recipes; versions are pinned until an explicit update. Icons are original OneCode artwork. */
 export const pluginCatalog: PluginCatalogEntry[] = [
   {
     id: 'computer-use', name: 'Computer use',
@@ -27,7 +27,7 @@ export const pluginCatalog: PluginCatalogEntry[] = [
     fields: [],
     tools: ['get_scene_info', 'get_object_info', 'get_viewport_screenshot', 'execute_blender_code'],
     instructions: [
-      'Install this plugin. CoS provides uv and Python automatically if they are missing.',
+      'Install this plugin. OneCode provides uv and Python automatically if they are missing.',
       'Then install the Blender addon: run uvx blender-mcp==1.9.1 install-addon in a terminal (needs uv on your PATH), or install addon.py from the source repository.',
       'In Blender: Preferences → Add-ons → enable Interface: MCP for Blender. Press N in the 3D viewport, open MCP for Blender, and click Start MCP Server.',
       'Restart this plugin. Ready requires tool discovery and a successful read-only scene probe.',
@@ -77,7 +77,7 @@ export const pluginCatalog: PluginCatalogEntry[] = [
     license: 'MIT',
     fields: [],
     tools: ['fetch'],
-    instructions: ['CoS provides uv and Python automatically if they are missing.', 'This server can make network requests as your user account.'],
+    instructions: ['OneCode provides uv and Python automatically if they are missing.', 'This server can make network requests as your user account.'],
   },
   {
     id: 'heygen',
@@ -123,7 +123,7 @@ export const pluginCatalog: PluginCatalogEntry[] = [
     fields: [],
     tools: ['manage_scene', 'manage_gameobject', 'manage_material', 'run_tests', 'read_console'],
     instructions: [
-      'Install Unity 2021.3 LTS or newer. CoS provides uv and Python automatically if they are missing.',
+      'Install Unity 2021.3 LTS or newer. OneCode provides uv and Python automatically if they are missing.',
       'In Unity Package Manager, add https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.2.0. Open Window → MCP for Unity and select stdio transport.',
       'Keep the Unity project open while using these tools. This community integration is maintained by Coplay/Aura and is not affiliated with Unity Technologies.',
     ],

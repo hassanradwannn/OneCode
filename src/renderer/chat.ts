@@ -1,3 +1,4 @@
+import { formatMessageContent, MESSAGE_TAGS as RENDERED_TAGS, MESSAGE_DROP_TAGS as DROP_RENDERED_TAGS, MAX_MESSAGE_MARKUP } from './message-format.js';
 import { providerText } from './provider-text.js';
 import { neutralProgressCopy } from '../shared/provider-copy.js';
 import { hasProviderDirective, resolvedCapture, withoutProviderDirectives } from '../shared/content-reference.js';
@@ -134,7 +135,7 @@ const GOAL_SCROLL_MARGIN = 72;
  * collapsed tool records can occupy less space than one authored message. */
 const MAX_TIMELINE_ROWS = 160;
 const TIMELINE_BATCH_SIZE = 30;
-const MAX_RENDERED_HTML_CHARS = 256 * 1024;
+const MAX_RENDERED_HTML_CHARS = MAX_MESSAGE_MARKUP;
 const SESSION_PAGE_SIZE = 60;
 const SESSION_SCROLL_MARGIN = 72;
 
@@ -2283,15 +2284,6 @@ function textBlock(className: string, value: string, truncated: boolean, chars: 
   return node;
 }
 
-const RENDERED_TAGS = new Set([
-  'A', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-  'HR', 'KBD', 'LI', 'MARK', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'SUB', 'SUP', 'TABLE',
-  'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL'
-]);
-const DROP_RENDERED_TAGS = new Set([
-  'SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH', 'FORM', 'INPUT', 'BUTTON',
-  'TEXTAREA', 'SELECT', 'OPTION', 'META', 'LINK'
-]);
 
 function safeRenderedHref(value: string): string | null {
   const trimmed = value.trim();
@@ -2867,41 +2859,14 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   };
   box.addEventListener('click', openLink);
   box.addEventListener('auxclick', openLink);
-  // Tables wrap to the transcript column. Extremely wide structural tables retain
-  // their own horizontal scroll instead of widening/clipping the whole conversation.
-  for (const table of box.querySelectorAll('table')) {
-    const viewport = el('div', 'markdown-table');
-    viewport.tabIndex = 0;
-    viewport.setAttribute('role', 'region');
-    ui(viewport, 'aria-label', () => t("Table"));
-    table.replaceWith(viewport);
-    viewport.append(table);
-  }
   if (!box.textContent?.trim() && safeFallback) {
-    box.classList.remove('rich');
-    box.textContent = safeFallback;
-  } else {
-    // Captured provider toolbars are stripped above. Add app-owned controls only after
-    // sanitizing and after the empty-capture fallback has been decided.
-    for (const pre of box.querySelectorAll('pre')) {
-      const value = pre.textContent ?? '';
-      const panel = el('div', 'markdown-code');
-      const header = el('div', 'tool-output-header');
-      const code = pre.querySelector('code');
-      const language = code && codeLanguages.get(code);
-      header.append(language ? el('strong', '', language.toUpperCase()) : el('strong', '', () => t('Code')));
-      if (language === 'json' && code) decorateJsonCode(code);
-      const copy = el('button', 'tool-copy', () => t('Copy')) as HTMLButtonElement;
-      copy.type = 'button';
-      copy.addEventListener('click', () => void (async () => {
-        if (await run(api.writeClipboard(value))) ui(copy, 'textContent', () => t('Copied'));
-        else toast(t('Could not copy text.'));
-      })());
-      header.append(copy);
-      pre.replaceWith(panel);
-      panel.append(header, pre);
-    }
-  }
+    box.classList.remove('rich'); box.textContent = safeFallback;
+  } else formatMessageContent(box, {
+    languages: codeLanguages, copy: async value => !!await run(api.writeClipboard(value)), label: t,
+    bindLabel: (node, property, value) => { ui(node, property, () => t(value)); },
+    decorateCode: (code, language) => { if (language === 'json') decorateJsonCode(code); },
+    copyFailed: () => toast(t('Could not copy text.'))
+  });
   return box;
 }
 

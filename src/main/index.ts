@@ -9,7 +9,7 @@ import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js
  */
 
 import path from 'node:path';
-import { app, Notification, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, screen, session } from 'electron';
+import { app, Notification, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, screen, session, shell } from 'electron';
 import { createKeepAwake, installKeepAwake } from './keep-awake.js';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { initConnectorProofPath, loadConnectorProof, notePluginInstalled } from './connector-proof.js';
@@ -126,7 +126,8 @@ import { browserWindowIconPath, windowsTaskbarIconPath } from './window-icon.js'
 import { editContextMenuTemplate } from './edit-context-menu.js';
 import { observeWindowPresentation } from './window-presentation.js';
 import { showConnectionLossNotice } from './connection-loss-notice.js';
-import { APP_ID, PRODUCT_NAME, appDataDirectory } from './app-identity.js';
+import { repairWindowsShortcuts } from './windows-shortcuts.js';
+import { APP_ID, PRODUCT_NAME, appDataDirectory, windowsAppId } from './app-identity.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -146,7 +147,7 @@ const usageWarmup = new AbortController();
 // One instance only: two copies would fight over the tunnel and the config file.
 // Isolate storage, secrets and the single-instance namespace before startup work.
 app.setName(PRODUCT_NAME);
-app.setAppUserModelId(APP_ID);
+app.setAppUserModelId(windowsAppId(app.isPackaged));
 app.commandLine.appendSwitch('force-renderer-accessibility');
 app.setPath('userData', appDataDirectory(app.getPath('appData')));
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -430,6 +431,10 @@ void app.whenReady().then(async () => {
   powerMonitor.on('resume', resumeConnectionLossNotices);
   const userData = app.getPath('userData');
   initLogFile(path.join(userData, 'app.log'));
+  if (process.platform === 'win32' && app.isPackaged) {
+    try { repairWindowsShortcuts(shell, { appData: app.getPath('appData'), desktop: app.getPath('desktop'), executable: process.execPath, resources: process.resourcesPath }); }
+    catch (error) { logWarn(`shortcut identity: ${(error as Error).message}`); }
+  }
   process.on('uncaughtExceptionMonitor', (error, origin) => {
     snapshotLogOnCrash(`${origin}: ${error.stack ?? error.message}`);
   });

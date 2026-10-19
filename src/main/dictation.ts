@@ -235,7 +235,7 @@ export function registerDictationIpc(getWindow: () => BrowserWindow | null): voi
   ipcMain.handle('dictation:start', async event => {
     const window = getWindow();
     if (!window || window.isDestroyed() || event.sender !== window.webContents)
-      return { ok: false as const, error: 'Dictation can only start from the CoS window' };
+      return { ok: false as const, error: 'Dictation can only start from the OneCode window' };
     if (process.platform !== 'win32')
       return { ok: false as const, error: 'Microphone dictation currently requires Windows' };
     if (active)

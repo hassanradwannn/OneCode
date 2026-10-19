@@ -1,4 +1,4 @@
-/** Tab strip of a CoS browser window. It only paints state from main and reports clicks. */
+/** Tab strip of a OneCode browser window. It only paints state from main and reports clicks. */
 interface ToolbarTab { id: number; title: string; url: string; favicon: string | null; active: boolean; loading: boolean; working: boolean }
 interface ToolbarState {
   tabs: ToolbarTab[];

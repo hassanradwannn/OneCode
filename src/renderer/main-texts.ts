@@ -2,7 +2,7 @@ import { onLanguageChange, t } from './i18n.js';
 import type { MainText } from '../shared/main-texts.js';
 
 /**
- * The tray menu, Session finish notice, tunnel-loss notices and CoS browser tray notice in the
+ * The tray menu, Session finish notice, tunnel-loss notices and OneCode browser tray notice in the
  * selected language, including native update restart confirmation. The main process has no
  * catalogs, so this document translates the exact source texts and hands them over.
  * Literal `t()` calls keep the catalog audit able to see each key.

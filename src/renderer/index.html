@@ -318,7 +318,7 @@
             <dialog class="plugin-dialog pet-delete-dialog" id="skillGithubDialog" aria-labelledby="skillGithubTitle">
               <div class="plugin-dialog-head"><h2 id="skillGithubTitle">Import from GitHub</h2><button class="btn" id="skillGithubClose" type="button">Close</button></div>
               <form id="skillGithubForm" class="plugin-dialog-body">
-                <p id="skillGithubDescription">Paste a public GitHub folder link or a link to its SKILL.md. The complete skill folder will be copied to your CoS library.</p>
+                <p id="skillGithubDescription">Paste a public GitHub folder link or a link to its SKILL.md. The complete skill folder will be copied to your OneCode library.</p>
                 <label class="plugin-field" for="skillGithubUrl"><span>GitHub URL</span><input id="skillGithubUrl" type="url" required autocomplete="url" spellcheck="false" placeholder="https://github.com/owner/repo/tree/main/skill" /></label>
                 <p id="skillGithubError" class="plugin-error" role="alert" hidden></p>
                 <div class="pet-delete-actions"><button class="btn" id="skillGithubCancel" type="button">Cancel</button><button class="btn btn-solid" id="skillGithubSubmit" type="submit">Import skill</button></div>
@@ -334,7 +334,7 @@
         </section>
         <section class="panel plugins-panel pets-panel" data-panel="pets">
           <div class="plugins-content">
-            <header class="plugin-page-head"><div><h1>Pets</h1><p>Your little desktop companions.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="petsSearch" type="search" placeholder="Search pets" aria-label="Search pets" /></label><button class="btn plugin-add" id="petsImport" type="button" aria-label="Import CoS Pet folder" title="Import CoS Pet folder"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
+            <header class="plugin-page-head"><div><h1>Pets</h1><p>Your little desktop companions.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="petsSearch" type="search" placeholder="Search pets" aria-label="Search pets" /></label><button class="btn plugin-add" id="petsImport" type="button" aria-label="Import OneCode Pet folder" title="Import OneCode Pet folder"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
             <div class="plugin-refresh-guide pet-import-guide">
               <p>A compatible pet is a folder with three files.</p>
               <button class="btn" id="petsFormatGuide" type="button">What can I import?</button>
@@ -346,7 +346,7 @@
                 <p class="pet-format-folder">Import the folder itself with <code>pet.json</code>, <code>atlas.png</code>, and <code>animations.json</code>. OneCode validates all three before copying the pet into your local library.</p>
                 <div class="pet-format-ai-help">
                   <strong>AI-assisted creation</strong>
-                  <p>Copy the production brief below and replace <code>&lt;describe your character here&gt;</code> with the character, personality, colors, style, accessories, and references you want. In Codex, invoke <code>$hatch-pet</code> for visual generation and QA; its official URL is included for discovery, while this app’s 96-frame CoS format remains authoritative.</p>
+                  <p>Copy the production brief below and replace <code>&lt;describe your character here&gt;</code> with the character, personality, colors, style, accessories, and references you want. In Codex, invoke <code>$hatch-pet</code> for visual generation and QA; its official URL is included for discovery, while this app’s 96-frame OneCode format remains authoritative.</p>
                 </div>
                 <pre id="petsFormatInstructions"></pre>
               </div>

@@ -64,7 +64,7 @@ export async function publishSkillPackage(source: string, root: string, id: stri
     for await (const entry of directory) {
       if (++entries > MAX_ENTRIES) throw new Error('Skill package exceeds 4096 entries');
       if (depth === 0 && entry.name === 'SKILL.md') continue;
-      if (depth === 0 && entry.name === SKILL_ORIGIN_FILENAME) throw new Error('Skill packages cannot supply CoS origin metadata');
+      if (depth === 0 && entry.name === SKILL_ORIGIN_FILENAME) throw new Error('Skill packages cannot supply OneCode origin metadata');
       const current = path.join(from, entry.name), destination = path.join(to, entry.name);
       const stat = await fs.lstat(current);
       if (stat.isSymbolicLink()) throw new Error('Skill packages cannot contain symbolic links or junctions');

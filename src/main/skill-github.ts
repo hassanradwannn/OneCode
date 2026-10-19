@@ -103,7 +103,7 @@ async function inspectGitHubSkill(requested: GitHubSkillLocation, signal: AbortS
     }
   }
   if (!files.some(file => file.relative === 'SKILL.md')) throw new Error('GitHub skill folder needs SKILL.md');
-  if (files.some(file => file.relative === '.cos-github.json')) throw new Error('GitHub skill uses a reserved CoS metadata filename');
+  if (files.some(file => file.relative === '.cos-github.json')) throw new Error('GitHub skill uses a reserved OneCode metadata filename');
   const revision = skillPackageRevision(files);
   return { location, commit, revision, files };
 }
@@ -133,7 +133,7 @@ function revisionFromTree(entries: TreeEntry[], directory: string): string {
     files.push({ relative, sha: entry.sha, size: entry.size! });
   }
   if (!files.some(file => file.relative === 'SKILL.md')) throw new Error('GitHub skill folder needs SKILL.md');
-  if (files.some(file => file.relative === '.cos-github.json')) throw new Error('GitHub skill uses a reserved CoS metadata filename');
+  if (files.some(file => file.relative === '.cos-github.json')) throw new Error('GitHub skill uses a reserved OneCode metadata filename');
   return skillPackageRevision(files);
 }
 

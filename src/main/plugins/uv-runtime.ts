@@ -8,7 +8,7 @@ import { unzipSync } from 'fflate';
  * A managed copy of uv for installing Python plugins.
  *
  * Most people do not have uv, and a desktop app cannot ask them to open a terminal. When uv is
- * not on PATH, CoS downloads one pinned release from uv's official GitHub releases, checks its
+ * not on PATH, OneCode downloads one pinned release from uv's official GitHub releases, checks its
  * size and SHA-256 against the values below, and keeps only the uv and uvx executables in the
  * app's data folder. Nothing else from the archive is written, and nothing runs until the
  * checksum matches. uv is MIT/Apache-2.0 licensed (https://github.com/astral-sh/uv).

@@ -43,7 +43,7 @@ export function pluginEnvironment(inherited = getDefaultEnvironment(), platform 
   directories.push('/usr/local/bin');
   const home = envValue(env, 'HOME');
   if (home) directories.push(path.posix.join(home, '.local', 'bin'));
-  // The uv CoS downloads when none is installed (uv-runtime.ts); last, so a user's own uv wins.
+  // The uv OneCode downloads when none is installed (uv-runtime.ts); last, so a user's own uv wins.
   const managed = managedUvDirectory();
   if (managed) directories.push(managed);
   setEnvValue(env, 'PATH', [...new Set(directories)].join(':'));
@@ -156,7 +156,7 @@ export async function runInstaller(command: string, args: string[], cwd: string)
     }, 180000);
     child.once('error', () => {
       clearTimeout(timer);
-      reject(new Error(`Required runtime ${path.basename(command)} is unavailable; install it and restart CoS`));
+      reject(new Error(`Required runtime ${path.basename(command)} is unavailable; install it and restart OneCode`));
     });
     // Callers can retire the staged runtime only after the process handles close.
     child.once('close', (code) => {
@@ -310,5 +310,5 @@ async function findExecutable(name: string): Promise<string> {
       /* next PATH entry */
     }
   }
-  throw new Error(`Install ${name} and restart CoS`);
+  throw new Error(`Install ${name} and restart OneCode`);
 }

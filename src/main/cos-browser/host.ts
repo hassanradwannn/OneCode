@@ -230,7 +230,7 @@ export class CosBrowser {
 
   private async boot(): Promise<void> {
     const dir = extensionDir();
-    if (!dir) throw new Error('The CoS browser needs the bundled extension folder, which is missing from this installation.');
+    if (!dir) throw new Error('The OneCode browser needs the bundled extension folder, which is missing from this installation.');
     this.stopping = false;
     this.browserEpoch++;
     const ses = session.fromPartition(PARTITION);

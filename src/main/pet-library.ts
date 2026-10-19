@@ -135,7 +135,7 @@ function parseAnimations(raw: Record<string, unknown>): PetAnimationManifest {
     raw['width'] !== COS_PET_ATLAS.width || raw['height'] !== COS_PET_ATLAS.height ||
     raw['columns'] !== COS_PET_ATLAS.columns || raw['cellWidth'] !== COS_PET_ATLAS.cellWidth ||
     raw['cellHeight'] !== COS_PET_ATLAS.cellHeight || raw['frameCount'] !== COS_PET_ATLAS.frameCount
-  ) throw new Error('animations.json must use the CoS Pets atlas layout.');
+  ) throw new Error('animations.json must use the OneCode Pets atlas layout.');
   const anchor = raw['anchor'];
   if (!Array.isArray(anchor) || anchor.length !== 2 || anchor[0] !== 80 || anchor[1] !== 136) {
     throw new Error('animations.json anchor must be [80, 136].');
@@ -147,7 +147,7 @@ function parseAnimations(raw: Record<string, unknown>): PetAnimationManifest {
     const source = object(sourceAnimations[name]);
     const expected = COS_PET_FRAME_LAYOUT[name];
     if (!source || !exactFrames(source['frames'], expected) || source['loop'] !== COS_PET_LOOPING[name]) {
-      throw new Error(`animations.json ${name} must use the required CoS Pets frame range and loop behavior.`);
+      throw new Error(`animations.json ${name} must use the required OneCode Pets frame range and loop behavior.`);
     }
     const ms = source['ms'];
     if (!Array.isArray(ms) || ms.length !== expected.length || !ms.every(value => Number.isFinite(value) && Number(value) > 0 && Number(value) <= 10_000)) {
@@ -195,7 +195,7 @@ function inspectPackage(folder: string, expectedId?: string): InspectedPet {
     metadata['format'] !== 'cos-pet' || metadata['version'] !== 1 ||
     typeof displayName !== 'string' || !displayName.trim() ||
     typeof description !== 'string'
-    ) throw new Error('The folder needs a valid CoS Pets pet.json manifest.');
+    ) throw new Error('The folder needs a valid OneCode Pets pet.json manifest.');
 
   const atlas = contained(folder, 'atlas.png');
   const atlasInfo = fs.statSync(atlas);

@@ -1873,7 +1873,7 @@ function apply(next: AppState): void {
         ? providerT("The plugin is in your Gemini. It runs the first time a chat asks for it.")
         : ''
       : ranAt === null
-        ? providerT("Gemini connected {0} but has never run a tool. Check that the CoS app is enabled in Gemini → Plugins.", [ago(reachedAt)])
+        ? providerT("Gemini connected {0} but has never run a tool. Check that the OneCode app is enabled in Gemini → Plugins.", [ago(reachedAt)])
         : unverified.length > 0
           ? // One connector working is not the whole setup. Naming the missing one is the
             // difference between "something is off" and knowing what to go and create.

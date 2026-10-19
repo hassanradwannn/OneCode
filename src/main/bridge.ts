@@ -1479,7 +1479,7 @@ function noteExtensionVersion(req: http.IncomingMessage): void {
           'add-on by itself; to do it now, choose Check for Updates on its about:addons page.'
         : `bridge: the browser is running extension build ${stamp}, but this app ships ${shipped}. ` +
           'It updates itself once no chat is busy. If it stays on the old build, Chrome loaded it from a ' +
-          'different folder: load the CoS extension folder again at chrome://extensions.'
+          'different folder: load the OneCode extension folder again at chrome://extensions.'
       );
     }
     // Even an incompatible peer reports its version before the protocol fence.
@@ -2915,7 +2915,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     else if (body.action === 'done' && typeof body.chatgptId === 'string') ok = await completeProjectCreate(body.id, client, body.chatgptId);
     else if (body.action === 'fail' && typeof body.error === 'string') ok = await failProjectCreate(body.id, client, body.error.slice(0, 500));
     if (ok) {
-      if (body.action === 'done') logInfo(`bridge: created the native Gemini Project for a new CoS project`);
+      if (body.action === 'done') logInfo(`bridge: created the native Gemini Project for a new OneCode project`);
       if (body.action === 'fail') logWarn(`bridge: native Gemini Project creation failed — ${String(body.error).slice(0, 200)}`);
       changed();
     }

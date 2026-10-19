@@ -240,7 +240,7 @@ export type ChromeApiReply = { ok: true; value: unknown } | { ok: false; message
 /** One worker call. Unknown names are refused rather than silently answered. */
 export async function callChromeApi(browser: BrowserControl, name: string, args: unknown): Promise<ChromeApiReply> {
   const handler = Object.hasOwn(handlers, name) ? handlers[name] : undefined;
-  if (!handler) return { ok: false, message: `${name} is not available in the CoS browser.` };
+  if (!handler) return { ok: false, message: `${name} is not available in the OneCode browser.` };
   try {
     return { ok: true, value: await handler(browser, Array.isArray(args) ? args : []) };
   } catch (error) {

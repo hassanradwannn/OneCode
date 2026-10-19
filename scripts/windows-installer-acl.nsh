@@ -54,6 +54,6 @@
   ${If} ${isForceRun}
   ${AndIf} ${Silent}
     System::Call 'kernel32::GetCurrentProcessId() i .r1'
-    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\resources\updater\legacy-relaunch.ps1" -Executable "$INSTDIR\${APP_EXECUTABLE_FILENAME}" -InstallerPid $1'
+    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\resources\updater\legacy-relaunch.ps1" -Executable "$INSTDIR\${APP_EXECUTABLE_FILENAME}" -InstallerPid $1 -ExpectedVersion "${VERSION}"'
   ${EndIf}
 !macroend

@@ -7,13 +7,13 @@ import { t, ui } from './i18n.js';
 const builtinAtlas = new URL('./pet-assets/atlas.png', import.meta.url).href;
 const PET_FORMAT_INSTRUCTIONS = `<describe your character here>
 
-Create a production-ready OneCode (CoS) Pet package from the character brief above. Finish the complete package; do not stop at concept art, sample frames, or an approximate spritesheet.
+Create a production-ready OneCode Pet package from the character brief above. Finish the complete package; do not stop at concept art, sample frames, or an approximate spritesheet.
 
 WORKFLOW AUTHORITY
 
 If you are Codex and the $hatch-pet skill is installed, invoke and read $hatch-pet before producing assets. Its official source is https://github.com/openai/skills/tree/main/skills/.curated/hatch-pet. Reuse its visual workflow: one canonical character reference, grounded image generation, transparency discipline, contact-sheet and motion-preview QA, and smallest-scope repairs. The skill name is the invocation; the URL is only its official reference/discovery location.
 
-Do not use $hatch-pet's default Codex atlas assembler, state list, filenames, validator, or package output. The CoS contract below is authoritative and intentionally differs from the Codex 8×9 pet format.
+Do not use $hatch-pet's default Codex atlas assembler, state list, filenames, validator, or package output. The OneCode contract below is authoritative and intentionally differs from the Codex 8×9 pet format.
 
 If $hatch-pet is unavailable, continue using this self-contained specification. Use $imagegen for visual generation when available. Keep one canonical reference image as the identity source for every animation: same face, silhouette, proportions, palette, material, outline, accessories, and handedness.
 
@@ -27,7 +27,7 @@ Create a visible plan and complete these stages:
 RUNTIME BEHAVIOR TO DESIGN FOR
 
 Normal desktop and task behavior
-- spawn (0–3): a short arrival or ready-for-work reaction. CoS also plays it when the overall projected task status changes to running.
+- spawn (0–3): a short arrival or ready-for-work reaction. OneCode also plays it when the overall projected task status changes to running.
 - idle (4–7): calm, low-distraction breathing/blinking used between events.
 - look (8–11): attentive or expectant reaction when the overall projected task status changes to waiting/sleeping. It must read differently from idle.
 - walk (12–19): a clean horizontally mirror-safe travel cycle used for autonomous desktop movement.
@@ -41,7 +41,7 @@ Comedy actions
 - punch (38–55): a readable three-beat light attack aimed toward the open side of the frame.
 - heavy (56–65): a stronger finishing hit with anticipation, contact, and recovery.
 - grab (66–71), carry (72–79), throw (80–87): reach for, hold, carry, and release an invisible object using the authored hand anchors.
-- CoS supplies the OpenAI → ClosedAI and Anthropic → trash labels/props as live DOM elements. Do not draw company names, logos, words, target labels, held text, or a trash bin into atlas.png. Draw only the character's body, poses, and character-owned accessory.
+- OneCode supplies the OpenAI → ClosedAI and Anthropic → trash labels/props as live DOM elements. Do not draw company names, logos, words, target labels, held text, or a trash bin into atlas.png. Draw only the character's body, poses, and character-owned accessory.
 
 The runtime may flip the character horizontally. Keep travel, attacks, accessories, and contact poses visually valid when mirrored. Never let an effect or body part cross into a neighboring 160×160 cell.
 

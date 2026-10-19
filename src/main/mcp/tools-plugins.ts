@@ -13,7 +13,7 @@ import type { CallContext } from './call-context.js';
 
 /** Shared by direct and nested plugin calls; the manager remains schema/admission authority. */
 async function runPluginTool(name: string, args: unknown): Promise<ToolResult> {
-  if (getConfig().readOnly) return pluginManager.redactResult(fail('TOOL_DISABLED: external plugins are unavailable while CoS read-only mode is on.')) as ToolResult;
+  if (getConfig().readOnly) return pluginManager.redactResult(fail('TOOL_DISABLED: external plugins are unavailable while OneCode read-only mode is on.')) as ToolResult;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return fail('INVALID_ARGUMENTS: plugin arguments must be an object.');
   return await pluginManager.call(name, args as Record<string, unknown>, noteOutcome) as ToolResult;
 }

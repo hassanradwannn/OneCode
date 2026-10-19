@@ -297,6 +297,8 @@ export interface ControlApiEvents {
    * nothing, leaves it where it was.
    */
   nextFrom: number;
+  /** Exact residence cursor for an older page; null proves there is no earlier page. Live revisions omit it. */
+  nextBefore?: number | null;
 }
 
 export interface ControlApiInput {

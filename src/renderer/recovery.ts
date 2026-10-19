@@ -37,7 +37,7 @@ export function renderRecoveryCountdowns(host: HTMLElement, countdowns: readonly
         : countdown.kind === 'provider-limit'
         ? t('Automatic recovery is paused during the history rate-limit wait. Reloading earlier can prolong the limit.')
         : countdown.kind === 'pickup-stopped'
-        ? t('The browser did not collect the pending step after {0} automatic reload attempts. Its original queued input or Goal obligation remains saved. CoS will not reload this chat for this step again; open the chat to continue manually.', [String(countdown.attempts ?? 3)])
+        ? t('The browser did not collect the pending step after {0} automatic reload attempts. Its original queued input or Goal obligation remains saved. OneCode will not reload this chat for this step again; open the chat to continue manually.', [String(countdown.attempts ?? 3)])
         : countdown.kind === 'native-busy' || countdown.generating
         ? t('Delivery was deferred because the turn is still marked generating. This is the remaining extra wait, not a new reload timer. Fresh work or a final answer cancels recovery.')
         : countdown.next === 'continue'

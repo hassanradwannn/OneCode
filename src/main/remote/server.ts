@@ -56,7 +56,7 @@ async function body(req: http.IncomingMessage, limit = 128_000): Promise<unknown
 }
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-src 'self' blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-src 'self' blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
   if (!url || req.headers.host !== new URL(url).host || !enabled || !ready) throw new RequestError(503, 'remote_unavailable');
   const route = new URL(req.url ?? '/', url);
   if (route.origin !== url || route.search.length > 2048) throw new RequestError(400, 'invalid_route');

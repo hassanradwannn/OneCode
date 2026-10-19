@@ -17,5 +17,9 @@ export interface RemoteBootstrap {
   preferencesRevision: string;
 }
 export type RemoteSession = ControlApiSession & { provider: ChatProvider | null };
-export type RemoteSessionDetail = Omit<ControlApiSessionDetail, 'session'> & { session: RemoteSession };
+export type RemoteSessionDetail = Omit<ControlApiSessionDetail, 'session'> & {
+  session: RemoteSession;
+  plan?: import('./agent-plan.js').AgentPlan | null;
+  selection?: { model: string; reasoningEffort?: import('./session.js').ReasoningEffort } | null;
+};
 export type RemoteSessionList = Omit<ControlApiSessionList, 'sessions'> & { sessions: RemoteSession[] };

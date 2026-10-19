@@ -1,3 +1,4 @@
+import { EFFORT_NAMES, COMPOSER_EFFORTS } from '../shared/chat-models.js';
 import { ui, uiText, t } from './i18n.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
 import { chatModelDisplayLabel, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel } from '../shared/chat-models.js';
@@ -67,8 +68,8 @@ const pairs = [
   ['workerModel', 'workerReasoning', false],
   ['helperModel', 'helperReasoning', false]
 ] as const;
-const effortNames: Record<string, string> = { none: "Instant", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", pro: 'Pro' } satisfies Record<ReasoningEffort, string>;
-const composerEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
+const effortNames = EFFORT_NAMES;
+const composerEfforts = COMPOSER_EFFORTS;
 const effortLabel = (effort: string): string => effortNames[effort] ? t(effortNames[effort]) : effort;
 function observedModel(value: string) {
   return resolveChatModel(catalog.models, value);
