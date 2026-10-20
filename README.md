@@ -2,18 +2,24 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.3.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.8.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-## What's new in 0.3.8
+## What's new in 0.3.8.1
+
+- Windows setup detects Chrome/Chromium, Edge, Brave and Firefox in custom folders and on other drives through registered locations, PATH and running browser executables.
+- Choosing a browser saves it before sign-in opens, so selecting Edge cannot reuse a previous Brave choice. Pending or rejected saves cannot launch the previous browser.
+- **Locate browser executable…** supports portable or unregistered Windows installs, with a saved path for each browser family.
+
+The 0.3.8 remote improvements are included:
 
 - Mobile remote settings fit the screen: category buttons wrap, controls stay reachable, and the page scrolls vertically without sideways panning.
 - Bookmark the remote link once. Its encrypted access key and private port are retained across restarts, updates, and turning Remote off and on.
 - Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
 - If another route takes the saved port, **Settings → Remote → Refresh link** selects a free private port. Copy the replacement link and update your bookmark; the conflicting route is preserved.
 
-See the [0.3.8 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8**; installers and the update feed use the compatible version **0.3.800**.
+See the [0.3.8.1 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8.1**; installers and the update feed use the compatible version **0.3.801**.
 
 ## Work with your own provider account
 
@@ -59,7 +65,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.800).
+Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8.1 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
