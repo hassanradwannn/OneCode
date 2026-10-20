@@ -6,6 +6,8 @@ A desktop workspace for AI providers and local tools on Windows. Work with files
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
+**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.3.8.1. Your profile and saved chats are preserved.
+
 ## What's new in 0.3.8.1
 
 - Windows setup detects Chrome/Chromium, Edge, Brave and Firefox in custom folders and on other drives through registered locations, PATH and running browser executables.
@@ -31,7 +33,7 @@ Keep chats and projects together, delegate workers, use account-available models
 
 1. Download **OneCode-Setup-x64.exe** from Releases and run it.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, [install it](https://tailscale.com/download/windows) and sign in with your own account.
-3. Open OneCode → **Settings → Setup**. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
+3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
 5. Choose **Gemini** or **ChatGPT** in Setup. Add **OneCode Core** in that provider using the exact URL shown, then approve a working folder and choose the tools you want to enable.
 6. ChatGPT users with native Skills can export **onecode-chatgpt** from Setup, upload it through ChatGPT Plugins → Skills, enable it, then turn on **Use ChatGPT's onecode-chatgpt skill** in OneCode. Leave the option off when Skills is unavailable.
@@ -59,7 +61,7 @@ Remote mode uses a separate private Tailscale Serve route and access key. Keep i
 
 ## Updates and longer tasks
 
-Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Version 0.3.7.5 includes Windows relaunch repairs and validates the cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
+Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. The Windows updater validates its cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
 
 Updates preserve your profile and saved chats. If an older installation cannot update, run the latest installer once.
 
