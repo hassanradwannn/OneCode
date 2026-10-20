@@ -14,7 +14,7 @@ function wakeBrowser(entry: InputEntry, retry = false, signal?: AbortSignal): Pr
   const home = chatProviderHomeUrl(provider);
   return wakeBrowserUrl(entry.conversationId ? chatProviderConversationUrl(provider, entry.conversationId)
     : `${home}${home.includes('?') ? '&' : '?'}${marker}#${marker}`, retry, getConfig().ui.backgroundChats === true, {
-      ...((entry.authoredSource ?? 'text') === 'text' && !entry.purpose && !entry.recovery ? { authoredInput: true as const } : {}),
+      ...((entry.authoredSource ?? 'text') === 'text' && (!entry.purpose || entry.purpose === 'user') && !entry.recovery ? { authoredInput: true as const } : {}),
       current: async () => {
         if (stopped || signal?.aborted) return false;
         const current = (await listInputs()).find(row => row.id === entry.id);

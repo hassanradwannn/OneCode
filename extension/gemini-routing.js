@@ -54,7 +54,7 @@ export function createGeminiRouting(chrome, ownedWindow) {
     writing = write.catch(() => undefined);
     await write;
   }
-  async function resolve(value, { sourceConversationId = null, sourceTabId = null } = {}) {
+  async function resolve(value, { sourceConversationId = null, sourceTabId = null, allowAccountHome = false } = {}) {
     const requested = parse(value);
     if (!requested) return value;
     const tabs = await chrome.tabs.query({ url: ['https://gemini.google.com/*'] });
@@ -95,6 +95,15 @@ export function createGeminiRouting(chrome, ownedWindow) {
         const available = tabs.filter(tab => !tab.incognito && !tab.pendingUrl && selectedContext(tab.url));
         const prefixes = new Set(available.map(tab => selectedContext(tab.url).prefix));
         if (prefixes.size === 1) { selected = available.slice(0, 1); requireActive = false; }
+        // An explicitly queued NEW input may open the normal native home when
+        // there is no account context at all. The page chooses/asks for sign-in;
+        // its observed route then owns preparation. Existing chats and multiple
+        // visible accounts still require their original exact context.
+        const input = requested.url.searchParams.get('cos-input');
+        if (!available.length && !tabs.some(tab => !tab.incognito && selectedContext(tab.pendingUrl || tab.url)) &&
+            allowAccountHome && !wanted && !Number.isInteger(sourceTabId) &&
+            /^[a-f0-9-]{36}$/i.test(input || '') && new URLSearchParams(requested.url.hash.slice(1)).get('cos-input') === input)
+          return requested.url.href;
       }
       if (selected.length !== 1) throw new Error('gemini_account_context_required');
       if (selected[0].pendingUrl) throw new Error('gemini_selected_account_changed');

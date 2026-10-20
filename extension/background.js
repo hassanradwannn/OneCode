@@ -2267,8 +2267,8 @@ async function inAppGroup(tab) {
   return (await storedBackgroundGroup())?.id === tab.groupId;
 }
 /** Native work reuses one expanded owned window and never takes OS focus. */
-async function createChatTab(url, background = false, active = !background, sourceConversationId = null, sourceTabId = null) {
-  url = await resolveProviderUrl(url, { sourceConversationId, sourceTabId });
+async function createChatTab(url, background = false, active = !background, sourceConversationId = null, sourceTabId = null, allowAccountHome = false) {
+  url = await resolveProviderUrl(url, { sourceConversationId, sourceTabId, allowAccountHome });
   if (!background) return chrome.tabs.create({ url, active });
   return inBackgroundWindow(async () => {
     if (groupsAvailable()) {
@@ -2499,7 +2499,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       // new opening authority. An already elected recovery keeps its own source.
       if (provider === 'gemini') {
         try {
-          url = await resolveProviderUrl(url, { sourceTabId: recoveredReuse?.tab ?? null });
+          url = await resolveProviderUrl(url, { sourceTabId: recoveredReuse?.tab ?? null, allowAccountHome: !target && !recoveredReuse });
         } catch (error) {
           if (!['gemini_account_context_required', 'gemini_selected_account_changed', 'gemini_conversation_account_unknown',
             'gemini_conversation_account_ambiguous'].includes(error?.message)) throw error;
@@ -2570,7 +2570,9 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
         if (elections[input.id]) continue;
       }
       await elect(input.id, { tab: null, stage: 'opening', conversationId: target, ...(project ? { project } : {}) });
-      tab = await createChatTab(url, background);
+      tab = provider === 'gemini' && !target
+        ? await createChatTab(url, background, !background, null, null, true)
+        : await createChatTab(url, background);
       await protectCreatedTab(tab);
       await elect(input.id, { tab: tab.id, stage: 'ready', conversationId: target, ...(project ? { project } : {}),
         ...(input.lifetime === 'temporary-planner' ? { helper: 'gemini-normal-history' } : {}) });

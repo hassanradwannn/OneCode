@@ -2,6 +2,7 @@
 import { bridgeStatus, browserWakeConnected } from './bridge.js';
 import { isPreferredBrowserRunning, openInPreferredBrowser } from './browser.js';
 import { getConfig } from './config.js';
+import { wakeBrowserWork } from './browser-wake.js';
 
 let waking: { lastSeenAt: number | null; selected: string; work: Promise<void>; failed: boolean; finished: boolean } | null = null;
 /** One browser startup per absence episode, shared by authored sends, discovery and owed recovery. */
@@ -9,7 +10,7 @@ export async function wakeBrowserUrl(url: string, retry = false, backgroundStart
   authority?: { current(): boolean | Promise<boolean>; authoredInput?: true }): Promise<void> {
   if (authority && !await authority.current()) return;
   const browser = await bridgeStatus();
-  if (browserWakeConnected()) { waking = null; return; }
+  if (browserWakeConnected()) { waking = null; wakeBrowserWork(); return; }
   const selected = getConfig().ui.chatBrowser ?? 'chrome';
   // The companion can be missing because its protocol is incompatible or MV3 is
   // suspended. Recovery/discovery require process absence. An explicit queued
@@ -21,7 +22,7 @@ export async function wakeBrowserUrl(url: string, retry = false, backgroundStart
   if (authority && !await authority.current()) return;
   // Both the process probe and durable recovery validation may yield.
   if (selected !== (getConfig().ui.chatBrowser ?? 'chrome')) return;
-  if (browserWakeConnected()) { waking = null; return; }
+  if (browserWakeConnected()) { waking = null; wakeBrowserWork(); return; }
   if (!absent && !authority?.authoredInput) return;
   if (retry && waking === prior && (waking?.failed || waking?.finished)) waking = null;
   // Until the extension registers, another explicit send belongs to the same startup.

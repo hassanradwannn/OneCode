@@ -9188,7 +9188,7 @@ async function inspectSilentGeminiInput(conversationId: string, grant: ActivityG
       stopRequestedFor(conversationId)) return null;
   const question = await readLatestUserMessage(grant.sessionId);
   const row = question?.inputId ? (await listInputs()).find(row => row.id === question.inputId) : null;
-  if (!row?.owner || !row.claimedBrowser || row.offeredAt === undefined || row.purpose || row.recovery ||
+  if (!row?.owner || !row.claimedBrowser || row.offeredAt === undefined || (row.purpose && row.purpose !== 'user') || row.recovery ||
       (row.authoredSource ?? 'text') !== 'text') return null;
   const receipt = await geminiInputBindingStatus({ id: row.id, owner: row.owner, browser: row.claimedBrowser,
     offeredAt: row.offeredAt }, conversationId, grant.sessionId);
