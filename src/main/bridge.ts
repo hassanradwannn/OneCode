@@ -41,7 +41,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -8073,6 +8073,8 @@ interface Repair {
   silenceGrant?: ActivityGrant;
   /** The authored question owns transport recovery across document-local generation changes. */
   assistantSource?: { key: string; turnId: string | null; completed: boolean };
+  /** Pointer back to the input owner's Send receipt, revalidated before action. */
+  inputSource?: Parameters<typeof geminiInputBindingStatus>[0];
   attribution?: { incident: UnattributedIncident; candidate: UnattributedCandidate };
   claimed?: boolean;
   /**
@@ -8378,8 +8380,16 @@ async function assistantRepairCurrent(conversationId: string, repair: Repair): P
   // An error originally filed for an already-completed stuck composer still owns its reload.
   if (!source.completed && await readCompletedFinal(repair.sessionId, conversationId, source.turnId)) return false;
   const spent = turnRepairSpent.get(conversationId);
-  return repair.state === 'done' || !spent || spent.sessionId !== repair.sessionId || spent.turnKey !== source.key ||
+  const available = repair.state === 'done' || !spent || spent.sessionId !== repair.sessionId || spent.turnKey !== source.key ||
     (repair.claimed === true && spent.token === repair.token);
+  if (!available) return false;
+  if (repair.inputSource && !repair.claimed && repair.state !== 'done') {
+    const receipt = await geminiInputBindingStatus(repair.inputSource, conversationId, repair.sessionId);
+    return receipt.state === 'ready' && receipt.turn.turnId === source.turnId &&
+      recoveryInputAllowed(repair.sessionId, conversationId) && !activeUntil.has(conversationId) &&
+      runningToolCalls(conversationId) === 0 && !approvalCardWaiting(conversationId);
+  }
+  return true;
 }
 
 /**
@@ -9168,6 +9178,43 @@ function noteSilence(conversationId: string, grant: ActivityGrant, reason: strin
  */
 type SpentSilence = Map<string, { grant: ActivityGrant; repair: Repair | undefined }>;
 
+/** A confirmed authored Gemini Send can earn one page refresh before its first
+ * tool call. It cannot earn Stop, Continue, completion or a second Send. Reuse
+ * the input owner's exact native receipt and the error-repair question budget. */
+export const GEMINI_RESPONSE_STALL_MS = 10 * 60_000;
+async function inspectSilentGeminiInput(conversationId: string, grant: ActivityGrant, now: number): Promise<'queued' | 'waiting' | null> {
+  if (chatProviderForConversation(conversationId) !== 'gemini' || !grant.turnId ||
+      !recoveryInputAllowed(grant.sessionId, conversationId) || isChatBlocked(conversationId) ||
+      stopRequestedFor(conversationId)) return null;
+  const question = await readLatestUserMessage(grant.sessionId);
+  const row = question?.inputId ? (await listInputs()).find(row => row.id === question.inputId) : null;
+  if (!row?.owner || !row.claimedBrowser || row.offeredAt === undefined || row.purpose || row.recovery ||
+      (row.authoredSource ?? 'text') !== 'text') return null;
+  const receipt = await geminiInputBindingStatus({ id: row.id, owner: row.owner, browser: row.claimedBrowser,
+    offeredAt: row.offeredAt }, conversationId, grant.sessionId);
+  if (receipt.state !== 'ready' || receipt.turn.turnId !== grant.turnId || activeUntil.get(conversationId) !== grant) return null;
+  const source = await assistantRepairSource(grant.sessionId);
+  if (activeUntil.get(conversationId) !== grant || source.completed || source.turnId !== grant.turnId ||
+      source.key !== `user:${receipt.turn.messageId}`) return null;
+  const deadline = grant.evidenceAt + Math.max(GEMINI_RESPONSE_STALL_MS, silenceWindowMs(grant));
+  if (now < deadline || silenceHeldByCalls(conversationId, grant, now, true)) {
+    grant.until = Math.max(deadline, now + GOAL_QUIET_MS);
+    return 'waiting';
+  }
+  const episode = `assistant-error:${source.key}`;
+  const live = liveConversations().find(row => row.conversationId === conversationId);
+  const queued = queueBrowserRecovery(conversationId, grant.sessionId, episode, 'assistant-error',
+    (live?.endedTurns ?? 0) + (live?.activeTurnId ? 1 : 0), now, source);
+  const repair = repairsInFlight.get(conversationId);
+  if (!queued && !(repair?.episode === episode && repair.state !== 'done')) return null;
+  if (queued && repair) repair.inputSource = { id: row.id, owner: row.owner, browser: row.claimedBrowser, offeredAt: row.offeredAt };
+  // The exact question's existing repair now owns recovery, including its claim
+  // checks and spent budget. Do not file a silence Continue for a tool-free turn.
+  activeUntil.delete(conversationId);
+  if (queued) logInfo('bridge: confirmed Gemini input stalled before tool use; queued its one page refresh');
+  return 'queued';
+}
+
 async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent: string[]; inspected: SpentSilence }> {
   let queued = false;
   let deferred = false;
@@ -9192,6 +9239,11 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     // Observation owns liveness, never permission to interrupt the native page.
     // Only an exactly recorded local call in this source turn earns silence repair.
     if (!grant.turnId || !await answerHasMcpCall(grant.sessionId, conversationId, grant.turnId)) {
+      const authored = await inspectSilentGeminiInput(conversationId, grant, now);
+      if (authored) {
+        queued ||= authored === 'queued'; deferred ||= authored === 'waiting';
+        continue;
+      }
       if (activeUntil.get(conversationId) === grant) {
         noteSilence(conversationId, grant, grant.turnId
           ? `not available: turn ${grant.turnId} has no attributed tool call recorded for this chat`

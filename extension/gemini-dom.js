@@ -1379,7 +1379,13 @@ var CLF_DOM = (() => {
     const url = new URL(node.href, location.href);
     return url.origin === 'https://gemini.google.com' && isAppHomePath(url.pathname);
   })) : null;
-  const errors = () => all('[role="alert"]').filter(node => shown(node) && !node.closest(TURN)).map(node => ({ node, text: text(node).slice(0, 2000), recoverable: true, blocking: true }));
+  const errors = () => all('[role="alert"]').filter(node => shown(node) && !node.closest(TURN)).map(node => {
+    const notice = text(node).slice(0, 2000).replace(/\s+/g, ' ').trim();
+    // A transport failure can be refreshed; quota/account notices cannot. Unknown
+    // alerts stay blocking. Ordinary assistant/user prose never enters this path.
+    const transport = /^(?:something went wrong(?:\. please try again(?: later)?)?|a network error occurred(?:\. please check your connection and try again)?|network error|connection (?:lost|interrupted)|unable to connect|there was a problem generating (?:a|the) response)(?:[.!])?(?: (?:try again|retry))?$/i.test(notice);
+    return { node, text: notice, recoverable: transport, blocking: !transport };
+  });
   const conversationTitle = () => document.title.replace(/\s*[-–]\s*(?:Google )?Gemini\s*$/, '').trim();
   const composerActions = () => {
     const button = sendButton() || stopButton() || unique(all('button[aria-label^="Dictate"]'));
