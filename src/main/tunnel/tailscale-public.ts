@@ -3,7 +3,7 @@ import https from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import type { TailscalePublicFailure } from '../../shared/types.js';
 
-const RESOLVER = 'https://cloudflare-dns.com/dns-query';
+const RESOLVERS = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const METADATA = '/.well-known/oauth-protected-resource';
 const MAX_BYTES = 64 * 1024;
 const PRIVATE_V4 = new BlockList();
@@ -56,15 +56,37 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
       const contentType = response.headers['content-type']?.split(';')[0]?.trim();
       if (!contentType || !options.accept.split(',').map(type => type.trim()).includes(contentType)) { response.destroy(); finish(new ProbeReadError('response')); return; }
       let body = '', bytes = 0;
+      response.setEncoding('utf8');
+      const streamReply = (): boolean => {
+        let boundary: RegExpExecArray | null;
+        while ((boundary = /\r?\n\r?\n/.exec(body))) {
+          const event = body.slice(0, boundary.index); body = body.slice(boundary.index + boundary[0].length);
+          const data = event.split(/\r?\n/).filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).replace(/^ /, '')).join('\n');
+          if (!data) continue;
+          let json: unknown;
+          try { json = JSON.parse(data); } catch { finish(new ProbeReadError('response')); return true; }
+          // Ignore SSE comments/notifications; only the exact initialize reply
+          // completes this bounded check. A server may leave the stream open.
+          if (object(json) && json.jsonrpc === '2.0' && json.id === 'onecode-ingress') {
+            finish(undefined, { status: 200, json }); return true;
+          }
+        }
+        return false;
+      };
       response.on('data', chunk => {
         bytes += Buffer.byteLength(chunk);
         if (bytes > MAX_BYTES) { response.destroy(); request.destroy(); finish(new ProbeReadError('response')); return; }
         body += String(chunk);
+        if (contentType === 'text/event-stream' && streamReply()) { response.destroy(); request.destroy(); }
       });
       response.once('error', () => finish(new ProbeReadError('transport')));
       response.once('aborted', () => finish(new ProbeReadError('transport')));
       response.once('end', () => {
-        try { finish(undefined, { status: 200, json: JSON.parse(contentType === 'text/event-stream' ? /^data:\s*(.+)$/m.exec(body)?.[1] ?? '' : body) }); }
+        try {
+          if (contentType === 'text/event-stream') { finish(new ProbeReadError('response')); return; }
+          finish(undefined, { status: 200, json: JSON.parse(body) });
+        }
         catch { finish(new ProbeReadError('response')); }
       });
     });
@@ -107,15 +129,16 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
   const pending = new AbortController();
   const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000), pending.signal]);
   let hasAddresses = false, dnsError = false;
+  const ingress = new Map<string, Promise<void>>();
   try {
     // Race the complete DNS -> HTTPS paths. Waiting for both DNS answers first made
     // a working family wait for the other's resolver timeout on launch/resume.
     // Keep the other family alive until exact metadata verifies, not just DNS success.
-    await Promise.any(([1, 28] as const).map(async type => {
-      const query = new URL(RESOLVER); query.searchParams.set('name', endpoint.hostname); query.searchParams.set('type', String(type));
+    await Promise.any(RESOLVERS.flatMap(resolver => ([1, 28] as const).map(async type => {
+      const query = new URL(resolver); query.searchParams.set('name', endpoint.hostname); query.searchParams.set('type', String(type));
       let answer: ReturnType<typeof dnsAddresses>;
       try {
-        const response = await deps.read(query, { signal: probeSignal, accept: 'application/dns-json' });
+        const response = await deps.read(query, { signal: probeSignal, accept: 'application/dns-json, application/json' });
         answer = response.status === 200 ? dnsAddresses(response.json, endpoint.hostname, type) : { addresses: [], error: true };
       } catch { answer = { addresses: [], error: true }; }
       dnsError ||= answer.error;
@@ -123,7 +146,10 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
       const addresses = [...new Set(answer.addresses)].slice(0, 4);
       hasAddresses ||= addresses.length > 0;
       // Bounded to four addresses per family; a dead IPv4 route cannot crowd out IPv6.
-      await Promise.any(addresses.map(async address => {
+      await Promise.any(addresses.map(address => {
+        const existing = ingress.get(address);
+        if (existing) return existing;
+        const attempt = (async () => {
         try {
           const response = await deps.read(metadata, { signal: probeSignal, accept: 'application/json', address });
           probeSignal.throwIfAborted();
@@ -140,8 +166,11 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
           }
         } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
         throw new Error('Ingress did not verify');
+        })();
+        ingress.set(address, attempt);
+        return attempt;
       }));
-    }));
+    })));
     signal.throwIfAborted();
     return { state: 'ready' };
   } catch {

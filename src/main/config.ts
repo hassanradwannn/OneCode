@@ -813,6 +813,10 @@ async function persistConfig(parsed: Config): Promise<Config> {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(tmp, JSON.stringify(parsed, null, 2), 'utf8');
   await fs.rename(tmp, configPath);
+  // Startup reservations follow the tunnel incarnation, not every settings write.
+  // Zod clones nested objects: an unrelated UI save must not cancel an in-flight
+  // connection. Actual tunnel changes (including A -> B -> A) still retire it.
+  if (JSON.stringify(parsed.tunnel) === JSON.stringify(current.tunnel)) parsed.tunnel = current.tunnel;
   // Only publish the new in-memory state after the durable write succeeded. A disk
   // error must not leave the UI believing settings were saved when they were not.
   current = parsed;

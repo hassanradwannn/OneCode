@@ -17,7 +17,7 @@ import { locateBinary } from './locate.js';
 import { createTailscaleRelay, type TailscaleRelay } from './tailscale-relay.js';
 import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.js';
 import { withTailscaleMutation } from './tailscale-mutation.js';
-import { TailscaleSetupRequired, tailscalePrerequisites } from './tailscale-prerequisites.js';
+import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites } from './tailscale-prerequisites.js';
 import { requestTailscaleSetup } from './tailscale-setup.js';
 
 class FunnelSetupError extends Error {}
@@ -186,8 +186,8 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       if (stopped) await handle.stop(); else active = handle;
     } catch (error) {
       if (stopped) return;
-      if (!(error instanceof TailscaleSetupRequired)) { if (initial) throw error; return; }
-      void requestTailscaleSetup(error.setup);
+      if (!(error instanceof TailscaleSetupRequired) && !(error instanceof TailscaleNotReady)) { if (initial) throw error; return; }
+      if (error instanceof TailscaleSetupRequired) void requestTailscaleSetup(error.setup);
       // No route mutation has started. Re-read installation/account/capabilities;
       // never replay an uncertain CLI mutation or recreate a replaced route.
       timer = setTimeout(() => { void attempt().catch(() => undefined); }, overrides.watchMs ?? 5_000); timer.unref?.();
@@ -342,9 +342,10 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
     startupTiming('routes-configured');
     report('connecting-tunnel', 'The owned Funnel route is configured. Checking its exact connector through public DNS and HTTPS…', publicUrl);
     let failedSince: number | null = null, failures = 0, firstPublicReady = false;
+    let previousPublicState: FunnelPublicResult['state'] | undefined;
     const details: Record<Exclude<FunnelPublicResult['state'], 'ready'>, string> = {
       'dns-pending': 'Public DNS has not published this device yet. Tailscale says propagation can take up to 10 minutes.',
-      'dns-error': 'The Cloudflare public DNS check could not verify a public ingress address. Check network access to the DNS-over-HTTPS resolver.',
+      'dns-error': 'Public DNS checks could not verify an ingress address. OneCode is checking Cloudflare and Google DNS automatically.',
       'tls-error': 'Public DNS resolves, but verified TLS to the Funnel ingress failed. Local Tailscale readiness does not prove public reachability.',
       'http-error': 'Public HTTPS answered, but the exact connector metadata path did not return HTTP 200. Check the current OneCode URL and Funnel routing.',
       'metadata-error': 'Public HTTPS did not return metadata for this exact current connector. A different or stale mount cannot verify this connection.',
@@ -363,6 +364,10 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
         await verifyNative();
         if (stopped) return;
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
+        if (result.state !== previousPublicState) {
+          logInfo(`OneCode Funnel public check state=${result.state} elapsedMs=${Math.round(performance.now() - startedAt)}`);
+          previousPublicState = result.state;
+        }
         if (result.state === 'ready') {
           if (!firstPublicReady) { firstPublicReady = true; startupTiming('public-ready'); }
           failedSince = null; failures = 0;
@@ -397,8 +402,8 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
     await relay?.stop();
     if (check.funnel !== 'permission-required') check.funnel = 'error';
     if (!check.version) check.cli = 'error';
-    const pendingSetup = error instanceof TailscaleSetupRequired && !nativeMutation;
-    const message = error instanceof FunnelSetupError || error instanceof TailscaleSetupRequired ? error.message : describeFailure(error);
+    const pendingSetup = (error instanceof TailscaleSetupRequired || error instanceof TailscaleNotReady) && !nativeMutation;
+    const message = error instanceof FunnelSetupError || error instanceof TailscaleSetupRequired || error instanceof TailscaleNotReady ? error.message : describeFailure(error);
     report(pendingSetup ? 'connecting-tunnel' : 'tunnel-unavailable', message);
     if (pendingSetup) throw error;
     throw new FunnelSetupError(message);

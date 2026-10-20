@@ -53,8 +53,8 @@ export function updateAll(quit: () => void, openDownload: (url: string) => Promi
 
 /** One durable startup attempt per accepted connector request; never another install. */
 export async function resumeUpdateRefresh(): Promise<void> {
-  // Config saves replace the tunnel settings object. Preserve that incarnation as well as
-  // its values, so a profile/tunnel A -> B -> A cannot borrow the old startup reservation.
+  // The config owner retains this incarnation through unrelated settings saves.
+  // Actual tunnel edits (including A -> B -> A) cannot borrow its startup reservation.
   const tunnel = getConfig().tunnel, snapshot = JSON.stringify(tunnel);
   const current = () => getConfig().tunnel === tunnel && JSON.stringify(tunnel) === snapshot;
   if (!await consumeRequestedPluginRefreshStartup(current) || !current()) return;

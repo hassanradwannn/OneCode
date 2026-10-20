@@ -6,10 +6,15 @@ export class TailscaleSetupRequired extends Error {
   constructor(step: TailscaleSetupStep, message: string) { super(message); this.setup = tailscaleSetupAction(step); }
 }
 const row = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+/** Read-only network/daemon wait; it does not authorize opening account setup. */
+export class TailscaleNotReady extends Error {}
 
 export function tailscalePrerequisites(status: Record<string, unknown>, funnel: boolean): { id: string; dnsName: string } {
   const self = row(status.Self), tailnet = row(status.CurrentTailnet);
-  if (status.BackendState !== 'Running' || status.AuthURL || self.Online === false)
+  if (!status.AuthURL && (['NoState', 'Starting', 'Stopped'].includes(String(status.BackendState)) ||
+      (status.BackendState === 'Running' && self.Online === false)))
+    throw new TailscaleNotReady('Waiting for Tailscale to connect. Keep Tailscale running and connected; OneCode will check again automatically.');
+  if (status.BackendState !== 'Running' || status.AuthURL)
     throw new TailscaleSetupRequired('login', 'Tailscale is installed. Sign in and connect this device in Tailscale; OneCode will continue automatically.');
   const dnsName = typeof self.DNSName === 'string' ? self.DNSName.toLowerCase().replace(/\.$/, '') : '';
   if (tailnet.MagicDNSEnabled === false || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(dnsName))
