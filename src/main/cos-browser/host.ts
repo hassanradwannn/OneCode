@@ -699,9 +699,7 @@ export class CosBrowser {
     view.webContents.on('did-finish-load', () => this.paintSignIn());
     const panel: SignInPanel = {
       contents, view, windowId,
-      browsers: installedSignInBrowsers().map(({ browser, executable }) => ({
-        id: browser, label: EXTERNAL_BROWSER_LABELS[browser], icon: null, executable
-      })),
+      browsers: [],
       phase: 'choose', browser: null, offerId: null, launching: false, notice: null, expiry: null
     };
     this.signIn = panel;
@@ -715,13 +713,18 @@ export class CosBrowser {
     this.showWindow(windowId, true);
     view.webContents.focus();
     // Each browser's own icon, as the person knows it from the taskbar.
-    for (const browser of panel.browsers) {
-      void browserIcon(browser.executable).then(icon => {
-        if (this.signIn !== panel || icon.isEmpty()) return;
-        browser.icon = icon.toDataURL();
-        this.paintSignIn();
-      }).catch(() => undefined);
-    }
+    void Promise.resolve(installedSignInBrowsers()).then(browsers => {
+      if (this.signIn !== panel) return;
+      panel.browsers = browsers.map(({ browser, executable }) => ({ id: browser, label: EXTERNAL_BROWSER_LABELS[browser], icon: null, executable }));
+      this.paintSignIn();
+      for (const browser of panel.browsers) {
+        void browserIcon(browser.executable).then(icon => {
+          if (this.signIn !== panel || icon.isEmpty()) return;
+          browser.icon = icon.toDataURL();
+          this.paintSignIn();
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
   }
 
   private paintSignIn(): void {

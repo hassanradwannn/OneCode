@@ -148,6 +148,8 @@ Native HTML Canvas snapshots are distinct from provider-native artifact revision
 
 ## Reading and validation
 
+`browser.ts` owns installed-browser resolution for setup and app-authored launches. Windows checks the selected family's normal channel paths, PATH, per-user/machine App Paths and StartMenuInternet registrations, and matching running executable paths on any drive. Registration arguments are discarded and another family is never a fallback. An explicit local executable picker retains per-family paths through the config owner. Setup saves the chosen family before sign-in and passes that same family to the launch IPC; pending or rejected saves cannot open a previous selection.
+
 Desktop Compact pickup acknowledges an exact live document before fetching its activity feed. The browser's IPC reply deadline must not reload that same document while a delayed feed response starts the handoff Send. An owner already between dispatch authorization and native acceptance retains custody. Actual Send, accepted question, saved Markdown and successor commit remain separate checkpoints for every provider; one provider's pending checkpoint cannot serialize another's.
 
 An exactly matching route that Chrome still marks loading can refuse a checkpoint before forwarding it to the app. Source checkpoints and successor authorization both use the same bounded readiness wait for that explicit unforwarded refusal, including Gemini's named warm-up conversation. A changed document, foreign route, lost response or uncertain dispatch cannot use this retry. The compact status remains Preparing until durable source dispatch evidence exists.

@@ -329,6 +329,7 @@ const configSchema = z.object({
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional().catch(undefined),
     chatProvider: z.enum(CHAT_PROVIDERS).optional().default('gemini'),
     chatBrowser: z.enum(CHAT_BROWSERS).optional().default('chrome'),
+    browserExecutables: z.object({ chrome: z.string().max(4096).optional(), edge: z.string().max(4096).optional(), brave: z.string().max(4096).optional(), firefox: z.string().max(4096).optional() }).strict().optional().catch(undefined),
     /** Where a minimized built-in browser window goes. */
     cosBrowserMinimize: z.enum(['taskbar', 'tray']).optional().default('taskbar'),
     developerMode: z.boolean().optional(),

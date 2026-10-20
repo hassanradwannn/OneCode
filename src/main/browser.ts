@@ -6,6 +6,7 @@ import { getConfig } from './config.js';
 import type { ChatBrowser } from '../shared/types.js';
 import { browserWindowBounds } from './browser-window-layout.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderHomeUrl } from '../shared/chat-provider.js';
+import { registeredWindowsBrowsers, windowsBrowserExecutable, WINDOWS_BROWSER_NAMES } from './browser-windows.js';
 
 type Exists = (candidate: string) => boolean;
 type Launch = typeof launchCommand;
@@ -19,19 +20,19 @@ export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
  * is not offered: the session handoff reads Chromium's single cookie store, and Firefox keeps a
  * store per container, so it is left out until that path is built and tested there.
  */
-export function installedSignInBrowsers(): Array<{ browser: ExternalChatBrowser; executable: string }> {
-  return (['chrome', 'edge', 'brave'] as const).flatMap(browser => {
-    const executable = preferredBrowserCandidates(process.platform, process.env, undefined, browser)
+export async function installedSignInBrowsers(): Promise<Array<{ browser: ExternalChatBrowser; executable: string }>> {
+  return (await Promise.all((['chrome', 'edge', 'brave'] as const).map(async browser => {
+    const executable = (await resolveBrowserCandidates(browser))
       .find(candidate => isExecutableBrowser(candidate, process.platform));
     return executable ? [{ browser, executable }] : [];
-  });
+  }))).flat();
 }
 
 export async function openBrowserSignIn(browser: ExternalChatBrowser,
-  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch'> = {}): Promise<string> {
+  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch' | 'discover'> = {}): Promise<string> {
   const platform = options.platform ?? process.platform;
   const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
-  for (const candidate of new Set(preferredBrowserCandidates(platform, options.env, options.home, browser))) {
+  for await (const candidate of browserLaunchCandidates(browser, options)) {
     if (!usable(candidate)) continue;
     // No throwaway profile: it would have neither the person's extension nor their account.
     // Start a fresh Gemini login instead of transplanting an embedded OAuth URL/PKCE state.
@@ -96,6 +97,8 @@ export interface PreferredBrowserOpenOptions {
   launch?: Launch;
   /** Test seam for the Windows minimized startup wrapper. */
   powershell?: typeof runPowerShell;
+  /** Read-only installation discovery; test/alternate-host seam. */
+  discover?: (browser: ExternalChatBrowser) => Promise<string[]>;
 }
 
 function isExecutableBrowser(candidate: string, platform: NodeJS.Platform): boolean {
@@ -134,12 +137,13 @@ export function preferredBrowserCandidates(
       return ['Mozilla Firefox', 'Firefox Developer Edition', 'Firefox Nightly']
         .flatMap(folder => roots.map(root => p.join(root, folder, 'firefox.exe')));
     }
-    const parts = browser === 'edge'
-      ? ['Microsoft', 'Edge', 'Application', 'msedge.exe']
+    const folders = browser === 'edge'
+      ? ['Microsoft\\Edge', 'Microsoft\\Edge Beta', 'Microsoft\\Edge Dev', 'Microsoft\\Edge SxS']
       : browser === 'brave'
-        ? ['BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe']
-        : ['Google', 'Chrome', 'Application', 'chrome.exe'];
-    return roots.map(root => p.join(root, ...parts));
+        ? ['BraveSoftware\\Brave-Browser', 'BraveSoftware\\Brave-Browser-Beta', 'BraveSoftware\\Brave-Browser-Dev', 'BraveSoftware\\Brave-Browser-Nightly']
+        : ['Google\\Chrome', 'Google\\Chrome Beta', 'Google\\Chrome Dev', 'Google\\Chrome SxS', 'Chromium'];
+    const executable = browser === 'edge' ? 'msedge.exe' : browser === 'brave' ? 'brave.exe' : 'chrome.exe';
+    return folders.flatMap(folder => roots.map(root => p.join(root, folder, 'Application', executable)));
   }
 
   if (platform === 'darwin') {
@@ -248,6 +252,40 @@ export function preferredBrowserCandidates(
   return [];
 }
 
+/** One resolver for setup, sign-in and ordinary launches, independent of install drive. */
+export async function resolveBrowserCandidates(browser: ExternalChatBrowser,
+  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'discover'> = {}): Promise<string[]> {
+  const platform = options.platform ?? process.platform, env = options.env ?? process.env;
+  const standard = preferredBrowserCandidates(platform, env, options.home, browser);
+  const configured = getConfig().ui.browserExecutables?.[browser];
+  const discovered = platform === 'win32'
+    ? await (options.discover ?? (family => registeredWindowsBrowsers(family, env)))(browser) : [];
+  const fromPath = platform === 'win32' ? (env.PATH ?? env.Path ?? '').split(';').flatMap(dir => {
+    const root = dir.trim().replace(/^"(.*)"$/, '$1');
+    return path.win32.isAbsolute(root) ? WINDOWS_BROWSER_NAMES[browser].map(name => path.win32.join(root, name)) : [];
+  }) : [];
+  const candidates = [...(configured && platform === process.platform && !options.env ? [configured] : []), ...standard, ...discovered, ...fromPath];
+  const seen = new Set<string>();
+  return candidates.filter(candidate => {
+    if (platform === 'win32' && windowsBrowserExecutable(candidate, browser, env) !== path.win32.normalize(candidate)) return false;
+    const key = platform === 'win32' ? candidate.toLowerCase() : candidate;
+    if (seen.has(key)) return false; seen.add(key); return true;
+  });
+}
+
+/** Common installs start immediately; query Windows only when those candidates cannot launch. */
+async function* browserLaunchCandidates(browser: ExternalChatBrowser,
+  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'discover'>): AsyncGenerator<string> {
+  const seen = new Set<string>();
+  for (const candidate of await resolveBrowserCandidates(browser, { ...options, discover: async () => [] })) {
+    seen.add(candidate.toLowerCase()); yield candidate;
+  }
+  if ((options.platform ?? process.platform) !== 'win32') return;
+  for (const candidate of await resolveBrowserCandidates(browser, options)) {
+    if (!seen.has(candidate.toLowerCase())) { seen.add(candidate.toLowerCase()); yield candidate; }
+  }
+}
+
 export function findPreferredBrowser(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
@@ -272,7 +310,6 @@ export async function openInPreferredBrowser(
   options: PreferredBrowserOpenOptions = {}
 ): Promise<string> {
   const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
   const usable = options.usable ?? ((candidate: string) => isExecutableBrowser(candidate, platform));
   const launch = options.launch ?? launchCommand;
   const selected = options.browser ?? getConfig().ui.chatBrowser ?? 'chrome';
@@ -295,7 +332,7 @@ export async function openInPreferredBrowser(
   ];
   let lastError: unknown = null;
 
-  for (const browser of new Set(preferredBrowserCandidates(platform, env, options.home, selected))) {
+  for await (const browser of browserLaunchCandidates(selected, options)) {
     if (!usable(browser)) continue;
     try {
       // A windowless Chrome exits once extensions load unless the profile has a
@@ -322,6 +359,6 @@ export async function openInPreferredBrowser(
     }
   }
 
-  if (lastError) throw new Error(`${label} could not start: ${(lastError as Error).message}. Check Settings > Browser & history > Provider browser.`);
-  throw new Error(`${label} was not found. Install it or change Settings > Browser & history > Provider browser.`);
+  if (lastError) throw new Error(`${label} could not start: ${(lastError as Error).message}. Check the selected browser in Settings > Setup.`);
+  throw new Error(`${label} was not found. Install it or choose its executable in Settings > Setup.`);
 }

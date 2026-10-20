@@ -127,10 +127,14 @@ const browserSetup = initBrowserSetup({
     await settingsSaveQueue;
     // The existing queue catches rejected saves so later settings can proceed. Its
     // completion alone is not proof that the requested browser became the live choice.
-    if ((state?.config.ui.chatBrowser ?? 'chrome') !== browser) throw new Error(t('The browser choice was not saved. Try again.'));
+    if ((state?.config.ui.chatBrowser ?? 'chrome') !== browser) {
+      $<HTMLSelectElement>('chatBrowser').value = state?.config.ui.chatBrowser ?? 'chrome';
+      throw new Error(t('The browser choice was not saved. Try again.'));
+    }
   },
   repaint: () => { setupOpenStep = 'browser'; if (state) apply(state); },
-  open: (browser, page) => run(api.openSetupBrowser(browser, page))
+  open: (browser, page) => run(api.openSetupBrowser(browser, page)),
+  locate: async browser => { await settingsSaveQueue; const next = await run(api.pickBrowserExecutable(browser)); if (next) apply(next); }
 });
 // Escape the translucent sidebar's backdrop-filter containing block.
 document.body.append($('connectionPopover'));

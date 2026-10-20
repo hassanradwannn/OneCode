@@ -1,5 +1,5 @@
 import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
-import { $, run, toast } from './dom.js';
+import { $, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
 import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
@@ -45,6 +45,7 @@ export function initBrowserSetup(actions: {
   choose(browser: ChatBrowser): void | Promise<void>;
   repaint(): void;
   open(browser: ExternalBrowser, page: 'extensions' | 'chatgpt'): Promise<unknown>;
+  locate?(browser: ExternalBrowser): Promise<void>;
 }): { render(state: AppState): { ready: boolean; choosingLocation: boolean }; reviewExtension(): void } {
   let current: AppState | null = null;
   let phase: 'extension' | 'location' = 'extension';
@@ -59,6 +60,12 @@ export function initBrowserSetup(actions: {
   let initialized = false;
   let savedBrowser: ChatBrowser | null = null;
   let ready = false;
+  let choosing = false;
+  const lockChoice = (busy: boolean): void => {
+    choosing = busy;
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-external-browser], #useExtensionBrowser, #openSelectedChatGpt, #openChatGptBrowser, #openExtensionSettings, #openFirefoxAddon, #pickBrowserExecutable')) button.disabled = busy;
+    $('browserExecutablePicker').hidden = current?.platform?.family !== 'windows';
+  };
 
   let copiedAt = 0;
   /**
@@ -155,6 +162,8 @@ export function initBrowserSetup(actions: {
     const address = `${external}://extensions`;
     $('setupExtensionAddress').textContent = address;
     const label = LABELS[external];
+    $('browserExecutablePicker').hidden = state.platform?.family !== 'windows';
+    $('browserExecutableHint').textContent = state.config.ui.browserExecutables?.[external] ?? t('For portable browsers or an installation in another folder or drive.');
     paintInstallSteps(label, providerName);
     ui($('setupExternalChoice'), 'textContent', () => t('Use {0}', [label]));
     ui($('setupExternalLabel'), 'textContent', () => t('Your existing browser profile and companion.'));
@@ -207,8 +216,16 @@ export function initBrowserSetup(actions: {
   })(); });
   for (const segment of document.querySelectorAll<HTMLButtonElement>('[data-external-browser]')) {
     segment.addEventListener('click', () => {
+      if (choosing) return;
       external = segment.dataset.externalBrowser as ExternalBrowser;
       if (current) render(current);
+      const chosen = external;
+      lockChoice(true);
+      void Promise.resolve().then(() => actions.choose(chosen)).catch(error => {
+        external = current?.config.ui.chatBrowser === 'cos' ? 'chrome' : current?.config.ui.chatBrowser ?? 'chrome';
+        if (current) render(current);
+        choiceFailed(error);
+      }).finally(() => lockChoice(false));
     });
   }
   // Standard radio keyboard behavior, with focus following the selected item.
@@ -231,6 +248,16 @@ export function initBrowserSetup(actions: {
   })());
   $('openFirefoxAddon').addEventListener('click', () => { void actions.open('firefox', 'extensions'); });
   $('openChatGptBrowser').addEventListener('click', () => { void actions.open(external, 'chatgpt'); });
-  $('openSelectedChatGpt').addEventListener('click', () => void run(window.api.openChatGpt()));
+  $('openSelectedChatGpt').addEventListener('click', () => {
+    if (choosing) return;
+    const chosen = external; lockChoice(true);
+    void Promise.resolve().then(() => actions.choose(chosen)).then(() => actions.open(chosen, 'chatgpt'))
+      .catch(choiceFailed).finally(() => lockChoice(false));
+  });
+  $('pickBrowserExecutable').addEventListener('click', () => {
+    if (choosing || !actions.locate) return;
+    const chosen = external; lockChoice(true);
+    void actions.locate(chosen).catch(choiceFailed).finally(() => lockChoice(false));
+  });
   return { render, reviewExtension: () => changePhase('extension') };
 }

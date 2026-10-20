@@ -203,6 +203,8 @@ export interface UiPrefs {
   privacyScreenshots: boolean;
   /** Browser for app-originated launches; connected source tabs retain placement ownership. */
   chatBrowser?: ChatBrowser;
+  /** Explicit executable selected locally for each installed browser family. */
+  browserExecutables?: Partial<Record<Exclude<ChatBrowser, 'cos'>, string>>;
   /** Where a minimized built-in browser window goes (default: the taskbar or Dock). */
   cosBrowserMinimize?: 'taskbar' | 'tray';
   /** Explicit choice, never inherited from the OS: the window looks how you left it. */

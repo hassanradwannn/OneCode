@@ -265,6 +265,7 @@ const api = {
   openChatGpt: () => call<boolean>('chatgpt:open'),
   signOutChatGpt: () => call<boolean>('chatgpt:signOut'),
   openSetupBrowser: (browser: 'chrome' | 'edge' | 'brave' | 'firefox', page: 'extensions' | 'chatgpt') => call<boolean>('browser:setupOpen', { browser, page }),
+  pickBrowserExecutable: (browser: 'chrome' | 'edge' | 'brave' | 'firefox') => call<AppState>('browser:pickExecutable', browser),
   // Applies the update this app has already downloaded and verified: the app quits, the
   // installer runs, and the app comes back as the new version. The displayed version fences
   // stale clicks; only the main process selects verified bytes and the installed target.

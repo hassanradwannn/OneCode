@@ -230,6 +230,7 @@ const settingsPatch = z.object({
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional(),
     chatProvider: z.enum(CHAT_PROVIDERS).optional(),
     chatBrowser: z.enum(CHAT_BROWSERS).optional(),
+    browserExecutables: z.object({ chrome: z.string().max(4096).optional(), edge: z.string().max(4096).optional(), brave: z.string().max(4096).optional(), firefox: z.string().max(4096).optional() }).strict().optional(),
     cosBrowserMinimize: z.enum(['taskbar', 'tray']).optional(),
     developerMode: z.boolean().optional(),
     playfulStatus: z.boolean().optional(),
@@ -420,6 +421,8 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       defaultChatReasoning: pick(current.ui.defaultChatReasoning, base.ui.defaultChatReasoning, wanted.ui.defaultChatReasoning),
       chatProvider: pick(current.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, base.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, wanted.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
       chatBrowser: pick(current.ui.chatBrowser, base.ui.chatBrowser, wanted.ui.chatBrowser),
+      // Only the local file picker owns these paths; a stale settings snapshot cannot erase them.
+      browserExecutables: current.ui.browserExecutables,
       cosBrowserMinimize: pick(current.ui.cosBrowserMinimize, base.ui.cosBrowserMinimize, wanted.ui.cosBrowserMinimize),
       developerMode: pick(current.ui.developerMode, base.ui.developerMode, wanted.ui.developerMode),
       playfulStatus: pick(current.ui.playfulStatus, base.ui.playfulStatus, wanted.ui.playfulStatus),
@@ -1532,6 +1535,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     await clipboard.writeText(`${browser}://extensions`);
     await openInPreferredBrowser('about:blank', { browser, reveal: true });
     return true;
+  });
+
+  handle('browser:pickExecutable', async payload => {
+    const browser = z.enum(['chrome', 'edge', 'brave', 'firefox']).parse(payload);
+    if (process.platform !== 'win32') throw new Error('Executable selection is available on Windows.');
+    const window = getWindow(); if (!window) throw new Error('No window');
+    const result = await dialog.showOpenDialog(window, { title: `Locate ${browser}`, properties: ['openFile'], filters: [{ name: 'Browser executable', extensions: ['exe'] }] });
+    if (result.canceled || !result.filePaths[0]) return buildState();
+    const { windowsBrowserExecutable } = await import('./browser-windows.js');
+    const executable = windowsBrowserExecutable(result.filePaths[0], browser);
+    if (!executable || !await (await import('node:fs/promises')).stat(executable).then(row => row.isFile(), () => false)) throw new Error('Choose the executable for the selected browser.');
+    await updateConfig(config => ({ ...config, ui: { ...config.ui, browserExecutables: { ...config.ui.browserExecutables, [browser]: executable } } }));
+    return buildState();
   });
 
   // Setup's first step: the CoS browser on screen, on Gemini's login when signed out.

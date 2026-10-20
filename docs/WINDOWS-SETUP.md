@@ -25,6 +25,8 @@ Share **OneCode-Setup-x64.exe**, its distributor-provided SHA256, and this guide
 
 ## Install and connect
 
+Browser detection supports custom installation drives through Windows registrations, PATH and running browser executables. In the Browser setup step, choose Chrome/Chromium, Edge, Brave or Firefox. If a portable or unregistered installation is missed, choose **Locate browser executable…** and select that browser's `.exe`; OneCode remembers the path separately for each browser. Selecting a browser saves it before sign-in opens. Firefox still requires the signed Companion add-on described in its setup guide.
+
 1. Run **OneCode-Setup-x64.exe** as your ordinary Windows user. Keep its per-user install folder unless you have a reason to change it. Start **OneCode** from its shortcut. Do not use another person's development launcher or copy their application-data folder.
 2. In **Setup**, select Brave or Chrome. Open its extensions page (`brave://extensions` or `chrome://extensions`), turn on **Developer mode**, and choose **Load unpacked**. Select the companion folder shown by OneCode. A fresh packaged app creates a stable copy under `%APPDATA%\OneCode\extension`; an upgrade may retain its existing GeminiCode folder. Use the path the app actually displays. Keep Developer mode on. After updating the desktop app, reload this same extension if the browser reports an old build.
 3. Accept the companion's browser permission prompt after reviewing it. It uses access to the selected provider, loopback pairing and a scoped debugger rendering lease for background operation. The browser may show a debugging banner during work. Cancelling that lease can pause background progress. No CUA driver is required by the product.
