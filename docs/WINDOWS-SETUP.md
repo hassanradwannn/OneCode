@@ -1,8 +1,10 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.3.8.1
+## Version 0.3.8.2
 
-This release fixes Windows setup browser detection in custom folders and on other drives, saves the selected browser before sign-in opens, and adds **Locate browser executable…** for portable installs.
+This release fixes missed browser wake notifications for new messages and opens Gemini's native account home for a fresh chat when no account page is open. Existing chats retain their exact account and conversation. It also fixes Tailscale startup cancellation during unrelated settings saves and checks public DNS and HTTPS without waiting for an initialize stream to close. A long, silent Gemini reply can recover its exact page through the existing guarded repair flow, without resending the task.
+
+Windows setup detects browsers in custom folders and on other drives, saves the selected browser before sign-in opens, and offers **Locate browser executable…** for portable installs.
 
 Remote mobile settings wrap their category buttons and controls to the screen and scroll vertically. In **Settings → Remote**, copy the private link once and bookmark the complete address, including its fragment. That installation retains its encrypted key and private port across restarts, updates and turning Remote off and on. Open or reload the bookmark to renew a browser connection after a restart or session expiry. Turning Remote off closes access immediately without changing the bookmark. The host PC, OneCode and Tailscale must be running; changing the Tailscale device identity or hostname requires a new link. If another program replaces the saved route, OneCode reports the conflict rather than silently changing the address. Choose **Refresh link** in **Settings → Remote** to select a free private port without modifying the conflicting route, then copy the replacement link and update your bookmark.
 

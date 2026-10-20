@@ -2,13 +2,19 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.3.8.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.3.8.2](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.3.8.1. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.3.8.2. Your profile and saved chats are preserved.
 
-## What's new in 0.3.8.1
+## What's new in 0.3.8.2
+
+- New messages wake the selected browser again when the connector becomes ready. A fresh Gemini chat can open its native account home when no Gemini page is open; existing chats retain their account and conversation.
+- Tailscale startup survives unrelated settings saves. Public readiness checks use independent DNS resolvers and accept a complete initialize reply without waiting for its event stream to close. Transient daemon startup states retry without opening another login.
+- Long, silent Gemini replies can recover through the existing page-repair flow after ten minutes without meaningful output. Recovery requires the exact acknowledged task and current question, respects longer thinking windows, and never resends the task. New output, a final reply, approvals or Stop prevent the silent-reply repair.
+
+The 0.3.8.1 setup fixes are included:
 
 - Windows setup detects Chrome/Chromium, Edge, Brave and Firefox in custom folders and on other drives through registered locations, PATH and running browser executables.
 - Choosing a browser saves it before sign-in opens, so selecting Edge cannot reuse a previous Brave choice. Pending or rejected saves cannot launch the previous browser.
@@ -21,7 +27,7 @@ The 0.3.8 remote improvements are included:
 - Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
 - If another route takes the saved port, **Settings → Remote → Refresh link** selects a free private port. Copy the replacement link and update your bookmark; the conflicting route is preserved.
 
-See the [0.3.8.1 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8.1**; installers and the update feed use the compatible version **0.3.801**.
+See the [0.3.8.2 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802) or follow the [setup guide](docs/WINDOWS-SETUP.md). OneCode displays **0.3.8.2**; installers and the update feed use the compatible version **0.3.802**.
 
 ## Work with your own provider account
 
@@ -67,7 +73,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8.1 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.801).
+Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8.2 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
