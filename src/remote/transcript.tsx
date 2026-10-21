@@ -3,6 +3,7 @@ import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
 import type { AgentPlan } from '../shared/agent-plan.js';
 import { chronological } from '../shared/chronology.js';
+import { hasProviderDirective, withoutProviderDirectives } from '../shared/content-reference.js';
 import { formatMessageContent, MESSAGE_TAGS, MESSAGE_DROP_TAGS, MAX_MESSAGE_MARKUP } from '../renderer/message-format.js';
 import { sanitizeHtmlTree } from '../renderer/sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '../renderer/math.js';
@@ -72,7 +73,9 @@ export function Transcript({ events, sessionId, openRequestId }: { events: Contr
   }
   return <>{rows.map(row => {
     if (Array.isArray(row)) return <ToolGroup key={`tools:${row[0]!.position}`} events={row} />;
-    const text = row.message?.text ?? row.detail ?? '';
+    const rawText = row.message?.text ?? row.detail ?? '';
+    const text = row.kind === 'assistant_message' && hasProviderDirective(rawText) ? withoutProviderDirectives(rawText) : rawText;
+    if (row.kind === 'assistant_message' && !text.trim()) return null;
     if (!row.presentation && ['progress', 'page_tool'].includes(row.kind)) return <div className="activity-row" key={row.position}><Icon name="check-circle" /><span>{text || row.label || 'Working'}</span></div>;
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
       {row.presentation || row.kind === 'native_image' || row.kind === 'native_video'
