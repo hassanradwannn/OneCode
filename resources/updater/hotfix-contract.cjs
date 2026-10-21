@@ -71,8 +71,17 @@ function runtimeId(arch, files, electron) { return crypto.createHash('sha256').u
 function runtime(value) {
   if (value?.schema !== 1 || value.platform !== 'win32' || !['x64','arm64'].includes(value.arch) || !/^\d+\.\d+\.\d+$/.test(value.electron)) throw Error('Invalid hotfix runtime');
   entries(value.files, false);
+  if(value.baseVersion!==undefined && (typeof value.baseVersion!=='string' || !/^\d+\.\d+\.\d+$/.test(value.baseVersion))) throw Error('Invalid installed base version');
   if (value.id !== runtimeId(value.arch, value.files, value.electron)) throw Error('Hotfix runtime fingerprint changed');
   return value;
+}
+function compatibleBase(runtime,manifest) {
+  if(runtime.id!==manifest.runtime || runtime.arch!==manifest.arch) return false;
+  if(!manifest.base) return true;
+  if(!runtime.baseVersion) return false;
+  const installed=runtime.baseVersion.split('.').map(Number),needed=manifest.base.version.split('.').map(Number);
+  for(let i=0;i<3;i++)if(installed[i]!==needed[i])return installed[i]>needed[i];
+  return true;
 }
 function manifest(value) {
   if (value?.schema !== 1 || !/^\d+\.\d+\.\d+$/.test(value.version) || value.platform !== 'win32' || !['x64','arm64'].includes(value.arch) ||
@@ -101,6 +110,6 @@ async function verify(root, files) {
     if (!stat.isFile() || stat.size !== file.size || await hash(resolved) !== file.sha256) throw Error('Hotfix resource does not match its verified inventory');
   });
 }
-return { mutable, noLinks, location, hash, inventory, runtimeId, runtime, manifest, baseRelease, verify };
+return { mutable, noLinks, location, hash, inventory, runtimeId, runtime, manifest, baseRelease, compatibleBase, verify };
 }
 module.exports = { ...withFilesystem(require('node:fs')), withFilesystem };

@@ -320,8 +320,8 @@ async function runPass(): Promise<void> {
     const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
     const manifest = await readHotfixManifest(manifestFile, release.version);
     const compatible = await compatibleHotfix(manifestFile, release.version);
-    const needsBase = !compatible && !digests.has(artifact.name);
-    if (compatible || (needsBase && manifest.base)) {
+    const needsBase = !digests.has(artifact.name) && !compatible;
+    if ((compatible && !needsBase) || (needsBase && manifest.base)) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
       let baseFile: string | undefined;

@@ -12,7 +12,8 @@ export default async function afterPack(context) {
   if (!arch) throw Error('Unsupported Windows hotfix architecture');
   const files = await contract.inventory(resources, name => !contract.mutable(name) && name !== 'updater/runtime.json' && !name.endsWith('.d.cts'));
   const electron = context.packager.info.framework.version;
-  const runtime = { schema: 1, platform: 'win32', arch, electron, files, id: contract.runtimeId(arch, files, electron) };
+  if(!/^\d+\.\d+\.\d+$/.test(context.packager.appInfo.version)) throw Error('The installed base must have an exact release version');
+  const runtime = { schema: 1, platform: 'win32', arch, electron, files, baseVersion: context.packager.appInfo.version, id: contract.runtimeId(arch, files, electron) };
   contract.runtime(runtime);
   await fs.writeFile(path.join(resources, 'updater/runtime.json'), JSON.stringify(runtime));
 }

@@ -185,7 +185,7 @@ async function runHotfix(record, note, dependencies, listing, log, persist) {
   const resources = path.join(record.target, 'resources');
   const {manifest,payload}=await verifiedPayload(record);
   const runtime = contract.runtime(JSON.parse(fs.readFileSync(path.join(resources, 'updater/runtime.json'), 'utf8')));
-  if (runtime.id !== manifest.runtime || runtime.arch !== manifest.arch) throw Error('Hotfix native runtime differs');
+  if (!contract.compatibleBase(runtime,manifest)) throw Error('Hotfix native runtime or installed base differs');
   await contract.verify(resources, runtime.files);
   const previous = await contract.inventory(resources, contract.mutable);
   const backup = path.join(path.dirname(note), `rollback-${record.version}-${record.at}`);

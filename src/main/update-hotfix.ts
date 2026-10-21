@@ -19,7 +19,7 @@ export async function compatibleHotfix(manifestFile: string, version: string, re
   let runtime: sharedContract.Runtime;
   try { runtime = contract.runtime(JSON.parse(await readFile(path.join(resources, 'updater/runtime.json'), 'utf8'))); }
   catch { return null; }
-  if (runtime.id !== manifest.runtime || runtime.arch !== manifest.arch) return null;
+  if (!contract.compatibleBase(runtime, manifest)) return null;
   const probe = path.join(resources, `.onecode-hotfix-write-${randomBytes(12).toString('hex')}.tmp`);
   contract.noLinks(probe);
   let handle;

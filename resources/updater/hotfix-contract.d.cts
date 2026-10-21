@@ -1,5 +1,6 @@
 export interface FileEntry { path: string; size: number; sha256: string }
-export interface Runtime { schema: 1; platform: 'win32'; arch: 'x64' | 'arm64'; electron: string; id: string; files: FileEntry[] }
+export interface Runtime { schema: 1; platform: 'win32'; arch: 'x64' | 'arm64'; electron: string; id: string; files: FileEntry[]; baseVersion?: string }
+export function compatibleBase(runtime: Runtime, manifest: Manifest): boolean;
 export interface BaseRelease { schema: 1; version: string; platform: 'win32'; arch: 'x64' | 'arm64'; runtime: string; installer: string; sha256: string; size: number }
 export interface Manifest { schema: 1; version: string; platform: 'win32'; arch: 'x64' | 'arm64'; runtime: string; archive: string; sha256: string; size: number; files: FileEntry[]; base?: BaseRelease }
 export function baseRelease(value: unknown): BaseRelease;

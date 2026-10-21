@@ -1,6 +1,6 @@
 # Windows application hotfix updates
 
-OneCode 0.4.5 includes the complete cumulative application and repaired updater. Existing users take this full release through Settings. Later compatible hotfixes use smaller downloads; if a hotfix requires a missing native base, the updater stages the declared full release and the hotfix together, then installs both before one final relaunch.
+OneCode 0.4.5 includes the complete cumulative application and repaired updater. Existing users take this full release through Settings. Later compatible hotfixes use smaller downloads; if a hotfix requires a required full base, the updater stages the declared full release and the hotfix together, then installs both before one final relaunch.
 
 ## Publish a compatible hotfix
 
@@ -40,3 +40,5 @@ The Windows after-pack hook records the immutable resource inventory and exact E
 The main update owner verifies and expands the archive into its versioned cache, refusing traversal, links, case aliases, unexpected entries and oversized data. Explicit Install when done retains the current version/work fences and durable shutdown. The helper runs from a copied Node runtime outside the install, checks the registered target, saves rollback copies and replaces only allowed files. Removed application files are retired as part of the snapshot. Success requires the new application to log its expected version and keep a loaded visible window alive.
 
 Failures before a successor runs restore the verified previous application snapshot. In a composite update that snapshot is the newly installed base; rollback does not reverse the native installer. An uncertain base installer is not replayed. A running unconfirmed successor is left alone with its rollback copy retained. A forced shutdown or power loss during replacement requires the retained backup or a full installer; automatic recovery is not claimed.
+
+The installed full-base version is recorded by the after-pack hook in resources/updater/runtime.json. It is independent of the application version: applying an app capsule cannot advance this base receipt. A matching native hash alone does not satisfy a newer required base; a missing legacy base receipt also requires the verified full base. The detached helper checks the same receipt after installation.
