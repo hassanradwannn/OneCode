@@ -19,6 +19,7 @@ import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.j
 import { withTailscaleMutation } from './tailscale-mutation.js';
 import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites, readTailscaleDaemon } from './tailscale-prerequisites.js';
 import { requestTailscaleSetup } from './tailscale-setup.js';
+import { restartWindowsTailscale } from './tailscale-repair.js';
 
 class FunnelSetupError extends Error {}
 type Row = Record<string, unknown>;
@@ -33,6 +34,7 @@ interface Dependencies {
   now(): number;
   retryWindowMs: number;
   watchMs: number;
+  repair(): Promise<void>;
 }
 const PORTS = [443, 8443, 10000];
 export const FUNNEL_METADATA_PREFIX = '/.well-known/oauth-protected-resource';
@@ -194,15 +196,23 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
     }
   };
   await attempt(true);
-  return { stop: async () => { stopped = true; clearTimeout(timer); await active?.stop(); } };
+  return {
+    stop: async () => { stopped = true; clearTimeout(timer); await active?.stop(); },
+    repairTailscale: async () => {
+      if (stopped || !active?.repairTailscale) throw new Error('The Tailscale connection is no longer active.');
+      await active.repairTailscale();
+    }
+  };
 }
 async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<Dependencies>): Promise<TunnelHandle> {
   const startedAt = performance.now();
   const startupTiming = (stage: string) => logInfo(`OneCode Funnel startup stage=${stage} elapsedMs=${Math.round(performance.now() - startedAt)}`);
   const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
-    probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, ...overrides };
+    probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, repair: restartWindowsTailscale, ...overrides };
+  let repairing: Promise<void> | null = null, transportEpoch = 0;
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
   const report = (state: 'connecting-tunnel' | 'connected' | 'offline' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
+    check.canRepair = process.platform === 'win32' && !repairing && check.funnel === 'ready' && check.publicIngress?.state === 'tls-error';
     check.checkedAt = Date.now(); check.detail = detail;
     opts.report({ state, detail, publicUrl, tailscale: { ...check } });
   };
@@ -352,17 +362,18 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       'mcp-error': 'Public HTTPS works, but the MCP initialize handshake failed. Keep OneCode running and use the current Core URL after this check passes.'
     };
     const cycle = async (initial = false): Promise<void> => {
-      if (stopped || checking || !publicUrl) return;
+      if (stopped || checking || repairing || !publicUrl) return;
+      const epoch = transportEpoch;
       checking = true;
       let delay: number | undefined = deps.watchMs;
       try {
         if (!initial) await verifyNative();
         if (stopped) return;
         const result = await deps.probe(publicUrl, publicProbe.signal);
-        if (stopped) return;
+        if (stopped || epoch !== transportEpoch) return;
         // A slow public result cannot publish a route whose custody changed meanwhile.
         await verifyNative();
-        if (stopped) return;
+        if (stopped || epoch !== transportEpoch) return;
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
         if (result.state !== previousPublicState) {
           logInfo(`OneCode Funnel public check state=${result.state} elapsedMs=${Math.round(performance.now() - startedAt)}`);
@@ -379,25 +390,51 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
             delay = deps.watchMs;
           } else {
             // A transient verification failure is not a fresh connection attempt.
-            // Keep the established route during the bounded retry window; prolonged
-            // failures still become unavailable above and custody failures fail at once.
-            report(firstPublicReady ? 'connected' : 'connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
+            // Retain the route during the bounded retry window, without advertising
+            // a failed public connection as Connected. A retry never replays a Send.
+            report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
             delay = Math.max(1, Math.round(Math.min(deps.watchMs, deps.watchMs / 3 * 2 ** Math.min(failures - 1, 2))));
           }
         }
       } catch (error) {
-        if (stopped) return;
+        if (stopped || epoch !== transportEpoch) return;
         check.publicIngress = undefined;
         if (check.funnel !== 'permission-required') check.funnel = 'error';
         report('tunnel-unavailable', error instanceof FunnelSetupError || error instanceof TailscaleNotReady || error instanceof TailscaleSetupRequired ? error.message : describeFailure(error));
       } finally {
         checking = false;
-        if (!stopped && delay !== undefined) { timer = setTimeout(() => void cycle(), delay); timer.unref?.(); }
+        if (!stopped && !repairing && delay !== undefined) { timer = setTimeout(() => void cycle(), delay); timer.unref?.(); }
       }
     };
     // Return the existing handle before networking so Disconnect can abort the first probe.
     void cycle(true);
-    return { stop: async () => { if (stopped) return; stopped = true; publicProbe.abort(); clearTimeout(timer); await withTailscaleMutation(removeOwned); await relay?.stop(); } };
+    return {
+      stop: async () => { if (stopped) return; stopped = true; publicProbe.abort(); clearTimeout(timer); await withTailscaleMutation(removeOwned); await relay?.stop(); },
+      repairTailscale: () => {
+        if (repairing) return repairing;
+        let started = false;
+        repairing = (async () => {
+          if (stopped || check.publicIngress?.state !== 'tls-error') throw new Error('A current public TLS failure is required before repairing Tailscale.');
+          await withTailscaleMutation(async () => { await verifyNative(); if (stopped) throw new Error('The Tailscale connection was closed.'); });
+          if (stopped || check.publicIngress?.state !== 'tls-error') throw new Error('The connection changed while repair was being prepared. Check its current status.');
+          started = true; transportEpoch++; clearTimeout(timer);
+          check.publicIngress = { state: 'checking', checkedAt: null };
+          report('connecting-tunnel', 'Waiting for Windows administrator consent to restart Tailscale. Saved routes and connector URLs are retained.', publicUrl);
+          await deps.repair();
+          if (!stopped) report('connecting-tunnel', 'Tailscale restarted. Verifying the existing connector through public DNS, HTTPS and MCP…', publicUrl);
+        })().catch(error => {
+          if (!stopped && started) {
+            check.publicIngress = { state: 'tls-error', checkedAt: Date.now() };
+            report('tunnel-unavailable', 'The public connection repair was not confirmed. Check Tailscale before trying Repair public connection again.', publicUrl);
+          }
+          throw error;
+        }).finally(() => {
+          repairing = null;
+          if (!stopped && started) { timer = setTimeout(() => void cycle(), 0); timer.unref?.(); }
+        });
+        return repairing;
+      }
+    };
   } catch (error) {
     publicProbe.abort(); clearTimeout(timer);
     check.publicIngress = undefined;

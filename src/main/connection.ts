@@ -25,6 +25,7 @@ import { publishPluginSurface, unpublishPluginSurface } from './plugin-refresh.j
 import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
 import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
+import { inFlightToolCalls } from './mcp/call-context.js';
 
 let endpoint: ProviderEndpoints | null = null;
 /** Retain custody while draining so final shutdown can bound that same stop. */
@@ -739,6 +740,17 @@ export async function rememberRunningSurfaceTokens(): Promise<boolean> {
 export function connect(current?: () => boolean): Promise<void> {
   if (shutdownRequested) return Promise.resolve();
   return enqueueLifecycle(() => connectImpl(current));
+}
+
+/** Explicit desktop request; the live adapter rechecks its own native route custody. */
+export async function repairTailscaleConnection(): Promise<void> {
+  if (shutdownRequested || pendingDisconnect || getConfig().tunnel.kind !== 'tailscale' ||
+      activeCoreTransport?.kind !== 'tailscale' || !sameCoreTransport(activeCoreTransport, coreTransport(getConfig().tunnel)) ||
+      !status.tailscale?.canRepair || !tunnel?.repairTailscale) {
+    throw new Error('Repair is available only for the current Tailscale public TLS failure.');
+  }
+  if (inFlightToolCalls() > 0) throw new Error('Wait for running tools to finish before restarting Tailscale.');
+  await tunnel.repairTailscale();
 }
 
 export function disconnect(): Promise<void> {

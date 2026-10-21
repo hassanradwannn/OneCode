@@ -78,7 +78,7 @@ import {
 } from '../shared/types.js';
 import { MAX_GOAL_SYSTEM_PROMPT_CHARS } from '../shared/goal.js';
 import { DEFAULT_HANDOFF_LENGTH, HANDOFF_LENGTHS, MAX_HANDOFF_PROMPT_CHARS } from '../shared/handoff.js';
-import { applySettings, connect, disconnect, getStatus, onStatusChange, rememberRunningSurfaceTokens } from './connection.js';
+import { applySettings, connect, disconnect, getStatus, onStatusChange, rememberRunningSurfaceTokens, repairTailscaleConnection } from './connection.js';
 import { effectiveCapabilities, getConfig, updateConfig, MAX_MCP_INSTRUCTIONS_CHARS, browserBridgePortSchema, settingsRecovered } from './config.js';
 import { UI_LANGUAGES } from '../shared/ui-language.js';
 import { PROJECT_COLORS } from '../shared/projects.js';
@@ -1378,6 +1378,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   handle('connection:disconnect', async () => {
     await disconnect();
+    return buildState();
+  });
+
+  handle('connection:repairTailscale', async () => {
+    await repairTailscaleConnection();
     return buildState();
   });
 

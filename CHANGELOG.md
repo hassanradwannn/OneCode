@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.2] — 2026-10-21
+
+Add Windows recovery for a Tailscale public TLS failure while the local connector remains healthy. Settings offers Repair public connection, rechecks the owned route, requests Windows consent to restart Tailscale, and verifies public access again. Failed public checks no longer remain labelled Connected. Saved connector URLs, account state, routes and chats are preserved. See [0.4.2 release notes](docs/release-notes/v0.4.2.md).
+
 ## [0.4.1] — 2026-10-21
 
 Repair Cloudflare DNS negotiation so either supported DNS resolver can independently verify the public connector when the other resolver is unreachable. This fixes connections stuck at Connecting on affected hotspots for both ChatGPT and Gemini. Saved URLs, Remote routes, permissions and chats are preserved. See [0.4.1 release notes](docs/release-notes/v0.4.1.md).

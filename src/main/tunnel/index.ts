@@ -87,6 +87,8 @@ export interface TunnelStartOptions {
 
 export interface TunnelHandle {
   stop: () => Promise<void>;
+  /** Explicit trusted-desktop recovery; polling and model tools cannot launch it. */
+  repairTailscale?: () => Promise<void>;
   /** Loopback base URL of the client's own health/metrics server, when it has one. */
   healthBase?: () => string | null;
 }

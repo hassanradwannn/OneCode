@@ -246,6 +246,7 @@ const api = {
   pickBinary: () => call<AppState>('binary:pick'),
   connect: () => call<AppState>('connection:connect'),
   disconnect: () => call<AppState>('connection:disconnect'),
+  repairTailscale: () => call<AppState>('connection:repairTailscale'),
   runDiagnostics: () => call<Diagnosis>('diagnostics:run'),
   saveDiagnosticsReport: () => call<{ saved: false } | { saved: true; name: string }>('diagnostics:saveReport'),
   requestDesktopAccessibility: () => call<AppState>('desktop:requestAccessibility'),

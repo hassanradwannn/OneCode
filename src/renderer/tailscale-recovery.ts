@@ -3,10 +3,23 @@ import { el, run, toast } from './dom.js';
 import { t } from './i18n.js';
 
 /** Shared recovery UI: wraps commands to fit narrow settings panes. */
-export function paintTailscaleRecovery(host: HTMLElement, step: string | undefined, mode: 'remote' | 'tunnel'): void {
-  const signature = `${mode}:${step ?? 'failure'}`;
+export function paintTailscaleRecovery(host: HTMLElement, step: string | undefined, mode: 'remote' | 'tunnel', canRepair = false): void {
+  const signature = `${mode}:${step ?? 'failure'}:${canRepair}`;
   if (host.dataset.recovery === signature) return;
   host.dataset.recovery = signature; host.replaceChildren();
+  if (canRepair && mode === 'tunnel') {
+    host.append(el('p', 'hint', () => t('Tailscale is connected locally, but its public TLS path failed. Repair restarts the system Tailscale service and briefly interrupts Tailscale connections. Windows may ask for administrator approval. Saved URLs and settings are retained.')));
+    const repair = el('button', 'btn', () => t('Repair public connection')) as HTMLButtonElement;
+    repair.type = 'button';
+    repair.onclick = async () => {
+      repair.disabled = true;
+      try {
+        if (await run(window.api.repairTailscale())) toast(t('Tailscale restarted. OneCode is checking the public connection.'));
+      } catch { toast(t('The repair result is unknown. Check Tailscale before trying again.')); }
+      finally { repair.disabled = false; }
+    };
+    host.append(repair);
+  }
   const details = document.createElement('details'); details.className = 'tailscale-recovery';
   details.append(el('summary', '', () => t('Setup recovery steps')));
   const list = document.createElement('ol');
