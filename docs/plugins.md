@@ -15,33 +15,31 @@ outside OneCode's delivery path receive Core's declaration/instructions but not 
 per-turn reminders. An existing provider snapshot from before this stable discovery declaration
 may need a one-time Core tool refresh; a new conversation is not the intended recovery path.
 
-The **Plugins** page in the app's sidebar manages external MCP integrations. Core and Desktop keep their existing
-connectors, permissions and tool registration. Plugins uses a third, separately tokenized
-endpoint and the shared **Chat On Steroids Plugins** connector.
+The **Plugins** page in OneCode manages external MCP integrations. New installations use
+one **OneCode Core** connector per provider and installation. Core exposes permitted local
+tools, skills and live plugin discovery through the existing permission controls. Legacy
+Desktop and Plugins endpoints remain compatible with previously configured installations.
 
-The [responsible-use notice](../README.md#responsible-use-and-provider-rules) applies to plugins too. Each external service retains its own terms, permissions and usage limits. Installing or enabling a plugin does not authorize routing a provider-blocked action through it or bypassing an account restriction.
+The [responsible-use notice](../README.md#responsible-use-and-provider-rules) applies to plugins too.
+Each external service retains its own terms, permissions and usage limits.
 
 ## Setup
 
-1. Open Plugins and choose **Set up plugins** in the prominent connection card.
-   With OpenAI Secure Tunnels, create a separate Plugins tunnel, enter its ID in
-   the dialog, and choose **Save & connect**. The existing API key and tunnel executable are reused.
-   Cloudflare/manual transports publish the Plugins endpoint at its separate path.
-2. Create the **Chat On Steroids Plugins** connector in ChatGPT under **Plugins → Add → Add custom MCP server**,
-   using the displayed name and description and the Plugins tunnel (or MCP URL). Keep the CoS connection running.
-3. On the app's **Plugins** page, click **+**. Choose a reviewed catalog recipe or a custom server. Review
-   installation instructions and supply credentials in the secure fields.
-4. A plugin becomes **Ready** only after connection and discovery succeed. Blender also
-   requires its addon to answer a read-only scene probe. Local readiness does not prove
-   that ChatGPT has enrolled the connector or refreshed its tools.
-5. A persistent reminder and **Open ChatGPT plugins** action stay visible above the installed list.
-   Successful installation, configuration and tool-policy changes also display a reminder to refresh the **Chat On Steroids Plugins** connector in ChatGPT. Refresh the connector in ChatGPT after changing enabled tools, or enable CoS's existing
-   automatic connector refresh. Existing conversations can retain cached declarations;
-   disabled tools refuse stale calls immediately.
+1. Complete OneCode Setup and connect the provider to the displayed **OneCode Core** URL.
+   Tailscale setup handles the public MCP route; Remote settings use a separate private Serve route.
+2. Open **Plugins**, click **+**, and choose a reviewed recipe or a custom MCP server.
+   Supply any credentials through the secure fields and complete required service sign-in.
+3. A plugin becomes **Ready** after connection and live tool discovery succeed. Blender also
+   requires its addon to answer a read-only scene probe.
+4. In an existing ChatGPT or Gemini chat, call Core `plugins` with `action: "list"` to see the
+   current integrations and schemas. New installations and policy changes are visible on the
+   next discovery call; creating a new chat is unnecessary. Calls to disabled tools are refused.
+5. If the provider has cached an older Core declaration without plugin discovery, refresh that
+   same OneCode Core connector once. Use the configured device-specific connector name.
 
-Automatic refresh compares the name, description and input schema that the provider's
-installed-tool UI exposes. For an upstream change confined to annotations or output schema,
-refresh manually; the Plugins endpoint itself always serves the complete current declaration.
+Models can install requested MCP integrations through Core's plugin installation action when
+Command and Create permissions allow it. Installation uses the same manager as the Plugins page;
+it cannot grant permissions or complete a service's user sign-in on its own.
 
 ## Supported sources
 

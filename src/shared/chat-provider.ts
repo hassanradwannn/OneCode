@@ -17,6 +17,12 @@ export type ChatProvider = keyof typeof CHAT_PROVIDER_DEFINITIONS;
 export const CHAT_PROVIDERS: readonly ChatProvider[] = Object.freeze(Object.keys(CHAT_PROVIDER_DEFINITIONS) as ChatProvider[]);
 export const DEFAULT_CHAT_PROVIDER: ChatProvider = 'gemini';
 
+/** Reject unknown persisted or external provider keys before any adapter lookup. */
+function providerDefinition(provider: ChatProvider) {
+  if (!Object.hasOwn(CHAT_PROVIDER_DEFINITIONS, provider)) throw new Error('Unsupported chat provider');
+  return CHAT_PROVIDER_DEFINITIONS[provider];
+}
+
 export interface ProviderTrustSettings {
   /** Legacy value used by configs saved before provider-specific trust settings existed. */
   strictChatAllowlist?: boolean;
@@ -34,7 +40,7 @@ export function chatProviderForStoredConversation(value: unknown): ChatProvider 
 export function isChatProviderConversationId(value: unknown, provider?: ChatProvider): value is string {
   const id = typeof value === 'string' ? value.trim() : '';
   const expected = provider ?? chatProviderForStoredConversation(id);
-  return !!expected && CHAT_PROVIDER_DEFINITIONS[expected].conversationId.test(id);
+  return !!expected && Object.hasOwn(CHAT_PROVIDER_DEFINITIONS, expected) && CHAT_PROVIDER_DEFINITIONS[expected].conversationId.test(id);
 }
 
 /**
@@ -46,15 +52,15 @@ export function chatProviderForConversation(value: unknown, fallback: ChatProvid
 }
 
 export function chatProviderHomeUrl(provider: ChatProvider): string {
-  return CHAT_PROVIDER_DEFINITIONS[provider].homeUrl;
+  return providerDefinition(provider).homeUrl;
 }
 
 export function chatProviderConversationUrl(provider: ChatProvider, conversationId: string): string {
-  return CHAT_PROVIDER_DEFINITIONS[provider].conversationPrefix + encodeURIComponent(conversationId);
+  return providerDefinition(provider).conversationPrefix + encodeURIComponent(conversationId);
 }
 
 export function chatProviderLabel(provider: ChatProvider): string {
-  return CHAT_PROVIDER_DEFINITIONS[provider].label;
+  return providerDefinition(provider).label;
 }
 
 /** Reads the independent trust-validation switch for one provider, with legacy migration. */
@@ -64,5 +70,5 @@ export function providerTrustValidationEnabled(settings: ProviderTrustSettings, 
 
 export function chatProviderCapabilities(provider: ChatProvider) {
   // Conservative application transport budgets; these are not model context sizes or account quotas.
-  return CHAT_PROVIDER_DEFINITIONS[provider].capabilities;
+  return providerDefinition(provider).capabilities;
 }

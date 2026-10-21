@@ -1,16 +1,13 @@
 import { providerText } from './provider-text.js';
 import { ui, t } from './i18n.js';
 import type { AppState } from '../shared/types.js';
-import type { SettingsPatch } from '../preload/index.js';
 import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
 import { $, disclosureChevron, el, run, toast } from './dom.js';
-import { paintSharedTunnel } from './tunnel-warning.js';
 import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 
 let snapshot: PluginSnapshot = { plugins: [], catalog: [], schemaRevision: 0 };
 let epoch = 0;
 let appState: AppState | null = null;
-let applyAppState: (next: AppState) => void = () => {};
 const artwork = import.meta.glob('./plugin-icons/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 function button(label: string | (() => string), action: () => void | Promise<void>, primary = false): HTMLButtonElement {
   const node = el('button', `btn${primary ? ' btn-solid' : ''}`, label) as HTMLButtonElement;
@@ -53,12 +50,12 @@ async function mutate(work: ReturnType<typeof window.api.pluginsSnapshot>, notif
   const own = ++epoch; const result = await run(work);
   if (!result) return false;
   if (own === epoch) { snapshot = result; renderInstalled(); }
-  if (notify) toast(t("Plugin settings saved. Refresh {0} in {1} to update its tools.", [pluginsConnectorName(), providerName()]));
+  if (notify) toast(t("Plugin settings saved. Discover the current tools through {0} in {1}.", [pluginsConnectorName(), providerName()]));
   return true;
 }
 /** This computer's Plugins connector name, which carries its suffix when one is set. */
 function pluginsConnectorName(): string {
-  return appState?.status.surfaces.find(item => item.id === 'plugins')?.connectorName ?? 'OneCode Plugins';
+  return appState?.status.surfaces.find(item => item.id === 'core')?.connectorName ?? 'OneCode Core';
 }
 function provider(): ChatProvider { return appState?.config.ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER; }
 function providerName(): string { return t("the provider"); }
@@ -68,20 +65,22 @@ function providerPluginsUrl(): string {
 export async function refreshPlugins(): Promise<void> { await mutate(window.api.pluginsSnapshot(), false); }
 export function applyPluginsState(next: AppState): void {
   appState = next;
-  const surface = next.status.surfaces.find((item) => item.id === 'plugins');
+  const surface = next.status.surfaces.find((item) => item.id === 'core');
   const status = $('pluginsConnectionStatus');
   const contacted = surface?.state === 'live' && !!surface.lastRequestAt;
-  const configured = !!next.config.tunnel.pluginsTunnelId?.trim() || surface?.state === 'live';
+  const configured = surface?.state === 'live';
+  $('pluginsSetupTitle').closest<HTMLElement>('.plugin-connection')!.hidden = configured;
   $('pluginsSetupTitle').closest('.plugin-connection')!.classList.toggle('is-configured', configured);
   const selectedProvider = providerName();
-  ui($('pluginsSetupTitle'), 'textContent', () => configured ? t("OneCode Plugins in {0}", [selectedProvider]) : t("Set up plugins before your first use"));
+  ui($('pluginsSetupTitle'), 'textContent', () => t('OneCode connection'));
   ui($('pluginsSetupHint'), 'textContent', () => configured
-    ? t("Your enabled plugins reach {0} through one plugin there: OneCode Plugins. Manage its connection here.", [selectedProvider])
+    ? t('Your enabled integrations are available through {0}. No additional provider connector is needed.', [pluginsConnectorName()])
     : t("Add {0} to {1} once, so it can use your installed plugins.", [pluginsConnectorName(), selectedProvider]));
-  ui($('pluginsSetupLink'), 'textContent', () => configured ? t("Plugin setup") : t("Set up plugins"));
+  ui($('pluginsSetupLink'), 'textContent', () => t('OneCode connection'));
   ui($('pluginsRefreshName'), 'textContent', pluginsConnectorName);
   ui($('pluginsProviderName'), 'textContent', () => selectedProvider);
   ui($('pluginsOpenGemini'), 'textContent', () => t("Open {0} plugins", [selectedProvider]));
+  $('pluginsOpenGemini').hidden = configured;
   $('pluginsSetupLink').classList.toggle('btn-solid', !configured);
   ui(status, 'textContent', () => surface?.state === 'live'
     ? contacted ? t("Connected to {0}", [selectedProvider]) : t("Plugin online · waiting for {0}", [selectedProvider])
@@ -94,52 +93,21 @@ export function applyPluginsState(next: AppState): void {
     : surface?.state === 'error' ? t(surface.detail) : t("Save your connection below to make enabled plugins available in {0}.", [selectedProvider]));
 }
 function showConnection(): void {
-  if (!appState) { toast(t("Connection settings are still loading.")); return; }
-  const { config, hasApiKey, status } = appState;
-  const surface = status.surfaces.find(item => item.id === 'plugins');
-  const { body } = dialog(() => t("Plugin setup"));
-  body.append(el('p', '', () => t("Connect once. Your enabled plugins share this one plugin in {0}.", [providerName()])));
-  const connectionStatus = el('p', 'plugin-setup-status'); connectionStatus.id = 'pluginSetupStatus'; body.append(connectionStatus);
+  if (!appState) { toast(t('Connection settings are still loading.')); return; }
+  const { config, status } = appState;
+  const surface = status.surfaces.find(item => item.id === 'core');
+  const { body } = dialog(() => t('OneCode connection'));
+  body.append(el('p', '', () => t('Use the same OneCode connector as files and terminal. Enabled integrations are discovered through its plugins tool.')));
   const copy = (label: string, value: string) => {
     const input = field(body, label, value); input.readOnly = true;
-    const row = el('div', 'plugin-setup-copy'); input.replaceWith(row); row.append(input, button(() => t("Copy"), async () => { if (await run(window.api.writeClipboard(value))) toast(t("{0} copied", [label])); }));
+    const row = el('div', 'plugin-setup-copy'); input.replaceWith(row);
+    row.append(input, button(() => t('Copy'), async () => { await run(window.api.writeClipboard(value)); }));
   };
-  let tunnel: HTMLInputElement | null = null;
-  let key: HTMLInputElement | null = null;
-  if (config.tunnel.kind === 'openai') {
-    body.append(button(() => t("Open Tunnels"), async () => { await run(window.api.openLink('https://platform.openai.com/settings/organization/tunnels')); }));
-    tunnel = field(body, () => t("Plugins tunnel ID"), config.tunnel.pluginsTunnelId ?? '', false, () => providerText("Create a dedicated tunnel in the same workspace you use in Gemini."));
-    tunnel.id = 'pluginsTunnelId'; tunnel.spellcheck = false; tunnel.autocomplete = 'off';
-    const shared = el('p', 'hint is-required'); shared.id = 'pluginsTunnelIdShared'; shared.setAttribute('role', 'status');
-    tunnel.closest('label')!.after(shared);
-    const paintShared = () => paintSharedTunnel(shared, { ...config.tunnel, pluginsTunnelId: tunnel!.value }, 'plugins');
-    tunnel.addEventListener('input', paintShared); paintShared();
-    if (hasApiKey) body.append(el('p', 'hint', () => t("Your stored tunnel API key is already available.")));
-    else key = field(body, () => t("Tunnel API key"), '', true, () => t("Use a restricted key with Tunnels: Read and Tunnels: Use. It is stored securely and shared with Core and Desktop."));
-  }
-  // Values needed for Gemini setup stay copyable; tool lists belong to each plugin.
-  copy(t("Name in {0}", [providerName()]), surface?.connectorName ?? 'OneCode Plugins');
-  copy(t("Description"), surface?.description ?? 'Tools from your enabled OneCode plugins.');
+  copy(t('Name'), pluginsConnectorName());
   const url = surface?.publicUrl ?? (config.tunnel.kind === 'manual' ? surface?.localUrl : null);
-  if (url) copy(t("MCP server URL"), url);
-  body.append(el('p', 'hint', () => config.tunnel.kind === 'openai'
-    ? t("In {0}, add this as a plugin with Tunnel and select your Plugins tunnel. Refresh it after adding or changing plugins.", [providerName()])
-    : t("In {0}, add this as a plugin using its MCP server URL. Refresh it after adding or changing plugins.", [providerName()])));
-  const actions = el('div', 'plugin-setup-actions');
-  actions.append(button(() => t("Open {0} plugins", [providerName()]), async () => { await run(window.api.openLink(providerPluginsUrl())); }), button(() => t("Save & connect"), async () => {
-    if (!appState) return;
-    if (tunnel && !tunnel.value.trim()) { tunnel.focus(); throw new Error(t("Enter your Plugins tunnel ID.")); }
-    if (key?.value) { const next = await run(window.api.setApiKey(key.value)); if (!next) return; key.value = ''; applyAppState(next); applyPluginsState(next); }
-    if (tunnel) {
-      const { capabilities, readOnly, commandAllowlist, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp } = appState.config;
-      const base: SettingsPatch = { capabilities, readOnly, commandAllowlist, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp };
-      const next = await run(window.api.saveSettings({ ...base, tunnel: { ...previousTunnel, pluginsTunnelId: tunnel.value.trim() } }, base));
-      if (!next) return; applyAppState(next); applyPluginsState(next);
-    }
-    const next = await run(window.api.connect());
-    if (next) { applyAppState(next); applyPluginsState(next); toast(t("Plugin connection saved")); }
-  }, true)); body.append(actions);
-  applyPluginsState(appState);
+  if (url) copy(t('MCP server URL'), url);
+  body.append(el('p', 'hint', () => t('If OneCode is already connected in your provider, no additional connector is needed. Use Setup for connection settings.')));
+  body.append(button(() => t('Open provider plugins'), async () => { await run(window.api.openLink(providerPluginsUrl())); }));
 }
 function renderInstalled(): void {
   const list = $('pluginsInstalled');
@@ -276,7 +244,7 @@ function showConfigure(plugin: PluginView): void {
   }, true));
 }
 function showCatalog(): void {
-  const { body } = dialog(() => t("Add a plugin")); body.append(el('p', 'muted', () => providerText("Independent integrations, one shared plugin in Gemini. Review each plugin’s access and setup before installing.")));
+  const { body } = dialog(() => t("Add a plugin")); body.append(el('p', 'muted', () => providerText("Independent integrations through your OneCode connector. Review each integration’s access and setup before installing.")));
   const grid = el('div', 'plugin-catalog'); grid.dataset.pluginCatalog = ''; renderCatalog(grid);
   body.append(grid, el('h3', '', () => t("Bring your own server"))); const custom = el('div', 'plugin-actions');
   custom.append(button(() => t("Import MCPB bundle"), async () => { const path = await run(window.api.pluginsImportBundle()); if (path) showCustom('mcpb', path); }), button(() => t("npm / Python / executable"), () => showCustom('npm')), button(() => t("Remote MCP URL"), () => showCustom('remote')), button(() => t("GitHub repository"), () => showCustom('github')));
@@ -337,8 +305,7 @@ function showCustom(kind: PluginSource['kind'], path = ''): void {
     }
   }, true));
 }
-export function initPlugins(onState: (next: AppState) => void = () => {}): void {
-  applyAppState = onState;
+export function initPlugins(): void {
   $('pluginsAdd').addEventListener('click', showCatalog); $('pluginsRefresh').addEventListener('click', () => void refreshPlugins());
   $('pluginsSearch').addEventListener('input', renderInstalled);
   $('pluginsSetupLink').addEventListener('click', showConnection);

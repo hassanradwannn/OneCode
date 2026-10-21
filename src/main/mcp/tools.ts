@@ -1,18 +1,6 @@
-/**
- * Builds the MCP server for one surface.
- *
- * There is no "the" tool list any more. Each connector is its own server with its own
- * `tools/list`, because that list is the unit the provider discovers: a discovery pull
- * returns everything one server advertises, so the only real way to bound what a
- * conversation can be handed is to publish less per server (`docs/tool-surface.md` §6.4).
- *
- * The invariant this file enforces is that the boundary is *real*. A server registers the
- * tools its surface names and nothing else, so a Core server has no handler for `computer`
- * and answers a call for it with an unknown-tool error from the protocol layer itself.
- * There is no hidden acceptance of names a server did not advertise, and there is no
- * merged list. Core's advertised plugins tool is an explicit discovery/call bridge:
- * it invokes the existing Plugins dispatcher with inherited caller proof, never a
- * hidden handler for an external tool name on Core.
+/** OneCode Core publishes the permitted local capabilities through one provider connector.
+ * Legacy endpoints retain compatibility; external schemas come from the live plugin owner.
+ * Discovery never grants permission or supplies caller identity.
  */
 
 import { McpServer } from '@modelcontextprotocol/server';
@@ -51,17 +39,17 @@ export function buildServer(ctx: ToolContext, surface: SurfaceId, observe?: (con
     const schema = geminiRoutingSchemaJson(toolSchemaJson(config.inputSchema));
     tools.push({ name, description: config.description, inputSchema: { type: 'object', ...schema }, ...(config.annotations ? { annotations: { ...config.annotations } } : {}) });
   } : undefined);
-  if (surface === 'core') registerCoreTools(registrar);
+  if (surface === 'core') { registerCoreTools(registrar); registerDesktopTools(registrar); }
   else registerDesktopTools(registrar);
   registerCodeMode(registrar, (name, args, parent) => {
     // Reuse the same registration/validation/handler authority, refreshed for every child
     // so a permission or approved-root change during an awaited script takes effect.
     const live = liveContext();
     const nested = createRegistrar(null, surface === 'core' ? withManagedSkills(live) : live, surface);
-    if (surface === 'core') registerCoreTools(nested);
+    if (surface === 'core') { registerCoreTools(nested); registerDesktopTools(nested); }
     else registerDesktopTools(nested);
     return nested.invokeNested(name, args, parent);
-  }, { windowsDesktop: surface === 'desktop' && process.platform === 'win32', surface });
+  }, { windowsDesktop: process.platform === 'win32', surface });
 
   // Cheap self-check on a property the tests assert and the design depends on: a surface
   // may register fewer tools than it declares — permissions decide that — but it may never

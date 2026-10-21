@@ -9434,10 +9434,9 @@ const PICKUP_WATCH_LIFETIME_MS = 12 * 60 * 60_000;
  * that is how the 2026-09-03 source page froze solid while its brief was being written).
  *
  * `asking` — the brief has not been asked for yet. Nothing has reached Gemini, so recovery starts
- * quickly: every two minutes for an initial five pickups. A manual request may be abandoned after
- * that burst because no Send is uncertain. A threshold-created automatic ticket is different:
- * the source may spend the whole interval draining native/local work, so exhaustion only slows
- * the next retry instead of silently cancelling compaction while the chat keeps growing. A
+ * quickly: every two minutes for at most five pickups. A request whose source Send is still
+ * proved unattempted is durably abandoned after that budget, including automatic tickets.
+ * The source's refused automatic-compaction receipt prevents an endless reload/recreate loop. A
  * responsive exact source is nudged to retry its durable ticket rather than reloaded out from
  * under its settle/Stop attempt.
  *
@@ -10419,15 +10418,25 @@ async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | 'r
         );
       }
       if (repair.reason === 'assistant-error') {
-        // The automatic Continue after this reload comes only through the silence watch, which needs
-        // this chat's activity grant (#1086). Without one nothing follows, so say so.
+        // Confirmed replacement readiness feeds the original guarded outbox below.
+        // Silence remains a separate watch if the same task stalls again later.
         const watch = activeUntil.get(conversationId);
-        logInfo(watch
-          ? `bridge: ${conversationId} stays under the silence watch after its error reload (turn ${watch.turnId ?? 'unknown'})`
-          : `bridge: ${conversationId} has no activity left for the silence watch after its error reload; no automatic Continue follows unless it works again`);
         // Charge the original question, never the replacement document seen at ACK time.
         if (repair.assistantSource) turnRepairSpent.set(conversationId,
           { sessionId: repair.sessionId, turnKey: repair.assistantSource.key, token: repair.token, at: Date.now() });
+        // This exact transport failure already earned and completed its page repair.
+        // Do not require a second silence reload to file the owed continuation.
+        // The outbox revalidates question, work, final, permissions and Stop around
+        // every await, and remains the sole owner of Stop and native Send.
+        const source = repair.assistantSource;
+        const current = () => repairsInFlight.get(conversationId) === repair && repair.state === 'done' &&
+          !stopRequestedFor(conversationId) && !isChatBlocked(conversationId) &&
+          !continuationForSession(repair.sessionId) && runningToolCalls(conversationId) === 0 &&
+          !approvalCardWaiting(conversationId) && recoveryInputAllowed(repair.sessionId, conversationId);
+        if (source?.turnId && !source.completed && current() && await assistantRepairCurrent(conversationId, repair) && current()) {
+          await fileRecoveryInput(repair.sessionId, conversationId, source.turnId, watch?.model === 'pro',
+            current, Date.now(), repair.progressId);
+        }
       }
       await updateRepairProgress(
         conversationId,
@@ -10526,6 +10535,13 @@ async function failRepairAttempt(
 ): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state !== 'handed' || repair.token !== token) continue;
+    if (why === 'unready') {
+      // Chrome accepted the reload. Its replacement has not proved readiness, so
+      // retain the spent claim and never replay that browser mutation on a timer.
+      await updateRepairProgress(conversationId, repair,
+        'Chat refresh requested; the replacement page has not confirmed readiness. Open the provider tab to check it.');
+      return;
+    }
     // Gemini recovered by itself and is answering: the page keeps the reload for after the answer
     // instead of ending it. Nothing failed, so it is neither a warning nor a "Reload failed" row.
     const streaming = why === 'streaming';

@@ -47,10 +47,10 @@ Normal app releases do not attach the large `OneCode-Native-Sources.tar.gz` arch
 
 The test suite, Vitest configuration, manual UI test scripts and their fixtures are maintained locally and ignored by Git at the user's request. Preserve those files when changing tracking. `npm test` uses that local suite; public `npm run verify` checks source prerequisites, privacy, notices, TypeScript and the production build without requiring unpublished tests. Public release acceptance documents retain the historical validation scope.
 
-Run meaningful focused tests for changed owners, TypeScript, build, packaged runtime smoke and relevant Electron UI checks. The full inherited test suite has known obsolete fixtures; do not mass-skip or weaken production behavior to claim parity.
+Run meaningful focused tests for changed owners, TypeScript, build, packaged runtime smoke and relevant Electron UI checks. Repair obsolete fixtures without mass-skipping tests or weakening production behavior to claim parity.
 
 Signed-in native acceptance uses the user-requested CUA driver CLI. Do not substitute another computer-use surface or bypass daemon consent. Root owns the signed browser; bounded workers must not race it. During broad acceptance, at most two direct independent fix workers may run; no nested agents.
 
 After extension edits, use `scripts/write-extension-stamp.mjs`. Rebuild and repackage after final source changes, then run `scripts/smoke-packaged-runtime.mjs --platform win32 --arch x64`. Preserve notices/licenses, privacy guards and unrelated dirty files. Never publish an old package as containing newer source. Keep private URLs, credentials, local acceptance artifacts and user history out of the public checkout.
 
-Future native model features, including returning generated Gemini images into OneCode, are a roadmap item until real provider export/ingestion and acceptance evidence exist. Do not claim feature parity merely from provider-generic terminology.
+Native output parity requires actual adapter/export acceptance. Gemini image previews and rendered PNG export have Windows acceptance; that does not prove original-file export, native video generation or native Canvas parity. Core local image/video presentations are a separate provider-independent path. Do not claim feature parity merely from provider-generic terminology.

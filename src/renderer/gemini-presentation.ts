@@ -24,7 +24,8 @@ export function geminiVisibleEvents(source: readonly SessionEvent[]): SessionEve
     if (event.kind === 'user_message') {
       const value = event.message.text.trim().replace(/\s+/g, ' ');
       const internal = firstUser && event.messageId?.startsWith('gemini:') === true &&
-        (value === WARMUP || value === '@gemini-code ' + WARMUP);
+        // Read-only migration: keep previously recorded setup exchanges hidden after rebranding.
+        (value === WARMUP || value === '@onecode-gemini ' + WARMUP || value === '@gemini-code ' + WARMUP);
       firstUser = false; warming = internal;
       return !internal;
     }

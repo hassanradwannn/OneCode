@@ -1,4 +1,4 @@
-Chat On Steroids native image-library source notices
+OneCode native image-library source notices
 
 The following files are preserved from the source archives identified in sources.json.
 Some upstream source archives contain optional or test dependencies; inclusion here does not assert that every listed component is linked on every target.

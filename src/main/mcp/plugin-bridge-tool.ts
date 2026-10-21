@@ -6,14 +6,34 @@ import { fail, failIdentity, guard, type SurfaceRegistrar, type ToolResult } fro
 import { toolDeclaration } from './tool-declarations.js';
 import { invokePluginTool } from './tools-plugins.js';
 import { PLUGIN_DISCOVERY_INSTRUCTIONS } from './plugin-discovery.js';
+import { BROWSER_TOOLS } from '../../shared/browser-control.js';
+import { WINDOWS_COMPUTER_METHODS } from '../../shared/windows-computer.js';
+
+const installation = z.object({
+  catalogId: z.string().min(1).max(128).optional(), name: z.string().min(1).max(100).optional(),
+  source: z.object({ kind: z.enum(['npm', 'python', 'command', 'remote', 'mcpb', 'github']),
+    package: z.string().max(512).optional(), version: z.string().max(128).optional(),
+    command: z.string().max(4096).optional(), args: z.array(z.string().max(4096)).max(128).optional(),
+    url: z.string().max(4096).optional(), auth: z.literal('oauth').optional(), path: z.string().max(4096).optional()
+  }).strict().optional(),
+  config: z.record(z.string(), z.string()).optional()
+}).strict();
 
 const schema = z.object({
-  action: z.enum(['list', 'call']),
+  action: z.enum(['list', 'call', 'installed', 'install']),
+  installation: installation.optional().describe('For install: a catalogId from installed, or a user-requested source. Requires Command execution and Create files. Configure secrets and sign in through OneCode Settings.'),
   query: z.string().trim().min(1).max(200).optional().describe('For list only: a literal case-insensitive match in tool name or description. Omit to list all exposed tools.'),
   name: z.string().min(1).max(128).optional().describe('For call only: the exact tool name returned by list.'),
   arguments: z.record(z.string(), z.unknown()).optional().describe('For call only: the upstream argument object, including {} when the tool takes no arguments. Follow its listed inputSchema.')
 }).strict().superRefine((value, context) => {
-  if (value.action === 'list') {
+  if (value.action === 'install') {
+    if (!value.installation) context.addIssue({ code: 'custom', path: ['installation'], message: 'Required for action=install.' });
+    if (value.query !== undefined || value.name !== undefined || value.arguments !== undefined)
+      context.addIssue({ code: 'custom', message: 'install takes only installation.' });
+    return;
+  }
+  if (value.installation !== undefined) context.addIssue({ code: 'custom', path: ['installation'], message: 'Only valid for action=install.' });
+  if (value.action === 'list' || value.action === 'installed') {
     for (const key of ['name', 'arguments'] as const) if (value[key] !== undefined)
       context.addIssue({ code: 'custom', path: [key], message: 'Only valid for action=call.' });
   } else {
@@ -26,7 +46,7 @@ const schema = z.object({
 // A cached native connector can predate a permission grant or app update. Keep
 // discovery and dispatch through this stable gateway on the same Core registrar.
 // Lifecycle tools and recursive gateways retain their direct-call contracts.
-const CORE_METHODS = new Set(['artifact', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'usage']);
+const CORE_METHODS = new Set(['skills', 'automations', 'artifact', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'usage', ...BROWSER_TOOLS, ...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'observe', 'computer']);
 
 /** One stable Core declaration; external schemas remain bounded discovery data, not Core tools. */
 export function registerPluginBridge(reg: SurfaceRegistrar): void {
@@ -38,6 +58,18 @@ export function registerPluginBridge(reg: SurfaceRegistrar): void {
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   })), input => guard('plugins', async () => {
+    if (input.action === 'installed') {
+      const snapshot = pluginManager.snapshot();
+      return { content: [{ type: 'text', text: JSON.stringify({
+        plugins: snapshot.plugins.map(({ id, name, enabled, status, tools }) => ({ id, name, enabled, status, tools })),
+        catalog: snapshot.catalog.map(({ id, name, description }) => ({ id, name, description }))
+      }) }] };
+    }
+    if (input.action === 'install' && (reg.ctx.readOnly || getConfig().readOnly)) return fail('TOOL_DISABLED: plugin installation is disabled in Read-only mode.');
+    if (input.action === 'install') return reg.guarded('command', 'plugins', () => reg.guarded('create', 'plugins', async () => {
+      const result = await pluginManager.install(input.installation!);
+      return pluginManager.redactResult({ content: [{ type: 'text', text: JSON.stringify(result) }] }) as ToolResult;
+    }));
     if (input.action === 'list') {
       const available = pluginManager.tools();
       const query = input.query?.toLowerCase();

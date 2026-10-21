@@ -10,3 +10,11 @@ export function safeExternalLink(value: string): boolean {
     return false;
   }
 }
+
+/** Provider-local downloadable files are opened through that exact native chat. */
+export function safeProviderFileLink(value: string): boolean {
+  if (!/^sandbox:\/mnt\/data\/[^?#]{1,2048}$/.test(value) || /[\s\\]/.test(value)) return false;
+  try { const decoded = decodeURIComponent(value.slice('sandbox:/mnt/data/'.length));
+    return !/[\\\u0000-\u001f\u007f]/.test(decoded) && decoded.split('/').every(part => Boolean(part) && part !== '.' && part !== '..');
+  } catch { return false; }
+}

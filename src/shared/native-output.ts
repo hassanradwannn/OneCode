@@ -1,4 +1,5 @@
 import { chatProviderForStoredConversation, type ChatProvider } from './chat-provider.js';
+import { safeProviderFileLink } from './external-link.js';
 
 export type NativeOutputKind = 'image' | 'video' | 'artifact';
 interface NativeOutputAdapter {
@@ -22,7 +23,8 @@ const uuid = (id: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  */
 export const NATIVE_OUTPUT_ADAPTERS = {
   chatgpt: {
-    message: uuid, mediaAsset: (id: string) => /^file_[A-Za-z0-9_-]{8,100}$/.test(id),
+    message: uuid, mediaAsset: (id: string, kind: 'image' | 'video') => /^file_[A-Za-z0-9_-]{8,100}$/.test(id) ||
+      kind === 'image' && id.length <= 512 && /\.(?:png|jpe?g|webp)$/i.test(id) && safeProviderFileLink(id),
     artifact: (id: string) => /^[A-Za-z0-9_-]{8,160}$/.test(id), revision: (id: string) => /^\d{1,16}$/.test(id),
     roles: ['tool', 'assistant'], exports: { image: 'original', video: 'original' }, snapshotSurfaces: []
   },

@@ -1,3 +1,4 @@
+import { initChatSchedules } from './chat-schedules.js';
 import { displayReleaseVersion } from '../shared/release-version.js';
 import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { initRemoteSettings } from './remote-settings.js';
@@ -689,7 +690,7 @@ function paintDesktopAccess(next: AppState): void {
  */
 function toolsOn(next: AppState): number {
   return next.status.surfaces
-    .filter((surface) => surface.available)
+    .filter((surface) => surface.id === 'core' && surface.available)
     .reduce((sum, surface) => sum + surface.tools.length, 0);
 }
 
@@ -1793,8 +1794,7 @@ function apply(next: AppState): void {
   }
   // Only this method needs a tunnel per connector. Cloudflare and manual publish the
   // whole address, so both connectors already ride the one tunnel on their own paths.
-  const desktopSurface = status.surfaces.find((surface) => surface.id === 'desktop');
-  $('desktopTunnelField').hidden = !openai || !desktopSurface?.available;
+  $('desktopTunnelField').hidden = true;
 
   // The add button is the call to action until a folder is shared, then it quiets to done.
   $('wizAddFolder').dataset.tone = config.roots.length > 0 ? 'ok' : 'off';
@@ -1873,7 +1873,7 @@ function apply(next: AppState): void {
   // done, and whether the cards stay on screen after the wizard tidies itself away.
   // This run's evidence, else the lasting proof kept for the tunnel each connector uses now:
   // a plugin that worked yesterday is still created in Gemini after a restart.
-  const surfaces = status.surfaces.map(withEvidence);
+  const surfaces = status.surfaces.filter(surface => surface.id === 'core').map(withEvidence);
   const newest = (times: Array<number | null>) => times.reduce<number | null>((best, at) => at !== null && (best === null || at > best) ? at : best, null);
   const reachedAt = status.lastRequestAt ?? newest(surfaces.map(surface => surface.lastRequestAt));
   const ranAt = status.lastToolCallAt ?? newest(surfaces.map(surface => surface.lastToolCallAt));
@@ -2037,7 +2037,7 @@ function copyRow(label: string | (() => string), value: string, what: string): H
 function connectorCards(next: AppState): HTMLElement[] {
   const { status, config } = next;
   return status.surfaces
-    .filter((surface) => surface.id !== 'plugins')
+    .filter((surface) => surface.id === 'core')
     .map((surface) => {
     // Every connector shows what to copy, Desktop beside Core: folded away, it read as optional
     // reading rather than a plugin to create.
@@ -2163,7 +2163,7 @@ function facts(next: AppState): HTMLElement[] {
   }
 
   rows.push([
-    'Tools across Core + Desktop',
+    'Tools',
     () => t(config.roots.length === 1 ? '{0} total · {1} folder' : '{0} total · {1} folders', [toolsOn(next), config.roots.length])
   ]);
 
@@ -2711,6 +2711,7 @@ function chooseChatBrowser(browser: ChatBrowser): void {
 }
 initProviderSettings(save);
 initRemoteSettings();
+initChatSchedules();
 $('pickBinary').addEventListener('click', async () => {
   const next = await run(api.pickBinary());
   if (next) apply(next);
@@ -2870,7 +2871,7 @@ const viewMenu = initViewMenu({
   zoom: { step: delta => zoom(zoomFactor + delta), reset: () => zoom(1), percent: () => zoomFactor * 100 }
 });
 initUsage();
-initPlugins(apply);
+initPlugins();
 initPets(api, pet);
 openSkillsLibrary = initSkillsLibrary(api);
 initBrowserPreferences();

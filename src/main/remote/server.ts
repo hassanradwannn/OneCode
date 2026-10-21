@@ -1,3 +1,4 @@
+import { chatScheduler } from '../chat-schedules.js';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -22,11 +23,12 @@ import { getSession, readAsset, readEvents } from '../session/store.js';
 import { PreviewDocuments, ARTIFACT_DOCUMENT_CSP } from '../artifacts/preview-documents.js';
 import { stageInputAttachment } from '../session/input-attachments.js';
 import { listManagedSkills } from '../skills.js';
-import { prepareNativeVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback } from '../native-media.js';
+import { prepareNativeVideoPlayback, preparePresentedVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback } from '../native-media.js';
 import type { RemoteBootstrap, RemoteStatus } from '../../shared/remote.js';
 import type { TailscaleSetupAction } from '../../shared/tailscale-setup.js';
-import { TailscaleSetupRequired } from '../tunnel/tailscale-prerequisites.js';
+import { TailscaleNotReady, TailscaleSetupRequired } from '../tunnel/tailscale-prerequisites.js';
 import { requestTailscaleSetup } from '../tunnel/tailscale-setup.js';
+import { listProjects } from '../projects.js';
 
 const auth = new RemoteAuth(), operations = new RemoteOperations();
 const previews = new PreviewDocuments();
@@ -42,11 +44,27 @@ let accessKey: string | null = null;
 let canRefreshLink = false;
 let lifecycle = Promise.resolve();
 let setup: TailscaleSetupAction | undefined, setupRetry: NodeJS.Timeout | undefined;
+let routeRetry = false;
 const assetRoot = path.resolve(__dirname, '../remote');
 function json(res: http.ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 async function checkRoute(): Promise<void> {
-  if (!serve || !ready) throw new Error('Remote access is unavailable.');
-  if (!verifying) verifying = serve.verify().catch(cause => { ready = false; auth.clear(); error = (cause as Error).message; canRefreshLink = cause instanceof RemoteRouteConflict; throw cause; }).finally(() => { verifying = null; });
+  if (!serve || !listener || !enabled || (!ready && !routeRetry)) throw new Error('Remote access is unavailable.');
+  const owner = serve;
+  if (!verifying) verifying = owner.verify().then(() => {
+    if (serve !== owner || !listener || !enabled || terminal) throw new Error('Remote access is unavailable.');
+    // Recovery only verifies the retained route. It never republishes a route or a message.
+    routeRetry = false; ready = true; error = null; canRefreshLink = false;
+  }).catch(cause => {
+    if (serve === owner && listener && enabled && !terminal) {
+      ready = false; error = (cause as Error).message;
+      routeRetry = cause instanceof TailscaleNotReady;
+      // A transient read failure suspends admission, not device identity. Existing
+      // revocation/expiry still apply, and only exact route verification restores access.
+      if (!routeRetry) auth.clear();
+      canRefreshLink = cause instanceof RemoteRouteConflict;
+    }
+    throw cause;
+  }).finally(() => { verifying = null; });
   return verifying;
 }
 async function body(req: http.IncomingMessage, limit = 128_000): Promise<unknown> {
@@ -78,10 +96,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const device = auth.authenticate(token); if (!device) throw new RequestError(401, 'connection_required');
     if (req.method === 'POST' && route.pathname === '/api/video/prepare') {
-      const request = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/), messageId: z.string().min(1).max(256), assetId: z.string().min(1).max(256) }).strict().parse(await body(req));
+      const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);
+      const request = z.union([
+        z.object({ sessionId, messageId: z.string().min(1).max(512), assetId: z.string().min(1).max(512) }).strict(),
+        z.object({ sessionId, presentationId: z.string().uuid() }).strict()
+      ]).parse(await body(req));
       for (const [key, row] of playbacks) if (row.expires < Date.now()) { playbacks.delete(key); await releaseNativeVideoPlayback(row.sessionId, key).catch(() => undefined); }
       if (playbacks.size >= 16) throw new RequestError(429, 'too_many_video_transfers');
-      const playback = await prepareNativeVideoPlayback(request.sessionId, request.messageId, request.assetId);
+      const playback = 'presentationId' in request ? await preparePresentedVideoPlayback(request.sessionId, request.presentationId)
+        : await prepareNativeVideoPlayback(request.sessionId, request.messageId, request.assetId);
       try { await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required'); }
       catch (error) { await releaseNativeVideoPlayback(request.sessionId, playback.token); throw error; }
       playbacks.set(playback.token, { owner: device.id, sessionId: request.sessionId, expires: Date.now() + 5 * 60_000 }); json(res, 200, playback); return;
@@ -137,8 +160,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const input = (await listInputs()).find(row => row.id === route.pathname.split('/').at(-1));
       json(res, 200, input ? projectInput(input) : null); return;
     }
+    if (req.method === 'GET' && route.pathname === '/api/schedules') { json(res, 200, await chatScheduler.list()); return; }
     if (req.method === 'GET' && route.pathname === '/api/bootstrap') {
       const view: RemoteBootstrap = { host: os.hostname(), version: APP_VERSION,
+        projects: (await listProjects()).filter(project => !project.ungrouped).map(({ id, name, color }) => ({ id, name, ...(color ? { color } : {}) })),
         providers: CHAT_PROVIDERS.map(id => ({ id, label: chatProviderLabel(id), models: getChatModels(id) })), ...remotePreferences() };
       json(res, 200, view); return;
     }
@@ -185,7 +210,7 @@ async function start(refreshLink = false): Promise<void> {
 }
 async function closeListener(): Promise<void> {
   await retirePlaybacks();
-  ready = false; auth.clear(); previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
+  ready = false; routeRetry = false; auth.clear(); previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
   const server = listener; listener = null;
   if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   url = null;
@@ -202,9 +227,8 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
       catch (cause) {
         error = (cause as Error).message;
         canRefreshLink = cause instanceof RemoteRouteConflict;
-        if (cause instanceof TailscaleSetupRequired) {
-          setup = cause.setup;
-          void requestTailscaleSetup(cause.setup);
+        if (cause instanceof TailscaleSetupRequired || cause instanceof TailscaleNotReady) {
+          if (cause instanceof TailscaleSetupRequired) { setup = cause.setup; void requestTailscaleSetup(cause.setup); }
           setupRetry = setTimeout(() => { if (enabled && !terminal) void setRemoteEnabled(true).catch(() => undefined); }, 5_000); setupRetry.unref();
         }
       }

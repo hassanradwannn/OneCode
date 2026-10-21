@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 57;
+  const RECORDER_VERSION = 66;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -1424,7 +1424,7 @@
   function setKeepAwake(on) {
     const locks = globalThis.navigator && globalThis.navigator.locks;
     if (on && !keepAwakeRelease && locks && typeof locks.request === 'function') {
-      const name = `chat-on-steroids-keep-awake-${Math.random().toString(36).slice(2, 12).padEnd(8, '0')}`;
+      const name = `onecode-keep-awake-${Math.random().toString(36).slice(2, 12).padEnd(8, '0')}`;
       let release = null;
       const held = new Promise((resolve) => { release = resolve; });
       keepAwakeRelease = release;
@@ -3543,6 +3543,16 @@
 
   function watchTranscript() {
     if (typeof MutationObserver !== 'function' || !document.body) return;
+    // Loaded pixels need not cause a DOM mutation. Retry their existing exact
+    // capture as soon as load fires, including after native generation settles.
+    let mediaRefresh = false;
+    const refreshLoadedMedia = event => {
+      if (mediaRefresh || event.target?.tagName !== 'IMG' || !recorderHandle.healthy() || !sameChat()) return;
+      if (!event.target.closest?.(TURN_SECTION)) return;
+      mediaRefresh = true;
+      void refreshFiber(null, true).finally(() => { mediaRefresh = false; });
+    };
+    listen(document, 'load', refreshLoadedMedia, true);
     let timer = null;
     let urgentQueued = false;
     let idlePresentationPending = false;
@@ -3552,7 +3562,9 @@
       // Ignore unrelated styling/Fiber stamps; they cannot change composer readiness.
       if (records.every(record => record.type === 'attributes')) {
         const composer = CLF_DOM.composerBox();
-        if (!composer || !records.some(record => composer.contains(record.target) || record.target.contains?.(composer))) return;
+        const pixelsChanged = records.some(record => record.target?.tagName === 'IMG' &&
+          ['src', 'srcset'].includes(record.attributeName));
+        if (!pixelsChanged && (!composer || !records.some(record => composer.contains(record.target) || record.target.contains?.(composer)))) return;
       }
       // Stop is mounted under the composer, outside TURN_SECTION. In a background tab the final
       // prose can arrive while Stop still exists (scheduling the throttled debounce below), and
@@ -3659,7 +3671,7 @@
       }, TRANSCRIPT_OBSERVE_MS);
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ['data-testid', 'aria-label', 'hidden', 'aria-hidden', 'inert', 'style', 'class'] });
+      attributeFilter: ['data-testid', 'aria-label', 'hidden', 'aria-hidden', 'inert', 'style', 'class', 'src', 'srcset'] });
     rememberCleanup(() => {
       observer.disconnect();
       if (timer !== null) clearTimeout(timer);
@@ -3799,7 +3811,7 @@
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
-  const FIBER_VERSION = 24;
+  const FIBER_VERSION = 31;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4169,7 +4181,7 @@
       const messageId = typeof entry.messageId === 'string' &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.messageId)
         ? entry.messageId : null;
-      const assetId = typeof entry.assetId === 'string' && /^file_[A-Za-z0-9_-]{8,100}$/.test(entry.assetId)
+      const assetId = typeof entry.assetId === 'string' && /^(?:file_[A-Za-z0-9_-]{8,100}|sandbox:\/mnt\/data\/[^\s\\?#]{1,500}\.(?:png|jpe?g|webp))$/i.test(entry.assetId) && !entry.assetId.split('/').some(part => part === '.' || part === '..')
         ? entry.assetId : null;
       const providerRole = entry.providerRole === 'tool' || entry.providerRole === 'assistant' ? entry.providerRole : null;
       const providerChannel = entry.providerChannel === 'final' ? 'final' : null;
@@ -4240,7 +4252,7 @@
     }
     const trace = turnTraceOf(raw.trace);
     if (codeModeCalls.length === 0 && kept.length === 0 && requests.length === 0 && keptMessages.length === 0 && keptActivities.length === 0 &&
-        keptThoughtNotifications.length === 0 && keptImages.length === 0 && keptVideos.length === 0 && keptArtifacts.length === 0 && !endMessageId && !trace && sightings.length === 0) {
+        keptThoughtNotifications.length === 0 && keptImages.length === 0 && keptVideos.length === 0 && keptArtifacts.length === 0 && !endMessageId && !trace && sightings.length === 0 && raw.imageGeneration !== true) {
       return null;
     }
     return {
@@ -4258,6 +4270,7 @@
       activities: keptActivities,
       thoughtNotifications: keptThoughtNotifications,
       images: keptImages,
+      imageGeneration: raw.imageGeneration === true,
       videos: keptVideos,
       artifacts: keptArtifacts,
       trace,
@@ -4320,7 +4333,11 @@
         const url = new URL(node.currentSrc || node.src, location.href);
         const exactUrl = url.pathname === '/backend-api/estuary/content' && url.searchParams.get('id') === image.assetId;
         const exactBlob = url.protocol === 'blob:' && node.getAttribute('data-clf-fiber-image-source') === url.href;
-        if (url.origin !== location.origin || (!exactUrl && !exactBlob) || !node.isConnected) continue;
+        const exactFile = image.assetId.startsWith('sandbox:') && node.getAttribute('data-clf-fiber-image-source') === url.href;
+        // Native file viewers can render their already-loaded raster as a data URL.
+        // Its exact file stamp/source lease owns pixel capture, not the URL's origin.
+        const fileRasterData = exactFile && /^data:image\/(?:png|jpeg|webp);base64,/i.test(url.href);
+        if ((url.origin !== location.origin && !fileRasterData) || (!exactUrl && !exactBlob && !exactFile) || !node.isConnected) continue;
       } catch { continue; }
       found.push(node);
     }
@@ -4400,6 +4417,9 @@
     if (!node) { await refreshFiber(); node = nativeImageNode(image); }
     if (!node || !node.complete || !(node.naturalWidth > 0)) return { error: 'not_rendered' };
     const heldEpoch = epoch, heldConversation = conversationId, sourceUrl = node.currentSrc || node.src;
+    // Pixel-only file previews cannot expand the original-file fetch contract.
+    try { if (new URL(sourceUrl, location.href).origin !== location.origin) return { error: 'not_rendered' }; }
+    catch { return { error: 'not_rendered' }; }
     const current = () => epoch === heldEpoch && conversationId === heldConversation && CLF_DOM.conversationId() === heldConversation &&
       nativeImageNode(image) === node && node.isConnected && (node.currentSrc || node.src) === sourceUrl;
     if (!current()) return { error: 'identity_changed' };
@@ -4421,12 +4441,83 @@
     return { data: btoa(binary) };
   }
 
-  /** Captures one already-rendered native image without fetching or retaining its signed URL. */
+  async function encodeNativeImagePreview(node, width, height, current) {
+    // Detailed storyboards can exceed the transport budget at the first quality.
+    // Bound every attempt and preserve aspect ratio instead of abandoning pixels.
+    for (const [scale, quality] of [[1, 0.8], [1, 0.6], [0.75, 0.6], [0.5, 0.55]]) {
+      if (!current()) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * scale)); canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('tainted');
+      context.drawImage(node, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', quality));
+      if (!current()) return null;
+      if (!blob || blob.type !== 'image/webp' || blob.size <= 0) throw new Error('tainted');
+      if (blob.size <= 384_000) return { blob, width: canvas.width, height: canvas.height };
+    }
+    throw new Error('oversized');
+  }
+  let nativeFilePreviewBusy = false;
+  const nativeFilePreviewAttempts = new Set();
+  /** A bounded native preview transaction; no provider endpoint or file id is invented. */
   async function captureNativeImage(task) {
+    const { image, key, observation, heldEpoch, heldConversation } = task;
+    if (!image.assetId.startsWith('sandbox:') || nativeImageNode(image)) return captureNativeImagePixels(task);
+    if (nativeImageCaptures.get(key)?.status === 'available') return;
+    const owned = () => nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation) &&
+      CLF_DOM.conversationId() === heldConversation;
+    if (!owned() || nativeFilePreviewBusy || desktopInputBusy || modelCatalogBusy || pluginRefreshBusy || nativeArtifactSnapshotBusy ||
+        nativeFilePreviewAttempts.has(key) || image.providerStatus !== 'finished_successfully' ||
+        CLF_DOM.generating() || document.querySelector('img[alt="Image preview"], [aria-modal="true"]')) return captureNativeImagePixels(task);
+    const suffix = `:${encodeURIComponent(image.messageId)}:${encodeURIComponent(image.assetId)}`;
+    const buttons = [...document.querySelectorAll('button[data-clf-native-file-preview]')].filter(node => node.isConnected && !node.disabled &&
+      node.getAttribute('data-clf-native-file-preview')?.startsWith(`${fiberScanToken}:`) &&
+      node.getAttribute('data-clf-native-file-preview')?.endsWith(suffix));
+    if (buttons.length !== 1) return captureNativeImagePixels(task);
+    const button = buttons[0], lease = `${heldEpoch}:${Math.random().toString(36).slice(2)}`;
+    let touched = false, preview = null;
+    const interaction = event => { if (event.isTrusted) touched = true; };
+    const current = () => !touched && owned() && button.isConnected && button.getAttribute('data-clf-native-file-lease') === lease &&
+      button.getAttribute('data-clf-native-file-preview')?.endsWith(suffix);
+    nativeFilePreviewBusy = true;
+    for (const name of ['pointerdown', 'keydown', 'input', 'wheel']) document.addEventListener(name, interaction, true);
+    try {
+      button.setAttribute('data-clf-native-file-lease', lease);
+      if (!current()) return;
+      nativeFilePreviewAttempts.add(key);
+      while (nativeFilePreviewAttempts.size > 200) nativeFilePreviewAttempts.delete(nativeFilePreviewAttempts.values().next().value);
+      button.click(); // Exactly once. An unconfirmed native open is never replayed.
+      for (const deadline = Date.now() + 12000; current() && Date.now() < deadline;) {
+        await refreshFiber(null, true);
+        if (!current()) return;
+        preview = nativeImageNode(image);
+        if (preview?.complete && preview.naturalWidth > 0) break;
+        await sleep(120);
+      }
+      if (current()) await captureNativeImagePixels({ ...task, previewCurrent: current });
+    } finally {
+      if (current() && preview && nativeImageNode(image) === preview) {
+        const close = [...document.querySelectorAll('button[aria-label="Close viewer"]')].filter(node => node.isConnected && !node.disabled);
+        if (close.length === 1) close[0].click();
+      }
+      if (button.getAttribute('data-clf-native-file-lease') === lease) button.removeAttribute('data-clf-native-file-lease');
+      for (const name of ['pointerdown', 'keydown', 'input', 'wheel']) document.removeEventListener(name, interaction, true);
+      nativeFilePreviewBusy = false;
+    }
+  }
+
+  /** Captures one already-rendered native image without fetching or retaining its signed URL. */
+  async function captureNativeImagePixels(task) {
     const { key, image, observation, heldEpoch, heldConversation } = task;
-    if (!nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation)) return;
+    const currentCapture = () => (!task.previewCurrent || task.previewCurrent()) && nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation);
+    if (!currentCapture()) return;
     const node = nativeImageNode(image);
     if (!node) return nativeImageUnavailable(key, image, observation, nativeImageMissingReason(image), 'missing', heldEpoch, heldConversation);
+    // Offscreen result galleries can leave their own image URLs lazy indefinitely.
+    // Let the browser load this already admitted native source; the load observer
+    // retries capture only after the same asset has real, decoded pixels.
+    if (!node.complete && node.loading === 'lazy') node.loading = 'eager';
     const sourceWidth = node.naturalWidth;
     const sourceHeight = node.naturalHeight;
     const sourceUrl = node.currentSrc || node.src;
@@ -4445,19 +4536,18 @@
     const pendingCapture = { status: 'pending', fingerprint, task };
     nativeImageCaptures.set(key, pendingCapture);
     const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
+    let width = Math.max(1, Math.round(sourceWidth * scale));
+    let height = Math.max(1, Math.round(sourceHeight * scale));
     if (width * height > 2_560_000) {
       return nativeImageUnavailable(key, image, observation, 'oversized', fingerprint, heldEpoch, heldConversation);
     }
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      const context = canvas.getContext('2d');
-      if (!context) throw new Error('tainted');
-      context.drawImage(node, 0, 0, width, height);
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.8));
-      if (!nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation) || nativeImageNode(image) !== node ||
+      const encoded = await encodeNativeImagePreview(node, width, height, () =>
+        currentCapture() && nativeImageNode(image) === node &&
+        node.complete && node.naturalWidth === sourceWidth && node.naturalHeight === sourceHeight && (node.currentSrc || node.src) === sourceUrl);
+      if (!encoded) { if (nativeImageCaptures.get(key) === pendingCapture) nativeImageCaptures.delete(key); return; }
+      const { blob } = encoded; width = encoded.width; height = encoded.height;
+      if (!currentCapture() || nativeImageNode(image) !== node ||
           !node.complete || node.naturalWidth !== sourceWidth || node.naturalHeight !== sourceHeight || (node.currentSrc || node.src) !== sourceUrl) {
         if (nativeImageCaptures.get(key) === pendingCapture) nativeImageCaptures.delete(key);
         return;
@@ -4465,7 +4555,7 @@
       if (!blob) throw new Error('tainted');
       if (blob.type !== 'image/webp' || blob.size <= 0 || blob.size > 384_000) throw new Error('oversized');
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (!nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation) || nativeImageNode(image) !== node ||
+      if (!currentCapture() || nativeImageNode(image) !== node ||
           !node.complete || node.naturalWidth !== sourceWidth || node.naturalHeight !== sourceHeight || (node.currentSrc || node.src) !== sourceUrl) {
         if (nativeImageCaptures.get(key) === pendingCapture) nativeImageCaptures.delete(key);
         return;
@@ -4482,7 +4572,7 @@
       nativeImageCaptures.set(key, { status: 'available', fingerprint });
       void flush();
     } catch (error) {
-      if (!nativeImageCaptureOwnerCurrent(key, image, observation, heldEpoch, heldConversation) || nativeImageNode(image) !== node ||
+      if (!currentCapture() || nativeImageNode(image) !== node ||
           !node.complete || node.naturalWidth !== sourceWidth || node.naturalHeight !== sourceHeight || (node.currentSrc || node.src) !== sourceUrl) {
         if (nativeImageCaptures.get(key) === pendingCapture) nativeImageCaptures.delete(key);
         return;
@@ -5409,6 +5499,14 @@
       // The live generation owns the turn it is writing; a settled one is claimed only by
       // ChatGPT's own request id. See settledTurnOwner().
       const localOwner = index === activeTurnIndex ? activeLocalTurnId : settledOwners.get(turn) || null;
+      if (turn.imageGeneration && localOwner && concreteConversation(turn.conversationId) === askedConversation) {
+        const id = `native-image-generation:${turn.turnId}`;
+        if (!pageToolsReported.has(id)) {
+          pageToolsReported.set(id, 'Generating image');
+          emit({ kind: 'page_tool', messageId: id, turnId: localOwner, text: 'Generating image', activeNow: false });
+          void flush();
+        }
+      }
       // An adopted document's first complete view is a history baseline. Seeing
       // already-written rows after reload is not newly authored work. Subsequent
       // changes use this same retained Fiber snapshot; a witnessed local Send
@@ -5520,6 +5618,8 @@
           }
           // Each tuple captures independently. The helper itself fences route/epoch and exact
           // current Fiber ownership after every await, so one slow image cannot overwrite another.
+          // The image can finish before its enclosing turn. Do not cache bytes
+          // as delivered while the app still correctly refuses incomplete images.
           if (image.providerStatus === 'finished_successfully') queueNativeImageCapture(image, observation);
           continue;
         }
@@ -6990,10 +7090,10 @@
    * like a stranger's — so it produced no attribution evidence and, worse, local rows were
    * classified as ChatGPT-native activity and re-recorded as the assistant's own captions.
    * The names are this install's: the plain ones, or with this computer's suffix when one
-   * ChatGPT account is used on several computers ("Chat On Steroids Core (Windows)"). The other
+   * ChatGPT account is used on several computers ("OneCode Core (Windows)"). The other
    * computer's calls run there, so they are not ours here (CLF_DOM.connectorNames).
    *
-   * Exact names, never a prefix: `Chat On Steroids Backup` would be somebody else's
+   * Exact names, never a prefix: `OneCode Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    */
   const LEGACY_CONNECTORS = ['TobisComputer'];
@@ -10984,7 +11084,7 @@
    * the person's draft again, which is preserved (#134).
    */
   // ChatGPT's editor keeps paragraphs as elements, so in its text the marker runs straight into the
-  // instruction ("]]Chat On Steroids…"); CONTINUATION_MARKER, which wants a space, missed it live.
+  // instruction ("]]OneCode…"); CONTINUATION_MARKER, which wants a space, missed it live.
   const HANDOFF_MARKED = /^\s*\[\[CLF-HANDOFF:[A-Za-z0-9_-]{16,64}\]\]/;
   /** A composer holding a handoff request this app typed (any attempt's), and no attachment. */
   function handoffMarked(box) {
@@ -13707,7 +13807,7 @@
   async function acceptDesktopInput(message) {
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
-    if (desktopInputBusy || modelCatalogBusy || !alive || (generating && !message.directTurn && !silencePickup) || (pendingInputTools > 0 && !message.directTurn) || goalBusy || job?.busy) return false;
+    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive || (generating && !message.directTurn && !silencePickup) || (pendingInputTools > 0 && !message.directTurn) || goalBusy || job?.busy) return false;
     const target = message.conversationId || null;
     const forEpoch = epoch;
     const sourceTurn = turnId;
@@ -13919,10 +14019,14 @@
       );
       // Native picker closure can precede re-enabling the same editor. Wait before
       // its one insertion; a disabled editing host is not a rejected helper prompt.
-      if (!await waitPageView(writableComposer, () => onTarget() && (!!message.directTurn || !CLF_DOM.generating()), 15000)) return fail(t(
-        'content_delivery_editor_not_writable',
-        "The provider editor did not become writable before sending."
-      ));
+      if (!await waitStableComposer(writableComposer, () => onTarget() && (!!message.directTurn || !CLF_DOM.generating()), 15000)) {
+        const changed = !onTarget() ? offTarget() : null;
+        if (changed) noteWithdraw(changed);
+        return fail(t(
+          'content_delivery_editor_not_writable',
+          "The provider editor did not become writable before sending."
+        ), changed === 'turn-progressed' && turnProgressSource ? `${changed}-${turnProgressSource}` : changed || undefined);
+      }
       // Same allowance as the draft check above, for the same reason: text this delivery itself left
       // behind is not a composer that "changed". Re-read rather than reusing `ownResidue`, because
       // model selection and the writability wait sit between the two and can replace the editor.
@@ -13987,8 +14091,12 @@
         return await CLF_DOM.uploadImages(input.images, () => sendCurrent() && onTarget() && draftCurrent(), draft, files);
       } : null;
       if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files))) return uploadUnconfirmed();
-      await Promise.resolve();
-      if (!onTarget() || !draftCurrent() || sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text)) return fail(t(
+      // Stop/picker closure can remount the native editor on its next render.
+      // Wait for this same untouched draft; never insert it twice or recapture a
+      // human-edited replacement as our own. Authorization follows this barrier.
+      const draftReady = await waitPageView(() => draftCurrent() &&
+        sendText(CLF_DOM.composerAuthoredText()) === sendText(input.text), onTarget, 1500, 50);
+      if (!onTarget() || !draftReady) return fail(t(
         'content_delivery_draft_preserved',
         'The composer changed; your draft was preserved'
       ));
@@ -14234,6 +14342,16 @@
     return alive && !generating && !CLF_DOM.generating() && route && url.searchParams.get('cos-plugin-refresh') === id;
   }
   // `tickMs` re-reads on a clock too, for a read that waits on time rather than on the DOM.
+  async function waitStableComposer(read, current, milliseconds) {
+    let editor = null, since = 0;
+    return waitPageView(() => {
+      const next = read();
+      if (!next) { editor = null; since = 0; return false; }
+      if (next !== editor) { editor = next; since = Date.now(); return false; }
+      return Date.now() - since >= 200 ? next : false;
+    }, current, milliseconds, 50);
+  }
+
   function waitPageView(read, current, milliseconds, tickMs = 0) {
     return new Promise(resolve => {
       let busy = false, dirty = false, done = false, tick = null;
@@ -14506,7 +14624,7 @@
     const hashMarker = new URLSearchParams(location.hash.slice(1));
     const commandMarked = marker.has('clf') || hashMarker.has('clf');
     return alive && !generating && !CLF_DOM.generating() && pendingInputTools === 0 && !desktopInputBusy &&
-      !modelCatalogBusy && !pluginRefreshBusy && !desktopDecision && !commandAttempt && !commandJournalGate && !commandMarked &&
+      !modelCatalogBusy && !pluginRefreshBusy && !nativeFilePreviewBusy && !desktopDecision && !commandAttempt && !commandJournalGate && !commandMarked &&
       queue.length === 0 && !flushWork && CLF_DOM.composerVisible() && !CLF_DOM.hasComposerAttachments() &&
       !(CLF_DOM.composer()?.textContent || '').trim() &&
       (home ? !rows.length && !marker.has('cos-input') && !hashMarker.has('cos-input') && !marker.has('temporary-chat') :
@@ -14657,6 +14775,30 @@
           .then(readable => sendResponse(readable ? { ready: true, reason: null } : { ready: false, reason: 'picker_unreadable' }));
         return true;
       }
+      if (message.type === 'clf-native-file-link') {
+        void (async () => {
+          const held = epoch, chat = conversationId;
+          const current = () => recorderHandle.healthy() && epoch === held && chat === conversationId && chat === message.conversationId && CLF_DOM.conversationId() === chat;
+          if (!current() || !/^sandbox:\/mnt\/data\/[^\s\\?#]{1,2048}$/.test(message.href || '')) return { ok: false, error: 'NATIVE_LINK_INVALID' };
+          await refreshFiber(null, true);
+          if (!current()) return { ok: false, error: 'NATIVE_LINK_CHANGED' };
+          const owners = [...fiberTurns.entries()].filter(([, turn]) => turn?.messages?.some(item =>
+            item.role === 'assistant' && (item.rawMessageId || item.messageId) === message.messageId));
+          if (owners.length !== 1) return { ok: false, error: 'NATIVE_LINK_MESSAGE_UNAVAILABLE' };
+          const stamp = `${fiberScanToken}:${owners[0][0]}:${encodeURIComponent(message.messageId)}`;
+          const fileStamp = `${stamp}:${encodeURIComponent(message.href)}`;
+          const fileControls = [...document.querySelectorAll('button[data-clf-native-file-download]')].filter(node =>
+            node.getAttribute('data-clf-native-file-download') === fileStamp && node.isConnected && !node.disabled);
+          const nodes = [...document.querySelectorAll('[data-clf-fiber-message]')].filter(node => node.getAttribute('data-clf-fiber-message') === stamp);
+          if (!nodes.length && fileControls.length === 1 && current()) { fileControls[0].click(); return { ok: true }; }
+          if (nodes.length !== 1) return { ok: false, error: 'NATIVE_LINK_MESSAGE_UNAVAILABLE' };
+          const links = [...nodes[0].querySelectorAll('a[href]')].filter(node => node.getAttribute('href') === message.href && node.isConnected);
+          if (!links.length && fileControls.length === 1 && current()) { fileControls[0].click(); return { ok: true }; }
+          if (links.length !== 1 || !current()) return { ok: false, error: 'NATIVE_LINK_UNAVAILABLE: show the file link in the provider chat first.' };
+          links[0].click(); return { ok: true };
+        })().then(sendResponse).catch(() => sendResponse({ ok: false, error: 'NATIVE_LINK_UNCONFIRMED: inspect the browser before clicking again.' }));
+        return true;
+      }
       if (message.type === 'clf-input-reuse-state') {
         sendResponse({ safe: inputReuseSafe(), navigationEpoch: epoch });
         return false;
@@ -14685,7 +14827,7 @@
       if (message.type === 'clf-recorder-ping') {
         // `busy`: this page is mid-turn or mid-handoff, so the extension must not reload under it.
         sendResponse({ ok: true, recorderVersion: RECORDER_VERSION,
-          busy: Boolean(generating || CLF_DOM.generating() || desktopInputBusy || pluginRefreshBusy || modelCatalogBusy || pendingTools > 0) });
+          busy: Boolean(generating || CLF_DOM.generating() || desktopInputBusy || pluginRefreshBusy || modelCatalogBusy || nativeFilePreviewBusy || pendingTools > 0) });
         return false;
       }
       if (message.type === 'clf-repair-check') {
@@ -14726,6 +14868,18 @@
         return false;
       }
       // Popup diagnostics. Ids and counters only — no prose, no transcript, no page text.
+      if (message.type === 'clf-repair-ready') {
+        const target = conversationId, forEpoch = epoch;
+        void (async () => {
+          const current = () => alive && target === message.conversationId && epoch === forEpoch &&
+            conversationId === target && CLF_DOM.conversationId() === target;
+          if (!current() || !CLF_DOM.composerVisible()) return sendResponse({ ok: false });
+          await observe();
+          const flushed = current() && await flush();
+          sendResponse({ ok: !!flushed && current(), conversationId: target, runId: RUN_ID });
+        })().catch(() => sendResponse({ ok: false }));
+        return true;
+      }
       if (message.type === 'clf-page-status') {
         const assistantError = currentAssistantError();
         sendResponse({

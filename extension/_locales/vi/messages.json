@@ -6,7 +6,7 @@
     "message": "ứng dụng không phản hồi"
   },
   "content_app_not_running": {
-    "message": "Chat On Steroids không chạy trên PC này."
+    "message": "OneCode không chạy trên PC này."
   },
   "content_auto_compaction": {
     "message": "Tự động thu gọn"
@@ -81,7 +81,7 @@
     "message": "trang được mở cho nội dung này đang hiển thị một cuộc trò chuyện khác"
   },
   "content_browser_disconnected": {
-    "message": "Kết nối trình duyệt đã bị ngắt trong Chat On Steroids."
+    "message": "Kết nối trình duyệt đã bị ngắt trong OneCode."
   },
   "content_cancel": {
     "message": "Hủy"
@@ -90,7 +90,7 @@
     "message": "Cuộc trò chuyện bị chặn"
   },
   "content_chat_blocked_tip": {
-    "message": "Cuộc trò chuyện này bị chặn trong ứng dụng Chat On Steroids: các lệnh gọi công cụ bị từ chối, còn Goal, Loop và tự động thu gọn đều tắt. Để bỏ chặn, mở tab Chat của ứng dụng, di chuột lên cuộc trò chuyện này trong danh sách phiên rồi nhấn biểu tượng chặn."
+    "message": "Cuộc trò chuyện này bị chặn trong ứng dụng OneCode: các lệnh gọi công cụ bị từ chối, còn Goal, Loop và tự động thu gọn đều tắt. Để bỏ chặn, mở tab Chat của ứng dụng, di chuột lên cuộc trò chuyện này trong danh sách phiên rồi nhấn biểu tượng chặn."
   },
   "content_chat_still_opening": {
     "message": "cuộc trò chuyện này vẫn đang mở — hãy thử lại"
@@ -585,7 +585,7 @@
     "message": "Đang lưu…"
   },
   "content_settings_aria": {
-    "message": "Cài đặt Chat On Steroids"
+    "message": "Cài đặt OneCode"
   },
   "content_stage_handoff_attention": {
     "message": "Phản hồi bàn giao cần được chú ý"
@@ -735,13 +735,13 @@
     "message": "Đang viết…"
   },
   "extension_action_title": {
-    "message": "Chat On Steroids"
+    "message": "OneCode"
   },
   "extension_description": {
-    "message": "Kết nối Nhà cung cấp với Chat On Steroids và điều khiển các tab trình duyệt ở chế độ nền bằng DOM, ảnh chụp màn hình và công cụ dành cho nhà phát triển."
+    "message": "Kết nối Nhà cung cấp với OneCode và điều khiển các tab trình duyệt ở chế độ nền bằng DOM, ảnh chụp màn hình và công cụ dành cho nhà phát triển."
   },
   "extension_name": {
-    "message": "Tiện ích trình duyệt Chat On Steroids"
+    "message": "Tiện ích trình duyệt OneCode"
   },
   "popup_advanced": {
     "message": "Nâng cao"
@@ -951,7 +951,7 @@
     "message": "Ghi phiên"
   },
   "popup_secure_storage_unavailable": {
-    "message": "Không có kho lưu trữ thông tin xác thực an toàn. Hãy mở Chat On Steroids để xem hướng dẫn thiết lập."
+    "message": "Không có kho lưu trữ thông tin xác thực an toàn. Hãy mở OneCode để xem hướng dẫn thiết lập."
   },
   "popup_sent_to_app": {
     "message": "Đã gửi tới ứng dụng"
@@ -1038,13 +1038,13 @@
     "message": "Thử lại"
   },
   "popup_version_mismatch_help": {
-    "message": "Ứng dụng v$1 (giao thức $2); tiện ích v$3 (giao thức $4). Mở trang Tiện ích mở rộng của trình duyệt, bật Chế độ dành cho nhà phát triển, rồi Cập nhật / Tải lại tiện ích này. Nếu vẫn không khớp, dùng Mở thư mục tiện ích mở rộng trong Chat On Steroids và tải thư mục đó. Tải lại các tab ChatGPT khi công việc đang chạy của chúng đã hoàn tất."
+    "message": "Ứng dụng v$1 (giao thức $2); tiện ích v$3 (giao thức $4). Mở trang Tiện ích mở rộng của trình duyệt, bật Chế độ dành cho nhà phát triển, rồi Cập nhật / Tải lại tiện ích này. Nếu vẫn không khớp, dùng Mở thư mục tiện ích mở rộng trong OneCode và tải thư mục đó. Tải lại các tab ChatGPT khi công việc đang chạy của chúng đã hoàn tất."
   },
   "popup_yes": {
     "message": "có"
   },
   "content_goal_error_loop_mcp_call_missing": {
-    "message": "Không ghi nhận lệnh gọi công cụ MCP nào trong phản hồi gần nhất. Gemini có thể đang hỏi bạn điều gì đó hoặc kết nối công cụ có thể đã bị mất. Hãy trả lời, hoặc kiểm tra tunnel nếu công cụ ngừng hoạt động. Tiếp tục tự động đã tạm dừng; Loop vẫn bật."
+    "message": "Không ghi nhận lệnh gọi công cụ MCP nào trong phản hồi gần nhất. nhà cung cấp có thể đang hỏi bạn điều gì đó hoặc kết nối công cụ có thể đã bị mất. Hãy trả lời, hoặc kiểm tra tunnel nếu công cụ ngừng hoạt động. Tiếp tục tự động đã tạm dừng; Loop vẫn bật."
   },
   "content_goal_error_goal_reply_not_pending": {
     "message": "Không có nội dung tiếp tục nào đang chờ cho câu trả lời này. Có thể nó đã được xử lý hoặc bị công việc mới hơn thay thế. Hãy kiểm tra hoạt động cuộc trò chuyện mới nhất trước khi thử lại."
@@ -1077,7 +1077,7 @@
     "message": "Endpoint tiếp tục tùy chỉnh không hợp lệ. Hãy kiểm tra URL trong Cài đặt; dùng HTTPS hoặc endpoint HTTP cục bộ."
   },
   "content_history_rate_limited": {
-    "message": "ChatGPT tạm thời giới hạn quyền truy cập lịch sử cuộc trò chuyện này. Chat On Steroids tạm dừng khôi phục tự động cho đến khi hết thời gian chờ."
+    "message": "ChatGPT tạm thời giới hạn quyền truy cập lịch sử cuộc trò chuyện này. OneCode tạm dừng khôi phục tự động cho đến khi hết thời gian chờ."
   },
   "content_goal_error_rate_limited": {
     "message": "Nhà cung cấp tiếp tục đang giới hạn tần suất yêu cầu. Hãy chờ lần thử lại được hiển thị hoặc chọn mô hình tiếp tục khác."
@@ -1167,7 +1167,7 @@
     "message": "Thất bại. Bắt đầu đăng nhập lại từ CoS."
   },
   "popup_app_not_running_help": {
-    "message": "Hãy chắc rằng Chat On Steroids đang mở trên máy tính này. Tiện ích sẽ tự kết nối."
+    "message": "Hãy chắc rằng OneCode đang mở trên máy tính này. Tiện ích sẽ tự kết nối."
   },
   "popup_provider": {
     "message": "Nhà cung cấp"

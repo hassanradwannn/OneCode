@@ -14,7 +14,7 @@ export type InputAutomation = 'off' | 'goal' | 'loop';
 
 type InputIntent = {
   mode: string; requestedMode?: string; sessionId: string | null; opening?: boolean;
-  finishOwner?: unknown; purpose?: string; attachmentDelivery?: string;
+  finishOwner?: unknown; purpose?: string; attachmentDelivery?: string; scheduleId?: string;
 };
 /** A native upload may wait for a browser boundary while retaining immediate intent.
  * Admission and presentation must classify that same durable row identically. */
@@ -23,7 +23,7 @@ export function manualInput(row: InputIntent): boolean {
     row.attachmentDelivery !== 'tool';
 }
 export function queuedFollowup(row: InputIntent): boolean {
-  return !row.opening && !manualInput(row) &&
+  return !row.opening && !row.scheduleId && !manualInput(row) &&
     (row.mode === 'finish' || (row.mode === 'after-turn' && !!row.sessionId && row.purpose !== 'decision'));
 }
 

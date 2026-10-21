@@ -105,7 +105,7 @@ async function prepareNativeWork(scope, tab, current, followsDocument = false) {
   if (!current() || !latest || latest.pendingUrl || latest.url !== tab.url) return false;
   for (const [key, receipt] of nativeWorkSelections) if (!receipt.current()) nativeWorkSelections.delete(key);
   const selected = nativeWorkSelections.get(scope);
-  if (window?.id === latest.windowId && (!selected || selected.tab !== latest.id)) {
+  if (window && window.id === latest.windowId && (!selected || selected.tab !== latest.id)) {
     await setManagedWindowState(window.id, current);
     if (!current()) return false;
     const before = await chrome.tabs.get(tab.id).catch(() => null);
@@ -368,7 +368,7 @@ const COMMAND_TAB_PROTECTION_MS = 30 * 60_000;
 /**
  * This install's connector names in ChatGPT, as the paired app reports them. A computer that
  * shares its ChatGPT account with another one names its connectors with a suffix, e.g.
- * "Chat On Steroids Core (Windows)"; pages recognize exactly these names as this app's traffic.
+ * "OneCode Core (Windows)"; pages recognize exactly these names as this app's traffic.
  * Kept in local storage so a restarted service worker does not fall back to the plain names
  * and claim the other computer's calls until the app answers again. Null until the app says.
  */
@@ -1484,7 +1484,7 @@ async function redeemCommand(id, client, conversationId = null, projectEntry = f
   };
   const command = result.data && result.data.command ? result.data.command : null;
   // A tab the app opened runs its command before its first status reply. Without this install's
-  // names it would take the plain "Chat On Steroids Core" for its own, which on a computer with a
+  // names it would take the plain "OneCode Core" for its own, which on a computer with a
   // suffix is the other computer's, and mention that Core in the bootstrap.
   return { ok: true, command, ...(command ? { identity: { connectorNames, connectorApps, ownCoreApp } } : {}) };
 }
@@ -2395,6 +2395,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
   const matchesInput = (input, tab) => {
     if (!input || !/^[a-f0-9-]{36}$/i.test(input.id)) return false;
     const target = cleanConversationId(input.conversationId);
+    if (providerForUrl(tab.pendingUrl || tab.url) !== providerForConversation(target, input.chatProvider ?? selectedProvider)) return false;
     if (target) return conversationForTab(tab) === target;
     try {
       const url = new URL(tab.pendingUrl || tab.url || '');
@@ -2426,6 +2427,15 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       delete elections[input.id];
       await persistLive();
       elected = null;
+    }
+    if (!target && elected && elected.tab == null && candidates.length === 1 && tab) {
+      const source = { tab: tab.id, documentId: tabDocuments[String(tab.id)], navigationEpoch: tabEpochs[String(tab.id)] };
+      // A crash can follow Chrome creation but precede persistence of its tab id.
+      // One exact marked document restores that spent election, never another opening.
+      if (ownsDocument(source)) {
+        await elect(input.id, { ...elected, tab: tab.id, stage: 'ready', conversationId: null });
+        elected = elections[input.id];
+      }
     }
     if (elected?.tab != null) tab = candidates.find(candidate => candidate.id === elected.tab);
     // The tab opened on this linked Project's page for this new chat finished on ChatGPT's home,
@@ -2551,14 +2561,15 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
             // empty. Its conversation ownership is gone, so ordinary pruning can
             // never retire it. The same preparation owns this exact one-hop home;
             // close it only after the replacement exists and a fresh draft check.
-            if (reusable.has(conversationFromUrl(candidate.url)) && (/^https:\/\/gemini\.google\.com(?:\/u\/\d+)?\/app\/?$/).test(latest.url) &&
+            if (reusable.has(conversationFromUrl(candidate.url)) && providerHomeDocument(latest.url, providerForUrl(candidate.url)) &&
                 tabEpochs[String(candidate.id)] === source.navigationEpoch + 1) {
               const abandoned = { ...source, navigationEpoch: source.navigationEpoch + 1 };
+              const abandonedUrl = latest.url;
               try {
                 const proof = await tabReply(candidate.id, { type: 'clf-tab-close-check', conversationId: null }, { documentId: source.documentId });
                 const current = await chrome.tabs.get(candidate.id);
                 if (proof?.safe === true && proof.conversationId === null && proof.navigationEpoch === abandoned.navigationEpoch &&
-                    ownsDocument(abandoned) && current && !current.pinned && !current.pendingUrl && current.url === latest.url) {
+                    ownsDocument(abandoned) && current && !current.pinned && !current.pendingUrl && current.url === abandonedUrl) {
                   await chrome.tabs.remove(candidate.id);
                   tabs = tabs.filter(row => row.id !== candidate.id);
                 }
@@ -3202,7 +3213,8 @@ async function runImageExports(jobs) {
     const nonce = typeof job?.nonce === 'string' && /^[0-9a-f-]{36}$/i.test(job.nonce) ? job.nonce : null;
     const conversationId = cleanConversationId(job?.conversationId);
     const messageId = typeof job?.messageId === 'string' && /^[A-Za-z0-9_:.-]{1,190}$/.test(job.messageId) ? job.messageId : '';
-    const assetId = typeof job?.assetId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(job.assetId) ? job.assetId : '';
+    const assetId = typeof job?.assetId === 'string' && /^(?:[A-Za-z0-9_-]{1,160}|sandbox:\/mnt\/data\/[^\s\\?#]{1,500}\.(?:png|jpe?g|webp))$/i.test(job.assetId) &&
+      !job.assetId.split('/').some(part => part === '.' || part === '..') ? job.assetId : '';
     if (!nonce || !conversationId || !messageId || !assetId || imageExportsInFlight.has(nonce)) continue;
     imageExportsInFlight.add(nonce);
     void (async () => {
@@ -3652,8 +3664,49 @@ function repairChangeDetail(latest) {
   return `changed-${part}${by}`;
 }
 
+// A tabs.reload promise acknowledges the request, not the replacement document.
+// Confirm the new recorder and flush its history before main snapshots Continue.
+async function confirmReloadedPage(tabId, conversationId, oldDocument, oldRun, waitMs = 45_000) {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || conversationForTab(tab) !== conversationId) return false;
+    const documentId = tabDocuments[String(tabId)];
+    if (!tab.pendingUrl && tab.status !== 'loading' && documentId && documentId !== oldDocument) {
+      const ready = await tabReply(tabId, { type: 'clf-repair-ready', conversationId }, { documentId });
+      if (ready?.ok === true && ready.conversationId === conversationId && ready.runId && ready.runId !== oldRun) return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+const pendingRepairReadiness = new Map();
+function watchReloadedRepair(token, receipt) {
+  if (receipt.checking) return;
+  receipt.checking = true;
+  // Readiness must not hold the shared status poll: other chats, Stop and the
+  // queued Continue keep using their ordinary transport while this page hydrates.
+  void confirmReloadedPage(receipt.tabId, receipt.conversationId, receipt.documentId, receipt.runId).then(async ready => {
+    if (pendingRepairReadiness.get(token) !== receipt) return;
+    if (ready) {
+      pendingRepairReadiness.delete(token);
+      await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=reloaded`);
+    } else {
+      receipt.checking = false;
+      if (!receipt.reported) { receipt.reported = true; await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=reloaded&why=unready`); }
+    }
+  }).catch(() => { receipt.checking = false; });
+}
 async function performBrowserRepairs(repairs, policy) {
+  // A slow replacement may become ready after the initial wait. Keep only the
+  // original spent receipt; this path never dispatches another reload or Send.
+  for (const [token, receipt] of pendingRepairReadiness) {
+    if (receipt.expiresAt <= Date.now()) { pendingRepairReadiness.delete(token); continue; }
+    watchReloadedRepair(token, receipt);
+  }
   for (const { conversationId, token, reason, focus, requiresClaim, continueFollows, suspended } of repairs) {
+    let reloadDispatched = false;
     // Re-scanned per repair rather than reused from above. Earlier entries in this same batch
     // may have created a tab, and the scan has to be the state immediately before the action or
     // the duplicate rule below is deciding on a tab list that no longer exists.
@@ -3806,7 +3859,18 @@ async function performBrowserRepairs(repairs, policy) {
           continue;
         }
       }
-      if (target) await chrome.tabs.reload(target.id);
+      if (target) {
+        const before = reason === 'assistant-error'
+          ? await tabReply(target.id, { type: 'clf-page-status' }, documentId ? { documentId } : undefined) : null;
+        reloadDispatched = true;
+        await chrome.tabs.reload(target.id);
+        if (reason === 'assistant-error') {
+          const receipt = { tabId: target.id, conversationId, documentId, runId: before?.runId, expiresAt: Date.now() + 180_000 };
+          pendingRepairReadiness.set(token, receipt); watchReloadedRepair(token, receipt);
+          // A later exact replacement acknowledgement, not tabs.reload, owns confirmation.
+          continue;
+        }
+      }
       else {
         await createChatTab(providerConversationUrl(conversationId), policy.background === true, focus);
       }
@@ -3814,7 +3878,7 @@ async function performBrowserRepairs(repairs, policy) {
       // A tab changed between the scan and action, or Chrome refused it. Report the exact failed
       // handout so the app can show the failure while keeping the same repair retryable. The
       // rest of the batch is unaffected: these are separate chats and separate failures.
-      await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=${repairAction}&why=error`);
+      await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=${repairAction}&why=${reloadDispatched ? 'unready' : 'error'}`);
       continue;
     }
     await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=${repairAction}`);
@@ -4545,7 +4609,7 @@ const HANDLERS = {
     await persist();
     return { ok: true };
   },
-  /** Ask every eligible ChatGPT tab to rebuild its Chat On Steroids activity stream now. */
+  /** Ask every eligible ChatGPT tab to rebuild its OneCode activity stream now. */
   async overwriteNow() {
     await load();
     const known = Object.keys(tabConversations)
@@ -5433,7 +5497,9 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
       let rootReload = false;
       try {
         const url = new URL(targetUrl);
-        rootReload = isChatGptUrl(targetUrl) && (/^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) || url.pathname === '');
+        const provider = providerForUrl(targetUrl);
+        rootReload = provider === 'chatgpt' ? url.pathname === '/' :
+          provider === 'gemini' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname);
       } catch {
         rootReload = false;
       }
@@ -5475,7 +5541,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 57;
+const PAGE_RECORDER_VERSION = 66;
 
 let deferredRecoveryWork = null;
 
@@ -5971,7 +6037,7 @@ async function replaceUsageObserver(tabId, attempt = 0) {
   if (status?.ok !== true || status.streaming !== false) return later();
   try {
     await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: () => { window.__cosUsageReplace = true; } });
-    // Gemini has no ChatGPT usage endpoint.
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['usage.js'] });
     return true;
   } catch {
     // A tab that closed or navigated gets a fresh usage.js from its own document start.

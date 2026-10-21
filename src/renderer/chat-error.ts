@@ -112,8 +112,8 @@ export function chatErrorPresentation(error: ChatError, history: readonly Sessio
     : reloadPolicy || providerText('Queued messages still wait until sending is safe. If the chat stays stuck, open Gemini and check the page before retrying.')}`;
   else if (reloadPolicy) next = `${t('This turn already received its automatic error reload.')} ${reloadPolicy}`;
   if (continued) {
-    const work = t('Work continued after this notice. Queued messages still wait until sending is safe.');
+    const work = t('Work continued after this notice.');
     next = repair || reloadPolicy ? `${next} ${work}` : t('Work continued after this notice. Automatic continuation waits for work to settle; the failed page alone does not trigger another message.');
   } else if (reloaded && reloadPolicy) next += ` ${t('Queued messages still wait until sending is safe.')}`;
-  return { title: reloaded ? t('Chat automatically refreshed') : title, message, next, resolved: false, reloaded };
+  return { title: reloaded ? t('Chat page refreshed; recovery pending') : title, message, next, resolved: false, reloaded };
 }

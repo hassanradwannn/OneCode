@@ -17,7 +17,7 @@ const notices = [
   'Catalog artwork: Copyright (c) 2026 Chat On Steroids contributors. MIT licensed, see LICENSE.',
   'Original illustrations are not official product logos. Product names identify independent',
   'integrations and do not imply affiliation or endorsement. External plugins installed by users',
-  'are not bundled with CoS; their package directories retain their own licenses and notices.',
+  'are not bundled with OneCode; their package directories retain their own licenses and notices.',
   ''
 ];
 const missing = [];
@@ -84,7 +84,7 @@ for (const file of ['README.md', 'COMPONENT-NOTICES.txt', 'LGPL-3.0.txt', 'GPL-3
 // Catalog packages are optional downloads, but their reviewed license texts must
 // also be reachable from the app's Legal Notices action before installation.
 const catalogLicenses = JSON.parse(await fs.readFile(path.join(root, 'docs/licenses/plugins/inventory.json'), 'utf8'));
-notices.push('='.repeat(80), 'Optional plugin catalog — separate installations and hosted services', 'Reviewed package licenses and hosted-service references follow. External server code is not bundled with CoS; custom installations and updates retain their own notices.', '');
+notices.push('='.repeat(80), 'Optional plugin catalog — separate installations and hosted services', 'Reviewed package licenses and hosted-service references follow. External server code is not bundled with OneCode; custom installations and updates retain their own notices.', '');
 for (const entry of catalogLicenses) {
   notices.push('='.repeat(80), entry.name ?? `${entry.package}@${entry.version}`, `License: ${entry.license}`, `Source: ${entry.repository}`);
   if (entry.endpoint) notices.push(`MCP endpoint: ${entry.endpoint}`);

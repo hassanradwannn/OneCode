@@ -26,3 +26,5 @@ aside{display:flex;flex-direction:column;min-height:0;overflow:hidden;gap:8px;pa
 .settings-tabs>button{max-width:100%;white-space:normal}
 .settings footer>button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 @media(max-width:700px){.setting{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}.setting:has(>input[type=checkbox]){grid-template-columns:minmax(0,1fr) auto}.setting>select,.setting>input[type=number],.setting>button{width:100%;max-width:100%}.settings footer>button{flex:1 1 160px}}
+/* Project groups share the desktop catalog; local paths stay on the host. */
+.project-group{border-bottom:1px solid var(--line);padding-bottom:8px}.project-group>summary{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;padding:5px 2px}.project-group>summary>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-group>summary>button{background:transparent;border:0;font-size:18px;min-width:36px}.project-group .task{width:100%;margin-top:4px}.task{min-height:44px}@media(max-width:700px){.task{min-height:48px}}

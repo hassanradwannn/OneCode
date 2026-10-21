@@ -194,7 +194,7 @@ export async function saveDiagnosticsReport(text: string, owner: BrowserWindow |
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   const options = {
     title: 'Save diagnostics report',
-    defaultPath: path.join(app.getPath('downloads'), `chat-on-steroids-diagnostics-${stamp}.txt`),
+    defaultPath: path.join(app.getPath('downloads'), `onecode-diagnostics-${stamp}.txt`),
     filters: [{ name: 'Text', extensions: ['txt'] }]
   };
   const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);

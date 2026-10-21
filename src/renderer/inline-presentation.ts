@@ -13,13 +13,14 @@ export function generationPlaceholder(label = t('Generating')): HTMLElement {
   const text = el('span', 'sr-only', label); stage.append(text); return stage;
 }
 export async function loadInlineVideo(frame: HTMLElement, button: HTMLButtonElement, sessionId: string,
-                                      messageId: string, assetId: string, current: () => boolean): Promise<void> {
+                                      messageId: string, assetId: string, current: () => boolean, presentationId?: string): Promise<void> {
   button.disabled = true;
   let retired = false, objectUrl = '', token = '';
   const valid = () => !retired && current() && frame.isConnected;
   live.set(frame, () => { retired = true; if (objectUrl) URL.revokeObjectURL(objectUrl); });
   try {
-    const reply = await window.api.prepareNativeVideoPlayback(sessionId, messageId, assetId);
+    const reply = presentationId ? await window.api.preparePresentedVideoPlayback(sessionId, presentationId)
+      : await window.api.prepareNativeVideoPlayback(sessionId, messageId, assetId);
     if (!reply.ok) throw new Error(reply.error);
     const playback = reply.data; token = playback.token;
     const parts: ArrayBuffer[] = []; let offset = 0;
@@ -56,7 +57,12 @@ export function inlinePresentation(value: ArtifactPresentation, sessionId: strin
   const closeFullscreen = () => { if (fullscreen?.open) fullscreen.close(); };
   const valid = () => !retired && current() && row.isConnected;
   live.set(row, () => { retired = true; closeFullscreen(); });
-  if (value.asset) {
+  if (value.kind === 'video' && value.asset) {
+    const title = el('strong', '', value.title);
+    const play = el('button', 'btn', () => t('Play video')) as HTMLButtonElement; play.type = 'button';
+    play.onclick = () => { void loadInlineVideo(stage, play, sessionId, '', '', valid, value.id); };
+    stage.replaceChildren(title, play);
+  } else if (value.asset) {
     void run(window.api.getSessionImage(sessionId, value.asset.id)).then(data => {
       if (!valid()) return;
       if (!data) { stage.replaceChildren(el('p', 'meta', () => t('Image preview unavailable'))); return; }

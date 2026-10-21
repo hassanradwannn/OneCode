@@ -1,3 +1,4 @@
+import { chatScheduler } from '../chat-schedules.js';
 import { z } from 'zod';
 import { CHAT_PROVIDERS, chatProviderForConversation } from '../../shared/chat-provider.js';
 import { REASONING_EFFORTS } from '../../shared/session.js';
@@ -12,14 +13,17 @@ import { saveRemotePreferences } from './preferences.js';
 import { attachmentSchema } from '../session/input-attachments.js';
 import { draftTaskPlan, goalBackendFor } from '../goal.js';
 import { runTaskRequest, cancelTaskRequest } from '../task-request.js';
+import { getProject } from '../projects.js';
 
 const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);
 const send = z.object({ action: z.literal('send'), id: z.string().uuid(), sessionId: sessionId.nullable(), provider: z.enum(CHAT_PROVIDERS),
   text: z.string().trim().min(1).max(64_000), model: z.string().max(80).nullable(), reasoningEffort: z.enum(REASONING_EFFORTS).nullable(),
   expectedTurnId: z.string().min(1).max(256).nullable(), afterTurn: z.boolean().optional(), automation: z.enum(['off', 'goal', 'loop']).optional(),
   attachments: z.array(attachmentSchema).max(20).optional(),
+  projectId: z.string().uuid().nullable().optional(),
   plan: z.array(z.string().trim().min(1).max(16000)).min(1).max(12).refine(stages => JSON.stringify(stages).length <= 12000).optional() }).strict();
 export const remoteActionSchema = z.discriminatedUnion('action', [send,
+  z.object({ action: z.literal('cancelSchedule'), id: z.string().uuid(), scheduleId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('draftPlan'), id: z.string().uuid(), text: z.string().trim().min(1).max(16000) }).strict(),
   z.object({ action: z.literal('cancelPlan'), id: z.string().uuid(), requestId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('stop'), id: z.string().uuid(), sessionId, expectedTurnId: z.string().min(1).max(256) }).strict(),
@@ -33,6 +37,7 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
     const backend = goalBackendFor('goal') === 'api' ? 'api' : 'chatgpt';
     return runTaskRequest(body.id, JSON.stringify(['plan', body.text, backend]), signal => draftTaskPlan(body.text, backend, undefined, signal), () => undefined);
   }
+  if (body.action === 'cancelSchedule') return chatScheduler.change(body.scheduleId, { enabled: false });
   if (body.action === 'cancelPlan') return { cancelled: cancelTaskRequest(body.requestId) };
   if (body.action === 'preferences') return saveRemotePreferences({ expectedRevision: body.expectedRevision, changes: body.changes });
   if (body.action === 'refreshModels') return startChatModelDiscovery(true, body.provider);
@@ -45,11 +50,16 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   const text = body.plan?.[0] ?? body.text;
   const objective = body.plan || body.automation === 'goal' ? body.text : undefined;
   if (existing) {
-    if (existing.text !== text || existing.objective !== objective || JSON.stringify(existing.stages ?? []) !== JSON.stringify(body.plan?.slice(1) ?? []) || existing.sessionId !== (body.sessionId ?? body.id) || existing.chatProvider !== body.provider || existing.model !== body.model || existing.reasoningEffort !== body.reasoningEffort || existing.automation !== body.automation || JSON.stringify(existing.attachments ?? []) !== JSON.stringify(body.attachments ?? []))
+    if ((existing.projectId ?? null) !== (body.projectId ?? null) || existing.text !== text || existing.objective !== objective || JSON.stringify(existing.stages ?? []) !== JSON.stringify(body.plan?.slice(1) ?? []) || existing.sessionId !== (body.sessionId ?? body.id) || existing.chatProvider !== body.provider || existing.model !== body.model || existing.reasoningEffort !== body.reasoningEffort || existing.automation !== body.automation || JSON.stringify(existing.attachments ?? []) !== JSON.stringify(body.attachments ?? []))
       throw new Error('Message id belongs to a different input.');
     return { input: projectInput(existing) };
   }
   if (session?.conversationId && chatProviderForConversation(session.conversationId) !== body.provider) throw new Error('An existing chat keeps its provider.');
+  if (body.projectId) {
+    if (session && session.projectId !== body.projectId) throw new Error('An existing chat keeps its project.');
+    const project = await getProject(body.projectId);
+    if (!project || (!session && project.ungrouped)) throw new Error('This project is unavailable.');
+  }
   const activeTurnId = session ? (await sessionControlsFor(session.id)).activeTurnId : null;
   if ((activeTurnId ?? null) !== body.expectedTurnId) throw new Error('Task state changed. Refresh before sending.');
   if (body.model) {
@@ -58,6 +68,7 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   } else if (body.reasoningEffort) throw new Error('Select a model before choosing thinking effort.');
   if (body.automation === 'goal' && body.text.length > 16_000) throw new Error('Keep a new Goal objective below 16,000 characters.');
   const input = await sendDesktopInput({ id: body.id, sessionId: body.sessionId, provider: body.provider, text,
+    ...(body.projectId ? { projectId: body.projectId } : {}),
     ...(body.automation ? { automation: body.automation } : {}),
     ...(body.plan ? { objective, stages: body.plan.slice(1), authoredSource: 'objective' as const }
       : body.automation === 'goal' ? { objective, authoredSource: 'text' as const } : {}),

@@ -22,14 +22,16 @@ export async function writePresentation(sessionId: string, value: ArtifactPresen
     if (previous?.presentation?.status === 'ready' && value.status !== 'ready') throw new Error('A completed presentation cannot return to generating');
     if (previous?.presentation?.status === 'failed' && value.status !== 'failed') throw new Error('A failed presentation is terminal; begin another generation');
     if (previous?.presentation?.status === 'ready' && previous.presentation.asset && previous.presentation.asset.id !== value.asset?.id)
-      throw new Error('A completed image cannot be replaced by another completion');
+      throw new Error('Completed media cannot be replaced by another completion');
     if (previous && JSON.stringify(previous.presentation) === JSON.stringify(value)) return;
     const sourceMessage=nativeOrigin?.messageId?(await readEvents(sessionId)).find(event=>event.kind==='assistant_message'&&event.messageId===nativeOrigin.messageId):undefined;
-    const time = previous?.time ?? sourceMessage?.time ?? Date.now();
-    const turnId=previous?.turnId??sourceMessage?.turnId??nativeOrigin?.turnId??(!nativeOrigin?.messageId?session.activeTurnId:undefined);
+    const refreshed = !nativeOrigin?.messageId && previous?.presentation?.status === 'ready' && value.status === 'ready' &&
+      (previous.presentation.revision !== value.revision || previous.presentation.openId !== value.openId);
+    const time = refreshed ? Date.now() : previous?.time ?? sourceMessage?.time ?? Date.now();
+    const turnId=refreshed ? session.activeTurnId : previous?.turnId??sourceMessage?.turnId??nativeOrigin?.turnId??(!nativeOrigin?.messageId?session.activeTurnId:undefined);
     const message = value.status === 'generating' ? 'Generating' : value.status === 'failed' ? 'Generation failed' : value.title;
     await appendEvent(sessionId, { kind: 'progress', source: 'app', time, progressId: `presentation:${value.id}`,
-      ...(previous ? { origin: previous.origin ?? previous.seq } : {}),
+      ...(previous && !refreshed ? { origin: previous.origin ?? previous.seq } : {}),
       ...(turnId ? { turnId } : {}),
       presentation: value, message: { text: message, chars: message.length, truncated: false } });
   });
@@ -47,5 +49,6 @@ export async function requirePendingPresentation(sessionId: string, id: string, 
 export async function presentArtifact(snapshot: ArtifactSnapshot, presentationId = snapshot.artifact.id): Promise<void> {
   const artifact = snapshot.artifact;
   await writePresentation(artifact.sessionId, { id: presentationId, title: artifact.title, kind: artifact.kind, provider: artifact.origin.provider,
-    status: 'ready', artifactId: artifact.id, revision: snapshot.revision.revision }, artifact.origin);
+    status: 'ready', artifactId: artifact.id, revision: snapshot.revision.revision },
+    snapshot.revision.source === 'provider' ? artifact.origin : undefined);
 }

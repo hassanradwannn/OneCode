@@ -21,17 +21,20 @@ export function initProviderSettings(save: () => void | Promise<void>): void {
 
 /** Capture only the static authored shell, before any chats, files or account content exist. */
 export function initProviderCopy(): (provider: ChatProvider) => void {
+  // Native guides and provider-only instructions name real service controls.
+  // Neutralizing those labels makes setup impossible to follow.
+  const nativeCopy = '[data-setup-guide], #pluginMoves, [data-provider-only], [data-provider-names]';
   const copy: Array<{ node: Text; source: string }> = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
     if (!/Gemini|ChatGPT/.test(node.data) ||
-        node.parentElement?.closest('script, style, option, code, [translate="no"], #chatProvider, #setupChatProvider, #composerProviderLabel')) continue;
+        node.parentElement?.closest(`script, style, option, code, [translate="no"], #chatProvider, #setupChatProvider, #composerProviderLabel, ${nativeCopy}`)) continue;
     copy.push({ node, source: node.data });
   }
   const attributes: Array<{ node: Element; property: 'title' | 'placeholder' | 'aria-label'; source: string }> = [];
   for (const node of document.querySelectorAll('[title],[placeholder],[aria-label]')) {
-    if (node.closest('[translate="no"], #chatProvider, #setupChatProvider')) continue;
+    if (node.closest(`[translate="no"], #chatProvider, #setupChatProvider, ${nativeCopy}`)) continue;
     for (const property of ['title', 'placeholder', 'aria-label'] as const) {
       const source = node.getAttribute(property);
       if (source && /Gemini|ChatGPT/.test(source)) attributes.push({ node, property, source });

@@ -5,7 +5,7 @@ import { locateBinary } from './locate.js';
 import { readDurable, writeDurableNow } from '../durable.js';
 import { withTailscaleMutation } from './tailscale-mutation.js';
 import { getConfig } from '../config.js';
-import { TailscaleSetupRequired, tailscalePrerequisites } from './tailscale-prerequisites.js';
+import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites, readTailscaleDaemon } from './tailscale-prerequisites.js';
 
 type Row = Record<string, unknown>;
 const object = (v: unknown): Row => v && typeof v === 'object' && !Array.isArray(v) ? v as Row : {};
@@ -27,8 +27,16 @@ const nativeRun = (args: string[]): Promise<string> => new Promise((resolve, rej
   const tunnel = getConfig().tunnel;
   const binary = locateBinary('tailscale', tunnel?.kind === 'tailscale' ? tunnel.binaryPath : undefined);
   if (!binary) { reject(new TailscaleSetupRequired('install', 'Tailscale could not be located. Install it or choose its executable in Advanced settings; OneCode will continue automatically.')); return; }
-  execFile(binary, args, { windowsHide: true, timeout: 20_000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, TAILSCALE_BE_CLI: '1' } }, (error, stdout) => error
-    ? reject(new Error('Tailscale Serve could not complete. Check that Tailscale is running and this user can access it.')) : resolve(stdout));
+  execFile(binary, args, { windowsHide: true, timeout: 20_000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, TAILSCALE_BE_CLI: '1' } }, (error, stdout, stderr) => {
+    if (!error) { resolve(stdout); return; }
+    const failure = new Error('Tailscale Serve could not complete. Check that Tailscale is running and this user can access it.');
+    // Raw CLI errors can contain private device data. Classify read-only failures,
+    // then return only fixed text; route mutations are never retryable here.
+    if (args[0] === 'status' || args[1] === 'status')
+      void readTailscaleDaemon(() => Promise.reject(new Error(stderr || (error.killed ? 'Tailscale command timed out' : error.message))))
+        .catch(cause => reject(cause instanceof TailscaleNotReady ? cause : failure));
+    else reject(failure);
+  });
 });
 const defaults: Dependencies = { run: nativeRun, read: () => readDurable<Custody>('remote-serve', { strict: true }), write: value => writeDurableNow('remote-serve', value) };
 export class RemoteRouteConflict extends Error {}
@@ -56,9 +64,9 @@ export class PrivateServe {
   private custody: Custody | null = null;
   constructor(private deps: Dependencies = defaults) {}
   private async inspect(): Promise<{ node: Row; config: Row; status: Row }> {
-    const [status, config] = await Promise.all([this.deps.run(['status', '--json']), this.deps.run(['serve', 'status', '--json'])]);
+    const [status, config] = await Promise.all([readTailscaleDaemon(() => this.deps.run(['status', '--json'])), readTailscaleDaemon(() => this.deps.run(['serve', 'status', '--json']))]);
     const state = parse(status);
-    if (state.BackendState !== 'Running' || state.AuthURL) throw new TailscaleSetupRequired('login', 'Sign in and connect this device in Tailscale; OneCode will continue automatically.');
+    tailscalePrerequisites(state, false);
     return { node: object(state.Self), config: parse(config), status: state };
   }
   start(proxy: string): Promise<string> { return withTailscaleMutation(() => this.startOwned(proxy)); }

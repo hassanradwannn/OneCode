@@ -1284,6 +1284,12 @@ export function foldProgress(events: readonly SessionEvent[]): SessionEvent[] {
     }
     const held = out[at];
     if (held && held.kind === 'progress' && event.kind === 'progress') {
+      // A new artifact revision or explicit presentation belongs with the new
+      // response. Replace the old inline card at this new position, once.
+      if (held.presentation?.status === 'ready' && event.presentation?.status === 'ready' && !event.origin &&
+          (held.presentation.revision !== event.presentation.revision || held.presentation.openId !== event.presentation.openId)) {
+        out[at] = null; anchor.set(key, index); continue;
+      }
       out[at] = { ...held, message: event.message, ...(event.presentation ? { presentation: event.presentation } : {}) };
     } else if (held && held.kind === 'page_tool' && event.kind === 'page_tool') {
       out[at] = { ...held, label: event.label };

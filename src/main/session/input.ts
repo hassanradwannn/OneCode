@@ -11,7 +11,7 @@ import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } 
 import { chatgptBindingInstructions, hasCurrentChatgptBinding, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -61,6 +61,8 @@ export const inputArgs = z.object({
 });
 export type InputArgs = z.infer<typeof inputArgs>;
 const entrySchema = inputArgs.extend({
+  /** Saved interval authority; only the scheduler's internal admission supplies this. */
+  scheduleId: z.string().uuid().optional(),
   steerReady: z.literal(true).optional(),
   /** This exact outbox row owns the first native send of its reserved local session. */
   opening: z.literal(true).optional(),
@@ -195,16 +197,15 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   const activity = observedActivity ?? deliveryHooks?.activity?.(session) ?? { possible: !!session.activeTurnId, exact: !!session.activeTurnId };
   const stopped = session.finishTurn?.released === true;
   const selection = session.selectedModel?.conversationId === session.conversationId ? session.selectedModel : null;
-  // The legacy provider's non-Pro composer path was measured on ChatGPT (#1231).
-  // It is not evidence of Gemini's native mid-generation Send behavior.
-  // The inherited native mid-generation composer path was measured on ChatGPT.
-  // Gemini corrections use an actual tool response, not an assumed native Send API.
+  // Native mid-generation composer Send was measured on ChatGPT (#1231).
+  // Gemini cannot borrow that behavior. Explicit Steer waits for its exact native
+  // turn-end barrier; attached images may use their existing validated MCP grant.
   const directTurn = !geminiInput(session.conversationId) && !stopped && activity.exact && end?.kind === 'turn_start' &&
     !!end.turnId && end.turnId === session.activeTurnId && !!selection?.model &&
     // The observed selection belongs to this exact chat. An activity renewal
     // without its own model label cannot revoke immediate delivery mid-turn.
     // A positive Pro observation still fences this native composer path.
-    activity.model !== 'pro' &&
+    activity.model !== 'pro' && activity.model !== 'unknown' &&
     !isProModel(selection.model, selection.reasoningEffort)
     ? { id: end.turnId, startedAt: end.time } : null;
   const canInject = !stopped && activity.exact && !directTurn;
@@ -274,6 +275,9 @@ async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
   // proves the exact unchanged work; the native page must still be idle for Send.
   if (entry.silenceBoundary) return await eligibleStageEnd(entry) === entry.silenceBoundary.turnId;
   const policy = await sessionInputPolicy(entry.sessionId);
+  // A saved interval wakes an idle chat independently of a newer completed turn.
+  // It still waits for ordinary browser readiness and can never join an MCP result.
+  if (entry.scheduleId) return policy.browserAllowed;
   if (entry.completedTurnId && await eligibleStageEnd(entry) !== entry.completedTurnId) return false;
   if (entry.directTurn) {
     const session = await getSession(entry.sessionId);
@@ -811,20 +815,27 @@ export function fileRotationInput(sessionId: string, turnId: string): Promise<In
   });
 }
 
-export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwner']): Promise<InputEntry> {
+export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwner'], scheduleId?: string): Promise<InputEntry> {
   const selectedProvider = raw.provider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   return serial(async () => {
     const input = inputArgs.parse(raw);
+    if (scheduleId !== undefined && (!z.string().uuid().safeParse(scheduleId).success || !input.sessionId ||
+        input.mode !== 'after-turn' || finishOwner || input.delivery || input.attachmentDelivery || input.steerTurnId ||
+        input.images?.length || input.attachments?.length || input.stages?.length || input.automation || input.objective))
+      throw new Error('Scheduled input requires an existing chat and a native after-turn message');
     if (input.stages !== undefined && JSON.stringify([input.text, ...input.stages]).length > 12000)
       throw new Error('Keep the complete plan below 12,000 characters');
     const current = await load();
     const prior = current.find((entry) => entry.id === input.id);
     if (prior) {
+      if (prior.scheduleId !== scheduleId) throw new Error('Message id already belongs to different scheduling authority');
       if (JSON.stringify(inputArgs.parse({ ...prior, sessionId: prior.opening ? prior.requestedSessionId ?? null : prior.sessionId, mode: prior.requestedMode ?? prior.mode })) !== JSON.stringify(input)) throw new Error('Message id already belongs to different input');
       if (!terminal(prior)) await materializeOpening(prior);
       return { ...prior };
     }
     const requestedSession = input.sessionId ? await getSession(input.sessionId) : null;
+    if (scheduleId && (!requestedSession?.conversationId || requestedSession.origin?.kind === 'worker'))
+      throw new Error('Scheduled input requires a bound normal chat');
     if (input.provider && requestedSession?.conversationId && chatProviderForConversation(requestedSession.conversationId) !== input.provider)
       throw new Error('An existing chat keeps its provider');
     if (input.steerTurnId && (!requestedSession?.conversationId || requestedSession.activeTurnId !== input.steerTurnId || input.mode !== 'auto' ||
@@ -870,17 +881,17 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
       // Native files belong to the next browser message, never a tool-result injection.
       if (finishOwner) throw new Error('Automatic finish messages cannot attach files');
       if (input.mode === 'finish' || (!input.steerTurnId && input.mode === 'auto' && (policy?.canInject || policy?.directTurn))) input.mode = 'after-turn';
-    } else if (input.mode === 'after-turn' && policy?.queueAtFinish) input.mode = 'finish';
+    } else if (!scheduleId && input.mode === 'after-turn' && policy?.queueAtFinish) input.mode = 'finish';
     if (input.mode === 'finish' || input.stages?.length) {
       const session = input.sessionId ? await getSession(input.sessionId) : null;
       if ((input.mode === 'finish' && !session?.conversationId) || session?.origin?.kind === 'worker') throw new Error('Queue staged tasks in a normal chat');
     }
     // Unattributed work can fence browser Send without making this chat a tool recipient.
     // Leave that input neutral until the existing serialized claim selects a safe transport.
-    const transportIntent = input.steerTurnId ? 'browser' as const : toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
+    const transportIntent = scheduleId || input.steerTurnId ? 'browser' as const : toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
       ? policy?.canInject ? 'tool' as const : !policy || policy.browserAllowed || policy.directTurn ? 'browser' as const : undefined : undefined;
     const directTurn = !input.steerTurnId && !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null;
-    const entry: InputEntry = { ...input, chatProvider: chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
+    const entry: InputEntry = { ...input, ...(scheduleId ? { scheduleId } : {}), chatProvider: chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
       ...(injectionOwner ? { toolTurnId: injectionOwner.turnId } : {}), ...(transportIntent ? { transportIntent } : {}),
       ...(requestedMode !== input.mode ? { requestedMode } : {}), ...(finishOwner ? { finishOwner } : {}), state: 'queued', owner: null, createdAt: Date.now(), conversationId: null };
     if (input.projectId) {
@@ -1174,7 +1185,7 @@ export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): P
     if (!row) return false;
     const policy = await sessionInputPolicy(row.sessionId!);
     const session = await getSession(row.sessionId!);
-    if (!session?.conversationId || session.conversationId !== row.conversationId) return false;
+    if (!session?.conversationId || session.conversationId !== row.conversationId || isChatBlocked(session.conversationId)) return false;
     const turnId = session.activeTurnId;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
     if (!turnId && !idle) return false;
@@ -1798,7 +1809,8 @@ async function bindOpening(entry: InputEntry, conversationId: string): Promise<b
   await materializeOpening(entry);
   const session = await getSession(entry.sessionId);
   if (!session || (session.conversationId && session.conversationId !== conversationId)) return false;
-  const strictAtAuthoritativeBind = !session.conversationId && getConfig().multiAgent.strictChatAllowlist === true;
+  const provider = chatProviderForConversation(conversationId);
+  const strictAtAuthoritativeBind = !session.conversationId && providerTrustValidationEnabled(getConfig().multiAgent, provider);
   let boundSessionNow = false;
   if (!session.conversationId) {
     if (!await rebindSession(session.id, null, conversationId)) return false;
@@ -1810,7 +1822,7 @@ async function bindOpening(entry: InputEntry, conversationId: string): Promise<b
   // mode was already on. Recovered outbox rows whose session attached earlier may reconcile their
   // row here, but that stale first outbox binding cannot mint Trust. Direct/browser-created chats
   // never traverse this boundary. Keep strict-off openings out of the explicit Trust registry.
-  if (boundSessionNow && strictAtAuthoritativeBind && getConfig().multiAgent.strictChatAllowlist === true) {
+  if (boundSessionNow && strictAtAuthoritativeBind && providerTrustValidationEnabled(getConfig().multiAgent, provider)) {
     if (!deliveryHooks?.trustOpening || !await deliveryHooks.trustOpening(session.id, conversationId)) return false;
   }
   return true;

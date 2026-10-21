@@ -28,6 +28,13 @@ function resolveArtifactReference(fromPath: string, reference: string): string |
   return parts.length ? parts.join('/') : null;
 }
 
+function previewStorageScript(): string {
+  // Opaque-origin sandboxes can throw even when merely reading localStorage.
+  // A document-local fallback keeps ordinary demos working without granting an
+  // origin, filesystem, persistence, network or access to the host's storage.
+  return `(function(){for(const name of ['localStorage','sessionStorage']){try{void window[name].length;continue}catch{}const data=new Map();let bytes=0;const storage={get length(){return data.size},key(i){return [...data.keys()][Number(i)]??null},getItem(k){return data.get(String(k))??null},setItem(k,v){k=String(k);v=String(v);const next=bytes-(data.has(k)?k.length+data.get(k).length:0)+k.length+v.length;if(k.length>4096||next>262144||(!data.has(k)&&data.size>=2048))throw new DOMException('Preview storage quota exceeded','QuotaExceededError');data.set(k,v);bytes=next},removeItem(k){k=String(k);bytes-=data.has(k)?k.length+data.get(k).length:0;data.delete(k)},clear(){data.clear();bytes=0}};Object.defineProperty(window,name,{value:storage,configurable:false})}})();`;
+}
+
 function consoleBridgeScript(channel: string): string {
   const key = JSON.stringify(channel);
   return `(function(){const key=${key};let sent=0;const emit=(level,args)=>{if(sent++>100)return;let text='';try{text=args.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ').slice(0,4000)}catch{text='[unserializable]'};parent.postMessage({__onecodeArtifactPreview:key,level,text},'*')};for(const level of ['log','info','warn','error']){const original=console[level]?.bind(console);console[level]=(...args)=>{emit(level,args);original?.(...args)}};addEventListener('error',e=>emit('error',[e.message||'Preview error']));addEventListener('unhandledrejection',e=>emit('error',[String(e.reason||'Unhandled rejection')]))})();`;
@@ -92,7 +99,7 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string)
     ::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:999px;background:#8888;background-clip:padding-box}
     @supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:#8888 transparent}}
   `;
-  const bridge = parsed.createElement('script'); bridge.textContent = consoleBridgeScript(channel).replace(/<\/script/gi, '<\\/script');
+  const bridge = parsed.createElement('script'); bridge.textContent = (previewStorageScript() + consoleBridgeScript(channel)).replace(/<\/script/gi, '<\\/script');
   parsed.head.prepend(charset, csp, viewport, bridge); parsed.head.append(scrolling);
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
@@ -132,7 +139,7 @@ export function createArtifactPreview(options: {
     });
   } else frame.srcdoc = documentSource;
   const shell = document.createElement('div'); shell.className = 'artifact-preview-shell'; shell.append(frame); options.parent.replaceChildren(shell);
-  let viewport: ArtifactViewport = window.innerWidth <= 600 ? 'portrait' : 'landscape';
+  let viewport: ArtifactViewport = 'responsive';
   const simulated = options.kind === 'web';
   const selector = document.createElement('select'); selector.className = 'artifact-viewport-select'; selector.setAttribute('aria-label', 'Preview viewport');
   for (const [value, preset] of Object.entries(ARTIFACT_VIEWPORTS)) {
@@ -147,14 +154,14 @@ export function createArtifactPreview(options: {
     frame.style.transform = `scale(${fit.scale})`; frame.style.transformOrigin = '0 0';
   };
   const setViewport = (mode: ArtifactViewport) => {
-    viewport = mode; selector.value = mode; selector.title = `${ARTIFACT_VIEWPORTS[mode].width} × ${ARTIFACT_VIEWPORTS[mode].height} · Fit to preview`;
+    viewport = mode; selector.value = mode; selector.title = mode === 'responsive' ? 'Use the available preview size' : `${ARTIFACT_VIEWPORTS[mode].width} × ${ARTIFACT_VIEWPORTS[mode].height} · Fit to preview`;
     options.parent.dataset.previewViewport = mode; resize();
   };
   const observer = simulated ? new ResizeObserver(resize) : null;
   if (simulated) {
     shell.classList.add('is-browser-viewport');
     setViewport(viewport); observer!.observe(shell);
-    selector.onchange = () => setViewport(selector.value === 'portrait' ? 'portrait' : 'landscape');
+    selector.onchange = () => setViewport(selector.value === 'portrait' ? 'portrait' : selector.value === 'landscape' ? 'landscape' : 'responsive');
     (options.controls ?? shell).append(selector);
   }
   let messages = 0;

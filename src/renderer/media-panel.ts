@@ -36,9 +36,12 @@ export function createMediaPanel(options: { onAvailabilityChanged?: () => void; 
   const detail = el('div', 'media-panel-detail'); body.append(list, detail); pane.append(toolbar, body);
 
   let sessionId: string | null = null, items: NativeMediaItem[] = [], selected = '', generation = 0, shown = false;
+  let requested = '';
+  let refreshGeneration = 0;
+  let refreshFlight: { owner: string | null; promise: Promise<void>; dirty: boolean } | null = null;
   let playbackUrl: string | null = null, playbackKey = '';
   const available = () => !!sessionId && items.length > 0;
-  const current = () => items.find(item => keyOf(item) === selected) ?? items[0] ?? null;
+  const current = () => items.find(item => keyOf(item) === selected) ?? (requested ? null : items[0] ?? null);
   function retirePlayback(): void { if (playbackUrl) URL.revokeObjectURL(playbackUrl); playbackUrl = null; playbackKey = ''; }
 
   async function loadPreview(item: NativeMediaItem, host: HTMLElement, token: number): Promise<void> {
@@ -90,12 +93,12 @@ export function createMediaPanel(options: { onAvailabilityChanged?: () => void; 
       button.setAttribute('aria-selected', String(keyOf(item) === selected)); button.dataset.key = keyOf(item);
       button.append(icon(item.kind === 'video' ? 'i-play' : 'i-image'), el('span', 'media-list-label', item.kind === 'video' ? t('Video') : t('Image')),
         el('span', 'media-list-meta', `${item.messageId.slice(0, 8)} · ${item.providerAssetId.slice(-10)}`));
-      button.addEventListener('click', () => { selected = keyOf(item); retirePlayback(); render(); }); list.append(button);
+      button.addEventListener('click', () => { requested = ''; selected = keyOf(item); generation++; retirePlayback(); render(); }); list.append(button);
     }
   }
 
   function renderDetail(): void {
-    detail.replaceChildren(); const item = current(); if (!item) { detail.append(el('p', 'meta media-panel-empty', () => t('No generated media recorded in this chat.'))); return; }
+    detail.replaceChildren(); const item = current(); if (!item) { detail.append(el('p', 'meta media-panel-empty', () => requested ? t('Loading preview…') : t('No generated media recorded in this chat.'))); return; }
     selected = keyOf(item); const token = generation;
     const head = el('div', 'media-detail-head');
     const heading = el('div', 'media-detail-title'); heading.append(icon(item.kind === 'video' ? 'i-play' : 'i-image'), el('strong', '', item.kind === 'video' ? t('Generated video') : t('Generated image')));
@@ -125,17 +128,30 @@ export function createMediaPanel(options: { onAvailabilityChanged?: () => void; 
   }
   function render(): void { renderList(); renderDetail(); }
 
-  async function refresh(): Promise<void> {
-    const owner = sessionId, token = ++generation; if (!owner) { items = []; selected = ''; render(); options.onAvailabilityChanged?.(); return; }
-    const reply = await run(window.api.listNativeMedia(owner)); if (!reply || token !== generation || owner !== sessionId) return;
-    const oldAvailable = available(); items = reply; if (!items.some(item => keyOf(item) === selected)) selected = items[0] ? keyOf(items[0]) : ''; render();
+  async function refreshOnce(): Promise<void> {
+    const owner = sessionId, token = ++refreshGeneration; if (!owner) { items = []; selected = ''; render(); options.onAvailabilityChanged?.(); return; }
+    const reply = await run(window.api.listNativeMedia(owner)); if (!reply || token !== refreshGeneration || owner !== sessionId) return;
+    const previous = JSON.stringify(items), previousDetail = JSON.stringify(current());
+    const oldAvailable = available(); items = reply;
+    if (requested && items.some(item => keyOf(item) === requested)) { selected = requested; requested = ''; }
+    if (!requested && !items.some(item => keyOf(item) === selected)) selected = items[0] ? keyOf(items[0]) : '';
+    if (previous !== JSON.stringify(items)) renderList();
+    if (previousDetail !== JSON.stringify(current())) { generation++; renderDetail(); }
     if (oldAvailable !== available()) options.onAvailabilityChanged?.();
   }
-  function sync(next: string | null): void { if (next === sessionId) { void refresh(); return; } sessionId = next; generation++; retirePlayback(); items = []; selected = ''; render(); options.onAvailabilityChanged?.(); if (next) void refresh(); }
-  function show(): void { shown = true; pane.hidden = false; void refresh(); }
+  function refresh(): Promise<void> {
+    if (refreshFlight?.owner === sessionId) { refreshFlight.dirty = true; return refreshFlight.promise; }
+    const flight = { owner: sessionId, promise: Promise.resolve(), dirty: false };
+    refreshFlight = flight;
+    flight.promise = (async () => { do { flight.dirty = false; await refreshOnce(); } while (flight.dirty && sessionId === flight.owner); })()
+      .finally(() => { if (refreshFlight === flight) refreshFlight = null; });
+    return flight.promise;
+  }
+  function sync(next: string | null): void { if (next === sessionId) { void refresh(); return; } sessionId = next; generation++; refreshGeneration++; retirePlayback(); items = []; selected = ''; requested = ''; render(); options.onAvailabilityChanged?.(); if (next) void refresh(); }
+  function show(): void { if (!shown) { shown = true; pane.hidden = false; render(); } void refresh(); }
   function hide(): void { shown = false; generation++; pane.hidden = true; retirePlayback(); }
   function mountAt(parent: HTMLElement): void { if (pane.parentElement !== parent) parent.append(pane); }
-  function open(messageId: string, assetId: string): void { selected = `${messageId}\u0000${assetId}`; render(); }
+  function open(messageId: string, assetId: string): void { requested = selected = `${messageId}\u0000${assetId}`; if (current()) requested = ''; generation++; retirePlayback(); render(); void refresh(); }
 
   refreshButton.addEventListener('click', () => void refresh());
   pane.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); options.onEscape?.(); } });

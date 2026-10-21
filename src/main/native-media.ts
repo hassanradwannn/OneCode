@@ -2,13 +2,14 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { promises as fs } from 'node:fs';
-import { canExportNativeOutput } from '../shared/native-output.js';
+import { nativeOutputAdapter, canExportNativeOutput } from '../shared/native-output.js';
 import type { NativeMediaItem, NativeMediaSaveResult, NativeVideoPlayback, NativeVideoPlaybackChunk } from '../shared/native-media.js';
 import { nativeMediaItem } from '../shared/native-media.js';
 import type { SessionEvent } from '../shared/session.js';
 import { exportImage } from './image-export.js';
 import { getSessionProject } from './projects.js';
-import { getSession, readEvents } from './session/store.js';
+import { getSession, readEvents, readAssetChunk } from './session/store.js';
+import { findPresentation } from './artifacts/presentation.js';
 import { exportVideo } from './video-export.js';
 import { getConfig } from './config.js';
 import { nativePathIdentity, resolvePath } from './sandbox.js';
@@ -16,13 +17,13 @@ import { nativePathIdentity, resolvePath } from './sandbox.js';
 type MediaEvent = Extract<SessionEvent, { kind: 'native_image' | 'native_video' }>;
 const PLAYBACK_TTL_MS = 30 * 60_000;
 const PLAYBACK_CHUNK_BYTES = 1024 * 1024;
-type Playback = { sessionId: string; file: string; mimeType: 'video/mp4' | 'video/webm'; bytes: number; expiresAt: number; timer?: ReturnType<typeof setTimeout> };
+type Playback = { sessionId: string; file?: string; presentationId?: string; assetId?: string; mimeType: 'video/mp4' | 'video/webm'; bytes: number; expiresAt: number; timer?: ReturnType<typeof setTimeout> };
 const playbacks = new Map<string, Playback>();
 
 async function removePlayback(token: string, value: Playback): Promise<void> {
   if (playbacks.get(token) === value) playbacks.delete(token);
   if (value.timer) clearTimeout(value.timer);
-  await fs.rm(value.file, { force: true }).catch(() => undefined);
+  if (value.file) await fs.rm(value.file, { force: true }).catch(() => undefined);
 }
 
 function touchPlayback(token: string, value: Playback, now = Date.now()): void {
@@ -72,6 +73,10 @@ export async function nativeMediaConversation(sessionId: string, messageId: stri
   const lineage = [...new Set([...session.chatIds, ...(session.conversationId ? [session.conversationId] : [])])];
   const conversationId = event.conversationId ?? (lineage.length === 1 ? lineage[0] : undefined);
   if (!conversationId || !lineage.includes(conversationId)) throw new Error('The original chat for this media is not recorded. Open the original output in the provider.');
+  const adapter = nativeOutputAdapter(conversationId);
+  if (!adapter?.message(messageId, conversationId) ||
+    !adapter.mediaAsset(assetId, event.kind === 'native_image' ? 'image' : 'video') || !adapter.roles.includes(event.providerRole))
+    throw new Error('The recorded media identity does not match its provider.');
   return conversationId;
 }
 
@@ -126,11 +131,37 @@ export async function prepareNativeVideoPlayback(sessionId: string, messageId: s
   return { token, mimeType: event.mimeType, bytes: result.bytes };
 }
 
+async function presentedVideo(sessionId: string, presentationId: string) {
+  if (!await getSession(sessionId)) throw new Error('Session was not found');
+  const row = (await findPresentation(sessionId, presentationId))?.presentation;
+  const asset = row?.asset;
+  if (row?.kind !== 'video' || row.status !== 'ready' || !asset ||
+    (asset.mimeType !== 'video/mp4' && asset.mimeType !== 'video/webm')) throw new Error('No recorded video matches this presentation');
+  return { ...asset, mimeType: asset.mimeType as 'video/mp4' | 'video/webm' };
+}
+
+export async function preparePresentedVideoPlayback(sessionId: string, presentationId: string): Promise<NativeVideoPlayback> {
+  await reapPlaybacks();
+  const asset = await presentedVideo(sessionId, presentationId);
+  await readAssetChunk(sessionId, asset.id, 0, 1, asset.bytes);
+  const token = randomUUID(), value: Playback = { sessionId, presentationId, assetId: asset.id, mimeType: asset.mimeType, bytes: asset.bytes, expiresAt: 0 };
+  playbacks.set(token, value); touchPlayback(token, value);
+  return { token, mimeType: value.mimeType, bytes: value.bytes };
+}
+
 export async function readNativeVideoPlaybackChunk(sessionId: string, token: string, offset: number, maxBytes = PLAYBACK_CHUNK_BYTES): Promise<NativeVideoPlaybackChunk> {
   await reapPlaybacks(); const value = playbacks.get(token);
   if (!value || value.sessionId !== sessionId || Date.now() >= value.expiresAt) throw new Error('Video playback has expired');
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > value.bytes) throw new Error('Invalid video playback offset');
   const size = Math.max(1, Math.min(PLAYBACK_CHUNK_BYTES, Math.floor(maxBytes), value.bytes - offset || 1));
+  if (value.assetId && value.presentationId) {
+    const asset = await presentedVideo(sessionId, value.presentationId);
+    if (asset.id !== value.assetId || asset.bytes !== value.bytes || asset.mimeType !== value.mimeType) throw new Error('Recorded video changed');
+    const bytes = await readAssetChunk(sessionId, asset.id, offset, size, asset.bytes);
+    touchPlayback(token, value);
+    return { data: bytes.toString('base64'), offset, nextOffset: offset + bytes.length, totalBytes: value.bytes, done: offset + bytes.length >= value.bytes };
+  }
+  if (!value.file) throw new Error('Video playback is unavailable');
   const handle = await fs.open(value.file, 'r');
   try {
     const buffer = Buffer.alloc(Math.min(size, Math.max(0, value.bytes - offset))); const { bytesRead } = buffer.length ? await handle.read(buffer, 0, buffer.length, offset) : { bytesRead: 0 };

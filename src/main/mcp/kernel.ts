@@ -128,7 +128,7 @@ import {
 } from '../session/store.js';
 import { sessionFinishDeadline } from '../session/finish.js';
 import type { ToolOutcome } from '../../shared/session.js';
-import { geminiBindingsEnabled, GeminiBindingError } from '../gemini/bindings.js';
+import { geminiBindingsEnabled, GeminiBindingError, consumeInheritedGeminiRouting } from '../gemini/bindings.js';
 import { localBindingIsCurrent, validateLocalBinding } from '../session/local-binding.js';
 import { geminiToolSchema } from '../gemini/routing-schema.js';
 import { toolSchemaJson } from './tool-declarations.js';
@@ -758,7 +758,7 @@ async function dispatchTracked(
   // before the shared blocked/superseded checks rather than guessing from selection.
   // Observation and its dependent input must resolve the same caller before either
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
-  const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
+  const desktopContext = (surface === 'desktop' || surface === 'core') && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
   // Identity and the finish hold share one ingress deadline; late proof must not
   // add another complete hold interval to an already waiting provider request.
@@ -1242,6 +1242,7 @@ async function dispatchTracked(
 
 /** Whether this handler must know which chat it is before resolving its paths. */
 function needsWorkspaceIdentity(name: string, args: unknown): boolean {
+  if (name === 'automations') return true;
   const input = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
   const relative = (value: unknown): boolean =>
     typeof value === 'string' && !isAbsoluteVirtualPath(value) && !isNativeWindowsPath(value);
@@ -1515,10 +1516,17 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
     findExposed,
     registered: () => [...names],
     descriptions: () => [...handlers].map(([name, entry]) => ({ name, description: entry.description, inputSchema: toolSchemaJson(entry.inputSchema, 'input') })),
-    invokeNested(name, args, parent) {
-      return dispatch(name, args, parent.caller.transportKey, parent.caller.requestId, surface, async () => {
+    async invokeNested(name, args, parent) {
+      // Consume redundant credentials before strict validation and recording. They
+      // may only repeat the already admitted parent; they cannot change identity.
+      let input = args;
+      try {
+        if (parent.caller.geminiBinding?.attribution === 'gemini_session_capability')
+          input = await consumeInheritedGeminiRouting(args, parent.caller.geminiBinding);
+      } catch { return failIdentity('GEMINI_NESTED_BINDING_MISMATCH: nested tools inherit the outer call. Omit routing fields; no child action ran.'); }
+      return dispatch(name, input, parent.caller.transportKey, parent.caller.requestId, surface, async () => {
         const entry = handlers.get(name);
-        return entry ? entry.run(args) : fail('UNKNOWN_TOOL: this tool is not available on this connector.');
+        return entry ? entry.run(input) : fail('UNKNOWN_TOOL: this tool is not available on this connector.');
       }, parent);
     },
     register(name, config, handler) {
@@ -1531,7 +1539,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
         const details = parsed.error.issues.slice(0, 3).map(issue =>
           `${issue.path.map(String).join('.').slice(0, 80) || 'arguments'}: ${issue.message.slice(0, 300)}`
         ).join('; ');
-        return fail(`INVALID_ARGUMENTS: ${details}`);
+        return fail(`INVALID_ARGUMENTS: ${details}. No action ran. Inspect this tool's ALL_TOOLS inputSchema and correct the rejected arguments before calling it again.`);
       } });
       observe?.(name, config);
       // Native Gemini carries an explicit local capability. HTTP ingress authenticates

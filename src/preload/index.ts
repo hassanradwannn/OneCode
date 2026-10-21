@@ -1,3 +1,4 @@
+import type { ChatSchedule } from '../shared/chat-schedules.js';
 import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/workspace-terminal.js';
 import type { RemoteStatus } from '../shared/remote.js';
 import type { ApprovalCardView } from '../shared/approval-wait.js';
@@ -322,6 +323,8 @@ const api = {
     call<boolean>('nativeMedia:openProvider', { sessionId, messageId, assetId }),
   prepareNativeVideoPlayback: (sessionId: string, messageId: string, assetId: string) =>
     call<NativeVideoPlayback>('nativeMedia:prepareVideo', { sessionId, messageId, assetId }),
+  preparePresentedVideoPlayback: (sessionId: string, presentationId: string) =>
+    call<NativeVideoPlayback>('nativeMedia:preparePresentedVideo', { sessionId, presentationId }),
   readNativeVideoPlaybackChunk: (sessionId: string, token: string, offset: number, maxBytes?: number) =>
     call<NativeVideoPlaybackChunk>('nativeMedia:videoChunk', { sessionId, token, offset, ...(maxBytes ? { maxBytes } : {}) }),
   releaseNativeVideoPlayback: (sessionId: string, token: string) => call<boolean>('nativeMedia:releaseVideo', { sessionId, token }),
@@ -393,6 +396,8 @@ const api = {
   remoteRefreshLink: () => call<RemoteStatus>('remote:refresh-link'),
   remoteRevoke: (id: string) => call<RemoteStatus>('remote:revoke', id),
   retryInputBrowser: (id: string) => call<InputEntry | null>('sessions:retryBrowser', { id }),
+  listSchedules: () => call<ChatSchedule[]>('schedules:list'),
+  cancelSchedule: (id: string) => call<ChatSchedule>('schedules:cancel', { id }),
   listInputs: () => call<InputEntry[]>('sessions:outbox'),
   listPausedHelpers: () => call<Array<{ id: string; sourceSessionId: string }>>('sessions:pausedHelpers'),
   runningTools: (conversationIds: string[]) => call<RunningToolActivity[]>('sessions:runningTools', { conversationIds }),
@@ -414,6 +419,7 @@ const api = {
   setZoom: (factor: number) => call<number>('window:zoom', { factor }),
   getZoom: () => call<number>('window:getZoom'),
   openSessionChat: (id: string) => call<boolean>('sessions:openChat', { id }),
+  openSessionFileLink: (id: string, messageId: string, href: string) => call<boolean>('sessions:openFileLink', { id, messageId, href }),
   /** ChatGPT's tool approval card in this chat's page, as the app may show it (2.1.38). */
   approvalCard: (id: string) => call<ApprovalCardView | null>('sessions:approvalCard', { id }),
   /** The person's answer to that exact card; the page presses it only if the card still stands. */

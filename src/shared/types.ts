@@ -404,7 +404,7 @@ export interface MultiAgentSettings {
 export interface McpSettings {
   /** Appended to the Core and Desktop server instructions, or empty for none. */
   instructions: string;
-  /** Use the user's installed native Gemini gemini-code skill for reusable opening guidance. */
+  /** Use the user's installed native Gemini onecode-gemini skill for reusable opening guidance. */
   useGeminiWebSkill?: boolean;
   useChatgptWebSkill?: boolean;
   /**

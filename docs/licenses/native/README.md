@@ -9,7 +9,7 @@ This supplement preserves full license texts omitted from the published native n
 - MPL-2.0.txt: https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt
 
 Retrieved 2026-09-08. These are unmodified license texts. Including GPLv3 here supplies
-the text incorporated by LGPLv3; it does not relicense Chat On Steroids as GPL software.
+the text incorporated by LGPLv3; it does not relicense OneCode as GPL software.
 
 Upstream build/source projects:
 - sharp: https://github.com/lovell/sharp

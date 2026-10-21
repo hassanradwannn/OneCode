@@ -6,7 +6,7 @@
     "message": "应用未响应"
   },
   "content_app_not_running": {
-    "message": "Chat On Steroids 未在此电脑上运行。"
+    "message": "OneCode 未在此电脑上运行。"
   },
   "content_auto_compaction": {
     "message": "自动压缩"
@@ -81,7 +81,7 @@
     "message": "为它打开的页面显示的是另一个对话"
   },
   "content_browser_disconnected": {
-    "message": "Chat On Steroids 中的浏览器连接已断开。"
+    "message": "OneCode 中的浏览器连接已断开。"
   },
   "content_cancel": {
     "message": "取消"
@@ -90,7 +90,7 @@
     "message": "聊天已阻止"
   },
   "content_chat_blocked_tip": {
-    "message": "此聊天已在 Chat On Steroids 应用中被阻止：其工具调用会被拒绝，目标、循环 和自动压缩均已关闭。要解除阻止，请打开应用的“聊天”标签页，在会话列表中将鼠标悬停在此聊天上，然后点击其阻止图标。"
+    "message": "此聊天已在 OneCode 应用中被阻止：其工具调用会被拒绝，目标、循环 和自动压缩均已关闭。要解除阻止，请打开应用的“聊天”标签页，在会话列表中将鼠标悬停在此聊天上，然后点击其阻止图标。"
   },
   "content_chat_still_opening": {
     "message": "此聊天仍在打开中，请重试"
@@ -585,7 +585,7 @@
     "message": "保存中…"
   },
   "content_settings_aria": {
-    "message": "Chat On Steroids 设置"
+    "message": "OneCode 设置"
   },
   "content_stage_handoff_attention": {
     "message": "交接回复需要处理"
@@ -735,13 +735,13 @@
     "message": "正在编写…"
   },
   "extension_action_title": {
-    "message": "Chat On Steroids"
+    "message": "OneCode"
   },
   "extension_description": {
-    "message": "将 提供方 连接到 Chat On Steroids，并通过 DOM、截图和开发者工具在后台控制浏览器标签页。"
+    "message": "将 提供方 连接到 OneCode，并通过 DOM、截图和开发者工具在后台控制浏览器标签页。"
   },
   "extension_name": {
-    "message": "Chat On Steroids 浏览器扩展"
+    "message": "OneCode 浏览器扩展"
   },
   "popup_advanced": {
     "message": "高级"
@@ -951,7 +951,7 @@
     "message": "会话捕获"
   },
   "popup_secure_storage_unavailable": {
-    "message": "安全凭据存储不可用。请打开 Chat On Steroids 查看设置说明。"
+    "message": "安全凭据存储不可用。请打开 OneCode 查看设置说明。"
   },
   "popup_sent_to_app": {
     "message": "已发送到应用"
@@ -1038,13 +1038,13 @@
     "message": "重试"
   },
   "popup_version_mismatch_help": {
-    "message": "应用 v$1（协议 $2）；扩展 v$3（协议 $4）。打开浏览器的“扩展程序”页面，启用“开发者模式”，然后更新 / 重新加载此扩展。如果仍不匹配，请在 Chat On Steroids 中使用“打开扩展文件夹”，并加载该文件夹。待 ChatGPT 标签页中的活动工作完成后，再重新加载这些标签页。"
+    "message": "应用 v$1（协议 $2）；扩展 v$3（协议 $4）。打开浏览器的“扩展程序”页面，启用“开发者模式”，然后更新 / 重新加载此扩展。如果仍不匹配，请在 OneCode 中使用“打开扩展文件夹”，并加载该文件夹。待 ChatGPT 标签页中的活动工作完成后，再重新加载这些标签页。"
   },
   "popup_yes": {
     "message": "是"
   },
   "content_goal_error_loop_mcp_call_missing": {
-    "message": "上一条回复中未记录 MCP 工具调用。Gemini 可能正在向你提问，也可能是工具连接已断开。请回答问题；如果工具无法继续工作，请检查隧道。自动继续已暂停；循环仍保持启用。"
+    "message": "上一条回复中未记录 MCP 工具调用。提供商 可能正在向你提问，也可能是工具连接已断开。请回答问题；如果工具无法继续工作，请检查隧道。自动继续已暂停；循环仍保持启用。"
   },
   "content_goal_error_goal_reply_not_pending": {
     "message": "此回答没有待处理的继续操作。它可能已经处理，或已被更新的工作取代。重试前请先检查最新的聊天活动。"
@@ -1077,7 +1077,7 @@
     "message": "自定义继续端点无效。请在设置中检查其 URL；请使用 HTTPS 或本地 HTTP 端点。"
   },
   "content_history_rate_limited": {
-    "message": "ChatGPT 暂时限制了对此对话历史的访问。Chat On Steroids 将暂停自动恢复，直到等待期结束。"
+    "message": "ChatGPT 暂时限制了对此对话历史的访问。OneCode 将暂停自动恢复，直到等待期结束。"
   },
   "content_goal_error_rate_limited": {
     "message": "继续提供者正在限制请求频率。请等待显示的重试时间，或选择其他继续模型。"
@@ -1167,7 +1167,7 @@
     "message": "失败。请从 CoS 重新开始登录。"
   },
   "popup_app_not_running_help": {
-    "message": "请确认 Chat On Steroids 已在这台电脑上打开。扩展会自动连接。"
+    "message": "请确认 OneCode 已在这台电脑上打开。扩展会自动连接。"
   },
   "popup_provider": {
     "message": "提供方"

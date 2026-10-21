@@ -1,8 +1,10 @@
+import { registerAutomationsTool } from './automations-tool.js';
 import { toolDeclaration } from './tool-declarations.js';
 import { registerPlanTool } from './plan-tool.js';
 import { registerHandoffTool } from './handoff-tool.js';
 import { registerArtifactTool } from './artifact-tool.js';
 import { registerPluginBridge } from './plugin-bridge-tool.js';
+import { registerSkillsTool } from './skills-tool.js';
 import { readSkillCatalog, SKILL_CATALOG_PATH } from '../skill-library.js';
 import { readSessionHistoryFile } from '../session/history-files.js';
 import { goalWorkerChat, imageExportCapable } from '../bridge.js';
@@ -257,6 +259,8 @@ function execPrincipal(): string | null {
 export function registerCoreTools(reg: SurfaceRegistrar): void {
   const { ctx, caps, exposedCaps } = reg;
   registerPluginBridge(reg);
+  registerSkillsTool(reg);
+  registerAutomationsTool(reg);
   registerArtifactTool(reg);
   // Named from the live roots, never from a `/project` that may not exist: a worked example the
   // model cannot act on costs a refused call and a retry. What followed the root had the same

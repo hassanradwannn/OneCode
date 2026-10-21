@@ -167,8 +167,11 @@ function canonical(value: unknown): string {
 const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const declaration = (tools: PluginToolSchema[]) => tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })).sort((a, b) => a.name.localeCompare(b.name));
 function recognizable(tools: unknown, surface: PluginSurface = 'core'): tools is PluginToolSchema[] {
-  // The registrar can append one local exec tool to the bounded upstream catalog.
-  if (!Array.isArray(tools) || (!tools.length && surface !== 'plugins') || tools.length > (surface === 'plugins' ? PLUGIN_MAX_TOOLS + 1 : 16) || JSON.stringify(tools).length > 300000) return false;
+  // Core includes the complete native desktop/browser contract. Bound its catalog
+  // by the declared surface rather than the pre-unification 16-tool limit.
+  // The external registrar can append one local exec tool to its bounded catalog.
+  const limit = surface === 'plugins' ? PLUGIN_MAX_TOOLS + 1 : Math.max(16, surfaceDefinition(surface).tools.length);
+  if (!Array.isArray(tools) || (!tools.length && surface !== 'plugins') || tools.length > limit || JSON.stringify(tools).length > 300000) return false;
   if (tools.some(tool => !tool || typeof tool.name !== 'string' || typeof tool.description !== 'string' || !tool.inputSchema || typeof tool.inputSchema !== 'object')) return false;
   return tools.every(tool => tool.inputSchema.type === 'object') && new Set(tools.map(tool => tool.name)).size === tools.length;
 }

@@ -43,7 +43,7 @@ export function initGeminiSkillSetup(api: SkillSetupApi): { apply(browser: ChatB
     const reply = await api.copyGeminiSkillInstructions();
     if (!reply.ok) throw new Error(t(reply.error));
     if (!reply.data) throw new Error(t('Could not copy skill instructions.'));
-    return providerText('Instructions copied. Create a skill named gemini-code in Gemini and paste them into its Instructions field.');
+    return providerText('Instructions copied. Create a skill named onecode-gemini in Gemini and paste them into its Instructions field.');
   }));
   open.addEventListener('click', () => {
     if (embedded) return;

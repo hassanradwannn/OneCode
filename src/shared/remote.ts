@@ -15,6 +15,7 @@ export interface RemoteBootstrap {
   providers: Array<{ id: ChatProvider; label: string; models: ChatModelCatalog }>;
   preferences: RemotePreferences;
   preferencesRevision: string;
+  projects: Array<Pick<import('./projects.js').LocalProject, 'id' | 'name' | 'color'>>;
 }
 export type RemoteSession = ControlApiSession & { provider: ChatProvider | null };
 export type RemoteSessionDetail = Omit<ControlApiSessionDetail, 'session'> & {

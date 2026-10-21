@@ -407,6 +407,19 @@ export function stripGeminiRoutingArgs(args: unknown): Record<string, unknown> {
   return toolArgs;
 }
 
+/** Redundant child credentials may repeat the parent grant, but cannot select another caller. */
+export async function consumeInheritedGeminiRouting(args: unknown, evidence: GeminiBindingEvidence | undefined): Promise<unknown> {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const input = args as Record<string, unknown>;
+  if (!Object.hasOwn(input, 'conversation_id') && !Object.hasOwn(input, 'session_key')) return args;
+  if (!evidence || input.conversation_id !== evidence.conversationId || typeof input.session_key !== 'string' || !KEY.test(input.session_key))
+    fail('GEMINI_NESTED_BINDING_MISMATCH');
+  await validateGeminiBindingEvidence(evidence);
+  const row = currentRow(evidence);
+  if (!row || !timingSafeEqual(hash(input.session_key), Buffer.from(row.keyHash, 'hex'))) fail('GEMINI_NESTED_BINDING_MISMATCH');
+  return stripGeminiRoutingArgs(input);
+}
+
 /** Test lifetime only. Production revocation always uses its durable owner above. */
 export async function resetGeminiBindingsForTests(): Promise<void> {
   await tail;

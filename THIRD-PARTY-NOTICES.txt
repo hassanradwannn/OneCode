@@ -9,7 +9,7 @@ the packaging pipeline together with their notices.
 Catalog artwork: Copyright (c) 2026 Chat On Steroids contributors. MIT licensed, see LICENSE.
 Original illustrations are not official product logos. Product names identify independent
 integrations and do not imply affiliation or endorsement. External plugins installed by users
-are not bundled with CoS; their package directories retain their own licenses and notices.
+are not bundled with OneCode; their package directories retain their own licenses and notices.
 
 ================================================================================
 OpenAI Codex — adapted coding instructions and update_plan contract
@@ -8045,7 +8045,7 @@ This supplement preserves full license texts omitted from the published native n
 - MPL-2.0.txt: https://www.mozilla.org/media/MPL/2.0/index.815ca599c9df.txt
 
 Retrieved 2026-09-08. These are unmodified license texts. Including GPLv3 here supplies
-the text incorporated by LGPLv3; it does not relicense Chat On Steroids as GPL software.
+the text incorporated by LGPLv3; it does not relicense OneCode as GPL software.
 
 Upstream build/source projects:
 - sharp: https://github.com/lovell/sharp
@@ -8085,7 +8085,7 @@ revisions and build scripts are at https://github.com/electron/electron/tree/v44
 
 
 --- COMPONENT-NOTICES.txt ---
-Chat On Steroids native image-library source notices
+OneCode native image-library source notices
 
 The following files are preserved from the source archives identified in sources.json.
 Some upstream source archives contain optional or test dependencies; inclusion here does not assert that every listed component is linked on every target.
@@ -203624,7 +203624,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 ================================================================================
 Optional plugin catalog — separate installations and hosted services
-Reviewed package licenses and hosted-service references follow. External server code is not bundled with CoS; custom installations and updates retain their own notices.
+Reviewed package licenses and hosted-service references follow. External server code is not bundled with OneCode; custom installations and updates retain their own notices.
 
 ================================================================================
 Computer use — CUA Driver
@@ -204123,7 +204123,7 @@ Official setup: https://developers.heygen.com/mcp/overview
 Provider terms: https://www.heygen.com/terms
 Checked: 2026-09-08
 
-This is a provider-operated remote service, not software bundled with Chat On Steroids. No open-source license to the service is granted by this catalog entry. Account access, usage, generated outputs and charges are governed by the provider's current terms and your agreement with that provider. The original CoS icon is separately MIT licensed.
+This is a provider-operated remote service, not software bundled with OneCode. No open-source license to the service is granted by this catalog entry. Account access, usage, generated outputs and charges are governed by the provider's current terms and your agreement with that provider. The original CoS icon is separately MIT licensed.
 
 
 ================================================================================
@@ -204141,7 +204141,7 @@ Official setup: https://www.recraft.ai/docs/mcp-reference/remote-server
 Provider terms: https://www.recraft.ai/legal/terms
 Checked: 2026-09-08
 
-This is a provider-operated remote service, not software bundled with Chat On Steroids. No open-source license to the service is granted by this catalog entry. Account access, usage, generated outputs and charges are governed by the provider's current terms and your agreement with that provider. The original CoS icon is separately MIT licensed.
+This is a provider-operated remote service, not software bundled with OneCode. No open-source license to the service is granted by this catalog entry. Account access, usage, generated outputs and charges are governed by the provider's current terms and your agreement with that provider. The original CoS icon is separately MIT licensed.
 
 
 ================================================================================

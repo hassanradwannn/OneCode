@@ -139,7 +139,7 @@ a smaller transport budget.
 
 ### Skills, mentions and provider-authored context
 
-`resources/skills/gemini-code/SKILL.md`, `mcp.useGeminiWebSkill`, native Gemini Skill selection and
+`resources/skills/onecode-gemini/SKILL.md`, `mcp.useGeminiWebSkill`, native Gemini Skill selection and
 `@OneCode Core`/connector menu behavior are provider-specific. A new provider needs a declared
 instruction mechanism: native Skill, connector mention, system instructions, or no injection.
 Never assume that installing the MCP URL also installs a Skill or teaches the provider when to use

@@ -21,7 +21,7 @@ import { setupApiKeySlot } from '../shared/setup-profile.js';
 import { startTunnel, TunnelError, type TunnelHandle } from './tunnel/index.js';
 import { tunnelRouteSettlingUntil } from './tunnel/route-settle.js';
 import { desktopAutomationSupported } from './platform.js';
-import { publishPluginSurface, unpublishPluginSurface, pluginRefreshPublications } from './plugin-refresh.js';
+import { publishPluginSurface, unpublishPluginSurface } from './plugin-refresh.js';
 import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
 import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
@@ -305,7 +305,6 @@ function toolsFor(id: SurfaceId): string[] {
     return desktopToolNames(caps);
   }
   const tools: string[] = [];
-  if (!config.readOnly && pluginManager.tools().length) tools.push('plugins');
   if (caps.read || caps.browse || caps.metadata) tools.push('read');
   if (caps.read) tools.push('view_image');
   if (!caps.command && caps.search) tools.push('find');
@@ -313,7 +312,8 @@ function toolsFor(id: SurfaceId): string[] {
   if (caps.command) tools.push('exec_command', 'write_stdin');
   if (config.sessions.record) tools.push('update_plan');
   if (config.multiAgent.enabled) tools.push('agents');
-  return tools;
+  tools.push('plugins', 'skills', ...desktopToolNames(caps));
+  return [...new Set(tools)];
 }
 
 function updateSurface(id: SurfaceId, next: Partial<SurfaceStatus>): void {
@@ -325,9 +325,10 @@ function updateSurface(id: SurfaceId, next: Partial<SurfaceStatus>): void {
 }
 
 export function refreshPluginPublication(id: SurfaceId): void {
-  // Installing no external plugins must not create browser maintenance work for existing users.
-  // Once enrolled, an empty declaration still matters: it withdraws previously enabled tools.
-  if (id === 'plugins' && !pluginManager.tools().length && !pluginRefreshPublications().some(row => row.surface === id)) return;
+  // Core is the single setup/discovery connector. Retain legacy routes without
+  // scheduling separate plugin-refresh work in the user's browser.
+  if (id !== 'core') { unpublishPluginSurface(id); return; }
+  // The one Core publication also withdraws tools when live permissions change.
   const surface = describeSurfaces().find(entry => entry.id === id);
   if (!endpoint || surface?.state !== 'live' || !surface.available) { unpublishPluginSurface(id); return; }
   endpoint.publication?.(id, (name, version, instructions, tools) => publishPluginSurface(id, name, version, instructions, tools));

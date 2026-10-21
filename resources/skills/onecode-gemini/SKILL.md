@@ -1,5 +1,5 @@
 ---
-name: gemini-code
+name: onecode-gemini
 description: Work with OneCode's connected local tools for coding, files, commands, interactive canvas mockups, plans, workers and enabled external MCPs. Use when a task comes from OneCode or explicitly requests it.
 ---
 
@@ -17,7 +17,11 @@ Use the current project or worker directory supplied by the app. Read applicable
 
 ## Complete and verify work
 
-OneCode has a built-in interactive canvas through Core artifact. For inline interactive mockups, call artifact begin with title and kind="html", then artifact create with its presentation_id, entrypoint="index.html", and files containing complete self-contained HTML/CSS/browser JavaScript. The result appears interactively in chat. Use open only for the optional workbench, read before patch with expected_revision, and fail when generation cannot finish. Preview has no Node, network or CDN access. A shell file or browser launch does not present an inline canvas; never claim creation after a failed command.
+OneCode has a built-in interactive canvas through Core artifact. Inspect its current inputSchema before your first call. Call begin once with title and kind="web", retain its returned presentation_id, then create once using that exact UUID, kind="web", entrypoint="index.html", and files:[{path:"index.html",text:"complete self-contained HTML/CSS/JavaScript"}]. create can inherit the title from that pending presentation. Check isError and structuredContent.value after each call. After success, keep the returned artifact.id and revision; do not begin/create again to test or display the same result.
+
+To edit, first read {action:"read",artifact_id}, then patch {action:"patch",artifact_id,expected_revision,operations:[{op:"upsert",path:"index.html",text:"complete replacement HTML"}]}. patch does not accept files or a patch string. A successful patch already refreshes the inline result at the latest reply. To show an existing artifact again, use {action:"present",artifact_id}; open is for an explicitly requested workbench side panel. Never claim creation or interaction testing after an error. Correct explicitly rejected arguments by reading the schema; inspect receipts before retrying any uncertain mutation.
+
+Preview has no Node, network or CDN access. Browser storage may be document-local and is not guaranteed persistent; guard reads/writes and keep the application usable without it. Use responsive CSS and size canvas backing pixels with devicePixelRatio for crisp output. Register controls before optional persistence/audio setup and verify the actual Play/Start action. A shell file or ordinary browser launch does not present an inline artifact. In exec, emit only needed metadata: do not print an entire artifact source or tool catalog when its size may exceed the output budget.
 
 If cached native schemas omit artifact, use this Core exec with the current Gemini binding: inspect ALL_TOOLS.find(t=>t.name==="artifact").inputSchema, then call tools.artifact with its actual arguments. Core plugins list also reports built_in_tools from its live registrar; call these through Core directly or exec, not plugins action=call. Local skills remain discoverable through /skills/.catalog.json.
 
@@ -31,4 +35,8 @@ Respect live permissions and Block/Trust decisions. Project association does not
 
 Give concise progress updates during substantial work and report the result, checks and material limitations. Do not claim an edit, command or external action succeeded without its actual result. A delayed mutation may already have completed: inspect its existing receipt or process before considering a retry, and never automatically repeat an uncertain write to repair delivery.
 
-Public skill version: ONECODE-GEMINI-SKILL-2. Report this version only when asked to verify this saved skill. The version is not a credential.
+Public skill version: ONECODE-GEMINI-SKILL-3. Report this version only when asked to verify this saved skill. The version is not a credential.
+
+## Scheduled completion checks
+
+For a requested hourly check, cron job or repeated follow-up, use the connected OneCode Core `automations` tool with the user's interval in minutes and saved message. OneCode sends that message into this chat on every interval until cancelled. Verify its returned schedule id and next_run_at. Use a stable key to avoid duplicates; list, update or cancel the same job. Discover it through Core `plugins {action:"list"}` when an existing chat has a cached tool list. A provider Monitoring card alone does not register this local job. Keep the PC awake, OneCode running and the provider signed in. Report actual process failures and missing outputs; a queued or sent check is not proof work completed.

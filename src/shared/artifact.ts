@@ -5,7 +5,7 @@ import type { AssetRef } from './session.js';
 export interface ArtifactPresentation {
   id: string;
   title: string;
-  kind: ArtifactKind | 'image';
+  kind: ArtifactKind | 'image' | 'video';
   status: 'generating' | 'ready' | 'failed';
   provider: ChatProvider;
   artifactId?: string;

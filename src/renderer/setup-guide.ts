@@ -15,7 +15,7 @@ type Capture = { file: string; size: [number, number]; labels: Record<string, st
 type Page = { scene: string; spots: Array<{ key: string; text: (labels: Record<string, string>) => string; pin?: Spot['pin'] }> };
 type Still = { src: string; spots: Array<{ text: string | (() => string); box: Box; pin?: Spot['pin'] }> };
 
-const pageFiles = import.meta.glob('./setup-images/pages/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const pageFiles = import.meta.glob('./setup-images/pages/*.{webp,svg}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 
 /** The capture of a page in the app's language (Gemini's own words there), else in English. */
 function capture(scene: string, language: Language = currentLanguage()): Capture | null {

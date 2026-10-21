@@ -16,18 +16,25 @@ export function forgetRemoteLink(): void {
 }
 export class RemoteRequestError extends Error { constructor(message: string, public status: number) { super(message); } }
 export class RemoteActionError extends Error {}
-function send(route: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
-  return fetch(`/api/${route}`, { method: body === undefined ? 'GET' : 'POST', credentials: 'omit', cache: 'no-store', signal,
+async function send(route: string, body?: unknown, signal?: AbortSignal): Promise<{ response: Response; result: any }> {
+  const deadline = AbortSignal.timeout(body === undefined || route === 'connect' ? 30_000 : 120_000);
+  try {
+  const response = await fetch(`/api/${route}`, { method: body === undefined ? 'GET' : 'POST', credentials: 'omit', cache: 'no-store', signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
     headers: { 'X-OneCode-Remote': '1', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return { response, result: await response.json() };
+  } catch (error) {
+    if (deadline.aborted && !signal?.aborted)
+      throw new RemoteRequestError('Connection timed out. Check Tailscale on both devices and keep the host running, then reconnect. An interrupted action may already have been accepted; it will not be resent automatically.', 503);
+    throw error;
+  }
 }
 async function reconnect(): Promise<void> {
   if (reconnecting) return reconnecting;
   const key = linkKey, epoch = authorityEpoch;
   if (!key) throw new RemoteRequestError('Open your bookmarked remote link to reconnect.', 401);
   const run = (async () => {
-    const response = await send('connect', { key, name: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 'Phone browser' : 'Browser' });
-    const result = await response.json();
+    const { response, result } = await send('connect', { key, name: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 'Phone browser' : 'Browser' });
     if (!response.ok) throw new RemoteRequestError(result.error ?? 'Remote connection failed', response.status);
     if (authorityEpoch !== epoch || linkKey !== key) throw new RemoteRequestError('This browser was disconnected.', 401);
     setRemoteToken(result.token);
@@ -44,8 +51,7 @@ export async function connectRemote(): Promise<void> {
 export async function request<T>(route: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   // Opening/reloading the bookmark renews admission through connectRemote.
   // Requests within an open workspace, including revoked sessions, never replay.
-  const response = await send(route, body, signal);
-  const result = await response.json();
+  const { response, result } = await send(route, body, signal);
   if (!response.ok) throw new RemoteRequestError(response.status === 401 ? 'Open your remote link again to reconnect.' : result.error ?? 'Remote request failed', response.status);
   return result as T;
 }

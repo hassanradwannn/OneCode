@@ -17,7 +17,7 @@ import { locateBinary } from './locate.js';
 import { createTailscaleRelay, type TailscaleRelay } from './tailscale-relay.js';
 import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.js';
 import { withTailscaleMutation } from './tailscale-mutation.js';
-import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites } from './tailscale-prerequisites.js';
+import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites, readTailscaleDaemon } from './tailscale-prerequisites.js';
 import { requestTailscaleSetup } from './tailscale-setup.js';
 
 class FunnelSetupError extends Error {}
@@ -221,8 +221,8 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
   let nativeMutation = false;
   const custodyFile = path.join(deps.stateDir, `tailscale-funnel-${createHash('sha256').update(opts.settings.profileId ?? 'default').digest('hex').slice(0, 24)}.json`);
   const readNode = async (): Promise<{ id: string; dnsName: string }> => {
-    const status = parse(await deps.run(binary, ['status', '--json']));
-    try { const node = tailscalePrerequisites(status, true); check.account = 'ready'; return node; }
+    const status = parse(await readTailscaleDaemon(() => deps.run(binary, ['status', '--json'])));
+    try { const node = tailscalePrerequisites(status, true); check.account = 'ready'; delete check.setup; return node; }
     catch (error) {
       if (error instanceof TailscaleSetupRequired) {
         check.setup = error.setup;
@@ -232,7 +232,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       throw error;
     }
   };
-  const readConfig = async (): Promise<NativeConfig> => config(await deps.run(binary, ['funnel', 'status', '--json']));
+  const readConfig = async (): Promise<NativeConfig> => config(await readTailscaleDaemon(() => deps.run(binary, ['funnel', 'status', '--json'])));
   // These are independent read-only daemon queries. Serial CLI process startup is
   // costly on Windows, especially immediately after laptop sign-in. Keep every
   // custody check and all route mutations ordered at their existing boundaries.
@@ -378,7 +378,10 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
             report('tunnel-unavailable', `${details[result.state]} OneCode will keep checking automatically; the saved route and URL were retained.`, publicUrl);
             delay = deps.watchMs;
           } else {
-            report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
+            // A transient verification failure is not a fresh connection attempt.
+            // Keep the established route during the bounded retry window; prolonged
+            // failures still become unavailable above and custody failures fail at once.
+            report(firstPublicReady ? 'connected' : 'connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
             delay = Math.max(1, Math.round(Math.min(deps.watchMs, deps.watchMs / 3 * 2 ** Math.min(failures - 1, 2))));
           }
         }
@@ -386,7 +389,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
         if (stopped) return;
         check.publicIngress = undefined;
         if (check.funnel !== 'permission-required') check.funnel = 'error';
-        report('tunnel-unavailable', error instanceof FunnelSetupError ? error.message : describeFailure(error));
+        report('tunnel-unavailable', error instanceof FunnelSetupError || error instanceof TailscaleNotReady || error instanceof TailscaleSetupRequired ? error.message : describeFailure(error));
       } finally {
         checking = false;
         if (!stopped && delay !== undefined) { timer = setTimeout(() => void cycle(), delay); timer.unref?.(); }

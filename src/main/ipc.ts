@@ -1,3 +1,4 @@
+import { chatScheduler } from './chat-schedules.js';
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
 import { CHAT_PROVIDERS, chatProviderConversationUrl, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
@@ -27,7 +28,9 @@ import { GEMINI_SKILLS_URL } from '../shared/gemini-web-skill.js';
 import { noteChatOrigin } from './session/recorder.js';
 import { refreshAppProxy } from './app-proxy.js';
 import { committedResumeAncestorsFromSummary, DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB, type SessionChange } from '../shared/session.js';
-import { safeExternalLink } from '../shared/external-link.js';
+import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
+import { chatProviderForStoredConversation } from '../shared/chat-provider.js';
+import { browserControl } from './browser-control.js';
 import { wakeBrowserWork } from './browser-wake.js';
 import { refreshKeepAwake } from './keep-awake.js';
 import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery, setChatModelProvider } from './chat-models.js';
@@ -87,7 +90,7 @@ import { onBackgroundExecChange, runningExecProcesses, stopExecProcess } from '.
 import { keychainNoticeReady } from './keychain-notice.js';
 import { runDiagnostics } from './diagnostics.js';
 import { readRecentLog, renderDiagnosticsReport, saveDiagnosticsReport, systemFacts, memoryFacts } from './diagnostics-report.js';
-import { listSessions, readTurnTraces } from './session/store.js';
+import { listSessions, readTurnTraces, readEvents } from './session/store.js';
 import { formatLogAsJson, formatLogForClipboard, getLog, logInfo, logWarn, onLog } from './logger.js';
 import { managedWorktreeCleanupOffers, acknowledgeManagedWorktreeCleanupOffer } from './agents.js';
 import { listOfferedWorkerWorktrees, disposeOfferedWorkerWorktree, WorkerWorktreeError } from './worktrees/index.js';
@@ -102,7 +105,7 @@ import { ProjectGitWatchSet, readProjectGitDiff, readProjectGitSnapshot } from '
 import { listArtifacts, patchArtifact, readArtifact } from './artifacts/service.js';
 import { onArtifactOpen } from './artifacts/events.js';
 import { exportArtifactToProject } from './artifacts/export.js';
-import { nativeMediaConversation, listNativeMedia, prepareNativeVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback, saveNativeMediaToProject } from './native-media.js';
+import { nativeMediaConversation, listNativeMedia, prepareNativeVideoPlayback, preparePresentedVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback, saveNativeMediaToProject } from './native-media.js';
 import { WorkbenchBrowserController } from './workbench-browser.js';
 import { hasSecret, isEncryptionAvailable, secureStorageStatus, setAsideUnreadableSecrets, setSecret, storedSecretsUnreadable } from './secrets.js';
 import { setupApiKeySlot } from '../shared/setup-profile.js';
@@ -1226,22 +1229,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload);
     return listNativeMedia(sessionId);
   });
+  // Transport bounds are provider-neutral. The media owner validates the exact recorded
+  // provider/message/asset tuple before revealing, exporting or preparing playback.
+  const nativeMediaReference = z.object({ sessionId: artifactSessionId,
+    messageId: z.string().min(1).max(512), assetId: z.string().min(1).max(512) }).strict();
   handle('nativeMedia:saveToProject', async payload => {
-    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId,
-      messageId: z.string().uuid(), assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    const { sessionId, messageId, assetId } = nativeMediaReference.parse(payload);
     return saveNativeMediaToProject(sessionId, messageId, assetId);
   });
   handle('nativeMedia:openProvider', async payload => {
-    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId,
-      messageId: z.string().uuid(), assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    const { sessionId, messageId, assetId } = nativeMediaReference.parse(payload);
     const conversationId = await nativeMediaConversation(sessionId, messageId, assetId);
     if (!await revealChatInBrowser(conversationId)) await openInPreferredBrowser(chatProviderConversationUrl(chatProviderForConversation(conversationId), conversationId), { reveal: true });
     return true;
   });
   handle('nativeMedia:prepareVideo', async payload => {
-    const { sessionId, messageId, assetId } = z.object({ sessionId: artifactSessionId, messageId: z.string().uuid(),
-      assetId: z.string().regex(/^file_[A-Za-z0-9_-]{8,100}$/) }).strict().parse(payload);
+    const { sessionId, messageId, assetId } = nativeMediaReference.parse(payload);
     return prepareNativeVideoPlayback(sessionId, messageId, assetId);
+  });
+  handle('nativeMedia:preparePresentedVideo', async payload => {
+    const { sessionId, presentationId } = z.object({ sessionId: artifactSessionId, presentationId: z.string().uuid() }).strict().parse(payload);
+    return preparePresentedVideoPlayback(sessionId, presentationId);
   });
   handle('nativeMedia:videoChunk', async payload => {
     const { sessionId, token, offset, maxBytes } = z.object({ sessionId: artifactSessionId, token: z.string().uuid(),
@@ -1524,7 +1532,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       await openInPreferredBrowser(chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER), { browser, reveal: true });
       return true;
     }
-    // Firefox installs the signed add-on from its release download; it asks before adding it.
+    // Open this project's Firefox support status; never install an upstream fork's binary.
     if (browser === 'firefox') {
       await openInPreferredBrowser(firefoxAddonUrl(APP_VERSION), { browser, reveal: true });
       return true;
@@ -1670,6 +1678,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     try { logInfo('main window send admitted'); } catch { /* Admission already belongs to the outbox. */ }
     return accepted;
   });
+  handle('schedules:list', async () => chatScheduler.list());
+  handle('schedules:cancel', async payload => chatScheduler.change(z.object({ id: z.string().uuid() }).strict().parse(payload).id, { enabled: false }));
   handle('sessions:outbox', async () => (await listInputs()).filter((row) => row.purpose !== 'decision'));
   handle('sessions:reorderInputs', async (payload) => {
     const { sessionId, ids } = z.object({ sessionId: z.string().min(8).max(64), ids: z.array(z.string().uuid()).min(1).max(10000) }).parse(payload);
@@ -1734,6 +1744,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('sessions:openChat', async (payload) => {
     const { id } = sessionIdArg.parse(payload);
     await openSessionChat(id);
+    return true;
+  });
+  handle('sessions:openFileLink', async payload => {
+    const { id, messageId, href } = z.object({ id: z.string().uuid(), messageId: z.string().min(1).max(200), href: z.string().max(2100) }).strict().parse(payload);
+    if (!safeProviderFileLink(href)) throw new Error('That provider file link is not allowed');
+    const session = await getSession(id);
+    if (chatProviderForStoredConversation(session?.conversationId) !== 'chatgpt') throw new Error('File links are not supported by this provider');
+    const allowed = async () => (await getSession(id))?.conversationId === session?.conversationId &&
+      (await readEvents(id)).some(event => event.kind === 'assistant_message' && event.messageId === messageId &&
+        (event.message.text.includes(href) || event.renderedHtml?.text.includes(href)));
+    if (!session?.conversationId || !await allowed()) throw new Error('This file link is not recorded in this chat');
+    const result = await browserControl.execute('native_file_link', { messageId, href }, `session:${id}`, session.conversationId, allowed);
+    if (result.error) throw new Error(result.error);
     return true;
   });
 

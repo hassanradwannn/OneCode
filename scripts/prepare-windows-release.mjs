@@ -40,8 +40,8 @@ const companionName = `OneCode-Companion-${version}.zip`;
 const zip = zipSync(entries, { level: 9 });
 assert.equal(JSON.parse(Buffer.from(unzipSync(zip)['manifest.json']).toString()).version, version);
 await fs.writeFile(path.join(output, companionName), zip);
-const skill = await fs.readFile(path.join(root, 'resources/skills/gemini-code/SKILL.md'));
-assert.deepEqual(skill, await fs.readFile(path.join(resources, 'skills/gemini-code/SKILL.md')));
+const skill = await fs.readFile(path.join(root, 'resources/skills/onecode-gemini/SKILL.md'));
+assert.deepEqual(skill, await fs.readFile(path.join(resources, 'skills/onecode-gemini/SKILL.md')));
 await fs.writeFile(path.join(output, 'SKILL.md'), skill);
 await fs.writeFile(path.join(output, 'OneCode-Gemini-Skill.zip'), zipSync({ 'SKILL.md': skill }));
 await fs.writeFile(path.join(output, 'OneCode-ChatGPT-Skill.zip'), zipSync({

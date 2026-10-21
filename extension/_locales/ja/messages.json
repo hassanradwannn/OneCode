@@ -6,7 +6,7 @@
     "message": "アプリが応答しませんでした"
   },
   "content_app_not_running": {
-    "message": "この PC で Chat On Steroids が実行されていません。"
+    "message": "この PC で OneCode が実行されていません。"
   },
   "content_auto_compaction": {
     "message": "自動圧縮"
@@ -81,7 +81,7 @@
     "message": "開いたページには別の会話が表示されていました"
   },
   "content_browser_disconnected": {
-    "message": "Chat On Steroids のブラウザー接続が切れています。"
+    "message": "OneCode のブラウザー接続が切れています。"
   },
   "content_cancel": {
     "message": "キャンセル"
@@ -90,7 +90,7 @@
     "message": "チャットはブロックされています"
   },
   "content_chat_blocked_tip": {
-    "message": "このチャットは Chat On Steroids アプリでブロックされています。ツール呼び出しは拒否され、ゴール、ループ、自動圧縮も無効です。解除するにはアプリのチャットタブを開き、セッション一覧でこのチャットにカーソルを合わせてブロック解除アイコンを押してください。"
+    "message": "このチャットは OneCode アプリでブロックされています。ツール呼び出しは拒否され、ゴール、ループ、自動圧縮も無効です。解除するにはアプリのチャットタブを開き、セッション一覧でこのチャットにカーソルを合わせてブロック解除アイコンを押してください。"
   },
   "content_chat_still_opening": {
     "message": "このチャットはまだ開いています。もう一度お試しください"
@@ -585,7 +585,7 @@
     "message": "保存中…"
   },
   "content_settings_aria": {
-    "message": "Chat On Steroids の設定"
+    "message": "OneCode の設定"
   },
   "content_stage_handoff_attention": {
     "message": "引き継ぎの応答を確認する必要があります"
@@ -735,13 +735,13 @@
     "message": "作成中…"
   },
   "extension_action_title": {
-    "message": "Chat On Steroids"
+    "message": "OneCode"
   },
   "extension_description": {
-    "message": "プロバイダー を Chat On Steroids に接続し、DOM、スクリーンショット、開発者ツールを使ってバックグラウンドでブラウザータブを操作します。"
+    "message": "プロバイダー を OneCode に接続し、DOM、スクリーンショット、開発者ツールを使ってバックグラウンドでブラウザータブを操作します。"
   },
   "extension_name": {
-    "message": "Chat On Steroids ブラウザー拡張機能"
+    "message": "OneCode ブラウザー拡張機能"
   },
   "popup_advanced": {
     "message": "詳細"
@@ -951,7 +951,7 @@
     "message": "セッションの取得"
   },
   "popup_secure_storage_unavailable": {
-    "message": "安全な認証情報ストレージを利用できません。設定手順を確認するには Chat On Steroids を開いてください。"
+    "message": "安全な認証情報ストレージを利用できません。設定手順を確認するには OneCode を開いてください。"
   },
   "popup_sent_to_app": {
     "message": "アプリに送信済み"
@@ -1038,13 +1038,13 @@
     "message": "再試行"
   },
   "popup_version_mismatch_help": {
-    "message": "アプリ v$1（プロトコル $2）、拡張機能 v$3（プロトコル $4）。ブラウザーの拡張機能ページを開いてデベロッパーモードを有効にし、この拡張機能を更新または再読み込みしてください。まだ一致しない場合は、Chat On Steroids の「拡張機能フォルダーを開く」でそのフォルダーを読み込んでください。ChatGPT タブの作業が終わったら再読み込みしてください。"
+    "message": "アプリ v$1（プロトコル $2）、拡張機能 v$3（プロトコル $4）。ブラウザーの拡張機能ページを開いてデベロッパーモードを有効にし、この拡張機能を更新または再読み込みしてください。まだ一致しない場合は、OneCode の「拡張機能フォルダーを開く」でそのフォルダーを読み込んでください。ChatGPT タブの作業が終わったら再読み込みしてください。"
   },
   "popup_yes": {
     "message": "はい"
   },
   "content_goal_error_loop_mcp_call_missing": {
-    "message": "前回の応答で MCP ツール呼び出しが記録されませんでした。Gemini が質問しているか、ツール接続が失われた可能性があります。質問に答えるか、ツールが動作しなくなった場合はトンネルを確認してください。自動継続は一時停止中ですが、ループは有効のままです。"
+    "message": "前回の応答で MCP ツール呼び出しが記録されませんでした。プロバイダー が質問しているか、ツール接続が失われた可能性があります。質問に答えるか、ツールが動作しなくなった場合はトンネルを確認してください。自動継続は一時停止中ですが、ループは有効のままです。"
   },
   "content_goal_error_goal_reply_not_pending": {
     "message": "この回答に対する保留中の継続はありません。すでに処理済みか、新しい作業に置き換えられた可能性があります。再試行する前に最新のチャット活動を確認してください。"
@@ -1077,7 +1077,7 @@
     "message": "カスタム継続エンドポイントが無効です。設定で URL を確認し、HTTPS またはローカル HTTP エンドポイントを使用してください。"
   },
   "content_history_rate_limited": {
-    "message": "ChatGPT がこの会話履歴へのアクセスを一時的に制限しました。待機時間が終了するまで、Chat On Steroids は自動復旧を一時停止します。"
+    "message": "ChatGPT がこの会話履歴へのアクセスを一時的に制限しました。待機時間が終了するまで、OneCode は自動復旧を一時停止します。"
   },
   "content_goal_error_rate_limited": {
     "message": "継続プロバイダーがリクエストをレート制限しています。表示されている再試行まで待つか、別の継続モデルを選択してください。"
@@ -1167,7 +1167,7 @@
     "message": "失敗しました。CoS からログインをやり直してください。"
   },
   "popup_app_not_running_help": {
-    "message": "このコンピューターで Chat On Steroids が開いていることを確認してください。拡張機能は自動的に接続します。"
+    "message": "このコンピューターで OneCode が開いていることを確認してください。拡張機能は自動的に接続します。"
   },
   "popup_provider": {
     "message": "プロバイダー"

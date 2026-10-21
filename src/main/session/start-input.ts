@@ -111,12 +111,12 @@ export async function sendQueuedDesktopInputNow(id: string, intent?: QueuedInput
   void startAcceptedInput(entry, controller).catch(() => undefined);
   return true;
 }
-export async function sendDesktopInput(input: InputArgs): Promise<InputEntry> {
+export async function sendDesktopInput(input: InputArgs, scheduleId?: string): Promise<InputEntry> {
   if (stopped) throw new Error('The app is shutting down');
-  if (input.mode === 'finish' || starting.has(input.id)) return enqueueInput(input);
+  if (input.mode === 'finish' || starting.has(input.id)) return scheduleId ? enqueueInput(input, undefined, scheduleId) : enqueueInput(input);
   const controller = new AbortController(); starting.set(input.id, controller);
   try {
-    const entry = await enqueueInput(input);
+    const entry = scheduleId ? await enqueueInput(input, undefined, scheduleId) : await enqueueInput(input);
     if (controller.signal.aborted) { await cancelInput(input.id); controller.signal.throwIfAborted(); }
     if (entry.state !== 'queued' || entry.transportIntent === 'tool' || entry.attachmentDelivery === 'tool') {
       starting.delete(input.id); return entry;

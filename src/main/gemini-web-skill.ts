@@ -15,7 +15,7 @@ export async function readBundledGeminiSkill(): Promise<{ bytes: Buffer; instruc
   let text: string;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { throw new Error('The bundled Gemini skill is invalid. Reinstall OneCode.'); }
-  const metadata = /^---\r?\nname: gemini-code\r?\ndescription: [^\r\n]+\r?\n---\r?\n/.exec(text);
+  const metadata = /^---\r?\nname: onecode-gemini\r?\ndescription: [^\r\n]+\r?\n---\r?\n/.exec(text);
   if (!metadata || text.includes('\0') || !text.includes(GEMINI_WEB_SKILL_VERSION))
     throw new Error('The bundled Gemini skill is invalid. Reinstall OneCode.');
   return { bytes, instructions: text.slice(metadata[0].length).trim() + '\n' };

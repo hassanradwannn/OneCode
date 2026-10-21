@@ -477,6 +477,21 @@ export function createBrowserControl(chrome, transport, protectedTab = () => fal
   async function execute(command) {
     if (command.epoch !== epoch || command.expiresAt <= Date.now()) error('BROWSER_EXPIRED: no operation dispatched.');
     const {tool,args} = command;
+    if (tool === 'native_file_link') {
+      // Desktop user activation, never a model browser_action. The main broker
+      // rechecks recorded membership, then spends this command exactly once.
+      const check = await transport('/browser-control',{method:'POST',body:JSON.stringify({action:'check',browserId,id:command.id,epoch:command.epoch})});
+      if (!check.ok || check.data?.allowed !== true) error('NATIVE_LINK_REVOKED: no download dispatched.');
+      const candidates = (await chrome.tabs.query({})).filter(tab => {
+        try { const url = new URL(tab.url); return url.origin === 'https://chatgpt.com' &&
+          url.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([^/]+)\/?$/)?.[1] === command.conversationId && !tab.pendingUrl; } catch { return false; }
+      });
+      if (candidates.length !== 1) error('NATIVE_LINK_NOT_OPEN: open this exact provider chat before downloading.');
+      const tab = candidates[0];
+      const answer = await chrome.tabs.sendMessage(tab.id, { type: 'clf-native-file-link', conversationId: command.conversationId,
+        messageId: args.messageId, href: args.href });
+      return answer?.ok === true ? { value: { clicked: true } } : { error: answer?.error || 'NATIVE_LINK_UNAVAILABLE: no matching rendered download link. No automatic retry.' };
+    }
     const writes = ['browser_action','browser_navigate','browser_evaluate'].includes(tool) || tool === 'browser_tabs' && ['new','close'].includes(args.action);
     if (!(writes ? policy.write : policy.read)) error('BROWSER_PERMISSION_REVOKED');
     if (tool === 'browser_tabs') {

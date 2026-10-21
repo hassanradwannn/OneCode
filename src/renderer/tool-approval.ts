@@ -3,7 +3,7 @@ import { el } from './dom.js';
 import { t, ui } from './i18n.js';
 
 const acknowledgement = 'cos.tool-approval-notice.v1';
-const screenshot = new URL('./setup-images/tool-approval.jpg', import.meta.url).href;
+const screenshot = new URL('./setup-images/tool-approval.svg', import.meta.url).href;
 
 function notice(): HTMLElement {
   const card = el('section', 'tool-approval-notice');

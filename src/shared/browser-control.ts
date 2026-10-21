@@ -16,7 +16,7 @@ export interface BrowserCommand {
   /** Exact request principals proved to belong to owner by the main-process correlation index. */
   ownerAliases?: string[];
   conversationId: string | null;
-  tool: BrowserTool;
+  tool: BrowserTool | 'native_file_link';
   args: Record<string, unknown>;
   expiresAt: number;
 }

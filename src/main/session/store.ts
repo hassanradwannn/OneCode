@@ -243,6 +243,7 @@ const MAX_EVENT_TAIL = 4096;
 const MAX_RECENT_READ_BYTES = 8 * 1024 * 1024;
 const MAX_CANONICAL_MESSAGE_BYTES = 1024 * 1024;
 export const MAX_ASSET_BYTES = 8 * 1024 * 1024;
+export const MAX_RECORDED_VIDEO_BYTES = 128 * 1024 * 1024;
 export const MAX_SESSION_ASSET_BYTES = 192 * 1024 * 1024;
 /** The default recording storage size; Settings can choose a larger one (#1406). */
 export const MAX_GLOBAL_ASSET_BYTES = DEFAULT_RECORDING_STORAGE_GIB * 1024 * 1024 * 1024;
@@ -3435,7 +3436,7 @@ export async function renameSession(id: string, title: string, source: SessionSu
       if (entry.summary.origin && entry.summary.origin.kind !== 'desktop') return;
       const auto = entry.summary.autoTitle;
       if (source === 'fallback' && auto?.source === 'provider') return;
-      if (source === 'provider' && (providerTitleIgnored(entry.summary) || projectPageTitle(title))) return;
+      if (source === 'provider' && (providerTitleIgnored(entry.summary, title) || projectPageTitle(title))) return;
       const next = { title: title.slice(0, 120), source };
       if (auto?.title === next.title && auto.source === next.source) return;
       entry.summary.autoTitle = next;
@@ -3449,7 +3450,7 @@ export async function renameSession(id: string, title: string, source: SessionSu
       if (conversationId && entry.summary.conversationId !== conversationId) return;
       if (!automaticTitle(entry.summary, firstTitleMessage(entry.messages.values()))) return;
       if (source === 'fallback' && entry.summary.titleSource === 'provider') return;
-      if (source === 'provider' && (providerTitleIgnored(entry.summary) || projectPageTitle(title))) return;
+      if (source === 'provider' && (providerTitleIgnored(entry.summary, title) || projectPageTitle(title))) return;
     }
     if (entry.summary.title === title.slice(0, 120) && entry.summary.titleSource === source) return;
     entry.summary.title = title.slice(0, 120);
@@ -3696,7 +3697,8 @@ export async function writeAsset(
   mimeType: string
 ): Promise<AssetRef> {
   assertSessionId(sessionId);
-  if (data.length === 0 || data.length > MAX_ASSET_BYTES) throw new Error('Session asset exceeds the per-asset limit');
+  const limit = mimeType === 'video/mp4' || mimeType === 'video/webm' ? MAX_RECORDED_VIDEO_BYTES : MAX_ASSET_BYTES;
+  if (data.length === 0 || data.length > limit) throw new Error('Session asset exceeds the per-asset limit');
   const hash = createHash('sha256').update(data).digest('hex').slice(0, 32);
   const extension =
     mimeType === 'image/png'
@@ -4242,6 +4244,38 @@ export async function readAsset(sessionId: string, assetId: string, maxBytes?: n
   } catch {
     return null;
   }
+}
+
+/** Bounded retained-media read. Callers must prove recorded membership before every chunk. */
+export async function readAssetChunk(sessionId: string, assetId: string, offset: number, size: number, expectedBytes: number): Promise<Buffer> {
+  assertSessionId(sessionId);
+  if (!/^[0-9a-f]{32}\.bin$/.test(assetId) || !Number.isSafeInteger(offset) || offset < 0 ||
+    !Number.isSafeInteger(size) || size < 1 || size > 1024 * 1024 ||
+    !Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > MAX_RECORDED_VIDEO_BYTES || offset > expectedBytes)
+    throw new Error('Invalid recorded video range');
+  const directory = await verifiedAssetsDirectory(sessionId);
+  const observed = directory && await inspectVerifiedAssetFile(directory, assetId);
+  if (!directory || !observed || observed.bytes !== expectedBytes) throw new Error('Recorded video is unavailable');
+  const handle = await fs.open(path.join(directory.path, assetId), fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size !== expectedBytes || before.dev !== observed.dev || before.ino !== observed.ino) throw new Error('Recorded video changed');
+    const data = Buffer.alloc(Math.min(size, expectedBytes - offset));
+    let read = 0;
+    while (read < data.length) {
+      const result = await handle.read(data, read, data.length - read, offset + read);
+      if (!result.bytesRead) throw new Error('Recorded video ended early');
+      read += result.bytesRead;
+    }
+    const after = await handle.stat();
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Recorded video changed');
+    const liveDirectory = await verifiedAssetsDirectory(sessionId);
+    const live = liveDirectory && await inspectVerifiedAssetFile(liveDirectory, assetId);
+    if (!liveDirectory || !sameFilesystemPath(liveDirectory.realPath, directory.realPath) ||
+      !live || live.dev !== before.dev || live.ino !== before.ino || live.bytes !== expectedBytes || live.mtimeMs !== before.mtimeMs)
+      throw new Error('Recorded video changed');
+    return data;
+  } finally { await handle.close(); }
 }
 
 /**

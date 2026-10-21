@@ -438,9 +438,9 @@ export function projectInput(entry: InputEntry): ControlApiInput {
     delivery: deliveryProof(entry),
     mode: entry.mode,
     transportIntent: entry.transportIntent ?? null,
-    // Filed by the app itself (a recovery pickup or an automatic follow-up), not typed by anyone.
+    // Filed by the app itself (a saved interval, recovery pickup or automatic follow-up).
     // A silence boundary alone is not that: it can ride a message a person typed.
-    automatic: !!(entry.recovery || entry.finishOwner),
+    automatic: !!(entry.scheduleId || entry.recovery || entry.finishOwner),
     purpose: entry.purpose ?? null,
     createdAt: entry.createdAt,
     dueAt: entry.dueAt,

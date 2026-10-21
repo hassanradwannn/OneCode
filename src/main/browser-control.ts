@@ -90,10 +90,10 @@ export class BrowserControlBroker {
     return allowed && this.pending.get(id) === p && p.command.expiresAt > Date.now();
   }
 
-  async execute(tool: BrowserTool, input: Record<string, unknown>, owner: string, conversationId: string | null,
+  async execute(tool: BrowserTool | 'native_file_link', input: Record<string, unknown>, owner: string, conversationId: string | null,
     allowed: () => Promise<boolean>): Promise<BrowserResult> {
     const args = { ...input };
-    const browsers = this.browsers();
+    const browsers = this.browsers().filter(browser => tool !== 'native_file_link' || !this.internal.has(browser.id));
     let browserId = typeof args.browserId === 'string' ? args.browserId : undefined;
     if (typeof args.tabId === 'string') {
       const match = tabHandle.exec(args.tabId);

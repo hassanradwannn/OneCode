@@ -10,7 +10,7 @@ var CLF_DOM = (() => {
   const MENTION = '[data-mention-id],[data-mention-name],.mention-chip,[contenteditable="false"][data-type="mention"]';
   const CONTROL = /\n*\[\[GEMINI_LOCAL_SESSION\]\][\s\S]*?\[\[\/GEMINI_LOCAL_SESSION\]\]\s*$/;
   const WARMUP = '[[GEMINI_LOCAL_WARMUP]] Initialize this local workspace conversation. Reply READY only. Do not call tools.';
-  const SKILL_WARMUP = '@gemini-code ' + WARMUP;
+  const SKILL_WARMUP = '@onecode-gemini ' + WARMUP;
   // A normal Gemini chat used for an app-owned, tool-free planner. This does not
   // claim Gemini native temporary mode; its native history remains in the account.
   const localHelper = new URL(location.href).searchParams.get('cos-helper') === 'planner';
@@ -88,7 +88,7 @@ var CLF_DOM = (() => {
     const framed = value.slice(promptContinuation(value).length);
     const header = /^\[\[COS_CONTEXT:(\d{1,6})\]\]\n/.exec(framed);
     const context = framed.slice(header[0].length, header[0].length + Number(header[1]));
-    return context.split('\n', 1)[0] === '@gemini-code' ? SKILL_WARMUP : WARMUP;
+    return context.split('\n', 1)[0] === '@onecode-gemini' ? SKILL_WARMUP : WARMUP;
   }
   function setOpeningClaim(value) {
     openingClaim = value && typeof value.id === 'string' && typeof value.owner === 'string' ? { id: value.id, owner: value.owner } : null;
@@ -386,7 +386,8 @@ var CLF_DOM = (() => {
       if (node.tagName === 'USER-QUERY' && (approvalReplyIds.has(nativeId(node, 'user')) || provisionalApprovalReplyIds.has(nativeId(node, 'user')))) return false;
       if (node.tagName === 'USER-QUERY') {
         const value = compact(authored(node.querySelector('.query-text') || node));
-        warming = value === WARMUP || value === SKILL_WARMUP;
+        // Historical setup text remains presentation metadata, never a new skill selection.
+        warming = value === WARMUP || value === SKILL_WARMUP || value === '@gemini-code ' + WARMUP;
       }
       return !warming;
     }).map(node => ({ node, nodes: [node], role: node.tagName === 'USER-QUERY' ? 'user' : 'assistant',
@@ -852,10 +853,10 @@ var CLF_DOM = (() => {
       const ownsClaim = () => current() && openingClaim === opening && commandClaim === command && Boolean(opening || command) &&
         attachmentRows().length === attachments.length && attachmentRows().every((node, index) => node === attachments[index]);
       let clicked = false, refusal = null;
-      const selected = await selectNativeMention('gemini-code', ownsClaim, reason => { refusal = reason; }, WARMUP, async (editor, owns, handedOff) => {
+      const selected = await selectNativeMention('onecode-gemini', ownsClaim, reason => { refusal = reason; }, WARMUP, async (editor, owns, handedOff) => {
         const ready = await waitFor(() => enabled(sendButton()) && composerAuthoredText() === WARMUP &&
-          provenMention(editor)?.name === 'gemini-code' && sendButton(), owns, 30000);
-        if (!ready || !owns() || composerAuthoredText() !== WARMUP || provenMention(editor)?.name !== 'gemini-code') {
+          provenMention(editor)?.name === 'onecode-gemini' && sendButton(), owns, 30000);
+        if (!ready || !owns() || composerAuthoredText() !== WARMUP || provenMention(editor)?.name !== 'onecode-gemini') {
           refusal = 'warmup-skill-send-not-ready'; return false;
         }
         cancelApprovalReplyProofs('new-send'); handedOff(); clicked = true; ready.click(); return true;
@@ -930,6 +931,33 @@ var CLF_DOM = (() => {
       if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
     }
   }
+  async function settleControlledWarmup(warmup, current) {
+    let changedAt = Date.now(), previous = null, edited = false;
+    const noteEdit = event => { if (event.isTrusted) edited = true; };
+    const owns = () => !edited && current() && !composerAuthoredText() && !hasComposerAttachments() &&
+      compact(authored(all('user-query').at(-1)?.querySelector('.query-text') || all('user-query').at(-1))) === warmup;
+    document.addEventListener('beforeinput', noteEdit, true);
+    document.addEventListener('input', noteEdit, true);
+    try {
+      const outcome = await waitFor(() => {
+        const output = all('model-response').filter(shown).map(text).join('\n');
+        if (!generating() && output.trim() && composerWritable()) return 'settled';
+        if (output !== previous) { previous = output; changedAt = Date.now(); }
+        return Date.now() - changedAt >= 45000 ? 'stalled' : null;
+      }, owns, 180000);
+      if (!owns()) return false;
+      if (outcome === 'settled') return true;
+      // The only submitted input is our exact tool-free warm-up. Stop it once,
+      // then wait for native idle before restoring the still-unsent real task.
+      // No task Send is retried, and a refreshed document cannot inherit this closure.
+      if (!generating() || !stopGeneration(owns)) return false;
+      console.info('[OneCode warmup] stopped stalled tool-free preparation');
+      return Boolean(await waitFor(() => !generating() && composerWritable(), owns, 30000)) && owns();
+    } finally {
+      document.removeEventListener('beforeinput', noteEdit, true);
+      document.removeEventListener('input', noteEdit, true);
+    }
+  }
   /** One native Send, then exact new user-row evidence. Never resend after an ambiguous click. */
   async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, clearAcceptedDraft = true,
     beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, whileGenerating = false, initialDraft = null,
@@ -946,7 +974,7 @@ var CLF_DOM = (() => {
     if (generating() || whileGenerating) return refused('page-busy');
     const current = () => stillCurrent() && composer() === box && (!id || conversationId() === id);
     const prior = new Set(messages().filter(message => message.role === 'user').map(message => message.id));
-    const initialRoute = location.href, initialCommand = commandClaim, initialAttachments = attachmentRows();
+    const initialRoute = location.href, initialCommand = commandClaim, initialOpening = openingClaim, initialAttachments = attachmentRows();
     let initialEditRevoked = false, rebound = false;
     const noteInitialEdit = event => {
       if (event.isTrusted && event.target?.closest?.(BOX)) initialEditRevoked = true;
@@ -1002,8 +1030,8 @@ var CLF_DOM = (() => {
       if (!warmId) return refused('warmup-acceptance-unconfirmed');
       id = warmId;
       preparedOpening = warmId;
-      const settled = await waitFor(() => !generating() && all('model-response').some(node => shown(node) && text(node)) && composerWritable(),
-        () => stillCurrent() && conversationId() === id, 180000);
+      const settled = await settleControlledWarmup(warmup, () => stillCurrent() && conversationId() === id &&
+        (initialCommand ? commandClaim === initialCommand : openingClaim === initialOpening));
       if (!settled || composerAuthoredText()) return refused('warmup-not-settled');
       box = composer();
       if (!insertPrompt(submitted, true)) return refused('task-not-restored');

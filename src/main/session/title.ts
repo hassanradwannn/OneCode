@@ -34,11 +34,15 @@ export function automaticTitle(summary: SessionSummary, first?: Extract<SessionE
 
 /**
  * Gemini names a chat from its first message. In a chat this app opened, that message is the
- * CoS instructions around the user's request, so every such chat was called some variant of
- * "Coding Agent Instructions". There the user's own request names the chat instead.
+ * integration instructions around the user's request. Ignore those bootstrap labels,
+ * while accepting the provider's generated titles for ordinary app-authored chats.
  */
-export function providerTitleIgnored(summary: SessionSummary): boolean {
-  return summary.origin?.kind === 'desktop';
+export function providerTitleIgnored(summary: SessionSummary, title = summary.title): boolean {
+  if (summary.origin && summary.origin.kind !== 'desktop') return true;
+  // Native providers generate concise titles. Reject bootstrap/instruction labels,
+  // rather than rejecting every generated title for app-authored conversations.
+  return /COS_CONTEXT|CLF-(?:HANDOFF|RESUME)|coding agent instructions|onecode.session|use the (?:installed|connected) onecode|you are a task planner/i.test(title) ||
+    (summary.origin?.kind === 'desktop' && /^(?:coding agent anleitung|workspace initialization)$/i.test(title.trim()));
 }
 
 /** "Gemini - <project>" is the project page's title, never the chat's (the extension skips it too). */

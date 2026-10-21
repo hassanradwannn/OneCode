@@ -6,7 +6,7 @@
     "message": "o app não respondeu"
   },
   "content_app_not_running": {
-    "message": "O Chat On Steroids não está em execução neste computador."
+    "message": "O OneCode não está em execução neste computador."
   },
   "content_auto_compaction": {
     "message": "Compactação automática"
@@ -81,7 +81,7 @@
     "message": "a página aberta para isso mostrava outra conversa"
   },
   "content_browser_disconnected": {
-    "message": "A conexão com o navegador está desconectada no Chat On Steroids."
+    "message": "A conexão com o navegador está desconectada no OneCode."
   },
   "content_cancel": {
     "message": "Cancelar"
@@ -90,7 +90,7 @@
     "message": "Chat bloqueado"
   },
   "content_chat_blocked_tip": {
-    "message": "Este chat está bloqueado no app Chat On Steroids: as chamadas de ferramenta são recusadas e Goal, Loop e a compactação automática ficam desativados. Para liberar, abra a aba Chat do app, passe o mouse sobre este chat na lista de sessões e clique no símbolo de bloqueio."
+    "message": "Este chat está bloqueado no app OneCode: as chamadas de ferramenta são recusadas e Goal, Loop e a compactação automática ficam desativados. Para liberar, abra a aba Chat do app, passe o mouse sobre este chat na lista de sessões e clique no símbolo de bloqueio."
   },
   "content_chat_still_opening": {
     "message": "este chat ainda está abrindo — tente novamente"
@@ -585,7 +585,7 @@
     "message": "Salvando…"
   },
   "content_settings_aria": {
-    "message": "Configurações do Chat On Steroids"
+    "message": "Configurações do OneCode"
   },
   "content_stage_handoff_attention": {
     "message": "A resposta de transferência precisa de atenção"
@@ -735,13 +735,13 @@
     "message": "Escrevendo…"
   },
   "extension_action_title": {
-    "message": "Chat On Steroids"
+    "message": "OneCode"
   },
   "extension_description": {
-    "message": "Conecta o Provedor ao Chat On Steroids e controla abas do navegador em segundo plano com DOM, capturas de tela e ferramentas de desenvolvedor."
+    "message": "Conecta o Provedor ao OneCode e controla abas do navegador em segundo plano com DOM, capturas de tela e ferramentas de desenvolvedor."
   },
   "extension_name": {
-    "message": "Extensão de navegador do Chat On Steroids"
+    "message": "Extensão de navegador do OneCode"
   },
   "popup_advanced": {
     "message": "Avançado"
@@ -951,7 +951,7 @@
     "message": "Captura da sessão"
   },
   "popup_secure_storage_unavailable": {
-    "message": "O armazenamento seguro de credenciais não está disponível. Abra o Chat On Steroids para ver as instruções de configuração."
+    "message": "O armazenamento seguro de credenciais não está disponível. Abra o OneCode para ver as instruções de configuração."
   },
   "popup_sent_to_app": {
     "message": "Enviado para o aplicativo"
@@ -1038,13 +1038,13 @@
     "message": "Tentar novamente"
   },
   "popup_version_mismatch_help": {
-    "message": "App v$1 (protocolo $2); extensão v$3 (protocolo $4). Abra a página de extensões do navegador, ative o Modo do desenvolvedor e use Atualizar / Recarregar nesta extensão. Se a incompatibilidade continuar, use Abrir pasta da extensão no Chat On Steroids e carregue essa pasta. Recarregue as abas do ChatGPT quando o trabalho ativo delas terminar."
+    "message": "App v$1 (protocolo $2); extensão v$3 (protocolo $4). Abra a página de extensões do navegador, ative o Modo do desenvolvedor e use Atualizar / Recarregar nesta extensão. Se a incompatibilidade continuar, use Abrir pasta da extensão no OneCode e carregue essa pasta. Recarregue as abas do ChatGPT quando o trabalho ativo delas terminar."
   },
   "popup_yes": {
     "message": "sim"
   },
   "content_goal_error_loop_mcp_call_missing": {
-    "message": "Nenhuma chamada de ferramenta MCP foi registrada na última resposta. O Gemini pode estar fazendo uma pergunta ou a conexão com as ferramentas pode ter sido perdida. Responda à pergunta ou verifique o túnel se as ferramentas pararam de funcionar. A continuação automática está pausada; o Loop continua ativado."
+    "message": "Nenhuma chamada de ferramenta MCP foi registrada na última resposta. O provedor pode estar fazendo uma pergunta ou a conexão com as ferramentas pode ter sido perdida. Responda à pergunta ou verifique o túnel se as ferramentas pararam de funcionar. A continuação automática está pausada; o Loop continua ativado."
   },
   "content_goal_error_goal_reply_not_pending": {
     "message": "Não há continuação pendente para esta resposta. Ela pode já ter sido tratada ou substituída por um trabalho mais recente. Confira a atividade mais recente do chat antes de tentar de novo."
@@ -1077,7 +1077,7 @@
     "message": "O endpoint de continuação personalizado é inválido. Verifique a URL em Configurações; use HTTPS ou um endpoint HTTP local."
   },
   "content_history_rate_limited": {
-    "message": "O ChatGPT limitou temporariamente o acesso ao histórico desta conversa. O Chat On Steroids pausa a recuperação automática até o fim da espera."
+    "message": "O ChatGPT limitou temporariamente o acesso ao histórico desta conversa. O OneCode pausa a recuperação automática até o fim da espera."
   },
   "content_goal_error_rate_limited": {
     "message": "O fornecedor de continuação está limitando as solicitações. Aguarde a nova tentativa indicada ou escolha outro modelo de continuação."
@@ -1167,7 +1167,7 @@
     "message": "Falhou. Recomece o login pelo CoS."
   },
   "popup_app_not_running_help": {
-    "message": "Verifique se o Chat On Steroids está aberto neste computador. A extensão se conecta sozinha."
+    "message": "Verifique se o OneCode está aberto neste computador. A extensão se conecta sozinha."
   },
   "popup_provider": {
     "message": "Provedor"

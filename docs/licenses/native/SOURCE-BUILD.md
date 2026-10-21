@@ -96,7 +96,7 @@ retaining exported interfaces and library names. Under application resources:
   `libvips-42.dll` and `libvips-cpp-8.18.6.dll`.
 - Linux: `app.asar.unpacked/node_modules/@img/sharp-libvips-linux-{x64|arm64}/lib/`.
 - macOS: `app.asar.unpacked/node_modules/@img/sharp-libvips-darwin-{x64|arm64}/lib/`
-  under `Chat On Steroids.app/Contents/Resources`.
+  under `OneCode.app/Contents/Resources`.
 
 Replace the corresponding shared libraries and retain required SONAME links. Sharp is
 also unpacked; its Apache-licensed binding source/build instructions are in the sharp
@@ -104,8 +104,8 @@ source distribution if an ABI change requires rebuilding it. No application hash
 or publisher-key requirement fences these files. On macOS seal the modified copy again:
 
 ```sh
-codesign --force --deep --sign - "Chat On Steroids.app"
-codesign --verify --deep --strict --verbose=2 "Chat On Steroids.app"
+codesign --force --deep --sign - "OneCode.app"
+codesign --verify --deep --strict --verbose=2 "OneCode.app"
 ```
 
 On Linux extract an AppImage or use an installed DEB copy to obtain ordinary writable

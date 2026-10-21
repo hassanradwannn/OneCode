@@ -302,15 +302,15 @@
           <div class="plugins-content">
           <header class="plugin-page-head"><div><h1>Plugins</h1><p>Bring your favorite tools into the conversation.</p></div><div class="plugin-search-actions"><label class="plugin-search"><i class="ico ph ph-magnifying-glass" aria-hidden="true"></i><input id="pluginsSearch" type="search" placeholder="Search plugins" aria-label="Search plugins" /></label><button class="btn plugin-add" id="pluginsAdd" type="button" aria-label="Add a plugin" title="Add a plugin"><i class="ico ph ph-plus" aria-hidden="true"></i></button></div></header>
           <section class="plugin-connection" aria-labelledby="pluginsSetupTitle">
-            <div><h2 id="pluginsSetupTitle">Set up plugins before your first use</h2><p id="pluginsSetupHint">Add OneCode Plugins to your selected provider once, so it can use your installed plugins.</p><span id="pluginsConnectionStatus" role="status">Setup required · connect your plugins</span></div>
-            <button class="btn btn-solid" id="pluginsSetupLink" type="button">Set up plugins</button>
+            <div><h2 id="pluginsSetupTitle">OneCode connection</h2><p id="pluginsSetupHint">Use your existing OneCode Core connector for enabled integrations.</p><span id="pluginsConnectionStatus" role="status">Connect OneCode to your provider</span></div>
+            <button class="btn btn-solid" id="pluginsSetupLink" type="button">OneCode connection</button>
           </section>
-          <div class="plugin-refresh-guide"><p>After installing, updating or changing enabled plugins, refresh <strong id="pluginsRefreshName" translate="no">OneCode Plugins</strong> in <span id="pluginsProviderName">your provider</span> to make its tools available.</p><button class="btn" id="pluginsOpenGemini" type="button">Open provider plugins</button></div>
+          <div class="plugin-refresh-guide"><p>Ask <span id="pluginsProviderName">your provider</span> to list installed integrations through <strong id="pluginsRefreshName" translate="no">OneCode Core</strong>. Its plugins tool discovers current tools immediately in existing chats.</p><button class="btn" id="pluginsOpenGemini" type="button">Open provider connections</button></div>
           <div class="plugin-section-head"><h2>Installed <span id="pluginsCount" class="plugin-count">Loading…</span></h2><button class="btn" id="pluginsRefresh" type="button">Check local status</button></div>
           <div id="pluginsInstalled" aria-live="polite"></div>
           <div class="plugin-section-head"><h2>Explore plugins</h2><span class="muted">Made for your workflow</span></div>
           <div id="pluginsExplore" class="plugin-directory"></div>
-          <details class="plugin-legal"><summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Legal Notices / Third-party Licenses</summary><p>Catalog illustrations are original Chat On Steroids artwork, Copyright © 2026 Chat On Steroids contributors, licensed under the app’s MIT license. They illustrate independent integrations and are not official product logos or endorsements. Product names belong to their respective owners.</p><p>Installed plugins retain their own licenses. Open a plugin’s details to see its source, version and license. Review the upstream project before installation. Bundled dependency notices and reviewed catalog license texts are included in THIRD-PARTY-NOTICES.txt with the application; external plugins are downloaded separately.</p><button class="btn" id="pluginsLegalOpen" type="button">Open full third-party license texts</button></details>
+          <details class="plugin-legal"><summary><svg class="disclosure-chevron details-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Legal Notices / Third-party Licenses</summary><p>Catalog illustrations are MIT licensed. Original authorship and copyright credits are preserved in the bundled legal notices. They illustrate independent integrations and are not official product logos or endorsements. Product names belong to their respective owners.</p><p>Installed plugins retain their own licenses. Open a plugin’s details to see its source, version and license. Review the upstream project before installation. Bundled dependency notices and reviewed catalog license texts are included in THIRD-PARTY-NOTICES.txt with the application; external plugins are downloaded separately.</p><button class="btn" id="pluginsLegalOpen" type="button">Open full third-party license texts</button></details>
           </div>
         </section>
         <section class="panel plugins-panel skills-panel" data-panel="skills">
@@ -624,8 +624,8 @@
                   <section id="browserExtensionStage" class="browser-stage" aria-labelledby="browserExtensionTitle">
                     <div class="browser-stage-copy">
                       <ol class="browser-install-steps">
-                        <li data-install-engine="gecko" hidden><div><b id="extensionStepAddon">Add the OneCode add-on to Firefox</b><button type="button" class="btn btn-solid" id="openFirefoxAddon"><i class="ico ph ph-puzzle-piece" aria-hidden="true"></i><span>Get the add-on</span></button>
-                          <p>Firefox asks before it adds the add-on. Choose Add.</p></div></li>
+                        <li data-install-engine="gecko" hidden><div><b id="extensionStepAddon">Check Firefox support</b><button type="button" class="btn btn-solid" id="openFirefoxAddon"><i class="ico ph ph-puzzle-piece" aria-hidden="true"></i><span>Firefox setup</span></button>
+                          <p>This candidate has no signed Firefox Companion. Use Chrome, Edge or Brave, or read the Firefox setup status.</p></div></li>
                         <li data-install-engine="chromium"><div><b id="extensionStepOpen">Open the extensions page</b><button type="button" class="btn btn-quiet" id="openExtensionSettings"><span id="setupExtensionAddress" translate="no">chrome://extensions</span><i class="ico ph ph-copy" aria-hidden="true"></i></button>
                           <p id="extensionStepOpenHint">Click the address to copy it, then paste it into the address bar and press Enter.</p></div></li>
                         <li data-install-engine="chromium"><div><b id="extensionStepDev">Turn on Developer mode</b><p id="extensionStepDevWhere" hidden></p>
@@ -796,7 +796,7 @@
                   <h3>Connect the tunnel</h3>
                   <p class="step-lead">Click Connect and wait for Connected. Change the connection method in Advanced below.</p>
                   <section class="field" id="tailscaleSetup" aria-label="Tailscale setup" hidden>
-                    <p class="hint">Install Tailscale separately, then sign in from its tray icon using your own account. Keep Tailscale running. If your tailnet restricts Funnel, its owner must allow this device.</p>
+                    <p class="hint">OneCode can start Tailscale installation with Windows Package Manager. Otherwise choose Install and sign in. Complete setup and sign in with your own account from Tailscale’s tray icon. Keep it running; your tailnet owner may need to allow Funnel.</p>
                     <div class="step-actions">
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/install/windows">Install and sign in</button>
                       <button class="btn" type="button" data-link-external="https://tailscale.com/docs/features/tailscale-funnel">Funnel permission help</button>
@@ -875,7 +875,7 @@
                         aria-describedby="connectorSuffixHint"
                       />
                       <p class="hint is-warn" id="connectorSuffixError" role="alert" hidden>Use up to 32 letters, digits, spaces, dots, dashes or underscores.</p>
-                      <p class="hint" id="connectorSuffixHint">Each computer needs its own plugins in Gemini, and they can't share a name. “Windows” names this computer's plugins “OneCode Core Windows” and so on. After changing it, rename this computer's plugins to match: in Gemini, open Connected apps and reconnect the custom app with its new name.</p>
+                      <p class="hint" id="connectorSuffixHint">Each computer needs its own OneCode Core connection with a unique device name. After changing it, reconnect this computer's Core app in your provider's settings using its new name.</p>
                     </div>
                   </details>
                   <!-- #1495: a workspace member without admin rights can neither add a custom app nor
@@ -937,7 +937,7 @@
             <details class="advanced" id="geminiSkillSetup" data-provider-only="gemini" open>
               <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini skill — optional</summary>
               <div class="field">
-                <p>OneCode includes reusable guidance for Gemini, named <b translate="no">gemini-code</b>. Core tools work without this skill: the app selects Core and provides current tool instructions automatically.</p>
+                <p>OneCode includes reusable guidance for Gemini, named <b translate="no">onecode-gemini</b>. Core tools work without this skill: the app selects Core and provides current tool instructions automatically.</p>
                 <div class="step-actions">
                   <button class="btn" id="saveGeminiSkillMarkdown" type="button">Save SKILL.md</button>
                   <button class="btn" id="saveGeminiSkillZip" type="button">Save skill ZIP</button>
@@ -946,10 +946,10 @@
                 </div>
                 <ol>
                   <li>Save SKILL.md or the ZIP, then open Gemini Skills in the same Google account as OneCode Core.</li>
-                  <li>In Gemini, choose <b>Upload</b>, select the saved file, review the name <b translate="no">gemini-code</b> and instructions, then choose <b>Create</b>. For manual creation, use that name, describe it as “Use OneCode's connected tools for coding and workspace tasks”, and paste the copied instructions.</li>
+                  <li>In Gemini, choose <b>Upload</b>, select the saved file, review the name <b translate="no">onecode-gemini</b> and instructions, then choose <b>Create</b>. For manual creation, use that name, describe it as “Use OneCode's connected tools for coding and workspace tasks”, and paste the copied instructions.</li>
                   <li>Activate the skill in Gemini. Only then enable the option below and start a new OneCode chat.</li>
                 </ol>
-                <label class="setting"><span class="setting-text"><b>Use Gemini's gemini-code skill</b><em>I installed and activated this skill in the Google account I use. OneCode will request it for new chats; this option does not install it.</em></span><input id="useGeminiWebSkill" type="checkbox" /></label>
+                <label class="setting"><span class="setting-text"><b>Use Gemini's onecode-gemini skill</b><em>I installed and activated this skill in the Google account I use. OneCode will request it for new chats; this option does not install it.</em></span><input id="useGeminiWebSkill" type="checkbox" /></label>
                 <p class="hint" id="geminiSkillResult" role="status">Saving or copying does not install the skill in your Google account.</p>
                 <p class="hint" id="geminiSkillBrowserHelp" hidden>Choose a full browser in Setup before opening Gemini Skills.</p>
                 <p class="hint">Google controls Skills availability and requires Keep Activity to be on. If your account has no Skills page or upload option, leave this off and use Core normally. A skill does not repair “MCP server could not be reached”; first resolve the public connection and Core URL.</p>
@@ -1074,6 +1074,12 @@
               -->
               <div class="view settings-page-content automation-content" data-view="settings" hidden>
                 <header class="settings-page-head automation-page-head"><div><h1>Agents &amp; automation</h1><p>Fine-tune your workspace and the way your agents work.</p></div></header>
+                <section class="settings-surface pane" aria-labelledby="chatSchedulesTitle">
+                  <h2 id="chatSchedulesTitle">Scheduled checks</h2>
+                  <p data-provider-names>Ask ChatGPT or Gemini to repeat a message at an interval until cancelled. Keep OneCode running, the PC awake and the provider signed in. A sent message is not proof the check succeeded.</p>
+                  <button class="btn" id="refreshChatSchedules" type="button">Refresh</button>
+                  <div id="chatSchedules" aria-live="polite"></div>
+                </section>
                 <header class="settings-section-head automation-section-head"><div><h2 class="settings-section-title">Continuation sources</h2><p>Choose where continuations come from and what their handoffs include.</p></div></header>
                 <div class="settings-surface pane">
                   <label class="setting">

@@ -9,8 +9,22 @@ const row = (value: unknown): Record<string, unknown> => value && typeof value =
 /** Read-only network/daemon wait; it does not authorize opening account setup. */
 export class TailscaleNotReady extends Error {}
 
+/** Only failed read-only daemon queries qualify. Never apply this to a route mutation. */
+export async function readTailscaleDaemon<T>(read: () => Promise<T>): Promise<T> {
+  try { return await read(); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (!/access denied|permission denied|not permitted|administrator|403/i.test(message) &&
+        /failed to connect to (?:local )?tailscale|(?:tailscaled|tailscale service).*(?:not running|unavailable)|could not connect|connection refused|ECONNREFUSED|ECONNRESET|broken pipe|unexpected EOF|timed? ?out|timeout|context deadline exceeded|503.*service unavailable/i.test(message))
+      throw new TailscaleNotReady('Waiting for the Tailscale service and network after startup or a network change. OneCode will retry automatically. Open Tailscale if it is stopped; complete any hotspot sign-in first.');
+    throw error;
+  }
+}
+
 export function tailscalePrerequisites(status: Record<string, unknown>, funnel: boolean): { id: string; dnsName: string } {
   const self = row(status.Self), tailnet = row(status.CurrentTailnet);
+  if (status.BackendState === 'NeedsMachineAuth')
+    throw new TailscaleNotReady('Approve this device in the Tailscale admin console. OneCode will detect approval automatically.');
   if (!status.AuthURL && (['NoState', 'Starting', 'Stopped'].includes(String(status.BackendState)) ||
       (status.BackendState === 'Running' && self.Online === false)))
     throw new TailscaleNotReady('Waiting for Tailscale to connect. Keep Tailscale running and connected; OneCode will check again automatically.');

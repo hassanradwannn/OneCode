@@ -5,9 +5,9 @@ build/
 resources/*
 !resources/skills/
 resources/skills/*
-!resources/skills/gemini-code/
-resources/skills/gemini-code/*
-!resources/skills/gemini-code/SKILL.md
+!resources/skills/onecode-gemini/
+resources/skills/onecode-gemini/*
+!resources/skills/onecode-gemini/SKILL.md
 !resources/updater/
 resources/updater/*
 !resources/updater/windows-update-helper.cjs
@@ -38,3 +38,6 @@ resources/updater/*
 /.vitest/
 /test-results/
 /playwright-report/
+
+# Private local continuity notes.
+/handoff.md

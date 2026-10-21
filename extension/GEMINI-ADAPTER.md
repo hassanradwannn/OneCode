@@ -109,7 +109,7 @@ its ordinary ACK rather than being replayed. This reduces hidden-observer latenc
 not claim that Google waits for Desktop ACK, assign earlier calls to a future turn, or lift
 the separate worker/Resume command journal gate.
 When an existing app opening/command owns a valid length-framed context whose first line
-is exactly `@gemini-code`, its existing tool-free warm-up attempts that native Skill option
+is exactly `@onecode-gemini`, its existing tool-free warm-up attempts that native Skill option
 and newly rendered token before Core is selected for the later real task. Pasted text alone
 cannot prove selection. If no unique option is available, only an unchanged restored app
 draft with the same route, claim and attachments can fall back to the ordinary tool-free

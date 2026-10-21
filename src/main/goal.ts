@@ -104,7 +104,7 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
  * uses to attribute traffic. Neither header carries anything about the user or the chat.
  */
 const ATTRIBUTION_HEADERS: Record<string, string> = {
-  'HTTP-Referer': 'https://github.com/chat-on-steroids',
+  'HTTP-Referer': 'https://github.com/hassanradwannn/OneCode',
   'X-Title': 'OneCode'
 };
 

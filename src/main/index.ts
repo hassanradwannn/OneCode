@@ -1,3 +1,4 @@
+import { chatScheduler } from './chat-schedules.js';
 import { initGeminiBindings } from './gemini/bindings.js';
 import { stopInputStartup } from './session/start-input.js';
 import { registerArtifactPreviewScheme, installArtifactPreviewProtocol } from './artifacts/preview-protocol.js';
@@ -711,6 +712,7 @@ void app.whenReady().then(async () => {
   // window that is already on screen. Everything it learns arrives through the ordinary state
   // push, every failure ends inside it, and its own timer keeps it running for a tray app that
   // is never restarted.
+  chatScheduler.start();
   startUpdateChecks();
   // Warm the existing derived cache once, after startup, without delaying the UI.
   // A visit to Usage joins this same calculation; unchanged recordings cost no reads.
@@ -754,6 +756,7 @@ app.on('will-quit', (event) => {
   event.preventDefault();
   if (shutdownStarted) return;
   shutdownStarted = true;
+  void chatScheduler.stop();
   stopInputStartup();
   tray?.destroy();
   tray = null;
@@ -768,7 +771,7 @@ app.on('will-quit', (event) => {
       {
         name: 'admission/drain',
         budgetMs: 40_000,
-        run: () => [shutdownConnection(), shutdownBridge(), shutdownControlApi(), shutdownRemote(), stopAgentRuntimeGc()]
+        run: () => [chatScheduler.stop(), shutdownConnection(), shutdownBridge(), shutdownControlApi(), shutdownRemote(), stopAgentRuntimeGc()]
       },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {

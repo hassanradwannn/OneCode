@@ -326,11 +326,9 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     };
   };
 
-  // One handler per surface, and the routing below is the only thing that decides which
-  // one sees a request. This is what makes the discovery boundary real rather than
-  // advertised: the Core handler has no `computer` registered at all, so a call for it
-  // fails as an unknown tool inside the protocol layer, with nothing here to "helpfully"
-  // forward it to the other surface.
+  // Each provider endpoint routes to its declared surface. Core registers the full
+  // local contract; legacy Desktop/Plugins routes remain compatible without gaining
+  // authority from another connector. Every handler retains the same live guards.
   const routes = surfacePaths.map((surface) => ({
     ...surface,
     prmPath: `${PRM_PREFIX}${surface.basePath}`,

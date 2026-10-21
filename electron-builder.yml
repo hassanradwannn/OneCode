@@ -79,8 +79,8 @@ extraResources:
     to: runtime-icon.ico
   - from: skills/onecode-chatgpt/SKILL.md
     to: skills/onecode-chatgpt/SKILL.md
-  - from: resources/skills/gemini-code/SKILL.md
-    to: skills/gemini-code/SKILL.md
+  - from: resources/skills/onecode-gemini/SKILL.md
+    to: skills/onecode-gemini/SKILL.md
 
 npmRebuild: false
 

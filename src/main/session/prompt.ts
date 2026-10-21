@@ -15,6 +15,7 @@ import { SESSION_HISTORY_INSTRUCTIONS } from './history-files.js';
 import { pluginManager } from '../plugins/manager.js';
 import { pluginDiscoveryInstructions } from '../mcp/plugin-discovery.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
+import { ARTIFACT_FLOW_REMINDER } from '../mcp/artifact-discovery.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
 
 type PromptScope = { chatProvider?: ChatProvider; routingInstructions?: string; sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
@@ -33,10 +34,12 @@ const promptFolder = (scope: PromptScope) => scope.sessionId ? getSessionProject
 function geminiOpeningInstructions(): string {
   const config = getConfig();
   return [
-    config.mcp.useGeminiWebSkill === true ? '@gemini-code' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
+    config.mcp.useGeminiWebSkill === true ? '@onecode-gemini' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
+    ...(effectiveCapabilities(config).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), 'gemini')] : []),
     `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
-    ...(effectiveCapabilities(config).read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
+    'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
+    ...(effectiveCapabilities(config).read ? ['Local skills: read /skills/.catalog.json, then the chosen SKILL.md.', 'Local chat history: read /sessions/.catalog.json, then the relevant history.md.'] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
   ].join('\n\n');
 }
@@ -45,7 +48,8 @@ function geminiOpeningInstructions(): string {
 function chatgptSkillInstructions(): string {
   const config = getConfig();
   return [
-    `Use the installed onecode-chatgpt skill. Current Core connector: ${JSON.stringify(configuredConnectorName('core'))}.`,
+    'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
+    `Use the onecode-chatgpt skill installed in the ChatGPT browser backend; do not look for it in the local /skills catalog. Current OneCode connector: ${JSON.stringify(configuredConnectorName('core'))}.`,
     `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
     ...(effectiveCapabilities(config).read ? ['Live local references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.'] : []),
     ...(pluginManager.tools().length ? ['Discover enabled integrations through Core plugins {action:"list"}; use returned schemas and the live plugin bridge for Computer use.'] : []),
@@ -186,6 +190,7 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true;
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
+    ...(provider === 'gemini' && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(effectiveCapabilities(getConfig()).read ? compactSkill
       ? ['Use the installed onecode-chatgpt skill. Live references: /skills/.catalog.json and /sessions/.catalog.json.']
       : [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),

@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 24;
+  const VERSION = 31;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -92,7 +92,9 @@
   /** ChatGPT-rendered authored prose. Tool rows and this extension's own surfaces are excluded. */
   const MARKDOWN = '.markdown, [data-markdown-text-style="assistant-message"]';
   const TOOL = 'span[class*="tool-message"], div.pointer-events-none.contents, div:has(> [data-testid="cot-v5-tool-icon-pile"])';
-  const GENERATED_IMAGE = '[class~="group/imagegen-image"] img, [class~="group/generated-image-preview"] img';
+  // Layout classes change independently of native asset ownership. Every pixel
+  // still needs an exact typed asset match below; an arbitrary img grants nothing.
+  const GENERATED_IMAGE = 'img';
   const GENERATED_VIDEO = 'video';
   const OWN_SURFACES = '.clf-stream, .clf-stage, .clf-composer, .clf-boot';
   const MAX_RENDERED_HTML = 120_000;
@@ -134,11 +136,11 @@
    * (`server.ts`), so these are this app naming itself rather than labels somebody typed.
    * The pre-1.7.1 name stays so an older chat's evidence still reads.
    *
-   * Exact names, never a prefix: `Chat On Steroids Backup` would be somebody else's
+   * Exact names, never a prefix: `OneCode Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    *
    * A computer that shares its ChatGPT account with another names its connectors with a suffix
-   * ("Chat On Steroids Core (Windows)"). The content script passes this install's names with
+   * ("OneCode Core (Windows)"). The content script passes this install's names with
    * every ask, and only those are ours: the other computer's calls run there, not here. Measured
    * 2026-10-04: the call path, `invocation.server` and `app_name` all carry the name as typed.
    */
@@ -146,7 +148,7 @@
   const LEGACY_APPS = ['TobisComputer'];
   const SUFFIXED_APP = /^OneCode (Core|Desktop|Plugins)(?: [\p{L}\p{N} ._-]{1,32}| \([\p{L}\p{N} ._-]{1,32}\))$/u;
   let OUR_APPS = [...PLAIN_APPS, ...LEGACY_APPS];
-  /** Takes the names an ask carries: three "Chat On Steroids …" names, in core/desktop/plugins order. */
+  /** Takes the names an ask carries: three "OneCode …" names, in core/desktop/plugins order. */
   function adoptAppNames(names) {
     if (!Array.isArray(names) || names.length !== 3) return;
     const words = ['Core', 'Desktop', 'Plugins'];
@@ -788,6 +790,69 @@
    * uploads and every other role/channel is private or unknown. Only the provider message UUID,
    * sediment file id and bounded geometry cross worlds; no signed URL or arbitrary metadata does.
    */
+  // File cards and inline Python images expose typed public sandbox references,
+  // not generated-image sediment ids. Both retain the exact assistant owner.
+  // Preserve that witnessed sandbox path and exact assistant message identity.
+  function nativeFileReference(node) {
+    for (let fiber = fiberOf(node), up = 0; fiber && up < MAX_CLIMB; up++, fiber = fiber.return) {
+      const reference = fiber.memoizedProps?.reference;
+      if (!reference || !['file', 'codex_sandbox_image'].includes(reference.type)) continue;
+      const path = reference.sandbox_path, messageId = reference.message_id, name = reference.file_name;
+      if (typeof path !== 'string' || !/^\/mnt\/data\/[^\s\\?#]{1,500}$/.test(path) || path.split('/').some(part => part === '.' || part === '..') ||
+          typeof name !== 'string' || name !== path.split('/').at(-1) || !str(messageId)) return null;
+      try { if (/[\\\u0000-\u001f\u007f]/.test(decodeURIComponent(path)) || decodeURIComponent(path).split('/').some(part => part === '.' || part === '..')) return null; }
+      catch { return null; }
+      return { messageId, assetId: `sandbox:${path}`, name };
+    }
+    return null;
+  }
+
+  function nativeFileImagesOf(sections, messages, exactImageNodes, exactFileButtons, shell = false) {
+    const owners = new Map(), files = new Map(), leases = [];
+    for (const message of messages || []) if (message?.author?.role === 'assistant' &&
+        (message.recipient === 'all' || shell && message.recipient === undefined) &&
+        !hiddenMessage(message) && !analysisMessage(message)) owners.set(message.id, message);
+    for (const section of sections) for (const button of section.querySelectorAll('button')) {
+      const reference = nativeFileReference(button);
+      if (!reference || !owners.has(reference.messageId)) continue;
+      const label = button.getAttribute('aria-label');
+      if (label === 'Download file') exactFileButtons.set(button, { ...reference, action: 'download' });
+      // The same native button reports its in-flight state while the viewer loads.
+      // Retain only an already issued lease; that label cannot start a new preview.
+      if (label === `Open preview of ${reference.name}` ||
+          (label === `Opening preview of ${reference.name}` && button.hasAttribute('data-clf-native-file-lease'))) {
+        exactFileButtons.set(button, { ...reference, action: 'preview' });
+        if (button.hasAttribute('data-clf-native-file-lease')) leases.push(reference);
+      }
+      if (!/\.(?:png|jpe?g|webp)$/i.test(reference.name)) continue;
+      const key = `${reference.messageId}\u0000${reference.assetId}`;
+      files.set(key, { ...reference, providerRole: 'assistant', providerChannel: 'final',
+        providerStatus: owners.get(reference.messageId).status === 'finished_successfully' ? 'finished_successfully' : 'in_progress',
+        order: messages.indexOf(owners.get(reference.messageId)), partOrder: 0 });
+    }
+    // The native preview is a portal outside the turn. Its own public reference
+    // must match a mounted card; its title, URL or document position is no proof.
+    for (const node of document.querySelectorAll('img')) {
+      const reference = nativeFileReference(node);
+      let descriptor = reference && files.get(`${reference.messageId}\u0000${reference.assetId}`);
+      // A preview opened by the isolated recorder's exact card transaction has
+      // a native temporary path, never a provider asset id. Its lease can join
+      // that one newly opened viewer to the still-mounted original file card.
+      if (!descriptor && leases.length === 1 && node.getAttribute('alt') === 'Image preview') {
+        let path = null;
+        for (let fiber = fiberOf(node), up = 0; fiber && up < MAX_CLIMB; up++, fiber = fiber.return) {
+          const props = fiber.memoizedProps;
+          if (props?.hostId === 'local' && props.panelId === 'right' && typeof props.path === 'string') { path = props.path; break; }
+        }
+        const lease = leases[0];
+        if (path && /^\/__codex_browser_temporary_files__\/[0-9a-f-]{36}\//i.test(path) && path.split('/').at(-1) === lease.name)
+          descriptor = files.get(`${lease.messageId}\u0000${lease.assetId}`);
+      }
+      if (descriptor) exactImageNodes.set(node, descriptor);
+    }
+    return [...files.values()].slice(0, MAX_GENERATED_IMAGES);
+  }
+
   function generatedImagesOf(sections, messages, exactImageNodes, shellImages = new Map()) {
     const out = [];
     const seen = new Set();
@@ -839,6 +904,13 @@
       descriptorsByAsset.set(image.assetId, list);
     }
     const nodesByAsset = new Map();
+    const shellImagesById = new Map(), duplicateShellImageIds = new Set();
+    for (const [item, asset] of shellImages) {
+      const id = str(item.id);
+      if (!id) continue;
+      if (shellImagesById.has(id)) duplicateShellImageIds.add(id);
+      shellImagesById.set(id, { item, asset });
+    }
     for (const section of sections) {
       let nodes = [];
       try { nodes = section.querySelectorAll(GENERATED_IMAGE); } catch { nodes = []; }
@@ -851,13 +923,25 @@
             // Current image previews use blob pixels. Only the mounted typed item
             // and its exact per-image control can identify those pixels; a blob URL
             // or a nearby gallery alone is not an asset identity.
-            let control = null;
+            let control = null, thumbnail = null;
             for (let at = fiberOf(node), up = 0; at && up < MAX_CLIMB; up++, at = at.return) {
               const props = at.memoizedProps;
               if (props?.imageId && !control) control = props;
+              if (props?.image?.type === 'generated-image' && !thumbnail) thumbnail = props.image;
               if (shellImages.has(props?.item)) {
-                if (control?.imageId === props.item.id && control.isComplete === true && control.isPreview === false)
-                  assetId = shellImages.get(props.item);
+                // Native gallery thumbnails carry a generated-image descriptor,
+                // not the hero's imageId/isComplete control. The descriptor is a
+                // separate object; require all its exact identity fields to join
+                // the canonical item within this mounted turn. Never use order.
+                const id = thumbnail?.id || control?.imageId;
+                const selected = shellImagesById.get(id);
+                const complete = thumbnail
+                  ? thumbnail.status === 'completed' && thumbnail.isPreview !== true &&
+                    thumbnail.chatGptMessageId === selected?.item.chatGptMessageId && thumbnail.src === selected?.item.src
+                  : control?.isComplete === true && control.isPreview === false;
+                if (selected && !duplicateShellImageIds.has(id) && complete &&
+                    selected.item.status === 'completed' && selected.item.isPreview !== true)
+                  assetId = selected.asset;
                 break;
               }
               if (props?.entry) break;
@@ -1503,7 +1587,7 @@
     return out;
   }
 
-  /** "/Chat On Steroids Core/link_…/read" -> "read", or null if that is not a name. */
+  /** "/OneCode Core/link_…/read" -> "read", or null if that is not a name. */
   function toolName(value) {
     if (typeof value !== 'string' || value.length === 0) return null;
     const tail = value.slice(value.lastIndexOf('/') + 1);
@@ -2454,6 +2538,8 @@
     const desiredUserStamps = new Map();
     const desiredThoughtStamps = new Map();
     const desiredImageStamps = new Map();
+    const desiredFileStamps = new Map();
+    const desiredPreviewStamps = new Map();
     const desiredVideoStamps = new Map();
     const groups = [];
     for (let at = 0; at < sections.length; at++) {
@@ -2527,6 +2613,7 @@
         const exactAnchors = new Map();
         const exactThoughtRows = new Map();
         const exactImageNodes = new Map();
+        const exactFileButtons = new Map();
         const exactVideoNodes = new Map();
         const turnBudget = { remaining: Math.min(MAX_TURN_TEXT, responseBudget.remaining) };
         const before = turnBudget.remaining;
@@ -2534,6 +2621,7 @@
         const nativeActivities = shell ? shellPublicActivity(shell, metadata, renderedMessages, turnBudget, section, exactAnchors) : nativeActivitiesOf(group.sections, messages, exactThoughtRows);
         responseBudget.remaining -= before - turnBudget.remaining;
         const generatedImages = generatedImagesOf(group.sections, messages, exactImageNodes, shell?.images);
+        generatedImages.push(...nativeFileImagesOf(group.sections, messages, exactImageNodes, exactFileButtons, Boolean(shell)));
         const generatedVideos = generatedVideosOf(group.sections, messages, exactVideoNodes);
         const providerArtifacts = providerArtifactsOf(messages);
         const activities = nativeActivities.events;
@@ -2550,7 +2638,8 @@
           codeModeCalls.length === 0 && calls.length === 0 &&
           requests.length === 0 &&
           renderedMessages.length === 0 &&
-          activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && generatedVideos.length === 0 && providerArtifacts.length === 0 && !endMessageId && trace.length === 0
+          activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && generatedVideos.length === 0 && providerArtifacts.length === 0 && !endMessageId && trace.length === 0 &&
+          !shell?.entry.turn.items.some(item => item?.type === 'generated-image')
         ) continue;
         const index = out.length;
         entry = {
@@ -2568,6 +2657,7 @@
           activities,
           thoughtNotifications: nativeActivities.notifications,
           images: generatedImages,
+          imageGeneration: shell?.entry.turn.items.some(item => item?.type === 'generated-image' && item.status !== 'completed') === true,
           videos: generatedVideos,
           artifacts: providerArtifacts,
           ...(trace.length ? { trace } : {}),
@@ -2630,6 +2720,10 @@
         if (!conversation.conflict) for (const [node, image] of exactImageNodes) {
           desiredImageStamps.set(node, `${scanToken}:${index}:${encodeURIComponent(image.messageId)}:${encodeURIComponent(image.assetId)}`);
         }
+        if (!conversation.conflict) for (const [node, file] of exactFileButtons) {
+          (file.action === 'preview' ? desiredPreviewStamps : desiredFileStamps).set(node,
+            `${scanToken}:${index}:${encodeURIComponent(file.messageId)}:${encodeURIComponent(file.assetId)}`);
+        }
         if (!conversation.conflict) for (const [node, video] of exactVideoNodes) {
           desiredVideoStamps.set(node, `${scanToken}:${index}:${encodeURIComponent(video.messageId)}:${encodeURIComponent(video.assetId)}`);
         }
@@ -2644,6 +2738,26 @@
       // messages until another render happened to restore the attribute. Keep the descriptor;
       // content.js will simply leave local turn ownership unset when the page turn id is null.
       if (entry) out.push(entry);
+    }
+    for (const node of document.querySelectorAll('button[data-clf-native-file-download]')) {
+      if (!desiredFileStamps.has(node)) node.removeAttribute('data-clf-native-file-download');
+    }
+    for (const [node, stamp] of desiredFileStamps) {
+      if (node.getAttribute('data-clf-native-file-download') !== stamp) node.setAttribute('data-clf-native-file-download', stamp);
+    }
+    for (const node of document.querySelectorAll('button[data-clf-native-file-preview], button[data-clf-native-file-lease]')) {
+      if (!desiredPreviewStamps.has(node)) { node.removeAttribute('data-clf-native-file-preview'); node.removeAttribute('data-clf-native-file-lease'); }
+    }
+    for (const [node, stamp] of desiredPreviewStamps) {
+      if (node.getAttribute('data-clf-native-file-preview') !== stamp) node.setAttribute('data-clf-native-file-preview', stamp);
+    }
+    // Include portal pixels, and retire their old scan/source lease on every scan.
+    for (const node of document.querySelectorAll('img')) {
+      const stamp = desiredImageStamps.get(node);
+      if (stamp === undefined) { node.removeAttribute('data-clf-fiber-image'); node.removeAttribute('data-clf-fiber-image-source'); continue; }
+      if (node.getAttribute('data-clf-fiber-image') !== stamp) node.setAttribute('data-clf-fiber-image', stamp);
+      const source = node.currentSrc || node.src;
+      if (source && node.getAttribute('data-clf-fiber-image-source') !== source) node.setAttribute('data-clf-fiber-image-source', source);
     }
     const cleanupSections = new Set();
     try {
@@ -2673,7 +2787,7 @@
           if (wantedImage === undefined) {
             if (currentImage !== null) node.removeAttribute('data-clf-fiber-image');
           } else if (currentImage !== wantedImage) node.setAttribute('data-clf-fiber-image', wantedImage);
-          const blobSource = wantedImage !== undefined && (node.currentSrc || node.src)?.startsWith('blob:')
+          const blobSource = wantedImage !== undefined
             ? node.currentSrc || node.src : null;
           if (blobSource === null) node.removeAttribute('data-clf-fiber-image-source');
           else if (node.getAttribute('data-clf-fiber-image-source') !== blobSource)
@@ -3042,7 +3156,7 @@
     }
     if (!connector || !Array.isArray(connector.actions) || typeof connector.name !== 'string') return null;
     const externalPlugins = pluginsConnectorApp(connector.name, connector.id);
-    if ((!connector.actions.length && !externalPlugins) || connector.actions.length > (externalPlugins ? 257 : 16)) return null;
+    if ((!connector.actions.length && !externalPlugins) || connector.actions.length > (externalPlugins ? 257 : 128)) return null;
     const budget = { bytes: PLUGIN_SCHEMA_READ_BYTES, nodes: 20000 };
     // Measured 2026-09-27: this page sends `description_model: ""` rather than null, so `??`
     // read every declaration as empty and no refresh could ever match the published schema.
@@ -3088,7 +3202,7 @@
         if (observedActions) return null;
         observedActions = props.actions;
         const externalPlugins = pluginsConnectorApp(props.connector.name, props.connector.id);
-        if ((!props.actions.length && !externalPlugins) || props.actions.length > (externalPlugins ? 257 : 16) || typeof props.connector.name !== 'string') return null;
+        if ((!props.actions.length && !externalPlugins) || props.actions.length > (externalPlugins ? 257 : 128) || typeof props.connector.name !== 'string') return null;
         const budget = { bytes: PLUGIN_SCHEMA_READ_BYTES, nodes: 20000 };
         const tools = props.actions.map(action => ({ name: action.name, description: copySchema(action.description_model ?? action.description, budget), inputSchema: copySchema(action.params, budget) }));
         if (tools.some(tool => !NAME.test(tool.name) || typeof tool.description !== 'string' || !tool.inputSchema || tool.inputSchema.type !== 'object') ||

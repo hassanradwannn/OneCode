@@ -37,6 +37,7 @@ export type RoundPart =
 /** Whether a row belongs to a turn's work rather than standing on its own. `answers` are the messages outlines name as a turn's answer. */
 export function isActivity(event: SessionEvent | undefined, answers: ReadonlySet<string> = new Set()): boolean {
   if (!event) return false;
+  if (event.kind === 'page_tool' && event.messageId.startsWith('native-image-generation:')) return false;
   // An answer still being written is not yet final, but it is the answer, not one more sentence.
   if (event.kind === 'assistant_message' && ((event.providerMessageId && answers.has(event.providerMessageId)) ||
       (event.messageId && answers.has(event.messageId)))) return false;
@@ -341,10 +342,10 @@ export function structureTimeline(rows: readonly FlowRow[], traces: Readonly<Rec
   const passThrough = (row: FlowRow) => {
     // An outlined turn with no recorded work still says what it said, before its answer.
     const event = row.event;
-    if (event?.kind === 'assistant_message' && event.turnId && traces[event.turnId] && !traced.has(event.turnId) &&
+    if (event && ['assistant_message', 'native_image', 'turn_end', 'page_tool'].includes(event.kind) && event.turnId && traces[event.turnId] && !traced.has(event.turnId) &&
         !runs.some(run => runTurn(run.rows) === event.turnId)) {
       traced.add(event.turnId);
-      out.push(...tracedParts([], traces[event.turnId]!, event.turnId, false, recapsOf(event.turnId)));
+      out.push(...tracedParts([], traces[event.turnId]!, event.turnId, working && liveTurnId === event.turnId, recapsOf(event.turnId)));
     }
     out.push({ kind: 'row', key: row.key });
   };

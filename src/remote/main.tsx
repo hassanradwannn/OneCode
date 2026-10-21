@@ -1,3 +1,4 @@
+import type { ChatSchedule } from '../shared/chat-schedules.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { RemoteBootstrap, RemotePreferences, RemoteSession, RemoteSessionDetail, RemoteSessionList } from '../shared/remote.js';
@@ -15,13 +16,35 @@ import { resolveChatModel } from '../shared/chat-models.js';
 import '../renderer/icons.css';
 import type { InputAttachment } from '../shared/input.js';
 import { historyRoute, mergeHistory } from './history.js';
-import { pendingMessages, type OptimisticMessage } from './pending-messages.js';
+import { pendingMessages, retireSubmittedDraft, type OptimisticMessage } from './pending-messages.js';
 
 type RemoteAppearance = { theme: 'system' | 'dark' | 'light'; textSize: 'default' | 'large' | 'extra' };
 function loadAppearance(): RemoteAppearance {
   try { const value = JSON.parse(localStorage.getItem('onecode-remote-appearance') ?? '{}'); return {
     theme: ['system', 'dark', 'light'].includes(value.theme) ? value.theme : 'system', textSize: ['default', 'large', 'extra'].includes(value.textSize) ? value.textSize : 'default' }; }
   catch { return { theme: 'system', textSize: 'default' }; }
+}
+
+function ScheduledChecks() {
+  const [rows, setRows] = useState<ChatSchedule[]>([]), [error, setError] = useState('');
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    const refresh = () => { void request<ChatSchedule[]>('schedules', undefined, controller.signal).then(value => {
+      if (!controller.signal.aborted) { setRows(value); setError(''); }
+    }).catch(error => { if (!controller.signal.aborted) setError((error as Error).message); }); };
+    refresh(); const timer = setInterval(refresh, 5000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, []);
+  return <section><h2>Scheduled checks</h2><p className="muted">Ask ChatGPT or Gemini to repeat a message at an interval until cancelled. Keep OneCode running, the PC awake and the provider signed in.</p>
+    {error && <p role="alert">{error}</p>}{!rows.length && <p>No scheduled checks.</p>}
+    {rows.map(row => <div className="setting" key={row.id}><span>{row.title}<small>{row.provider === 'gemini' ? 'Gemini' : 'ChatGPT'} · {row.intervalMinutes} min · {row.enabled ? new Date(row.nextRunAt).toLocaleString() : 'Cancelled'}</small>
+      <small>{row.lastError || row.runs.at(-1)?.detail || (row.runs.length ? `Last scheduled message: ${row.runs.at(-1)!.state}` : '')}</small><small>{row.message}</small></span>
+      {row.enabled && <button disabled={cancelling === row.id} onClick={async () => { setCancelling(row.id); try {
+        const changed = await action<ChatSchedule>({action:'cancelSchedule',id:crypto.randomUUID(),scheduleId:row.id});
+        setRows(rows => rows.map(item => item.id === changed.id ? changed : item));
+      } catch (error) { setError((error as Error).message); } finally { setCancelling(null); } }}>Cancel schedule</button>}</div>)}
+    <p className="muted">A queued or sent message is not proof the check succeeded.</p></section>;
 }
 
 function Settings({ bootstrap, refresh, back, appearance, saveAppearance, disconnect }: { bootstrap: RemoteBootstrap; refresh(): Promise<RemoteBootstrap>; back(): void; appearance: RemoteAppearance; saveAppearance(value: RemoteAppearance): void; disconnect(): void }) {
@@ -49,7 +72,7 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
       <label className="setting"><span>Default model<small>Choices observed on the host provider page.</small></span><select value={draft.defaultChatModel ?? ''} onChange={event => { update('defaultChatModel', event.target.value); update('defaultChatReasoning', undefined); }}><option value="">Automatic</option>{provider.models.models.filter(model => !model.id.endsWith('-current')).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
       {!!defaultModel?.efforts.length && <label className="setting"><span>Thinking effort</span><select value={draft.defaultChatReasoning ?? ''} onChange={event => update('defaultChatReasoning', event.target.value as ReasoningEffort)}><option value="">Provider default</option>{defaultModel.efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label>}
       <label className="setting"><span>Messages during a running task</span><select value={draft.followUp ?? 'steer'} onChange={event => update('followUp', event.target.value as 'steer' | 'queue')}><option value="steer">Send new direction immediately</option><option value="queue">Queue after this turn</option></select></label>{bool('Enter to send', 'enterSends', 'Shift+Enter adds a new line.')}</>}
-    {tab === 'Automation' && <>{bool('Automatic continuation', 'autoContinue', 'Continue eligible interrupted responses.')}{bool('Automatic skill selection', 'autoSelectSkills', 'Choose relevant installed skills for new messages.')}<label className="setting"><span>Rotate long turns after (minutes)<small>0 disables scheduled rotation.</small></span><input type="number" min={0} max={120} value={draft.rotateTurnMinutes ?? 30} onChange={event => update('rotateTurnMinutes', Number(event.target.value))} /></label></>}
+    {tab === 'Automation' && <><ScheduledChecks />{bool('Automatic continuation', 'autoContinue', 'Continue eligible interrupted responses.')}{bool('Automatic skill selection', 'autoSelectSkills', 'Choose relevant installed skills for new messages.')}<label className="setting"><span>Rotate long turns after (minutes)<small>0 disables scheduled rotation.</small></span><input type="number" min={0} max={120} value={draft.rotateTurnMinutes ?? 30} onChange={event => update('rotateTurnMinutes', Number(event.target.value))} /></label></>}
     {tab === 'Workspace' && <>{bool('Background chats', 'backgroundChats', 'Open app-created provider chats in the background.')}<label className="setting"><span>Background placement</span><select value={draft.backgroundPlacement ?? 'window'} onChange={event => update('backgroundPlacement', event.target.value as 'window' | 'group')}><option value="window">Separate window</option><option value="group">Browser tab group</option></select></label><label className="setting"><span>Provider tabs to retain</span><input type="number" min={1} max={50} value={draft.tabsToKeepOpen ?? 8} onChange={event => update('tabsToKeepOpen', Number(event.target.value))} /></label></>}
     {tab === 'Appearance' && <><label className="setting"><span>Remote theme<small>This browser</small></span><select value={browser.theme} onChange={event => { setBrowser(value => ({ ...value, theme: event.target.value as RemoteAppearance['theme'] })); setMessage('Unsaved changes'); }}><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="setting"><span>Text size<small>This browser</small></span><select value={browser.textSize} onChange={event => { setBrowser(value => ({ ...value, textSize: event.target.value as RemoteAppearance['textSize'] })); setMessage('Unsaved changes'); }}><option value="default">Default</option><option value="large">Large</option><option value="extra">Extra large</option></select></label><label className="setting"><span>Host theme</span><select value={draft.theme ?? 'dark'} onChange={event => update('theme', event.target.value as 'dark' | 'light')}><option value="dark">Dark</option><option value="light">Light</option></select></label>{bool('Follow new output', 'followOutput', 'Stop following when you scroll up.')}</>}
     {tab === 'Notifications' && bool('Task completion notifications', 'turnNotifications', 'Completion notifications on the host PC.')}
@@ -59,6 +82,7 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
 
 function Workspace({ disconnect }: { disconnect(): void }) {
   const [bootstrap, setBootstrap] = useState<RemoteBootstrap | null>(null), [sessions, setSessions] = useState<RemoteSession[]>([]), [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [newProject, setNewProject] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [detail, setDetail] = useState<RemoteSessionDetail | null>(null), [events, setEvents] = useState<ControlApiEvents['events']>([]), [inputs, setInputs] = useState<ControlApiInput[]>([]);
   const [provider, setProvider] = useState<ChatProvider | null>(null), [model, setModel] = useState(''), [effort, setEffort] = useState(''), [draft, setDraft] = useState(''), [view, setView] = useState('chat');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [connected, setConnected] = useState(false), [sending, setSending] = useState(false), [pending, setPending] = useState<string | null>(null), [editing, setEditing] = useState(false), [title, setTitle] = useState('');
@@ -77,6 +101,8 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   const files = useRef<HTMLInputElement>(null), attachmentDrafts = useRef(new Map<string, InputAttachment[]>());
   const saveAppearance = (value: RemoteAppearance) => { setAppearance(value); try { localStorage.setItem('onecode-remote-appearance', JSON.stringify(value)); } catch { /* in-memory preference */ } };
   const selectedRef = useRef(selected), draftRef = useRef(draft), drafts = useRef(new Map<string, string>()), pane = useRef<HTMLDivElement>(null), following = useRef(true), boot = useRef(bootstrap);
+  const composerKey = selected ?? `new:${newProject ?? ''}`;
+  const composerKeyRef = useRef(composerKey); composerKeyRef.current = composerKey;
   selectedRef.current = selected; draftRef.current = draft; boot.current = bootstrap;
   const pendingTarget = useRef<string | null>(null), pendingDraft = useRef(''), listLoaded = useRef(false);
   const refreshBootstrap = async () => { const value = await request<RemoteBootstrap>('bootstrap'); setBootstrap(value); return value; };
@@ -106,7 +132,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
           historyInitialized = true; historyFrom = history.nextFrom;
           setEvents(previous => mergeHistory(previous, history.events));
         }
-        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); if (selectedRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) setDraft(''); if (input.sessionId) setSelected(input.sessionId); } setNotice(''); } }
+        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); retireSubmittedDraft(drafts.current, attachmentDrafts.current, pendingTarget.current, pendingDraft.current); if (composerKeyRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) { setDraft(''); setAttachments([]); } if (input.deliveredSessionId ?? input.sessionId) setSelected(input.deliveredSessionId ?? input.sessionId); } setNotice(''); } }
       } catch (error) { if (!controller.signal.aborted) {
         const failed = error as Error;
         if (failed instanceof RemoteRequestError && failed.status === 503 && failed.message === 'busy') return;
@@ -119,10 +145,12 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [selected]);
   useEffect(() => { if (following.current && boot.current?.preferences.followOutput !== false) pane.current?.scrollTo({ top: pane.current.scrollHeight }); }, [events, optimistic]);
-  function select(id: string | null): void {
+  function select(id: string | null, projectId: string | null = null): void {
+    const nextKey = id ?? `new:${projectId ?? ''}`;
+    setNewProject(projectId);
     setFocusOpenId(null);
-    attachmentDrafts.current.set(selected ?? 'new', attachments); setAttachments(attachmentDrafts.current.get(id ?? 'new') ?? []); setMode('off'); setModeChanged(false);
-    drafts.current.set(selected ?? 'new', draft); setSelected(id); setDetail(null); setEvents([]); setNextBefore(null); setLoadingEarlier(false); setNotice(''); setPlan(plans.current.get(id ?? 'new') ?? null); setDraft(drafts.current.get(id ?? 'new') ?? ''); setView('chat'); setModel(''); setEffort(''); setModelEdited(false); setEditing(false); following.current = true;
+    attachmentDrafts.current.set(composerKey, attachments); setAttachments(attachmentDrafts.current.get(nextKey) ?? []); setMode('off'); setModeChanged(false);
+    drafts.current.set(composerKey, draft); setSelected(id); setDetail(null); setEvents([]); setNextBefore(null); setLoadingEarlier(false); setNotice(''); setPlan(plans.current.get(nextKey) ?? null); setDraft(drafts.current.get(nextKey) ?? ''); setView('chat'); setModel(''); setEffort(''); setModelEdited(false); setEditing(false); following.current = true;
     if (id === null) setProvider(bootstrap?.preferences.chatProvider ?? null);
   }
   const currentDetail = detail?.session.id === selected ? detail : null;
@@ -137,7 +165,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     const saved = !selected && actualProvider === bootstrap?.preferences.chatProvider ? bootstrap.preferences : null;
     setModel(observed?.model ?? saved?.defaultChatModel ?? ''); setEffort(observed?.reasoningEffort ?? saved?.defaultChatReasoning ?? '');
   }, [selected, currentDetail?.selection?.model, currentDetail?.selection?.reasoningEffort, actualProvider, catalog?.models.observedAt, modelEdited]);
-  const activePlan = plan?.key === (selected ?? 'new') ? plan : null;
+  const activePlan = plan?.key === (composerKey) ? plan : null;
   const planInvalid = !!activePlan?.stages && (!activePlan.stages.length || activePlan.stages.some(stage => !stage.trim()) || JSON.stringify(activePlan.stages).length > 12000);
   const delivering = inputs.some(row => (row.sessionId === selected || row.deliveredSessionId === selected) && !!selected && !row.automatic && row.delivery === 'pending' && row.state === 'queued');
   const modelProblem = model && !currentModel ? 'This model is unavailable. Choose a model from the current provider.'
@@ -146,15 +174,16 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     event.preventDefault(); if (!draft.trim() || sending || pending || uploading || activePlan?.busy || activePlan?.unconfirmed || planInvalid || !actualProvider || (selected && !currentDetail)) return;
     if (activePlan && !activePlan.stages) { await preparePlan(); return; }
     if (modelProblem) { setError(modelProblem); return; }
-    const id = crypto.randomUUID(), target = selected; pendingTarget.current = target; pendingDraft.current = draft; setSending(true); setError(''); setPending(id);
-    setOptimistic(rows => [...rows, { id, sessionId: target, text: draft.trim(), state: 'sending' }]);
+    const id = crypto.randomUUID(), target = selected, targetKey = composerKey; pendingTarget.current = targetKey; pendingDraft.current = draft; setSending(true); setError(''); setPending(id);
+    setOptimistic(rows => [...rows, { id, sessionId: target, composerKey: targetKey, text: draft.trim(), state: 'sending' }]);
     try {
-      const result = await action<{ input: ControlApiInput }>({ action: 'send', id, sessionId: selected, provider: actualProvider, text: draft.trim(), model: model || null, reasoningEffort: effort || null, expectedTurnId: activeTurn,
+      const result = await action<{ input: ControlApiInput }>({ action: 'send', id, sessionId: selected, projectId: selected ? summary?.projectId ?? null : newProject, provider: actualProvider, text: draft.trim(), model: model || null, reasoningEffort: effort || null, expectedTurnId: activeTurn,
         ...(modeChanged || !selected ? { automation: actualMode } : {}), ...(attachments.length ? { attachments } : {}), ...(activePlan?.stages ? { plan: activePlan.stages } : {}),
         afterTurn: !!activeTurn && bootstrap?.preferences.followUp === 'queue' });
       setOptimistic(rows => rows.map(row => row.id === id ? { ...row, sessionId: result.input.deliveredSessionId ?? result.input.sessionId, receipt: result.input, state: 'accepted' } : row));
-      if (selectedRef.current === target) { if (draftRef.current === pendingDraft.current) { setDraft(''); drafts.current.delete(target ?? 'new'); setAttachments([]); attachmentDrafts.current.delete(target ?? 'new'); } if (result.input.sessionId) setSelected(result.input.sessionId); }
-      if (activePlan) { plans.current.delete(activePlan.key); if (selectedRef.current === target) setPlan(null); }
+      retireSubmittedDraft(drafts.current, attachmentDrafts.current, targetKey, pendingDraft.current);
+      if (composerKeyRef.current === targetKey) { if (draftRef.current === pendingDraft.current) { setDraft(''); drafts.current.delete(targetKey); setAttachments([]); attachmentDrafts.current.delete(targetKey); } if (result.input.sessionId) setSelected(result.input.sessionId); }
+      if (activePlan) { plans.current.delete(activePlan.key); if (composerKeyRef.current === targetKey) setPlan(null); }
       setPending(null); setSending(false); setNotice('');
     } catch (error) {
       setError((error as Error).message); setSending(false);
@@ -171,13 +200,13 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     if (activePlan?.stages && activePlan.text !== value.trim()) { const next = { ...activePlan, stages: null, text: value.trim() }; plans.current.set(next.key, next); setPlan(next); }
   }
   function togglePlan(): void {
-    const key = selected ?? 'new', current = plans.current.get(key);
+    const key = composerKey, current = plans.current.get(key);
     if (current) { if (current.requestId) void mutate({ action: 'cancelPlan', requestId: current.requestId }); plans.current.delete(key); setPlan(null); }
     else { const next = { key, text: '', stages: null, requestId: null, busy: false, error: '' }; plans.current.set(key, next); setPlan(next); }
     input.current?.focus({ preventScroll: true });
   }
   async function preparePlan(): Promise<void> {
-    const key = selected ?? 'new', text = draft.trim();
+    const key = composerKey, text = draft.trim();
     if (!text || text.length > 16000) { setError('Enter a task of at most 16000 characters.'); return; }
     const next: PlanDraft = { key, text, stages: null, requestId: crypto.randomUUID(), busy: true, error: '' };
     plans.current.set(key, next); setPlan(next);
@@ -186,7 +215,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
       if (plans.current.get(key) !== next) return;
       next.stages = stages; next.requestId = null;
     } catch (error) { if (plans.current.get(key) === next) { next.error = (error as Error).message; next.unconfirmed = !(error instanceof RemoteActionError) && !(error instanceof RemoteRequestError && error.status < 500); } }
-    finally { if (plans.current.get(key) === next) { next.busy = false; if ((selectedRef.current ?? 'new') === key) setPlan({ ...next }); } }
+    finally { if (plans.current.get(key) === next) { next.busy = false; if (composerKeyRef.current === key) setPlan({ ...next }); } }
   }
   const completion = useComposerCompletion({ draft, setDraft: updateDraft, input, skills, loading: skillsLoading, sessionId: selected, command: name => {
     if (name === 'new') select(null);
@@ -205,7 +234,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   }, [completion.visible, skillsLoaded]);
   const upload = async (chosen: FileList | null) => {
     if (!chosen?.length || uploading) return;
-    const target = selected; setUploading(true); setError('');
+    const targetKey = composerKey; setUploading(true); setError('');
     try {
       if (attachments.length + chosen.length > 20) throw new Error('Attach up to 20 files per message');
       const uploaded: InputAttachment[] = [];
@@ -214,14 +243,20 @@ function Workspace({ disconnect }: { disconnect(): void }) {
         const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]!); reader.onerror = () => reject(new Error('Could not read this file')); reader.readAsDataURL(file); });
         uploaded.push(await request<InputAttachment>('attachments', { name: file.name, data }));
       }
-      if (selectedRef.current === target) setAttachments(rows => [...rows, ...uploaded]);
-      else attachmentDrafts.current.set(target ?? 'new', [...(attachmentDrafts.current.get(target ?? 'new') ?? []), ...uploaded]);
+      if (composerKeyRef.current === targetKey) setAttachments(rows => [...rows, ...uploaded]);
+      else attachmentDrafts.current.set(targetKey, [...(attachmentDrafts.current.get(targetKey) ?? []), ...uploaded]);
     } catch (error) { setError((error as Error).message); } finally { setUploading(false); if (files.current) files.current.value = ''; }
   };
+  const taskRow = (session: RemoteSession) => <button key={session.id} className={`task ${selected === session.id ? 'active' : ''}`} onClick={() => select(session.id)} title={session.title || 'Untitled chat'}><strong>{session.title || 'Untitled chat'}</strong></button>;
   if (!bootstrap) return <main className="pair"><h1>Loading OneCode…</h1><p role="alert">{error}</p><button onClick={() => location.reload()}>Reconnect</button></main>;
   return <div className="app" data-view={view} data-theme={bootstrap.preferences.theme} data-remote-theme={appearance.theme} data-text-size={appearance.textSize}><header className="top"><div className="brand">◈ OneCode <small>Remote</small></div><span className={connected ? 'connected' : 'muted'}>{connected ? '●' : '○'} {bootstrap.host} · {connected ? 'Connected' : 'Reconnecting'}</span></header><div className="body">
-    <aside className={view === 'tasks' ? 'visible' : ''}><button onClick={() => select(null)}>＋ New chat</button><p className="eyebrow">Tasks</p><div className="task-list">{sessions.map(session => <button key={session.id} className={`task ${selected === session.id ? 'active' : ''}`} onClick={() => select(session.id)} title={session.title || 'Untitled chat'}><strong>{session.title || 'Untitled chat'}</strong><small>{session.activeTurnId ? '● Working' : 'Ready'}</small></button>)}{nextCursor && <button onClick={async () => { const page = await request<RemoteSessionList>(`sessions?limit=50&cursor=${encodeURIComponent(nextCursor)}`); setSessions(rows => [...rows, ...page.sessions.filter(row => !rows.some(existing => existing.id === row.id))]); setNextCursor(page.nextCursor); }}>Load more</button>}</div><button className="settings-link" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')}><Icon name="settings" /> Settings</button></aside>
-    {view === 'settings' ? <Settings bootstrap={bootstrap} appearance={appearance} saveAppearance={saveAppearance} refresh={refreshBootstrap} back={() => setView('chat')} disconnect={() => { void request('disconnect', {}).catch(() => undefined).finally(() => { setRemoteToken(''); disconnect(); }); }} /> : <main className={view === 'tasks' ? 'mobile-hidden' : ''}><header className="chat-heading"><div className="heading-line"><h1>{selected ? summary?.title || 'Loading task…' : 'New chat'}</h1>{!selected && !sending && !pending ? <select aria-label="Provider for this chat" disabled={sending || !!pending} value={actualProvider ?? ''} onChange={event => { setProvider(event.target.value as ChatProvider); setModel(''); setEffort(''); setModelEdited(true); }}>{bootstrap.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select> : <span className="muted">{catalog?.label}</span>}</div>{selected && <button onClick={() => { setTitle(summary?.title ?? ''); setEditing(value => !value); }}>Edit task</button>}</header>
+    <aside className={view === 'tasks' ? 'visible' : ''}><button onClick={() => select(null)}>＋ New chat</button>
+      <div className="task-list">{(bootstrap.projects ?? []).map(project => <details className="project-group" key={project.id} open data-project-color={project.color}>
+        <summary><span>{project.name}</span><button aria-label={`New chat in ${project.name}`} onClick={event => { event.preventDefault(); select(null, project.id); }}>＋</button></summary>
+        {sessions.filter(session => session.projectId === project.id).map(taskRow)}
+      </details>)}<p className="eyebrow">Chats</p>{sessions.filter(session => !(bootstrap.projects ?? []).some(project => project.id === session.projectId)).map(taskRow)}
+      {nextCursor && <button onClick={async () => { const page = await request<RemoteSessionList>(`sessions?limit=50&cursor=${encodeURIComponent(nextCursor)}`); setSessions(rows => [...rows, ...page.sessions.filter(row => !rows.some(existing => existing.id === row.id))]); setNextCursor(page.nextCursor); }}>Load more</button>}</div><button className="settings-link" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')}><Icon name="settings" /> Settings</button></aside>
+    {view === 'settings' ? <Settings bootstrap={bootstrap} appearance={appearance} saveAppearance={saveAppearance} refresh={refreshBootstrap} back={() => setView('chat')} disconnect={() => { void request('disconnect', {}).catch(() => undefined).finally(() => { setRemoteToken(''); disconnect(); }); }} /> : <main className={view === 'tasks' ? 'mobile-hidden' : ''}><header className="chat-heading"><div className="heading-line"><h1>{selected ? summary?.title || 'Loading task…' : newProject ? `New chat · ${bootstrap.projects?.find(project => project.id === newProject)?.name ?? 'Project unavailable'}` : 'New chat'}</h1>{!selected && !sending && !pending ? <select aria-label="Provider for this chat" disabled={sending || !!pending} value={actualProvider ?? ''} onChange={event => { setProvider(event.target.value as ChatProvider); setModel(''); setEffort(''); setModelEdited(true); }}>{bootstrap.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select> : <span className="muted">{catalog?.label}</span>}</div>{selected && <button onClick={() => { setTitle(summary?.title ?? ''); setEditing(value => !value); }}>Edit task</button>}</header>
       {editing && <form className="edit-title" onSubmit={event => { event.preventDefault(); void mutate({ action: 'rename', sessionId: selected, title, expectedTitle: summary?.title ?? '' }); setEditing(false); }}><input aria-label="Task title" value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /><button>Save title</button></form>}
       <div className="thread" ref={pane} onScroll={() => { const node = pane.current; if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60; }}>
         <div className="transcript">{!selected && <div className="welcome"><h2>What are we working on?</h2><p>Start a task on {bootstrap.host}.</p></div>}
@@ -234,7 +269,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
             finally { if (selectedRef.current === target) setLoadingEarlier(false); }
           }}>{loadingEarlier ? 'Loading…' : 'Load earlier'}</button>}
           {selected && <Transcript events={events} sessionId={selected} openRequestId={focusOpenId} />}
-          {pendingMessages(optimistic, inputs, events, selected).map(row => <article className="human optimistic" key={row.id}><div className="msg" dir="auto">{row.text}</div><small>{row.receipt?.delivery === 'sent' ? 'Sent ✓' : row.receipt?.delivery === 'not_sent' ? 'Not sent' : row.state === 'unconfirmed' || row.receipt?.delivery === 'unconfirmed' ? 'Delivery unconfirmed' : 'Sending…'}</small></article>)}
+          {pendingMessages(optimistic, inputs, events, selected, composerKey).map(row => <article className="human optimistic" key={row.id}><div className="msg" dir="auto">{row.text}</div><small>{row.receipt?.delivery === 'sent' ? 'Sent ✓' : row.receipt?.delivery === 'not_sent' ? 'Not sent' : row.state === 'unconfirmed' || row.receipt?.delivery === 'unconfirmed' ? 'Delivery unconfirmed' : 'Sending…'}</small></article>)}
           {activeTurn && <div className="thinking" role="status"><span className="thinking-dot" />{events.some(event => event.turnId === activeTurn && ['assistant_message', 'tool_call'].includes(event.kind)) ? 'Working…' : 'Thinking…'}</div>}
         </div>
       </div><div className="composer-area"><div className="status" role="status">{pending ? 'Checking delivery…' : sending || delivering ? 'Sending…' : activeTurn ? 'Working' : 'Ready'}{notice ? ` · ${notice}` : ''}</div>{inputs.filter(input => input.sessionId === selected && !input.automatic && input.state === 'queued' && input.delivery === 'pending' && ['after-turn', 'finish'].includes(input.mode)).map(input => <div className="queued" key={input.id}><span>Queued after this turn</span><button onClick={() => { void mutate({ action: 'cancel', inputId: input.id }); }}>Cancel</button></div>)}
@@ -292,6 +327,6 @@ function App() {
   }, []);
   return connected ? <Workspace disconnect={() => { forgetRemoteLink(); setConnected(false); }} />
     : <main className="pair"><div className="brand">◈ OneCode <small>Remote</small></div><h1>{connecting ? 'Connecting…' : 'Open your remote link'}</h1>
-      {!connecting && <p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>}</main>;
+      {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>{error && (hasRemoteLink() || hasRemoteToken()) && <button onClick={() => location.reload()}>Reconnect</button>}</>}</main>;
 }
 createRoot(document.getElementById('root')!).render(<App />);

@@ -1,13 +1,7 @@
-/**
- * Server instructions advertised during MCP initialization. The client decides which
- * instructions reach the model; successful transport does not prove full prompt receipt.
- *
- * Core carries adapted upstream Codex collaboration instructions followed by only the
- * available local tools. Declarations own per-tool details; live guards enforce permissions.
- *
- * Written per surface. Two connectors mean two of these, and each says only what its own
- * tools can do: telling the Core conversation about `computer` would be describing a tool
- * that server does not have, which is exactly the confusion the split exists to end.
+import { CHAT_SCHEDULE_INSTRUCTIONS } from '../../shared/chat-schedules.js';
+/** OneCode Core publishes the permitted local capabilities through one provider connector.
+ * Legacy endpoints retain compatibility; external schemas come from the live plugin owner.
+ * Discovery never grants permission or supplies caller identity.
  */
 
 import { CODING_INSTRUCTIONS } from './coding-instructions.js';
@@ -36,15 +30,15 @@ export function serverInstructions(
   skills = skillCatalogInstructions()
 ): string {
   const routing = geminiBindingsEnabled() ? `${GEMINI_ROUTING_INSTRUCTIONS}\n\n` : '';
-  if (surface === 'plugins') return routing + 'External MCP tools enabled by the user in OneCode. Each tool retains its upstream schema and annotations. External servers run with their own operating-system or service permissions; OneCode approved folders do not sandbox them. Use only for the user\'s requested task. A failed or disconnected call may already have taken effect: never automatically retry a mutation after an ambiguous failure. Disabled tools require the user to re-enable them in Settings. Core and Desktop are separate connectors.' + (canAddCodeMode(pluginManager.tools()) ? '\n\n' + CODE_MODE_INSTRUCTIONS : '');
+  if (surface === 'plugins') return routing + 'External MCP tools enabled by the user in OneCode. Each tool retains its upstream schema and annotations. External servers run with their own operating-system or service permissions; OneCode approved folders do not sandbox them. Use only for the user\'s requested task. A failed or disconnected call may already have taken effect: never automatically retry a mutation after an ambiguous failure. Disabled tools require the user to re-enable them in Settings. Use the OneCode Core connector for all new setup; this endpoint remains compatible with older installations.' + (canAddCodeMode(pluginManager.tools()) ? '\n\n' + CODE_MODE_INSTRUCTIONS : '');
   return routing + (surface === 'desktop' ? [browserInstructions(), ...(platform === 'win32' || platform === 'darwin' ? [desktopInstructions(ctx, platform)] : [`Files, patches and shell commands live in the separate "${surfaceDefinition('core').connectorName}" connector.`, CODE_MODE_INSTRUCTIONS, ...userInstructions()])].join('\n\n') : coreInstructions(ctx, platform, skills));
 }
 
-function browserInstructions(): string {
+function browserInstructions(surface: 'core' | 'desktop' = 'desktop'): string {
   return [
-    'Browser control runs through the companion extension inside your existing browser, on Desktop. Prefer browser_* tools for web work: they read the DOM and operate background tabs without moving the OS cursor or foregrounding Chrome.',
+    'Browser control runs through the companion extension inside your existing browser. Prefer browser_* tools for web work: they read the DOM and operate background tabs without moving the OS cursor or foregrounding Chrome.',
     'Start with browser_tabs action=list and choose a returned tabId by title/URL. access.snapshot and access.input distinguish DOM reading from interaction; pendingUrl identifies a destination still loading. browser_snapshot reads existing HTTP(S) tabs directly, including protected ChatGPT pages and foreign attachments. An attach refusal does not require another tab: inspect that same tab. Attach for input, screenshots and captured diagnostics. action=new starts the requested URL directly in a background tab; created and attached are separate facts. If created is true and attached is false, inspect or attach that same tab instead of repeating new. Release leaves it open. No additional per-tab confirmation is required.',
-    'Keep existing-browser work on this Desktop connector. External Playwright/browser plugins can launch a separate empty browser on about:blank; they do not inherit this browser\'s tabs, login, tabId or refs. Switching connectors or opening duplicate provider chats cannot repair an ownership or protected-input refusal. Use browser_snapshot for the available read path.',
+    `Keep existing-browser work on this ${surface === 'core' ? 'Core' : 'Desktop'} connector. External Playwright/browser plugins can launch a separate empty browser on about:blank; they do not inherit this browser\'s tabs, login, tabId or refs. Switching connectors or opening duplicate provider chats cannot repair an ownership or protected-input refusal. Use browser_snapshot for the available read path.`,
     'Unattached/foreign browser_snapshot returns inspectionOnly and documentId without action refs. Your attached tab returns refs/pageId; mode:inspect preserves existing refs. format:dom adds bounded element attributes, CSS and rectangles for DOM/layout diagnosis without arbitrary JavaScript. selector scopes to a CSS subtree such as main. filter is a literal case-insensitive match, not regex. Truncation never proves absence. Snapshot again after navigation or stale refs. Attached frameId selects an observed iframe; inspection uses document: frameIds. browser_screenshot supplies image-pixel coordinates and screenshotId; full-page images are inspection-only.',
     'browser_action clicks, hovers, fills, types, selects, sends key chords, scrolls, drags and handles dialogs. browser_navigate opens URLs/history/reloads in the same owned tab. browser_evaluate executes one page JavaScript expression, including async results, for application state and diagnostics. Wrap multiple statements in an IIFE returning the needed value. It has no Node or filesystem API. Use native browser input for ordinary interaction and evaluate for development/debugging.',
     'browser_console and browser_network capture events from attachment onward, with cursors and filters. Attach before reproducing a problem. Request one requestId to inspect headers/body; absence from a bounded buffer is not proof no request occurred. Chrome debugger cancellation/DevTools can detach a tab.',
@@ -104,14 +98,13 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
   ].join(' ');
   const lines = [
     CODING_INSTRUCTIONS,
+    CHAT_SCHEDULE_INSTRUCTIONS,
     skills,
     ...(caps.read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
     '',
     '# Local tools',
-    `Use the connected tools as needed: ${surfaceDefinition('core').connectorName} for files, terminal, plans and workers` +
-    `; ${surfaceDefinition('desktop').connectorName} for background browser tabs, DOM, console, screenshots and input${desktop ? ', native windows and clipboard' : ''}` +
-    `; Core plugins action=list then action=call for enabled external apps and services (the separate ${surfaceDefinition('plugins').connectorName} connector also exposes their native tools).`,
-    'For external MCPs, discover with plugins {action:"list",query:"optional literal search"}; then call plugins {action:"call",name:"exact_listed_name",arguments:{...}} using the returned inputSchema. Use arguments, not args. No separate @Plugins mention is needed. This bridge does not install, enable, sign in or import another app\'s MCP settings. Live plugin admission and this chat\'s binding, Block and Trust still apply.',
+    `Use ${surfaceDefinition('core').connectorName} for files, terminal, plans, workers, browser and desktop tools. Discover enabled external apps through plugins action=list, then action=call. One provider connector reaches all enabled OneCode capabilities; live permissions decide access.`,
+    'No separate @Plugins mention is needed. Use plugins action=install with installation for a user-requested integration; it requires Command execution and Create files. Configure sign-in/secrets in Settings. Calls use arguments, not args, and retain live binding, Block and Trust guards.',
     pluginDiscoveryInstructions(configuredConnectorName('core'), mcpProvider()),
     artifactDiscoveryInstructions(caps),
     `Host: ${host}. Roots: ${roots}`,
@@ -171,17 +164,18 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
   );
   if (desktop && (caps.screen || caps.control || caps.clipboardRead || caps.clipboardWrite)) lines.push(
     '',
-    `Native screen, window, mouse, keyboard and clipboard tools are in "${surfaceDefinition('desktop').connectorName}". If needed but unavailable, name that connector.`
+    `Native screen, window, mouse, keyboard and clipboard tools are in "${surfaceDefinition('core').connectorName}". If needed but unavailable, name that connector.`
   );
-  if (caps.screen || caps.control) lines.push(
-    `For pages already open in the user's browser, discover "${surfaceDefinition('desktop').connectorName}" and use browser_tabs list, then browser_snapshot on the returned tabId. DOM reading works without attach, including protected ChatGPT tabs. format:dom adds attributes and layout. External browser plugins can start a separate empty browser on about:blank and do not share these tabs or handles.`
-  );
+  if (caps.screen || caps.control) lines.push('', browserInstructions('core'));
+  if (desktop && (caps.screen || caps.control || caps.clipboardRead || caps.clipboardWrite)) {
+    lines.push('', desktopInstructions(ctx, platform, 'core'));
+  }
   lines.push('', CODE_MODE_INSTRUCTIONS, ...userInstructions());
   return lines.join('\n');
 }
 
-function desktopInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
-  if (platform === 'win32') return windowsDesktopInstructions();
+function desktopInstructions(ctx: ToolContext, platform: NodeJS.Platform, surface: 'core' | 'desktop' = 'desktop'): string {
+  if (platform === 'win32') return windowsDesktopInstructions(surface);
   const host = platform === 'darwin' ? 'Mac' : 'Windows PC';
   const paste = platform === 'darwin' ? 'command+v' : 'ctrl+v';
   const lines = [
@@ -220,18 +214,18 @@ function desktopInstructions(ctx: ToolContext, platform: NodeJS.Platform): strin
     );
   }
 
-  lines.push(
+  if (surface === 'desktop') lines.push(
     '',
     `Files, patches and commands live in a separate connector, "${surfaceDefinition('core').connectorName}".`,
     'This one cannot read or change files. If a task needs that and it is not available here, say so.'
   );
 
-  lines.push('', CODE_MODE_INSTRUCTIONS, ...userInstructions());
+  if (surface === 'desktop') lines.push('', CODE_MODE_INSTRUCTIONS, ...userInstructions());
 
   return lines.join('\n');
 }
 
-function windowsDesktopInstructions(): string {
+function windowsDesktopInstructions(surface: 'core' | 'desktop' = 'desktop'): string {
   return [
     'Windows Computer Use uses the Window2 app/window interface. Use its named tools directly or call the same methods on sky inside this connector’s exec JavaScript. sky is supplied automatically; no package import or setup is needed. Mac uses a separate contract.',
     '',
@@ -254,7 +248,6 @@ function windowsDesktopInstructions(): string {
     'Use nodeRepl.write(value) or text(value) for concise text. sky methods return their native arrays/objects or undefined, and throw tool failures. tools.<name> returns the normal MCP envelope with structuredContent.value. Only sky.get_window_state automatically displays images.',
     'This app reuses its bounded exec runtime: variables do not persist across calls, so carry returned Window objects or rehydrate with get_window. No Node, imports, filesystem, network or extra Codex permission system is installed. Each method still uses this app’s live capability checks, exact caller and local recording. Keep independent reads parallel only when their observations do not conflict; await actions before refreshing.',
     '',
-    `Files, patches and shell commands live in the separate "${surfaceDefinition('core').connectorName}" connector. Act only within the user’s requested task.`,
-    ...userInstructions()
+    ...(surface === 'desktop' ? [`Files, patches and shell commands live in the separate "${surfaceDefinition('core').connectorName}" connector. Act only within the user’s requested task.`, ...userInstructions()] : ['Files, patches, shell commands and permitted desktop tools are all available through this Core connector. Act only within the user’s requested task.'])
   ].join('\n');
 }

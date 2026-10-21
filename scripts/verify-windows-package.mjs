@@ -46,15 +46,15 @@ export function assertWindowsPackageIsolation(resources) {
       const stat = lstatSync(file);
       if (stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) throw new Error(`Linked/special file in packaged resources: ${label}`);
       if ((label === 'skills' || label.startsWith('skills/')) && !(stat.isDirectory()
-        ? ['skills', 'skills/gemini-code', 'skills/onecode-chatgpt'].includes(label)
-        : ['skills/gemini-code/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label))) throw new Error(`Unapproved skill resource input: ${label}`);
+        ? ['skills', 'skills/onecode-gemini', 'skills/onecode-chatgpt'].includes(label)
+        : ['skills/onecode-gemini/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label))) throw new Error(`Unapproved skill resource input: ${label}`);
       if (label.startsWith('updater/') && (stat.isDirectory() || !['updater/windows-update-helper.cjs', 'updater/legacy-relaunch.ps1', 'updater/app-update.yml'].includes(label)))
         throw new Error(`Unapproved updater resource input: ${label}`);
       if (label === 'updater/app-update.yml' && !readFileSync(file).equals(readFileSync(path.join(resources, 'app-update.yml'))))
         throw new Error('Updater resource configuration differs from the active feed');
       if (isPrivate(label, stat.isDirectory())) throw new Error(`Private profile/credential file in packaged resources: ${label}`);
       if (stat.isDirectory()) visit(file, label);
-      else if ((label.startsWith('extension/') || label.startsWith('updater/') || label === 'WINDOWS-SETUP.md' || ['skills/gemini-code/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label)) && /\.(?:js|cjs|ps1|json|html|css|md|txt)$/i.test(label)) {
+      else if ((label.startsWith('extension/') || label.startsWith('updater/') || label === 'WINDOWS-SETUP.md' || ['skills/onecode-gemini/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label)) && /\.(?:js|cjs|ps1|json|html|css|md|txt)$/i.test(label)) {
         inspectText(readFileSync(file), label); ownedFiles++;
       }
     }

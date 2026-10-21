@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.0] — 2026-10-21
+
+Consolidate permitted local tools, plugins and managed skills under OneCode Core. Add durable interval checks for ChatGPT and Gemini, preserve Remote project composer and delivery ownership, repair native steering and restored browser openings, and automate supported Windows Tailscale setup. Correct image-card recovery and Gemini image export, add inline local photos and playable MP4/WebM videos on desktop and Remote, and recover from transient Tailscale startup/network failures without replaying route changes or messages. See [0.4.0 release notes](docs/release-notes/v0.4.0.md).
+
 ## [0.3.6] — 2026-10-19
 
 Unify Gemini and ChatGPT handoff capture around completed Markdown replies without a save-tool approval. Preserve the original task across native manual approval replies, include published tool titles in connector-scoped auto-approval, and repair the fresh Gemini editor remount before warm-up. Add optional native ChatGPT skill export and shorter authorized prompts, preserve late progress placement, and forward native screenshots as images without base64 text overflow. See [0.3.6 release notes](docs/release-notes/v0.3.6.md).

@@ -1,23 +1,6 @@
-/**
- * The model-facing surfaces this app publishes, and what each one is for.
- *
- * Gemini connects to one MCP server per connector, and the *whole* of that server's
- * tool list is one discovery unit. The planning bound for a surface is its complete
- * tools/list. Core's explicit plugins bridge retrieves external schemas as bounded
- * result data; it does not register those external names as Core tools.
- *
- * That is the entire reason this file exists. Splitting into separate servers is the
- * only mechanism that actually bounds the worst case, because a separate server is a
- * separate discovery boundary that no query can cross.
- *
- * It is deliberately not a splitting free-for-all. Every extra surface is another
- * connector the user has to create, name, describe and keep connected, and on the
- * OpenAI tunnel it is another tunnel id as well (see `docs/tool-surface.md` §6.4).
- * A surface has to earn that. The test applied here is: a distinct capability boundary
- * the user already thinks in, plus enough schema weight that folding it into Core
- * would meaningfully raise Core's no-query cost.
- *
- * Two surfaces pass that test today.
+/** OneCode Core publishes the permitted local capabilities through one provider connector.
+ * Legacy endpoints retain compatibility; external schemas come from the live plugin owner.
+ * Discovery never grants permission or supplies caller identity.
  */
 
 import type { Capabilities } from '../../shared/types.js';
@@ -104,25 +87,18 @@ const CORE: SurfaceDefinition = {
     'Use for: opening and reading files, searching a repository, applying patches, creating, renaming and deleting files, ' +
     'running builds, tests, linters, git, npm and shell commands, continuing long-running or interactive terminal sessions, ' +
     'and writing files onto this computer. Create interactive canvas mockups, HTML prototypes, charts and presentations inline in OneCode through the built-in artifact tool, with an optional workbench. ' +
-    'Also discovers and calls enabled external MCP integrations through the plugins tool, displays task plans and — when the user has ' +
+    'Inspect and control existing browser tabs, list and launch apps, list windows, capture window screenshots, inspect native controls, click, type, scroll and use the clipboard when the user enables those permissions. ' +
+    'Schedule repeated messages and completion checks in the same chat at a requested interval through automations. Also discovers and calls enabled external MCP integrations through the plugins tool, displays task plans and — when the user has ' +
     'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several AI conversations.',
-  cardSummary: 'Files, patches and terminal.',
+  cardSummary: 'Files, terminal, browser, desktop, skills and plugins.',
   required: true,
   // A stable superset lets the user switch providers without reconnecting the MCP app.
   // save_image checks its registered provider export capability and exact live-page owner.
-  tools: ['plugins', 'artifact', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'save_handoff', 'agents', 'session_finish', 'usage', 'exec']
+  tools: ['plugins', 'skills', 'automations', 'artifact', 'read', 'view_image', 'find', 'apply_patch', 'save_image', 'exec_command', 'write_stdin', 'update_plan', 'save_handoff', 'agents', 'session_finish', 'usage', ...BROWSER_TOOLS, ...WINDOWS_COMPUTER_METHODS, 'read_clipboard', 'write_clipboard', 'observe', 'computer', 'exec']
 };
 
-/**
- * Desktop — seeing and driving the native desktop.
- *
- * This one earns its boundary twice over. It is gated on permissions the user grants
- * separately and can switch off independently; Windows has the Window2 app/window API,
- * while macOS retains observe/computer. The majority of coding sessions
- * never touch the desktop at all. Folding it into Core would put its weight into every
- * no-query discovery of the coding surface, for a capability most conversations do not
- * want.
- */
+/** Legacy Desktop endpoint: the same permission-gated native and browser owners
+ * are also registered on Core. Retained for existing provider connections. */
 const DESKTOP: SurfaceDefinition = {
   id: 'desktop',
   serverName: 'onecode-desktop',

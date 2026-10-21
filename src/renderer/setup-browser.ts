@@ -74,7 +74,7 @@ export function initBrowserSetup(actions: {
    * language change through ui(), like every other text.
    */
   const paintInstallSteps = (label: string, providerName: string): void => {
-    // Firefox installs the signed add-on from this version's release: no Developer mode, no folder.
+    // Firefox has a separate signed-package requirement; show its explicit setup status.
     const gecko = external === 'firefox';
     for (const step of $('browserExtensionStage').querySelectorAll<HTMLElement>('[data-install-engine]')) {
       step.hidden = step.dataset.installEngine !== (gecko ? 'gecko' : 'chromium');

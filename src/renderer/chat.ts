@@ -17,7 +17,7 @@ import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, ini
 import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
 import { decorateJsonCode } from './json-code.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
-import { safeExternalLink } from '../shared/external-link.js';
+import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
 import { createFilePanel } from './file-panel.js';
 import { renderAgentPlan } from './agent-plan.js';
@@ -1262,7 +1262,9 @@ async function loadSessions(detail: 'reread' | 'changed' = 'reread'): Promise<vo
   chatSearch?.refresh();
   const row = selectedId === null ? undefined : sessions.find(entry => entry.id === selectedId);
   if (detail === 'reread' || selectedId === null || detailFor !== selectedId || changed.all || changed.ids.has(selectedId) ||
-      row?.updatedAt !== detailStamp?.updatedAt || row?.events !== detailStamp?.events) await loadDetail();
+      row?.updatedAt !== detailStamp?.updatedAt || row?.events !== detailStamp?.events) {
+    await loadDetail(); void mediaPanel?.refresh();
+  }
   else void refreshSessionControls();
   void refreshInputQueue();
 }
@@ -1701,7 +1703,7 @@ function paintGoalProgress(): void {
 }
 const cancelledStarts = new Set<string>();
 function pendingComposerInput(): InputEntry | undefined {
-  return [...startingInputs.values(), ...pendingComposerInputs].find(entry => (!queuedFollowup(entry) || entry.state === 'browser') && ['queued', 'browser'].includes(entry.state) &&
+  return [...startingInputs.values(), ...pendingComposerInputs].find(entry => !entry.scheduleId && (!queuedFollowup(entry) || entry.state === 'browser') && ['queued', 'browser'].includes(entry.state) &&
     (selectedId ? (entry.sessionId ?? entry.deliveredSessionId) === selectedId :
       pendingNewInput?.generation === selectionGeneration && pendingNewInput.id === entry.id));
 }
@@ -2133,7 +2135,7 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
   const selection = selectionGeneration;
   const observed = wanted === null ? undefined : sessions.find(row => row.id === wanted);
   const observedCompletion = observed ? { ...observed } : undefined;
-  if (wanted !== null && (historyBefore !== null || historyLoading) && detailFor === wanted && !navigate) {
+  if (wanted !== null && historyLoading && detailFor === wanted && !navigate) {
     if (historyLoading) historyRefreshPending = true;
     void refreshSessionControls(); paintDetail(); return false;
   }
@@ -2154,10 +2156,12 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
   }
   const opening = detailFor !== wanted;
   if (opening) { historyBefore = null; historyStart = null; roundsEnter = false; }
+  const resident = !navigate && historyBefore !== null && detailFor === wanted && events.length > 0;
   // Live deltas must not evict a historical page while the user is reading it.
   const incremental = !prepend && newerFrom === undefined && historyBefore === null && detailFor === wanted && detailCursor !== null;
   const detail = await run(
-    api.getSession(wanted, newerFrom !== undefined ? { after: newerFrom, limit: TIMELINE_BATCH_SIZE } : incremental ? { from: detailCursor!, limit: TIMELINE_BATCH_SIZE } : { ...(olderBefore !== undefined ? { before: olderBefore } : historyBefore !== null ? { before: historyBefore } : {}), limit: TIMELINE_BATCH_SIZE })
+    api.getSession(wanted, resident ? { after: Math.min(...events.map(residenceOf)) - 1, limit: MAX_TIMELINE_ROWS }
+      : newerFrom !== undefined ? { after: newerFrom, limit: TIMELINE_BATCH_SIZE } : incremental ? { from: detailCursor!, limit: TIMELINE_BATCH_SIZE } : { ...(olderBefore !== undefined ? { before: olderBefore } : historyBefore !== null ? { before: historyBefore } : {}), limit: TIMELINE_BATCH_SIZE })
   );
   if (generation !== detailLoadGeneration || selection !== selectionGeneration || selectedId !== wanted) return false;
   if (!detail) {
@@ -2169,6 +2173,16 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
       $('timeline').removeAttribute('aria-busy');
     }
     return false;
+  }
+  if (resident) {
+    // Refresh canonical revisions only inside the page being read. New work must
+    // neither evict that page nor move its history boundaries or live cursor.
+    const revisions = new Map(detail.events.map(event => [canonicalMessageKey(event) ?? `seq:${event.seq}`, event]));
+    events = events.map(event => revisions.get(canonicalMessageKey(event) ?? `seq:${event.seq}`) ?? event);
+    totalEvents = detail.total;
+    detailStamp = observedCompletion ? { updatedAt: observedCompletion.updatedAt, events: observedCompletion.events } : null;
+    paintDetail(false);
+    return true;
   }
   // An empty older page is not navigation. Keep the live cursor and viewport intact.
   if (prepend && !detail.events.length) return true;
@@ -2294,7 +2308,7 @@ function textBlock(className: string, value: string, truncated: boolean, chars: 
 function safeRenderedHref(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.startsWith('#')) return trimmed;
-  return safeExternalLink(trimmed) ? trimmed : null;
+  return safeExternalLink(trimmed) || safeProviderFileLink(trimmed) ? trimmed : null;
 }
 
 const PROVIDER_CITATION = /^\uE200(?:cite|filecite)\uE202[^\uE200\uE201]*\uE201/;
@@ -2725,7 +2739,7 @@ function nativePromptCards(root: ParentNode): Array<{ group: Element; anchor: st
   return cards;
 }
 
-export function renderedMarkdown(source: string, capture?: StoredText, references?: readonly MessageReference[]): HTMLElement {
+export function renderedMarkdown(source: string, capture?: StoredText, references?: readonly MessageReference[], fileLink?: (href: string) => void): HTMLElement {
   // Fiber's canonical text can be complete while a background provider tab still
   // paints its first words. Render this revision directly; captured DOM HTML is
   // never evidence that it contains the current message revision.
@@ -2734,7 +2748,7 @@ export function renderedMarkdown(source: string, capture?: StoredText, reference
   // recorded rendering is the faithful presentation; without one, the directive lines are dropped.
   if (hasProviderDirective(text)) {
     const plain = withoutProviderDirectives(text);
-    if (resolvedCapture(capture)) return renderedMessage(capture, plain);
+    if (resolvedCapture(capture)) return renderedMessage(capture, plain, fileLink);
     text = plain || t('This reply points to content from another message that was not recorded.');
   }
   const citations = text.includes('\uE200') ? citationLabels(text, capture) : new Map<string, string>();
@@ -2786,7 +2800,7 @@ export function renderedMarkdown(source: string, capture?: StoredText, reference
     }
   }] });
   const html = parser.parse(separateDisplayMath(text), { async: false });
-  const box = renderedMessage({ text: html, chars: html.length, truncated: html.length > MAX_RENDERED_HTML_CHARS }, text);
+  const box = renderedMessage({ text: html, chars: html.length, truncated: html.length > MAX_RENDERED_HTML_CHARS }, text, fileLink);
   drawMath(box, math);
   writingPanels(box, writing);
   if (capture?.text && !capture.truncated && capture.text.length <= MAX_RENDERED_HTML_CHARS) {
@@ -2814,7 +2828,7 @@ export function renderedMarkdown(source: string, capture?: StoredText, reference
   return box;
 }
 
-export function renderedMessage(html: StoredText | null | undefined, fallback: string): HTMLElement {
+export function renderedMessage(html: StoredText | null | undefined, fallback: string, fileLink?: (href: string) => void): HTMLElement {
   const box = el('div', 'msg');
   // Same reason as textBlock, for the markdown path — and it is the fallback rather than the
   // authority: an element below that carried its own direction keeps it.
@@ -2858,6 +2872,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
     const href = safeRenderedHref(anchor.getAttribute('href') ?? '');
     event.preventDefault();
     if (!href) return;
+    if (safeProviderFileLink(href)) { fileLink?.(href); return; }
     if (href.startsWith('#')) { document.getElementById(href.slice(1))?.scrollIntoView(); return; }
     // Electron deliberately denies arbitrary renderer navigation/window.open. A user
     // activation crosses the existing, independently validated main-process link API.
@@ -3332,7 +3347,7 @@ async function fillTimelineHistory(): Promise<void> {
     const refresh = filledOpening || historyRefreshPending;
     historyRefreshPending = false;
     if (historyDemand) void fillTimelineHistory();
-    else if (refresh && historyBefore === null) void loadDetail();
+    else if (refresh) void loadDetail();
   }
 }
 
@@ -3377,7 +3392,7 @@ function appendToolOutput(box: HTMLDetailsElement, { call }: Extract<SessionEven
   if (call.tool === 'artifact' && call.outcome === 'ok' && !call.result.truncated && ownerId) {
     try {
       const value = JSON.parse(call.result.text) as { action?: string; artifact?: { id?: string; title?: string; kind?: string; headRevision?: number }; revision?: number };
-      if (value.artifact?.id && value.artifact.title && ['create', 'patch', 'open'].includes(value.action ?? '')) {
+      if (value.artifact?.id && value.artifact.title && ['create', 'patch', 'present', 'open'].includes(value.action ?? '')) {
         const card = el('div', 'artifact-result-card');
         const words = el('div', 'artifact-result-words');
         words.append(icon(value.artifact.kind === 'web' ? 'i-browser' : 'i-file-text'),
@@ -3543,7 +3558,10 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     case 'assistant_message': {
       const box = el('div', 'said');
       box.append(el('b', '', () => event.final ? t('Agent') : providerText("Gemini (partial)")));
-      box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references));
+      const owner = context?.id ?? selectedId;
+      box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references, href => {
+        if (owner && event.messageId) void run(api.openSessionFileLink(owner, event.messageId, href));
+      }));
       return box;
     }
     case 'native_image': {
@@ -3553,7 +3571,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       const width = event.width ?? event.previewWidth ?? 1;
       const height = event.height ?? event.previewHeight ?? 1;
       frame.style.aspectRatio = `${Math.max(1, width)} / ${Math.max(1, height)}`;
-      if (event.providerStatus === 'in_progress') { box.append(generationPlaceholder()); return box; }
+      if (event.providerStatus === 'in_progress' && !event.asset) { box.append(generationPlaceholder()); return box; }
       const unavailable = () => {
         frame.classList.toggle('is-unavailable', event.previewStatus !== 'pending');
         frame.replaceChildren(el('p', 'meta', () => {
@@ -3676,6 +3694,15 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       return line;
     }
     case 'page_tool': {
+      if (event.messageId.startsWith('native-image-generation:')) {
+        const history = context?.history ?? events;
+        const settled = !event.turnId || history.some(row => row.turnId === event.turnId &&
+          (row.kind === 'native_image' || row.kind === 'turn_end'));
+        const box = el('div', 'said native-image');
+        if (!settled) box.append(generationPlaceholder());
+        box.hidden = settled;
+        return box;
+      }
       const line = el('p', 'meta is-progress thinking-line');
       line.append(icon('i-globe', 'ico thinking-ico'), el('span', '', event.label));
       return line;

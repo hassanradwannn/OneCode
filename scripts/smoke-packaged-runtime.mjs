@@ -117,7 +117,7 @@ for (const relative of [
   `app.asar.unpacked/node_modules/tree-sitter-bash/prebuilds/${nativeDir}/tree-sitter-bash.node`
 ]) required(relative);
 
-const skillPath = 'skills/gemini-code/SKILL.md';
+const skillPath = 'skills/onecode-gemini/SKILL.md';
 if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository, 'resources', ...skillPath.split('/')))))
   throw new Error('Packaged Gemini skill differs from the public source asset');
 const chatgptSkillPath = 'skills/onecode-chatgpt/SKILL.md';
