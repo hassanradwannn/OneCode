@@ -15,6 +15,22 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.4.4': {
+    lead: () => t('See what changed after an update, including small hotfixes.'),
+    highlights: [
+      { icon: 'i-sparkle', title: () => t('Update highlights are back'), text: () => t('This summary opens once after updating. If another dialog is open, it waits until you close it.') },
+      { icon: 'i-gear', title: () => t('Review changes anytime'), text: () => t('Open Settings → General → What’s new to see the changes in your installed version again.') },
+      { icon: 'i-check-circle', title: () => t('Smaller hotfix updates'), text: () => t('Compatible hotfixes download a smaller application bundle and activate through Install when done. Your chats and settings stay in place.') },
+      { icon: 'i-globe', title: () => t('Connection fixes included'), text: () => t('Public checks allow slow valid replies. A timeout is reported separately from a TLS failure.') }
+    ]
+  },
+  '0.4.3': {
+    lead: () => t('More patient connection checks and smaller future updates.'),
+    highlights: [
+      { icon: 'i-globe', title: () => t('Time for a valid reply'), text: () => t('Public checks allow slow valid replies. A timeout is reported separately from a TLS failure.') },
+      { icon: 'i-check-circle', title: () => t('Smaller hotfix updates'), text: () => t('Compatible hotfixes download a smaller application bundle and activate through Install when done. Your chats and settings stay in place.') }
+    ]
+  },
   '0.3.0': {
     lead: () => t('Provider setup, parallel chats and clearer controls.'),
     highlights: [
@@ -156,6 +172,7 @@ function snapToPixels(dialog: HTMLDialogElement): void {
 }
 
 let wired = false;
+let cancelPending: (() => void) | undefined;
 function wire(dialog: HTMLDialogElement): void {
   if (wired) return;
   wired = true;
@@ -177,6 +194,19 @@ function wire(dialog: HTMLDialogElement): void {
   dialog.addEventListener('click', event => { if (event.target === dialog) close(); });
 }
 
+/** The same installed-version summary is available from Settings after dismissal. */
+export function showWhatsNew(version: string): boolean {
+  const dialog = $<HTMLDialogElement>('whatsNewDialog');
+  if (document.querySelector('dialog[open]') || !paintWhatsNew(version)) return false;
+  cancelPending?.();
+  wire(dialog);
+  dialog.showModal();
+  snapToPixels(dialog);
+  $('whatsNewDone').focus({ focusVisible: false } as FocusOptions);
+  void run(window.api.markWhatsNewSeen());
+  return true;
+}
+
 /**
  * Decides once per start: shows the dialog after a real update to a version with highlights and
  * records the version once it has been shown, so it never shows twice; any other version change is
@@ -184,20 +214,23 @@ function wire(dialog: HTMLDialogElement): void {
  * its version in the main process, before anything here runs.
  */
 export function initWhatsNew(current: string | null, lastSeen: string | undefined): void {
+  cancelPending?.();
   if (!current) return;
   const action = whatsNewAction(current, lastSeen, hasHighlights);
   if (action === 'none') return;
   if (action !== 'show' || !paintWhatsNew(current)) { void run(window.api.markWhatsNewSeen()); return; }
-  const dialog = $<HTMLDialogElement>('whatsNewDialog');
-  wire(dialog);
   // After the window has painted its first state, so the dialog opens over a settled app. Another
-  // open dialog wins; the version is recorded only once this one has really been shown.
-  window.setTimeout(() => {
-    if (dialog.open || document.querySelector('dialog[open]')) return;
-    dialog.showModal();
-    snapToPixels(dialog);
-    // Enter answers it at once; the focus ring appears only once the keyboard is used.
-    $('whatsNewDone').focus({ focusVisible: false } as FocusOptions);
-    void run(window.api.markWhatsNewSeen());
-  }, 600);
+  // open dialog wins; its close event resumes this pending summary without another restart.
+  let settled = false;
+  const attempt = (): void => { if (settled) showWhatsNew(current); };
+  const timer = window.setTimeout(() => { settled = true; attempt(); }, 600);
+  const cancel = (): void => {
+    window.clearTimeout(timer);
+    document.removeEventListener('close', attempt, true);
+    window.removeEventListener('pagehide', cancel);
+    if (cancelPending === cancel) cancelPending = undefined;
+  };
+  cancelPending = cancel;
+  document.addEventListener('close', attempt, true);
+  window.addEventListener('pagehide', cancel, { once: true });
 }

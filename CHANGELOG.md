@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.4] — 2026-10-22
+
+Restore current release highlights in the existing What's new pane after an update, defer the summary while another dialog is open, and add Settings → General → What's new → View changes for reopening it. Ship the first application hotfix release for compatible 0.4.3 installations without uploading another full installer. Earlier connection recovery and timeout fixes are included. See [0.4.4 release notes](docs/release-notes/v0.4.4.md).
+
 ## [0.4.3] — 2026-10-22
 
 Allow slow valid public HTTPS/MCP checks to complete and distinguish timeouts from TLS failures. Enable verified Windows application hotfix bundles through the existing internal updater, with native runtime compatibility checks, coordinated restart and rollback copies. Existing installations receive this enabling release through the normal full installer. See [0.4.3 release notes](docs/release-notes/v0.4.3.md).

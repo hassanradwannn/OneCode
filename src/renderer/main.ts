@@ -28,7 +28,7 @@ import { initKeychainNotice } from './keychain-notice.js';
 import { initPet } from './pet.js';
 import { initPets } from './pets.js';
 import { initSkillsLibrary } from './skills-library.js';
-import { initWhatsNew } from './whats-new.js';
+import { hasHighlights, initWhatsNew, showWhatsNew } from './whats-new.js';
 import { initSettingsSearch } from './settings-search.js';
 import type { AppearanceSettings } from '../shared/appearance.js';
 import type { BrowserBridgePort } from '../shared/browser-bridge.js';
@@ -1287,6 +1287,7 @@ function updateInstallWaitingText(update: AppState['update']): string {
 }
 
 function paintUpdate(next: AppState): void {
+  $('settingsWhatsNewRow').hidden = !next.update.current || !hasHighlights(next.update.current);
   const checkButton = $<HTMLButtonElement>('checkForUpdates');
   const checking = next.update.stage === 'checking' || next.update.stage === 'downloading' || checkButton.getAttribute('aria-busy') === 'true';
   checkButton.disabled = checking;
@@ -2648,6 +2649,7 @@ initUpdateReadiness();
 $('updateReviewSetup').addEventListener('click', () => showTab('setup'));
 const updateAllButton = $<HTMLButtonElement>('updateAll');
 const checkForUpdatesButton = $<HTMLButtonElement>('checkForUpdates');
+$('showWhatsNew').addEventListener('click', () => { if (state?.update.current) showWhatsNew(state.update.current); });
 checkForUpdatesButton.addEventListener('click', async () => {
   if (checkForUpdatesButton.disabled) return;
   checkForUpdatesButton.setAttribute('aria-busy', 'true');

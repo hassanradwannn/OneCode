@@ -1,6 +1,12 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.4.3
+## Version 0.4.4
+
+0.4.4 is an application hotfix for a compatible 0.4.3 installation. New users and users on 0.4.2 or earlier first run the [0.4.3 base installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.3/OneCode-Setup-x64.exe), then open **Settings → General → Check for updates → Install when done**. Do not run or extract the hotfix ZIP into the installation manually. The verified internal updater applies it after work finishes and restarts the app.
+
+After the update, **What's new** shows the installed release's highlights once. It waits for any other dialog to close. Reopen it under **Settings → General → What's new → View changes**, then choose **Full release notes** for that version's GitHub release. **Got it**, Escape or the backdrop closes the pane. A same-version restart and a fresh installation do not show it automatically.
+
+## Connection fixes included from 0.4.3
 
 Public checks now allow slower valid HTTPS/MCP replies and distinguish a timeout from a TLS failure. Install 0.4.3 normally through Settings → General → Check for updates → Install when done. This enables smaller compatible application hotfixes in the same internal updater; they activate after work finishes and OneCode restarts. See [hotfix updates](HOTFIX-UPDATES.md).
 

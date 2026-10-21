@@ -55,6 +55,7 @@ The browser bridge and MCP listener have separate authentication. Companion pair
 | Projects and files | `projects.ts`, `sandbox.ts`, `workspace.ts` | Explicit project and root grants; project membership adds no permission |
 | Continuation | `session/continuation.ts`, `goal.ts` | Exact same-provider handoff, Goal/Loop and durable objectives |
 | Updates | `update.ts`, `update-all.ts`, `resources/updater/windows-update-helper.cjs` | Verified artifacts, install intent, safe shutdown, profile preservation and visible relaunch |
+| Release highlights | `renderer/whats-new.ts`, `shared/whats-new.ts`, `ipc.ts` | Bundled installed-version highlights, lastSeenVersion acknowledgement after showing, pending-modal deferral and Settings reopen; no separate installation authority |
 
 ## Identity and concurrency
 
