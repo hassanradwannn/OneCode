@@ -15,6 +15,15 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.4.5': {
+    lead: () => t('Clear download progress and complete updates in one restart.'),
+    highlights: [
+      { icon: 'i-check-circle', title: () => t('Hotfix download progress'), text: () => t('The download percentage follows the bytes received and reaches 100% only after verification and staging.') },
+      { icon: 'i-steps', title: () => t('One update, one restart'), text: () => t('If a hotfix needs a newer full release, OneCode downloads both, installs the base first and applies the hotfix before reopening.') },
+      { icon: 'i-lock', title: () => t('The exact release you selected'), text: () => t('Installer downloads stay on their selected release even when a newer hotfix is published during the download.') },
+      { icon: 'i-sparkle', title: () => t('Earlier fixes stay included'), text: () => t('Full releases include earlier hotfixes, including connection repairs and the What’s new pane. Your chats and settings are preserved.') }
+    ]
+  },
   '0.4.4': {
     lead: () => t('See what changed after an update, including small hotfixes.'),
     highlights: [

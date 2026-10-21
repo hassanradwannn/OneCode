@@ -7,11 +7,15 @@ const contract = sharedContract.withFilesystem(rawFs);
 const { readFile, mkdir, writeFile } = rawPromises;
 
 export type HotfixManifest = sharedContract.Manifest;
-export async function compatibleHotfix(manifestFile: string, version: string, resources = process.resourcesPath, arch = process.arch): Promise<HotfixManifest | null> {
+export async function readHotfixManifest(manifestFile: string, version: string, arch = process.arch): Promise<HotfixManifest> {
   const bytes = await readFile(manifestFile);
   if (bytes.length > 256 * 1024) throw Error('Hotfix manifest is too large');
   const manifest = contract.manifest(JSON.parse(bytes.toString('utf8')));
   if (manifest.version !== version || manifest.arch !== arch) throw Error('Hotfix manifest names another release or architecture');
+  return manifest;
+}
+export async function compatibleHotfix(manifestFile: string, version: string, resources = process.resourcesPath, arch = process.arch): Promise<HotfixManifest | null> {
+  const manifest = await readHotfixManifest(manifestFile, version, arch);
   let runtime: sharedContract.Runtime;
   try { runtime = contract.runtime(JSON.parse(await readFile(path.join(resources, 'updater/runtime.json'), 'utf8'))); }
   catch { return null; }

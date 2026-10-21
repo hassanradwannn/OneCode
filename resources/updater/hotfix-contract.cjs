@@ -78,7 +78,18 @@ function manifest(value) {
   if (value?.schema !== 1 || !/^\d+\.\d+\.\d+$/.test(value.version) || value.platform !== 'win32' || !['x64','arm64'].includes(value.arch) ||
       !HEX.test(value.runtime) || value.archive !== `OneCode-Hotfix-${value.arch}.zip` || !HEX.test(value.sha256) ||
       !Number.isSafeInteger(value.size) || value.size < 1 || value.size > 64 * 1024 * 1024) throw Error('Invalid hotfix manifest');
-  entries(value.files, true); return value;
+  entries(value.files, true);
+  if (value.base !== undefined) {
+    baseRelease(value.base);
+    const compare = (a,b) => { const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<3;i++)if(x[i]!==y[i])return x[i]-y[i];return 0; };
+    if(value.base.arch!==value.arch || value.base.runtime!==value.runtime || compare(value.base.version,value.version)>0) throw Error('Hotfix base differs from its runtime or release');
+  }
+  return value;
+}
+function baseRelease(value) {
+  if(value?.schema!==1 || !/^\d+\.\d+\.\d+$/.test(value.version) || value.platform!=='win32' || !['x64','arm64'].includes(value.arch) ||
+    !HEX.test(value.runtime) || value.installer!==`OneCode-Setup-${value.arch}.exe` || !HEX.test(value.sha256) || !Number.isSafeInteger(value.size) || value.size<1 || value.size>1024*1024*1024) throw Error('Invalid full release descriptor');
+  return value;
 }
 async function verify(root, files) {
   noLinks(root); const directories = new Set();
@@ -90,6 +101,6 @@ async function verify(root, files) {
     if (!stat.isFile() || stat.size !== file.size || await hash(resolved) !== file.sha256) throw Error('Hotfix resource does not match its verified inventory');
   });
 }
-return { mutable, noLinks, location, hash, inventory, runtimeId, runtime, manifest, verify };
+return { mutable, noLinks, location, hash, inventory, runtimeId, runtime, manifest, baseRelease, verify };
 }
 module.exports = { ...withFilesystem(require('node:fs')), withFilesystem };

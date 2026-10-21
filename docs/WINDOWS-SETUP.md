@@ -1,6 +1,12 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.4.4
+## Version 0.4.5
+
+Install the [complete 0.4.5 Windows release](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe), or use **Settings → General → Check for updates → Install when done** from an existing installation. This release includes all earlier hotfixes, the What's new pane and the repaired updater. Installer downloads use the selected version's feed; hotfix downloads display byte progress.
+
+For future hotfixes, a compatible installation downloads the small bundle. If its native base is missing or incompatible, OneCode verifies and downloads the declared full base plus the hotfix, waits for active work, installs both in order and opens the final version once. Do not manually extract a hotfix into the installation. A failed or interrupted update leaves a diagnostic rather than replaying an uncertain installer.
+
+## Earlier application hotfix (0.4.4)
 
 0.4.4 is an application hotfix for a compatible 0.4.3 installation. New users and users on 0.4.2 or earlier first run the [0.4.3 base installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.3/OneCode-Setup-x64.exe), then open **Settings → General → Check for updates → Install when done**. Do not run or extract the hotfix ZIP into the installation manually. The verified internal updater applies it after work finishes and restarts the app.
 

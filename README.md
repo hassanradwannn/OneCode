@@ -2,11 +2,17 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.4](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.4)** · **[Windows base installer (0.4.3)](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.3/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.4.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.5)** · **[Windows installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**On 0.4.3 or later?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.4.4. New users and users on older versions first install the [0.4.3 base](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.3), then use the internal updater. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.5. This full release includes the earlier hotfixes and enables repaired downloads and combined updates. New users can run the installer above. Your profile and saved chats are preserved.
+
+## What's new in 0.4.5
+
+Hotfix downloads report progress as bytes arrive, with 100% reserved for verified, staged files. Installer downloads stay pinned to the selected release, so a newly published hotfix cannot redirect an in-progress full update to a release without an installer.
+
+After 0.4.5, if a hotfix requires a full release you missed, the updater verifies and downloads both. One **Install when done** action closes OneCode, installs the required base, applies the hotfix and reopens only the final version. A compatible installation still downloads just the small hotfix. Every full release is built from the cumulative source and retains earlier hotfix fixes, including connection repairs and **What's new**. See [release notes](docs/release-notes/v0.4.5.md), [validation](docs/release-acceptance/v0.4.5.md) and [hotfix guide](docs/HOTFIX-UPDATES.md).
 
 ## What's new in 0.4.4
 
@@ -75,7 +81,7 @@ Keep chats and projects together, delegate workers, use account-available models
 
 ## Install
 
-1. Run the [0.4.3 Windows base installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.3/OneCode-Setup-x64.exe), then use **Settings → General → Check for updates → Install when done** for the latest application hotfix.
+1. Run the [0.4.5 Windows installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe), then use **Settings → General → Check for updates → Install when done** for later updates.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, [install it](https://tailscale.com/download/windows) and sign in with your own account.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
@@ -113,7 +119,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find current checks in the [0.4.4 acceptance record](docs/release-acceptance/v0.4.4.md), with hotfix assets and checksums on the [0.4.4 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.4). The [0.4.3 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.3) retains the complete Windows installer.
+Developers can find current checks in the [0.4.5 acceptance record](docs/release-acceptance/v0.4.5.md), with the full installer, required-base descriptor and checksums on the [0.4.5 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.5). Historical releases and their acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

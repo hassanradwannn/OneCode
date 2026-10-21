@@ -9,6 +9,7 @@ import { load as loadYaml } from 'js-yaml';
 import { writeUpdateMetadata } from './write-update-metadata.mjs';
 import { assertWindowsPackageIsolation } from './verify-windows-package.mjs';
 import { execFileSync } from 'node:child_process';
+import contract from '../resources/updater/hotfix-contract.cjs';
 
 // Assemble only reviewed public inputs from the final package, never local profiles or logs.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,10 +56,13 @@ const installer = await fs.readFile(path.join(output, 'OneCode-Setup-x64.exe'));
 const metadata = loadYaml(await fs.readFile(path.join(output, 'latest-x64.yml'), 'utf8'));
 assert.equal(metadata.version, version);
 assert.equal(metadata.files[0].sha512, createHash('sha512').update(installer).digest('base64'));
+const runtime = contract.runtime(JSON.parse(await fs.readFile(path.join(resources, 'updater/runtime.json'), 'utf8')));
+const baseName = 'OneCode-Base-x64.json';
+await fs.writeFile(path.join(output,baseName),JSON.stringify(contract.baseRelease({schema:1,version,platform:'win32',arch:'x64',runtime:runtime.id,installer:'OneCode-Setup-x64.exe',size:installer.length,sha256:createHash('sha256').update(installer).digest('hex')})));
 const names = [
   'OneCode-Setup-x64.exe', 'OneCode-Setup-x64.exe.blockmap', 'latest-x64.yml', companionName,
   'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip', 'SKILL.md',
-  'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md'
+  'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', baseName
 ];
 const sums = [];
 for (const name of names) {
@@ -67,5 +71,5 @@ for (const name of names) {
   sums.push(`${createHash('sha256').update(bytes).digest('hex')}  ${name}`);
 }
 await fs.writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
-execFileSync(process.execPath, [path.join(root, 'scripts/write-hotfix-package.mjs'), output, '--with-installer'], { cwd: root, stdio: 'inherit' });
+if(!process.argv.includes('--full-only')) execFileSync(process.execPath, [path.join(root, 'scripts/write-hotfix-package.mjs'), output, '--with-installer','--base-file',path.join(output,baseName)], { cwd: root, stdio: 'inherit' });
 console.log(`Verified ${version}: ${names.length} public assets; Windows x64 updater metadata and checksums match.`);

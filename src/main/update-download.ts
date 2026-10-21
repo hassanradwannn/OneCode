@@ -47,7 +47,7 @@ export function validateWindowsUpdate(info: UpdateInfo, version: string, name: s
 
 export async function downloadWindowsUpdate(version: string, name: string,
   progress: (percent: number) => void): Promise<string> {
-  const updater = new ConsistentNsisUpdater({ provider: 'github', owner: 'hassanradwannn', repo: 'OneCode',
+  const updater = new ConsistentNsisUpdater({ provider: 'generic', url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${version}/`,
     channel: windowsUpdateChannel(process.arch) });
   // This engine must never own shutdown or install. In particular its normal-quit hook is off.
   configureWindowsDownloadEngine(updater);

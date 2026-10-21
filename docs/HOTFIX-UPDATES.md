@@ -1,6 +1,6 @@
 # Windows application hotfix updates
 
-OneCode 0.4.3 introduces application-only updates through the existing internal update owner. Users on 0.4.2 or earlier first install the complete 0.4.3 release through Settings. Future compatible releases use the same Check for updates and Install when done actions, with a smaller download and a coordinated restart.
+OneCode 0.4.5 includes the complete cumulative application and repaired updater. Existing users take this full release through Settings. Later compatible hotfixes use smaller downloads; if a hotfix requires a missing native base, the updater stages the declared full release and the hotfix together, then installs both before one final relaunch.
 
 ## Publish a compatible hotfix
 
@@ -8,16 +8,22 @@ From the canonical checkout, increment the normal three-part application version
 
 ```powershell
 npm run dist:dir:x64
-npm run release:hotfix
+npm run release:hotfix -- --base-version 0.4.5
 ```
 
-The directory build runs the packaged runtime smoke check without assembling NSIS. The publishing command creates `OneCode-Hotfix-x64.zip`, `OneCode-Hotfix-x64.json` and a matching `SHA256SUMS.txt`. Publish those three files to the ordinary GitHub release for that exact version. Do not upload a leftover installer from release/. The standalone command replaces the checksum list so it cannot accidentally advertise an old installer. A full Windows release's preparation command includes both the installer and the hotfix assets.
+Use the latest complete release compatible with this runtime as --base-version. The publisher verifies that release's checksum list and OneCode-Base-x64.json, including the installer digest, size, architecture and native fingerprint. Missing or changed native resources require a new full release rather than an application hotfix.
+
+The directory build runs packaged runtime smoke without assembling NSIS. The publishing command creates OneCode-Hotfix-x64.zip, OneCode-Hotfix-x64.json and SHA256SUMS.txt; publish these three files to the exact version's release. The manifest embeds the verified full-base descriptor. Do not upload a leftover installer. The standalone command replaces the checksum list so stale installers cannot be advertised.
+
+Build complete releases from main after all earlier hotfix commits, using npm run dist:x64 and node scripts/prepare-windows-release.mjs. Preparation writes OneCode-Base-x64.json and includes it in release checksums. The normal mode can also emit a matching application capsule. For the 0.4.5 updater transition, --full-only excludes the capsule so older clients download the complete release through their existing installer path. A full release contains the current application snapshot, including prior hotfixes; it does not revert to an earlier application snapshot.
 
 The capsule is a complete snapshot of allowed application resources, not a binary delta. It contains app.asar, Companion, bundled skills, updater helpers, setup text and third-party notices. It cannot replace Electron, Node, native modules, tunnel binaries, private profiles or credentials. Every manifest entry has an exact path, byte count and SHA-256; the archive and manifest also match the release checksum list. The trust source is the configured OneCode GitHub publisher over HTTPS, as with the existing installer updater; an independent code-signing signature is not claimed.
 
 ## Runtime compatibility and activation
 
-A hotfix-only latest release has no installer asset or latest-x64.yml. Keep the README's fresh-install link pinned to the compatible full base release, and tell older users to install that base first. Existing 0.4.3 clients discover the normal three-part release tag and use SHA256SUMS.txt plus the hotfix manifest; they do not need an installer update feed for a compatible capsule.
+A hotfix-only latest release has no installer asset or latest-x64.yml. Keep the README's fresh-install link pinned to the latest complete release. The 0.4.5 updater discovers the normal three-part hotfix tag and verifies SHA256SUMS.txt plus the manifest. A compatible installation downloads only the capsule. Otherwise it independently verifies the required base descriptor and installer against the base release's checksums, downloads both artifacts into versioned stages, and offers one install action. Legacy hotfix manifests without a base remain usable on compatible installations; they cannot authorize a guessed installer.
+
+Downloads report actual received bytes, weighted across the base and hotfix when both are required; 100% means the whole plan has verified and staged. Full Windows feeds are pinned to the selected tag, never reselected from a moving latest release during download.
 
 ## Maintain the What's new pane
 
@@ -29,8 +35,8 @@ The pane compares the installed version with the existing config.ui.lastSeenVers
 
 An application hotfix retains the base executable and Windows installation registration, so their file/display version may remain at the base release. OneCode's own installed version and What's new pane report the activated application version. This is expected when the native runtime is retained.
 
-The Windows after-pack hook records an immutable resource inventory and the exact Electron version in resources/updater/runtime.json. A capsule is selected only when its architecture and runtime fingerprint match the installed baseline. The detached helper verifies the actual native resources again after canonical shutdown. A change to that runtime requires a full installer. If a hotfix-only release is incompatible, the updater offers the release page rather than attempting a replacement; link the required complete base release in its notes.
+The Windows after-pack hook records the immutable resource inventory and exact Electron version in resources/updater/runtime.json. Direct capsules must match that baseline. A composite plan uses bootstrap schema3: verify both payloads before mutation, wait for the old process tree, execute the exact base installer with --onecode-bootstrap, verify its product version and registration, verify its new native inventory against the hotfix, then apply the patch and launch the final application once. The installer never owns an intermediate app launch. An unexpected running successor stops replacement; it is not killed.
 
 The main update owner verifies and expands the archive into its versioned cache, refusing traversal, links, case aliases, unexpected entries and oversized data. Explicit Install when done retains the current version/work fences and durable shutdown. The helper runs from a copied Node runtime outside the install, checks the registered target, saves rollback copies and replaces only allowed files. Removed application files are retired as part of the snapshot. Success requires the new application to log its expected version and keep a loaded visible window alive.
 
-Failures before a successor runs restore the verified previous snapshot. A successor that is still running but cannot be confirmed is left alone and its rollback copy is retained; the helper never kills potentially active user work. Rollback backups remain in the private update cache. A forced shutdown or power loss during replacement requires recovery from the retained backup or a full installer; automatic replay of an uncertain update is not claimed.
+Failures before a successor runs restore the verified previous application snapshot. In a composite update that snapshot is the newly installed base; rollback does not reverse the native installer. An uncertain base installer is not replayed. A running unconfirmed successor is left alone with its rollback copy retained. A forced shutdown or power loss during replacement requires the retained backup or a full installer; automatic recovery is not claimed.

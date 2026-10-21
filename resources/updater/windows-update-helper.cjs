@@ -7,18 +7,22 @@ const cp = require('node:child_process');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const same = (a, b) => path.win32.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.win32.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
 function validate(record) {
-  if (![1, 2].includes(record?.schema) || !/^\d+\.\d+\.\d+$/.test(record.version) ||
+  if (![1, 2, 3].includes(record?.schema) || !/^\d+\.\d+\.\d+$/.test(record.version) ||
       !/^\d+\.\d+\.\d+\.\d+$/.test(record.fileVersion) || !/^[a-f0-9]{64}$/.test(record.digest) ||
       !Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isSafeInteger(record.at) ||
       Date.now() - record.at < -60000 || Date.now() - record.at > 30 * 60000 ||
       !['installer', 'target', 'executable', 'log'].every(key => typeof record[key] === 'string' && path.win32.isAbsolute(record[key]) && !/[\r\n"\0]/.test(record[key])) ||
       !same(record.executable, path.win32.join(record.target, 'OneCode.exe')) ||
-      !(record.schema === 1 ? /^OneCode-Setup-(x64|arm64)\.exe$/.test(path.win32.basename(record.installer)) :
+      !(record.schema !== 2 ? /^OneCode-Setup-(x64|arm64)\.exe$/.test(path.win32.basename(record.installer)) :
         /^OneCode-Hotfix-(x64|arm64)\.zip$/.test(path.win32.basename(record.installer)) &&
         typeof record.manifest === 'string' && same(record.manifest, path.win32.join(path.win32.dirname(record.installer), 'hotfix-manifest.json')) &&
         /^[a-f0-9]{64}$/.test(record.manifestDigest) && record.elevate === false)) {
     throw new Error('Invalid or expired update handoff');
   }
+  if(record.schema===3 && (!/^\d+\.\d+\.\d+$/.test(record.baseVersion) || record.fileVersion!==`${record.baseVersion}.0` ||
+    typeof record.patchArchive!=='string' || !path.win32.isAbsolute(record.patchArchive) || /[\r\n"\0]/.test(record.patchArchive) ||
+    !/^OneCode-Hotfix-(x64|arm64)\.zip$/.test(path.win32.basename(record.patchArchive)) ||
+    typeof record.manifest!=='string' || !same(record.manifest,path.win32.join(path.win32.dirname(record.patchArchive),'hotfix-manifest.json')) || !/^[a-f0-9]{64}$/.test(record.manifestDigest) || !/^[a-f0-9]{64}$/.test(record.patchDigest))) throw Error('Invalid composite update handoff');
   return record;
 }
 function noLinks(file) {
@@ -114,6 +118,12 @@ async function run(note, dependencies = {}) {
       await runHotfix(record, note, dependencies, listing, log, persist);
       return;
     }
+    let patch;
+    if(record.schema===3) {
+      patch={...record,schema:2,installer:record.patchArchive,digest:record.patchDigest,elevate:false};
+      const {manifest}=await verifiedPayload(patch);
+      if(!manifest.base || manifest.base.version!==record.baseVersion || manifest.base.sha256!==record.digest || manifest.base.installer!==path.basename(record.installer) || manifest.base.size!==fs.statSync(record.installer).size) throw Error('Composite installer differs from the hotfix base');
+    }
     persist('installing');
     // NSIS /D is final and unquoted. The bootstrap owns restart; no --force-run.
     await (dependencies.execute || execute)(record.installer, ['/S', '--updated', '--onecode-bootstrap', '/currentuser', `/D=${record.target}`], record.elevate === true);
@@ -125,6 +135,11 @@ async function run(note, dependencies = {}) {
     log(`installed version ${installed}; sha256 ${crypto.createHash('sha256').update(fs.readFileSync(record.executable)).digest('hex')}`);
     (dependencies.shortcuts || shortcuts)(record.executable);
     log('installed shortcuts verified');
+    if(patch) {
+      if(listing(record.executable).length) throw Error('Base installer unexpectedly started OneCode before the hotfix');
+      log('base installed without relaunch; applying verified hotfix');
+      await runHotfix(patch,note,dependencies,listing,log,persist);return;
+    }
     persist('relaunching');
     if (!listing(record.executable).length) {
       // An explicit Update and restart must show the GUI successor. Only the
@@ -153,18 +168,25 @@ async function run(note, dependencies = {}) {
     throw error;
   }
 }
-async function runHotfix(record, note, dependencies, listing, log, persist) {
+async function verifiedPayload(record) {
   const contract = require('./hotfix-contract.cjs');
-  const resources = path.join(record.target, 'resources');
+  contract.noLinks(record.installer);
   contract.noLinks(record.manifest);
   if (await contract.hash(record.manifest) !== record.manifestDigest) throw Error('Hotfix manifest changed after verification');
   const manifest = contract.manifest(JSON.parse(fs.readFileSync(record.manifest, 'utf8')));
   if (manifest.version !== record.version || manifest.archive !== path.basename(record.installer) || manifest.sha256 !== record.digest || fs.statSync(record.installer).size !== manifest.size) throw Error('Hotfix handoff differs from manifest');
+  if(await contract.hash(record.installer)!==record.digest) throw Error('Hotfix archive changed after verification');
+  const payload = path.join(path.dirname(record.installer), 'hotfix-payload');
+  await contract.verify(payload, manifest.files);
+  return {manifest,payload};
+}
+async function runHotfix(record, note, dependencies, listing, log, persist) {
+  const contract = require('./hotfix-contract.cjs');
+  const resources = path.join(record.target, 'resources');
+  const {manifest,payload}=await verifiedPayload(record);
   const runtime = contract.runtime(JSON.parse(fs.readFileSync(path.join(resources, 'updater/runtime.json'), 'utf8')));
   if (runtime.id !== manifest.runtime || runtime.arch !== manifest.arch) throw Error('Hotfix native runtime differs');
   await contract.verify(resources, runtime.files);
-  const payload = path.join(path.dirname(record.installer), 'hotfix-payload');
-  await contract.verify(payload, manifest.files);
   const previous = await contract.inventory(resources, contract.mutable);
   const backup = path.join(path.dirname(note), `rollback-${record.version}-${record.at}`);
   contract.noLinks(backup);

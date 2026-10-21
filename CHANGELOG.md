@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.5] — 2026-10-22
+
+Report hotfix byte progress, pin full-installer downloads to the selected tag, and stage a verified required full release plus its hotfix for one shutdown and final relaunch. Add publisher-verified base metadata and fail closed before installation on mismatched inputs. Ship a complete cumulative installer containing the 0.4.4 What's new pane and earlier connection fixes. See [0.4.5 release notes](docs/release-notes/v0.4.5.md).
+
 ## [0.4.4] — 2026-10-22
 
 Restore current release highlights in the existing What's new pane after an update, defer the summary while another dialog is open, and add Settings → General → What's new → View changes for reopening it. Ship the first application hotfix release for compatible 0.4.3 installations without uploading another full installer. Earlier connection recovery and timeout fixes are included. See [0.4.4 release notes](docs/release-notes/v0.4.4.md).

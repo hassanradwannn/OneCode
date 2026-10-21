@@ -38,7 +38,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -51,7 +51,8 @@ import { downloadWindowsUpdate } from './update-download.js';
 import { currentWindowsInstallTarget } from './update-registration.js';
 import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 import { startWindowsUpdate } from './update-bootstrap.js';
-import { compatibleHotfix, stageHotfix } from './update-hotfix.js';
+import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
+import { baseRelease } from '../../resources/updater/hotfix-contract.cjs';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
@@ -151,7 +152,7 @@ export function releaseVersion(tag: unknown): string | null {
 const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle', error: null, checkedAt: null };
 
 let status: UpdateStatus = CLEAR;
-let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix'; target: string; digest: string; hotfix?: string } | null = null;
+let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'composite'; target: string; digest: string; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
@@ -317,13 +318,31 @@ async function runPass(): Promise<void> {
   const hotfixDigest = artifact.kind === 'installer' ? digests.get(hotfixName) : undefined;
   if (hotfixDigest) {
     const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
-    const manifest = await compatibleHotfix(manifestFile, release.version);
-    if (manifest) {
+    const manifest = await readHotfixManifest(manifestFile, release.version);
+    const compatible = await compatibleHotfix(manifestFile, release.version);
+    const needsBase = !compatible && !digests.has(artifact.name);
+    if (compatible || (needsBase && manifest.base)) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
-      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256);
+      let baseFile: string | undefined;
+      const base = needsBase ? manifest.base : undefined;
+      const total = manifest.size + (base?.size ?? 0);
+      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
+      if (base) {
+        if (!isNewer(release.version, base.version)) throw Error('A hotfix-only release requires an earlier complete base');
+        const baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
+        if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
+        const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
+        const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
+        for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
+        baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
+        if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
+      }
+      const progress = (bytes: number) => report((base?.size ?? 0) + bytes);
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, progress);
       const hotfix = await stageHotfix(file, manifest);
-      staged = { version: release.version, file, kind: 'hotfix', target: artifact.target, digest: manifest.sha256, hotfix };
+      staged = base && baseFile ? { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 }
+        : { version: release.version, file, kind: 'hotfix', target: artifact.target, digest: manifest.sha256, hotfix };
       set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
       logInfo(`update: ${release.version} application hotfix is verified and ready; native runtime retained`);
       return;
@@ -490,7 +509,7 @@ async function get(url: string, timeout: number | AbortSignal, headers: Record<s
  * `.part` until it has passed: the rename is what publishes it, so a download that was
  * interrupted or is not the right file can never be handed to an installer.
  */
-async function download(version: string, name: string, expected: string): Promise<string> {
+async function download(version: string, name: string, expected: string, size?: number, progress?: (bytes: number) => void): Promise<string> {
   const dir = stagingDir(version);
   // Versioned staging never removes the download engine's current-installer/blockmap cache.
   await mkdir(dir, { recursive: true });
@@ -500,19 +519,21 @@ async function download(version: string, name: string, expected: string): Promis
   const stalled = new Error(`downloading ${name} stopped: no data for ${DOWNLOAD_STALL_MS / 1000} seconds`);
   const watch = setTimeout(() => quiet.abort(stalled), DOWNLOAD_STALL_MS);
   const hash = createHash('sha256');
+  let received = 0;
   try {
     const response = await get(assetUrl(version, name), quiet.signal);
     if (!response.body) throw new Error(`downloading ${name} returned no content`);
     const body = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
-    body.on('data', (chunk: Buffer) => { hash.update(chunk); watch.refresh(); });
+    body.on('data', (chunk: Buffer) => { received += chunk.length; hash.update(chunk); watch.refresh(); progress?.(received); });
     await pipeline(body, createWriteStream(`${file}.part`), { signal: quiet.signal });
   } catch (err) {
+    await rm(`${file}.part`, { force: true });
     throw quiet.signal.aborted ? stalled : err;
   } finally {
     clearTimeout(watch);
   }
   const digest = hash.digest('hex');
-  if (digest !== expected) {
+  if (digest !== expected || (size !== undefined && received !== size)) {
     await rm(`${file}.part`, { force: true });
     throw new Error(`${name} is not the published file: sha256 ${digest} instead of ${expected}`);
   }
@@ -583,7 +604,8 @@ function checkInstallIntent(): Promise<void> {
     if (!reasons.length) {
       try {
         if (await fileDigest(ready.file) !== ready.digest) throw new Error('The staged update changed after verification');
-        if (ready.kind === 'installer' && await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+        if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('The staged hotfix changed after verification');
+        if (ready.kind !== 'appimage' && await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
         // Re-read after filesystem/registry waits. No sampled timer or model status grants idleness.
         reasons = await busyProjection();
       } catch (error) {
@@ -657,7 +679,7 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!ready) return;
   try {
     if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
-    if (ready.kind === 'installer' || ready.kind === 'hotfix') {
+    if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
@@ -666,7 +688,7 @@ export async function applyStagedUpdate(): Promise<void> {
       // after restart, without enabling the global automatic-refresh preference.
       await prepareUpdateHandoff?.(ready.version);
       // NSIS /D must be the final, unquoted argument. It names only the verified current install.
-      const elevate = ready.kind === 'installer' && process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
+      const elevate = ready.kind !== 'hotfix' && process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
         executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
     } else {
