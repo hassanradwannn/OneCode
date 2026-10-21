@@ -2,13 +2,19 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.2](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.2)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.4.3](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.3)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.4.2. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.4.3. Your profile and saved chats are preserved.
 
-## What's new in 0.4.2
+## What's new in 0.4.3
+
+Public checks no longer cut off a healthy HTTPS/MCP reply after four seconds. Slow responses have their own timeout result instead of being labelled TLS failures.
+
+Windows 0.4.3 also enables smaller application hotfix updates through the ordinary internal updater. Compatible hotfixes download an application bundle, wait for work to finish and activate after a verified restart. Native runtime changes still require a complete installer. See the [0.4.3 release notes](docs/release-notes/v0.4.3.md) and [hotfix guide](docs/HOTFIX-UPDATES.md).
+
+## Earlier connection recovery
 
 If the connector works locally but public access fails during TLS, **Settings → Connection → Repair public connection** can restart Tailscale with Windows administrator consent. This briefly interrupts Tailscale connections, preserves the existing routes and URLs, and checks public HTTPS and MCP again before showing Connected. Repeated clicks share one repair; background checks never launch administrator prompts.
 
@@ -53,7 +59,7 @@ The 0.3.8 remote improvements are included:
 - Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
 - If another route takes the saved port, **Settings → Remote → Refresh link** selects a free private port. Copy the replacement link and update your bookmark; the conflicting route is preserved.
 
-These earlier repairs are included in 0.4.2. Historical details remain in the [0.3.8.2 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
+These earlier repairs are included in 0.4.3. Historical details remain in the [0.3.8.2 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
 
 ## Work with your own provider account
 
@@ -93,7 +99,7 @@ Remote mode uses a separate private Tailscale Serve route and access key. Keep i
 
 ## Updates and longer tasks
 
-Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. The Windows updater validates its cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
+Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible application hotfixes use a smaller verified bundle and retain the native runtime. The Windows updater also validates its cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
 
 Ask ChatGPT or Gemini to check a local job at an interval, such as every 60 minutes. The agent must register the interval and message with Core `automations` and verify the returned schedule ID and next run. OneCode saves the schedule and sends its message into the same chat at each interval until cancelled. Manage or cancel checks in **Settings → Agents & automation → Scheduled checks**, or ask the agent. Keep the PC awake, OneCode running and the provider signed in. A provider-native Monitoring card alone does not register a OneCode check; a sent message does not prove the check ran or the job succeeded.
 
@@ -101,7 +107,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find current checks in the [0.4.2 acceptance record](docs/release-acceptance/v0.4.2.md), with release assets and checksums on the [0.4.2 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.2).
+Developers can find current checks in the [0.4.3 acceptance record](docs/release-acceptance/v0.4.3.md), with release assets and checksums on the [0.4.3 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.3).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

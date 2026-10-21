@@ -1,7 +1,7 @@
 {
   "name": "onecode",
-  "version": "0.4.2",
-  "shortVersionWindows": "0.4.2.0",
+  "version": "0.4.3",
+  "shortVersionWindows": "0.4.3.0",
   "description": "Desktop workspace for AI providers with local MCP tools, managed chats and parallel agents.",
   "license": "MIT",
   "author": "OneCode contributors",
@@ -49,7 +49,8 @@
     "dist:dir:linux:x64": "node scripts/package.mjs --platform linux --arch x64 --dir",
     "dist:dir:linux:arm64": "node scripts/package.mjs --platform linux --arch arm64 --dir",
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
-    "test:kill": "node scripts/kill-stray-vitest.mjs"
+    "test:kill": "node scripts/kill-stray-vitest.mjs",
+    "release:hotfix": "node scripts/write-hotfix-package.mjs"
   },
   "dependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",

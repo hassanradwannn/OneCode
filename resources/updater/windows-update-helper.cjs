@@ -7,13 +7,16 @@ const cp = require('node:child_process');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const same = (a, b) => path.win32.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.win32.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
 function validate(record) {
-  if (record?.schema !== 1 || !/^\d+\.\d+\.\d+$/.test(record.version) ||
+  if (![1, 2].includes(record?.schema) || !/^\d+\.\d+\.\d+$/.test(record.version) ||
       !/^\d+\.\d+\.\d+\.\d+$/.test(record.fileVersion) || !/^[a-f0-9]{64}$/.test(record.digest) ||
       !Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isSafeInteger(record.at) ||
       Date.now() - record.at < -60000 || Date.now() - record.at > 30 * 60000 ||
       !['installer', 'target', 'executable', 'log'].every(key => typeof record[key] === 'string' && path.win32.isAbsolute(record[key]) && !/[\r\n"\0]/.test(record[key])) ||
       !same(record.executable, path.win32.join(record.target, 'OneCode.exe')) ||
-      path.win32.basename(record.installer) !== 'OneCode-Setup-x64.exe' && path.win32.basename(record.installer) !== 'OneCode-Setup-arm64.exe') {
+      !(record.schema === 1 ? /^OneCode-Setup-(x64|arm64)\.exe$/.test(path.win32.basename(record.installer)) :
+        /^OneCode-Hotfix-(x64|arm64)\.zip$/.test(path.win32.basename(record.installer)) &&
+        typeof record.manifest === 'string' && same(record.manifest, path.win32.join(path.win32.dirname(record.installer), 'hotfix-manifest.json')) &&
+        /^[a-f0-9]{64}$/.test(record.manifestDigest) && record.elevate === false)) {
     throw new Error('Invalid or expired update handoff');
   }
   return record;
@@ -34,7 +37,7 @@ function tail(file, limit = 65536) {
   try { const size = fs.fstatSync(handle).size, bytes = Buffer.alloc(Math.min(limit, size)); fs.readSync(handle, bytes, 0, bytes.length, Math.max(0, size - bytes.length)); return bytes.toString('utf8'); }
   finally { fs.closeSync(handle); }
 }
-function readyWindow(text, since) {
+function readyWindow(text, since, version) {
   const lines = text.split(/\r?\n/).filter(line => Date.parse(line.slice(0, 24)) >= since);
   const loaded = lines.some(line => line.includes('window loaded'));
   let visible = false;
@@ -47,7 +50,7 @@ function readyWindow(text, since) {
       visible = state.visible === true && state.minimized === false && state.quitting === false;
     } catch { /* Incomplete diagnostic lines cannot prove presentation. */ }
   }
-  return loaded && visible;
+  return loaded && visible && (!version || lines.some(line => line.endsWith(`app version ${version}`)));
 }
 function registration(target) {
   const guid = '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
@@ -107,6 +110,10 @@ async function run(note, dependencies = {}) {
     registered(record.target);
     const digest = crypto.createHash('sha256').update(fs.readFileSync(record.installer)).digest('hex');
     if (digest !== record.digest) throw new Error('Staged installer digest changed');
+    if (record.schema === 2) {
+      await runHotfix(record, note, dependencies, listing, log, persist);
+      return;
+    }
     persist('installing');
     // NSIS /D is final and unquoted. The bootstrap owns restart; no --force-run.
     await (dependencies.execute || execute)(record.installer, ['/S', '--updated', '--onecode-bootstrap', '/currentuser', `/D=${record.target}`], record.elevate === true);
@@ -146,5 +153,77 @@ async function run(note, dependencies = {}) {
     throw error;
   }
 }
-module.exports = { validate, run, readyWindow, ownedShortcutIcon };
+async function runHotfix(record, note, dependencies, listing, log, persist) {
+  const contract = require('./hotfix-contract.cjs');
+  const resources = path.join(record.target, 'resources');
+  contract.noLinks(record.manifest);
+  if (await contract.hash(record.manifest) !== record.manifestDigest) throw Error('Hotfix manifest changed after verification');
+  const manifest = contract.manifest(JSON.parse(fs.readFileSync(record.manifest, 'utf8')));
+  if (manifest.version !== record.version || manifest.archive !== path.basename(record.installer) || manifest.sha256 !== record.digest || fs.statSync(record.installer).size !== manifest.size) throw Error('Hotfix handoff differs from manifest');
+  const runtime = contract.runtime(JSON.parse(fs.readFileSync(path.join(resources, 'updater/runtime.json'), 'utf8')));
+  if (runtime.id !== manifest.runtime || runtime.arch !== manifest.arch) throw Error('Hotfix native runtime differs');
+  await contract.verify(resources, runtime.files);
+  const payload = path.join(path.dirname(record.installer), 'hotfix-payload');
+  await contract.verify(payload, manifest.files);
+  const previous = await contract.inventory(resources, contract.mutable);
+  const backup = path.join(path.dirname(note), `rollback-${record.version}-${record.at}`);
+  contract.noLinks(backup);
+  if (fs.existsSync(backup)) throw Error('Hotfix rollback directory already exists; no replay attempted');
+  for (const entry of previous) {
+    const file = contract.location(backup, entry.path); fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.copyFileSync(contract.location(resources, entry.path), file);
+  }
+  await contract.verify(backup, previous);
+  const names = new Set(manifest.files.map(file => file.path));
+  const changed = new Set(), temporaryFiles = new Set();
+  persist('installing');
+  try {
+    // The canonical shutdown has finished. Refuse a manually started successor.
+    if (listing(record.executable).length) throw Error('OneCode restarted before hotfix replacement');
+    for (const entry of manifest.files) {
+      const destination = contract.location(resources, entry.path), temporary = destination + '.onecode-next';
+      contract.noLinks(temporary);
+      temporaryFiles.add(temporary);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(contract.location(payload, entry.path), temporary);
+      if (await contract.hash(temporary) !== entry.sha256) throw Error('Hotfix replacement checksum differs');
+      fs.renameSync(temporary, destination); changed.add(entry.path);
+    }
+    for (const entry of previous) if (!names.has(entry.path)) { fs.unlinkSync(contract.location(resources, entry.path)); changed.add(entry.path); }
+    await contract.verify(resources, manifest.files);
+    (dependencies.registration || registration)(record.target);
+    (dependencies.shortcuts || shortcuts)(record.executable);
+    persist('relaunching');
+    await launchSuccessor(record, dependencies, listing, log, record.version);
+    log('success: application hotfix loaded; native runtime retained');
+    persist('success'); fs.renameSync(note, path.join(path.dirname(note), 'last-success.json'));
+  } catch (error) {
+    // Never overwrite files or terminate a successor that may already be doing user work.
+    if (listing(record.executable).length) { log('successor still running; rollback retained for recovery after close'); throw error; }
+    for (const name of changed) {
+      const old = previous.find(file => file.path === name), destination = contract.location(resources, name);
+      if (old) fs.copyFileSync(contract.location(backup, name), destination);
+      else if (fs.existsSync(destination)) fs.unlinkSync(destination);
+    }
+    for (const temporary of temporaryFiles) { contract.noLinks(temporary); if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+    await contract.verify(resources, previous);
+    log('application hotfix rolled back; previous application files restored');
+    try { await launchSuccessor(record, dependencies, listing, log); } catch { log('previous app relaunch could not be confirmed; backup retained'); }
+    throw error;
+  }
+}
+async function launchSuccessor(record, dependencies, listing, log, version) {
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false, env });
+  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
+  const deadline = Date.now() + 45000; let stable = 0;
+  while (true) {
+    const running = listing(record.executable).length > 0;
+    if (running && !stable) stable = Date.now(); if (!running) stable = 0;
+    if (running && Date.now() - stable >= 5000 && readyWindow(tail(record.log), record.at, version)) return;
+    if (Date.now() > deadline) throw Error('Hotfix successor did not reach a stable visible window and expected version');
+    await sleep(1000);
+  }
+}
+module.exports = { validate, run, readyWindow, ownedShortcutIcon, runHotfix };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });

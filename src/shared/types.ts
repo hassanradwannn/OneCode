@@ -518,7 +518,7 @@ export interface ConnectionStatus {
   surfaces: SurfaceStatus[];
 }
 
-export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error' | 'mcp-error';
+export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error' | 'mcp-error' | 'timeout';
 export interface TailscaleStatus {
   /** Current native custody with failed public TLS permits OS-consented desktop recovery. */
   canRepair?: boolean;

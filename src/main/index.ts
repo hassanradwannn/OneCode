@@ -10,6 +10,7 @@ import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js
  */
 
 import path from 'node:path';
+import { APP_VERSION } from './version.js';
 import { app, Notification, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, screen, session, shell } from 'electron';
 import { createKeepAwake, installKeepAwake } from './keep-awake.js';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
@@ -686,6 +687,7 @@ void app.whenReady().then(async () => {
   onMainTextsChange(() => writeDurableSoon(MAIN_TEXTS_STATE, mainTextTranslations()));
 
   logInfo('app started');
+  logInfo(`app version ${APP_VERSION}`);
 
   // Historical Unattributed repair may legitimately scan and rewrite a large legacy bucket.
   // It is maintenance, not a prerequisite for showing the app or accepting new exact-id

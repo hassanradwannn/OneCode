@@ -357,6 +357,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       'dns-pending': 'Public DNS has not published this device yet. Tailscale says propagation can take up to 10 minutes.',
       'dns-error': 'Public DNS checks could not verify an ingress address. OneCode is checking Cloudflare and Google DNS automatically.',
       'tls-error': 'Public DNS resolves, but verified TLS to the Funnel ingress failed. Local Tailscale readiness does not prove public reachability.',
+      'timeout': 'The public connection check timed out. A slow response does not prove a TLS failure; OneCode will check again without restarting Tailscale.',
       'http-error': 'Public HTTPS answered, but the exact connector metadata path did not return HTTP 200. Check the current OneCode URL and Funnel routing.',
       'metadata-error': 'Public HTTPS did not return metadata for this exact current connector. A different or stale mount cannot verify this connection.',
       'mcp-error': 'Public HTTPS works, but the MCP initialize handshake failed. Keep OneCode running and use the current Core URL after this check passes.'

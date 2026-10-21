@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.3] — 2026-10-22
+
+Allow slow valid public HTTPS/MCP checks to complete and distinguish timeouts from TLS failures. Enable verified Windows application hotfix bundles through the existing internal updater, with native runtime compatibility checks, coordinated restart and rollback copies. Existing installations receive this enabling release through the normal full installer. See [0.4.3 release notes](docs/release-notes/v0.4.3.md).
+
 ## [0.4.2] — 2026-10-21
 
 Add Windows recovery for a Tailscale public TLS failure while the local connector remains healthy. Settings offers Repair public connection, rechecks the owned route, requests Windows consent to restart Tailscale, and verifies public access again. Failed public checks no longer remain labelled Connected. Saved connector URLs, account state, routes and chats are preserved. See [0.4.2 release notes](docs/release-notes/v0.4.2.md).

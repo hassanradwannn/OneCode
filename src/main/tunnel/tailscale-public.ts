@@ -6,6 +6,10 @@ import type { TailscalePublicFailure } from '../../shared/types.js';
 const RESOLVERS = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const METADATA = '/.well-known/oauth-protected-resource';
 const MAX_BYTES = 64 * 1024;
+const DNS_READ_MS = 4_000;
+// Public Funnel replies can take several seconds, including a streamed initialize
+// body. Keep the DNS race short without cutting off a healthy public response.
+const PUBLIC_READ_MS = 12_000;
 const PRIVATE_V4 = new BlockList();
 for (const [address, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
   ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24],
@@ -26,7 +30,7 @@ export function isPublicIngressAddress(address: string): boolean {
 interface JsonResponse { status: number; json: unknown }
 interface ReadOptions { signal: AbortSignal; accept: string; address?: string; body?: string; headers?: Record<string, string> }
 interface Dependencies { read(url: URL, options: ReadOptions): Promise<JsonResponse> }
-class ProbeReadError extends Error { constructor(readonly kind: 'transport' | 'response') { super(kind); } }
+class ProbeReadError extends Error { constructor(readonly kind: 'transport' | 'response' | 'timeout') { super(kind); } }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** No redirects, ambient cookies, proxy credentials or disabled certificate checks. */
@@ -84,8 +88,8 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
         body += String(chunk);
         if (contentType === 'text/event-stream' && streamReply()) { response.destroy(); request.destroy(); }
       });
-      response.once('error', () => finish(new ProbeReadError('transport')));
-      response.once('aborted', () => finish(new ProbeReadError('transport')));
+      response.once('error', () => finish(new ProbeReadError(options.signal.reason?.name === 'TimeoutError' ? 'timeout' : 'transport')));
+      response.once('aborted', () => finish(new ProbeReadError(options.signal.reason?.name === 'TimeoutError' ? 'timeout' : 'transport')));
       response.once('end', () => {
         try {
           if (contentType === 'text/event-stream') { finish(new ProbeReadError('response')); return; }
@@ -94,8 +98,8 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
         catch { finish(new ProbeReadError('response')); }
       });
     });
-    request.once('error', () => finish(new ProbeReadError('transport')));
-    timer = setTimeout(() => { request.destroy(); finish(new ProbeReadError('transport')); }, 4_000);
+    request.once('error', () => finish(new ProbeReadError(options.signal.reason?.name === 'TimeoutError' ? 'timeout' : 'transport')));
+    timer = setTimeout(() => { finish(new ProbeReadError('timeout')); request.destroy(); }, options.address ? PUBLIC_READ_MS : DNS_READ_MS);
     request.end(options.body);
   });
 }
@@ -131,7 +135,7 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
   const metadata = new URL(endpoint.origin + METADATA + endpoint.pathname);
   const failures = new Set<TailscalePublicFailure>();
   const pending = new AbortController();
-  const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000), pending.signal]);
+  const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(30_000), pending.signal]);
   let hasAddresses = false, dnsError = false;
   const ingress = new Map<string, Promise<void>>();
   try {
@@ -156,13 +160,14 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
         const existing = ingress.get(address);
         if (existing) return existing;
         const attempt = (async () => {
+        let initializing = false;
         try {
           const response = await deps.read(metadata, { signal: probeSignal, accept: 'application/json', address });
           probeSignal.throwIfAborted();
           if (response.status !== 200) failures.add('http-error');
           else if (!object(response.json) || response.json.resource !== endpoint.href) failures.add('metadata-error');
           else {
-            failures.add('mcp-error');
+            initializing = true;
             const initialized = await deps.read(endpoint, { signal: probeSignal, address, accept: 'application/json, text/event-stream', headers,
               body: JSON.stringify({ jsonrpc: '2.0', id: 'onecode-ingress', method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'OneCode ingress check', version: '1' } } }) });
             const rpc = initialized.json;
@@ -170,7 +175,11 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
                 typeof rpc.result.protocolVersion === 'string' && object(rpc.result.serverInfo) && typeof rpc.result.serverInfo.name === 'string') return;
             failures.add('mcp-error');
           }
-        } catch (error) { if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error'); }
+        } catch (error) {
+          if (error instanceof ProbeReadError && error.kind === 'timeout') failures.add('timeout');
+          else if (initializing) failures.add('mcp-error');
+          else if (error instanceof ProbeReadError && error.kind === 'response') failures.add('metadata-error');
+        }
         throw new Error('Ingress did not verify');
         })();
         ingress.set(address, attempt);
@@ -182,6 +191,6 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
   } catch {
     signal.throwIfAborted();
     if (!hasAddresses) return { state: dnsError ? 'dns-error' : 'dns-pending' };
-    return { state: failures.has('mcp-error') ? 'mcp-error' : failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : 'tls-error' };
+    return { state: failures.has('mcp-error') ? 'mcp-error' : failures.has('metadata-error') ? 'metadata-error' : failures.has('http-error') ? 'http-error' : failures.has('timeout') ? 'timeout' : 'tls-error' };
   } finally { pending.abort(); }
 }

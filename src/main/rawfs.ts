@@ -15,7 +15,7 @@ import path from 'node:path';
  * normal node:fs implementation. The runtime require is intentionally dynamic so the
  * build does not try to resolve Electron's special module at bundle time.
  */
-const rawFs: typeof nodeFs = (() => {
+export const rawFs: typeof nodeFs = (() => {
   if (!process.versions.electron) return nodeFs;
   const runtimeRequire = createRequire(path.join(process.cwd(), '__clf_runtime__.cjs'));
   return runtimeRequire('original-fs') as typeof nodeFs;

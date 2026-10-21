@@ -48,6 +48,7 @@ extraResources:
     to: app-update.yml
   - from: resources/updater
     to: updater
+    filter: ['**/*.cjs', '**/*.yml', '**/*.ps1']
   - from: LICENSE
     to: LICENSE
   - from: THIRD-PARTY-NOTICES.txt
@@ -85,7 +86,7 @@ extraResources:
 npmRebuild: false
 
 # macOS only; a no-op on every other platform. See the hook and the mac.identity note below.
-afterPack: scripts/afterpack-macos-adhoc-seal.mjs
+afterPack: scripts/afterpack-onecode.mjs
 
 asarUnpack:
   - '**/node_modules/@koromix/koffi-*/**'

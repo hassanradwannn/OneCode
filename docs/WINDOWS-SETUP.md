@@ -1,6 +1,8 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.4.2
+## Version 0.4.3
+
+Public checks now allow slower valid HTTPS/MCP replies and distinguish a timeout from a TLS failure. Install 0.4.3 normally through Settings → General → Check for updates → Install when done. This enables smaller compatible application hotfixes in the same internal updater; they activate after work finishes and OneCode restarts. See [hotfix updates](HOTFIX-UPDATES.md).
 
 If OneCode works locally but shows **Public TLS connection failed**, open **Settings → Connection → Repair public connection**. Windows may ask for administrator approval to restart Tailscale. This briefly interrupts Tailscale connections. OneCode retains the existing routes and URLs and verifies public DNS, HTTPS and MCP again before showing Connected. Cancelled or failed repairs are not repeated automatically. Wait for running tools to finish before using this action.
 

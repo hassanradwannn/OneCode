@@ -8,6 +8,7 @@ import { zipSync, unzipSync } from 'fflate';
 import { load as loadYaml } from 'js-yaml';
 import { writeUpdateMetadata } from './write-update-metadata.mjs';
 import { assertWindowsPackageIsolation } from './verify-windows-package.mjs';
+import { execFileSync } from 'node:child_process';
 
 // Assemble only reviewed public inputs from the final package, never local profiles or logs.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -66,4 +67,5 @@ for (const name of names) {
   sums.push(`${createHash('sha256').update(bytes).digest('hex')}  ${name}`);
 }
 await fs.writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
+execFileSync(process.execPath, [path.join(root, 'scripts/write-hotfix-package.mjs'), output, '--with-installer'], { cwd: root, stdio: 'inherit' });
 console.log(`Verified ${version}: ${names.length} public assets; Windows x64 updater metadata and checksums match.`);

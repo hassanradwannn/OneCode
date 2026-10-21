@@ -51,6 +51,7 @@ import { downloadWindowsUpdate } from './update-download.js';
 import { currentWindowsInstallTarget } from './update-registration.js';
 import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 import { startWindowsUpdate } from './update-bootstrap.js';
+import { compatibleHotfix, stageHotfix } from './update-hotfix.js';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
@@ -150,7 +151,7 @@ export function releaseVersion(tag: unknown): string | null {
 const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle', error: null, checkedAt: null };
 
 let status: UpdateStatus = CLEAR;
-let staged: { version: string; file: string; kind: 'installer' | 'appimage'; target: string; digest: string } | null = null;
+let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix'; target: string; digest: string; hotfix?: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
@@ -203,7 +204,7 @@ export async function restoreUpdateHandoff(): Promise<void> {
   let note: { version?: unknown; schema?: number; status?: string; error?: string; at?: number } | null = null;
   try { note = JSON.parse(await readFile(handoffNote(), 'utf8')); } catch { return; }
   // The external bootstrap owns its live handoff. Starting the successor must not erase it.
-  if (note?.schema === 1 && note.status !== 'failed' && typeof note.at === 'number' && Date.now() - note.at < 15 * 60_000) return;
+  if ((note?.schema === 1 || note?.schema === 2) && note.status !== 'failed' && typeof note.at === 'number' && Date.now() - note.at < 15 * 60_000) return;
   await rm(handoffNote(), { force: true }).catch(() => undefined);
   const version = typeof note?.version === 'string' && /^\d+\.\d+\.\d+$/.test(note.version) ? note.version : null;
   if (version && isNewer(version, APP_VERSION)) {
@@ -311,7 +312,26 @@ async function runPass(): Promise<void> {
   // One read of the release's own checksums, for whichever of the two paths below runs. It is
   // both the manifest of what the release contains and the proof of what may be executed, so
   // neither adopting a file nor fetching one happens without it.
-  const expected = (await releaseDigests(release.version)).get(artifact.name);
+  const digests = await releaseDigests(release.version);
+  const hotfixName = `OneCode-Hotfix-${process.arch}.json`;
+  const hotfixDigest = artifact.kind === 'installer' ? digests.get(hotfixName) : undefined;
+  if (hotfixDigest) {
+    const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
+    const manifest = await compatibleHotfix(manifestFile, release.version);
+    if (manifest) {
+      if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
+      set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256);
+      const hotfix = await stageHotfix(file, manifest);
+      staged = { version: release.version, file, kind: 'hotfix', target: artifact.target, digest: manifest.sha256, hotfix };
+      set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
+      logInfo(`update: ${release.version} application hotfix is verified and ready; native runtime retained`);
+      return;
+    }
+    logInfo('update: hotfix runtime differs; checking for a full installer');
+    if (!digests.has(artifact.name)) { set({ latest: release.version, stage: 'idle' }); return; }
+  }
+  const expected = digests.get(artifact.name);
   if (!expected) throw new Error(`release ${release.version} publishes no ${artifact.name}`);
   const carried = await adopt(release.version, artifact.name, expected);
   if (carried) {
@@ -637,7 +657,7 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!ready) return;
   try {
     if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
-    if (ready.kind === 'installer') {
+    if (ready.kind === 'installer' || ready.kind === 'hotfix') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
@@ -646,7 +666,7 @@ export async function applyStagedUpdate(): Promise<void> {
       // after restart, without enabling the global automatic-refresh preference.
       await prepareUpdateHandoff?.(ready.version);
       // NSIS /D must be the final, unquoted argument. It names only the verified current install.
-      const elevate = process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
+      const elevate = ready.kind === 'installer' && process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
         executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
     } else {
