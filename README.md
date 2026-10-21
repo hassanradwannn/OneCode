@@ -2,11 +2,17 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.0)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.4.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.1)** · **[Download for Windows](https://github.com/hassanradwannn/OneCode/releases/latest/download/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.4.0. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates**, then choose **Install when done** to get 0.4.1. Your profile and saved chats are preserved.
+
+## What's new in 0.4.1
+
+Fixes a Tailscale connector that could remain **Connecting** on hotspots and other networks where Google DNS over HTTPS is unreachable. OneCode now requests Cloudflare's JSON DNS API with its required media type and accepts the JSON response formats used by both resolvers. Either working resolver can complete the existing public HTTPS and MCP checks independently.
+
+The fix applies to both ChatGPT and Gemini connectors on every updated installation. It preserves saved connector URLs, private Remote routes, permissions and chats. See the [0.4.1 release notes](docs/release-notes/v0.4.1.md) and [validation record](docs/release-acceptance/v0.4.1.md).
 
 ## What's new in 0.4.0
 
@@ -41,7 +47,7 @@ The 0.3.8 remote improvements are included:
 - Opening the bookmark reuses or renews that browser's connection. Messages and other actions are never automatically replayed.
 - If another route takes the saved port, **Settings → Remote → Refresh link** selects a free private port. Copy the replacement link and update your bookmark; the conflicting route is preserved.
 
-These earlier repairs are included in 0.4.0. Historical details remain in the [0.3.8.2 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
+These earlier repairs are included in 0.4.1. Historical details remain in the [0.3.8.2 release notes](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
 
 ## Work with your own provider account
 
@@ -89,7 +95,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find earlier 0.3.7 validation records in the [release acceptance notes](docs/release-acceptance/v0.3.7.md), and current release details and checksums on the [0.3.8.2 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.3.802).
+Developers can find current checks in the [0.4.1 acceptance record](docs/release-acceptance/v0.4.1.md), with release assets and checksums on the [0.4.1 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.1).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

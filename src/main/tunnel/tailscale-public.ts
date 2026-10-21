@@ -54,7 +54,11 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
     const request = https.request(url, requestOptions, response => {
       if (response.statusCode !== 200) { response.destroy(); finish(undefined, { status: response.statusCode ?? 0, json: null }); return; }
       const contentType = response.headers['content-type']?.split(';')[0]?.trim();
-      if (!contentType || !options.accept.split(',').map(type => type.trim()).includes(contentType)) { response.destroy(); finish(new ProbeReadError('response')); return; }
+      // Google returns ordinary JSON for its JSON DNS API. Keep response media
+      // validation separate from Cloudflare's exact request negotiation.
+      const responseTypes = options.accept === 'application/dns-json'
+        ? ['application/dns-json', 'application/json'] : options.accept.split(',').map(type => type.trim());
+      if (!contentType || !responseTypes.includes(contentType)) { response.destroy(); finish(new ProbeReadError('response')); return; }
       let body = '', bytes = 0;
       response.setEncoding('utf8');
       const streamReply = (): boolean => {
@@ -138,7 +142,9 @@ export async function probeFunnelPublic(value: string, signal: AbortSignal, over
       const query = new URL(resolver); query.searchParams.set('name', endpoint.hostname); query.searchParams.set('type', String(type));
       let answer: ReturnType<typeof dnsAddresses>;
       try {
-        const response = await deps.read(query, { signal: probeSignal, accept: 'application/dns-json, application/json' });
+        // Cloudflare selects its JSON DNS API only for this exact Accept value;
+        // a combined JSON media range returns HTTP 400 instead of DNS answers.
+        const response = await deps.read(query, { signal: probeSignal, accept: 'application/dns-json' });
         answer = response.status === 200 ? dnsAddresses(response.json, endpoint.hostname, type) : { addresses: [], error: true };
       } catch { answer = { addresses: [], error: true }; }
       dnsError ||= answer.error;

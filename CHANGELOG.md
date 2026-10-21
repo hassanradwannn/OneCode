@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.1] — 2026-10-21
+
+Repair Cloudflare DNS negotiation so either supported DNS resolver can independently verify the public connector when the other resolver is unreachable. This fixes connections stuck at Connecting on affected hotspots for both ChatGPT and Gemini. Saved URLs, Remote routes, permissions and chats are preserved. See [0.4.1 release notes](docs/release-notes/v0.4.1.md).
+
 ## [0.4.0] — 2026-10-21
 
 Consolidate permitted local tools, plugins and managed skills under OneCode Core. Add durable interval checks for ChatGPT and Gemini, preserve Remote project composer and delivery ownership, repair native steering and restored browser openings, and automate supported Windows Tailscale setup. Correct image-card recovery and Gemini image export, add inline local photos and playable MP4/WebM videos on desktop and Remote, and recover from transient Tailscale startup/network failures without replaying route changes or messages. See [0.4.0 release notes](docs/release-notes/v0.4.0.md).

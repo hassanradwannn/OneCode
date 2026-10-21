@@ -1,6 +1,8 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.4.0
+## Version 0.4.1
+
+This patch fixes a connector stuck at **Connecting / Public DNS check failed** when Google DNS over HTTPS is unreachable. Cloudflare DNS negotiation now uses its required JSON media type; either reachable resolver can finish public HTTPS and MCP verification. Update normally, keep OneCode and Tailscale running, and let the existing connection retry. Saved connector URLs and Remote bookmarks are preserved. Account consent, captive portals and blocked network access still require the corresponding native action.
 
 OneCode Core provides permitted local tools, installed integrations and managed skills through one connection per provider. Existing chats can discover newly added integrations without starting another chat. Remote preserves project placement and each chat's provider. Recurring checks save the requested interval and message, then send in that same chat until cancelled; keep the PC awake, OneCode running and the provider signed in.
 
@@ -18,7 +20,7 @@ Interactive web previews default to **Fit · Responsive**, using the available p
 
 ## Firefox
 
-OneCode 0.4.0 for Windows does not include a signed Firefox Companion package. Use Chrome, Edge or Brave with the bundled OneCode Companion. Firefox executable detection remains available, but detection alone does not establish a provider connection. Setup links to this status instead of downloading a different project's extension.
+OneCode 0.4.1 for Windows does not include a signed Firefox Companion package. Use Chrome, Edge or Brave with the bundled OneCode Companion. Firefox executable detection remains available, but detection alone does not establish a provider connection. Setup links to this status instead of downloading a different project's extension.
 
 For multiple computers, set **Name for this computer** before adding each device's MCP URL. Both MCP identity fields publish the configured full name. OneCode accepts a unique native title-cased/dash-to-space presentation only after selecting and verifying its real menu token. Different-device and ambiguous duplicate names are refused. Existing native connectors are not renamed by this update.
 
