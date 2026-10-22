@@ -1,5 +1,13 @@
 # OneCode changelog
 
+## [0.5.0] — 2026-10-23
+
+Ship the first full Windows x64 + Linux x64 release, including AppImage/DEB packaging and a verified AppImage application-hotfix foundation. Repair Linux embedded-browser bounds, preserve fresh authenticated Core routing for plans/plugins/sub-agents, add pre-Send image preview, bundle the supported Linux dictation runtime, and carry forward the accepted Tailscale, connector-identity, transcript and long-response reliability repairs. See [0.5.0 release notes](docs/release-notes/v0.5.0.md).
+
+## [0.4.8] — 2026-10-22
+
+Retain the exact unresolved turn for Continue/steering, keep long tool responses alive through the connector, and fail interrupted proxy streams without replaying uncertain work. See [0.4.8 notes](docs/release-notes/v0.4.8.md).
+
 ## [0.4.7] — 2026-10-22
 
 Align the previous native-message identity used during steering and receipt tracking, retain the replacement working turn, restore normal 90-second silence recovery, and extend exact authored-input refresh to ChatGPT before first tool use. Preserve one-shot refresh, current-source checks and no Send replay. See [0.4.7 notes](docs/release-notes/v0.4.7.md).
