@@ -2529,14 +2529,23 @@
       }
     }
     // A mounted live mapping can be ahead of (or richer than) the typed shell-item projection.
-    // Recover only exact current-branch public rows and let them replace same-id synthesized rows;
-    // the normal authored-message projection below still decides what is allowed to cross worlds.
+    // Recover only exact current-branch public rows. Never replace a populated typed row: that
+    // row owns lifecycle fields such as phase/completed/status which the live mapping may omit
+    // during a shell transition. For the same id, only fill missing public text and preserve the
+    // typed envelope; append the mapping row only when the typed projection omitted it entirely.
     try {
       const live = shellLiveMapping(fiber, entry);
       if (live && live !== false) for (const message of shellLivePublicMessages(live, entry)) {
         const id = str(message.id), at = messages.findIndex(row => str(row?.id) === id);
-        if (at >= 0) messages[at] = message;
-        else messages.push(message);
+        if (at < 0) {
+          messages.push(message);
+          continue;
+        }
+        const typed = messages[at];
+        const recovered = authoredText(message);
+        if (typed?.author?.role === message.author?.role && !authoredText(typed) && recovered) {
+          messages[at] = { ...typed, content: message.content };
+        }
       }
     } catch {
       // The typed shell projection remains authoritative when the optional live mapping is absent
