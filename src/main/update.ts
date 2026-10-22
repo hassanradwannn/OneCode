@@ -52,10 +52,12 @@ import { currentWindowsInstallTarget } from './update-registration.js';
 import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 import { startWindowsUpdate } from './update-bootstrap.js';
 import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
+import { inspectLocalBetaUpdate, localBetaUpdateConfig, startLocalBetaUpdate, verifyLocalBetaUpdate, type LocalBetaUpdateConfig } from './beta-update.js';
 import { baseRelease } from '../../resources/updater/hotfix-contract.cjs';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
+const LOCAL_BETA_UPDATE = localBetaUpdateConfig();
 const REPO = 'hassanradwannn/OneCode';
 const LATEST_RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 
@@ -149,14 +151,25 @@ export function releaseVersion(tag: unknown): string | null {
   return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
 }
 
-const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle', error: null, checkedAt: null };
+const CLEAR: UpdateStatus = {
+  current: APP_VERSION,
+  latest: null,
+  stage: 'idle',
+  error: null,
+  checkedAt: null,
+  channel: LOCAL_BETA_UPDATE ? 'beta-branch' : 'release',
+  currentRevision: null,
+  latestRevision: null
+};
 
 let status: UpdateStatus = CLEAR;
 let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'composite'; target: string; digest: string; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
+let betaStaged: { config: LocalBetaUpdateConfig; currentRevision: string; targetRevision: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
 let requestedVersion: string | null = null;
+let requestedBetaRevision: string | null = null;
 let installEpoch = 0;
 let installPoll: ReturnType<typeof setTimeout> | null = null;
 let installCheck: Promise<void> | null = null;
@@ -217,8 +230,8 @@ export async function restoreUpdateHandoff(): Promise<void> {
 }
 
 export function startUpdateChecks(): void {
-  if (!UPDATES_ENABLED || !app.isPackaged) return;
-  void restoreUpdateHandoff();
+  if (!UPDATES_ENABLED || (!app.isPackaged && !LOCAL_BETA_UPDATE)) return;
+  if (!LOCAL_BETA_UPDATE) void restoreUpdateHandoff();
   if (recheck) clearInterval(recheck);
   recheck = setInterval(() => void checkForUpdates(), RECHECK_MS);
   recheck.unref();
@@ -260,21 +273,26 @@ export function checkForUpdates(): Promise<void> {
     .catch((err: Error) => {
       // This pass owns GitHub requests; keep its transport failure readable without
       // relabeling HTTP, filesystem or other diagnostics. The log keeps the original.
-      const reason = err instanceof TypeError && err.message === 'fetch failed' ? 'GitHub could not be reached' : err.message;
+      const reason = !LOCAL_BETA_UPDATE && err instanceof TypeError && err.message === 'fetch failed' ? 'GitHub could not be reached' : err.message;
       set({ stage: 'failed', error: reason });
       logWarn(`update check failed: ${err.message}`);
     })
     .finally(() => {
       if (pass === run) pass = null;
       scheduleRetry();
-      if (requestedVersion && status.stage === 'ready') void checkInstallIntent();
-      else if (requestedVersion && status.stage !== 'checking') cancelUpdateInstall();
+      if (requestedBetaRevision && status.stage === 'ready') void checkBetaInstallIntent();
+      else if (requestedVersion && status.stage === 'ready') void checkInstallIntent();
+      else if ((requestedVersion || requestedBetaRevision) && status.stage !== 'checking') cancelUpdateInstall();
     });
   pass = run;
   return run;
 }
 
 async function runPass(): Promise<void> {
+  if (LOCAL_BETA_UPDATE) {
+    await runLocalBetaPass(LOCAL_BETA_UPDATE);
+    return;
+  }
   set({ stage: 'checking', error: null });
   const release = { version: await latestVersion() };
   // GitHub answered. From here the UI can tell "current" from "not asked yet", whatever the
@@ -380,6 +398,27 @@ async function runPass(): Promise<void> {
   }
   set({ stage: 'ready', downloadPercent: 100 });
   logInfo(`update: ${release.version} is downloaded and ready to install`);
+}
+
+async function runLocalBetaPass(config: LocalBetaUpdateConfig): Promise<void> {
+  set({ stage: 'checking', error: null, latest: null, latestRevision: null, channel: 'beta-branch' });
+  const inspection = await inspectLocalBetaUpdate(config);
+  set({
+    checkedAt: Date.now(),
+    currentRevision: inspection.currentRevision,
+    latestRevision: inspection.latestRevision,
+    betaRelation: inspection.relation
+  });
+  if (!inspection.latestRevision) {
+    betaStaged = null;
+    cancelUpdateInstall();
+    set({ latest: null, stage: 'idle', downloadPercent: undefined });
+    return;
+  }
+  if (betaStaged?.currentRevision !== inspection.currentRevision || betaStaged.targetRevision !== inspection.latestRevision) cancelUpdateInstall();
+  betaStaged = { config, currentRevision: inspection.currentRevision, targetRevision: inspection.latestRevision };
+  set({ latest: null, stage: 'ready', downloadPercent: 100 });
+  logInfo(`update: Beta branch ${inspection.latestRevision.slice(0, 12)} is ready to fast-forward from ${inspection.currentRevision.slice(0, 12)}`);
 }
 
 /** Where one release's artifact is kept. Versioned, so no build is ever taken for another. */
@@ -567,8 +606,9 @@ export function configureUpdateInstall(quit: () => void, prepare?: (version: str
 }
 
 export function cancelUpdateInstall(): boolean {
-  const wasRequested = requestedVersion !== null;
+  const wasRequested = requestedVersion !== null || requestedBetaRevision !== null;
   requestedVersion = null;
+  requestedBetaRevision = null;
   installEpoch++;
   runAfterInstall = false;
   if (installPoll) clearTimeout(installPoll);
@@ -586,6 +626,21 @@ export async function requestUpdateInstall(expectedVersion: string): Promise<'wa
   set({ installRequested: true, busyReasons: [] });
   if (installCheck) await installCheck;
   await checkInstallIntent();
+  return runAfterInstall ? 'restarting' : 'waiting';
+}
+
+export function localBetaUpdatesEnabled(): boolean {
+  return LOCAL_BETA_UPDATE !== null;
+}
+
+export async function requestBetaUpdateInstall(expectedRevision: string): Promise<'waiting' | 'restarting'> {
+  if (!quitForUpdate || !betaStaged || status.stage !== 'ready' || expectedRevision !== betaStaged.targetRevision || status.latestRevision !== expectedRevision)
+    throw new Error('This Beta branch update is no longer current. Check for updates again.');
+  requestedBetaRevision = expectedRevision;
+  installEpoch++;
+  set({ installRequested: true, busyReasons: [] });
+  if (installCheck) await installCheck;
+  await checkBetaInstallIntent();
   return runAfterInstall ? 'restarting' : 'waiting';
 }
 
@@ -620,6 +675,41 @@ function checkInstallIntent(): Promise<void> {
       installPoll.unref(); return;
     }
     if (markInstallOnQuit(version!)) quitForUpdate!();
+  })().finally(() => { if (installCheck === run) installCheck = null; });
+  installCheck = run;
+  return run;
+}
+
+function checkBetaInstallIntent(): Promise<void> {
+  if (installCheck) return installCheck;
+  const revision = requestedBetaRevision;
+  const epoch = installEpoch;
+  const ready = betaStaged;
+  const current = () => installEpoch === epoch && requestedBetaRevision === revision && revision !== null && betaStaged === ready &&
+    ready?.targetRevision === status.latestRevision && status.stage === 'ready';
+  const run = (async () => {
+    if (!current() || !ready) return;
+    let reasons: UpdateBusyReason[];
+    try { reasons = await busyProjection(); }
+    catch { reasons = ['unavailable']; }
+    if (!current()) return;
+    if (!reasons.length) {
+      try {
+        await verifyLocalBetaUpdate(ready.config, ready.currentRevision, ready.targetRevision);
+        reasons = await busyProjection();
+      } catch (error) {
+        if (!current()) return;
+        cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); return;
+      }
+    }
+    if (!current()) return;
+    set({ busyReasons: reasons });
+    if (reasons.length) {
+      installPoll = setTimeout(() => { installPoll = null; void checkBetaInstallIntent(); }, 2000);
+      installPoll.unref(); return;
+    }
+    runAfterInstall = true;
+    quitForUpdate!();
   })().finally(() => { if (installCheck === run) installCheck = null; });
   installCheck = run;
   return run;
@@ -670,6 +760,19 @@ export const UPDATE_HANDOFF_MS = 30_000;
 
 export async function applyStagedUpdate(): Promise<void> {
   if (!UPDATES_ENABLED) return;
+  if (LOCAL_BETA_UPDATE && runAfterInstall && requestedBetaRevision === betaStaged?.targetRevision) {
+    const ready = betaStaged;
+    betaStaged = null;
+    requestedBetaRevision = null;
+    runAfterInstall = false;
+    try {
+      await startLocalBetaUpdate(ready.config, ready.currentRevision, ready.targetRevision, process.pid);
+      logInfo(`update: handed Beta branch ${ready.targetRevision.slice(0, 12)} to the local fast-forward updater`);
+    } catch (err) {
+      logWarn(`could not hand off the local Beta update: ${(err as Error).message}`);
+    }
+    return;
+  }
   // Downloading alone never grants execution, including ordinary Quit or OS shutdown.
   if (!runAfterInstall || requestedVersion !== staged?.version) return;
   const ready = staged;
@@ -719,6 +822,7 @@ export function resetUpdateForTests(): void {
   installFolderAccess = probeInstallFolder;
   status = CLEAR;
   staged = null;
+  betaStaged = null;
   pass = null;
   runAfterInstall = false;
   listeners.clear();

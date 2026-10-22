@@ -784,6 +784,12 @@ export interface UpdateStatus {
   latest: string | null;
   stage: 'idle' | 'checking' | 'downloading' | 'ready' | 'failed';
   error: string | null;
+  /** Production uses release assets. The local Beta lane follows the remote beta Git branch. */
+  channel?: 'release' | 'beta-branch';
+  /** Commit identity for the local Beta lane. Never used as executable authority by production. */
+  currentRevision?: string | null;
+  latestRevision?: string | null;
+  betaRelation?: 'current' | 'local-ahead' | 'remote-ahead';
   /** When the release API last answered, as epoch ms. Null until it has. */
   checkedAt: number | null;
   /** A version handed to its installer that this start is still older than: it did not install. */

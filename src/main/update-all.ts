@@ -1,5 +1,5 @@
 /** One explicit command over the existing updater, connection and refresh owners. */
-import { checkForUpdates, configureUpdateInstall, manualDownloadUrl, requestUpdateInstall, updateStatus } from './update.js';
+import { checkForUpdates, configureUpdateInstall, localBetaUpdatesEnabled, manualDownloadUrl, requestBetaUpdateInstall, requestUpdateInstall, updateStatus } from './update.js';
 import { consumeRequestedPluginRefreshStartup, requestPluginRefreshes } from './plugin-refresh.js';
 import { startBridge } from './bridge.js';
 import { connect, getStatus } from './connection.js';
@@ -14,9 +14,14 @@ export function updateAll(quit: () => void, openDownload: (url: string) => Promi
     await checkForUpdates();
     const update = updateStatus();
     const failed = update.stage === 'failed';
+    const betaRevision = localBetaUpdatesEnabled() && update.stage === 'ready' ? update.latestRevision : null;
     // Ask after the download, when quitting can actually install the named build. A
     // cancelled dialog grants neither installer shutdown nor future startup work.
-    if (update.stage === 'ready' && !await confirmRestart(update.latest!)) return 'cancelled';
+    if (update.stage === 'ready' && !await confirmRestart(betaRevision ? `Beta ${betaRevision.slice(0, 12)}` : update.latest!)) return 'cancelled';
+    if (betaRevision) {
+      configureUpdateInstall(quit);
+      return requestBetaUpdateInstall(betaRevision);
+    }
     // An app update must not wait on tunnel authentication or connectivity. The next
     // build connects for its accepted refresh request; the current build only commits intent.
     if (failed || !update.latest) {

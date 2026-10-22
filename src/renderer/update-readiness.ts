@@ -37,7 +37,8 @@ export function paintUpdateReadiness(next: AppState, operationError: string | nu
   // A new version/schema/error reopens an incomplete card; identical pushes preserve the choice.
   const signature = JSON.stringify([
     operationError, busy, next.update.current, next.update.latest, next.update.stage, next.update.error,
-    next.update.checkedAt != null, next.bridge.extensionVersion, next.bridge.running, next.bridge.paired,
+    next.update.checkedAt != null, next.update.channel, next.update.currentRevision, next.update.latestRevision, next.update.betaRelation,
+    next.bridge.extensionVersion, next.bridge.running, next.bridge.paired,
     next.bridge.present, next.bridge.error, next.status.state,
     next.status.state !== 'connected' ? next.status.detail : null,
     rows.map(row => [row.id, row.status, !!row.schemaUnchecked]),

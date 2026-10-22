@@ -1225,16 +1225,32 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   // A mismatched companion can fail the protocol gate before it becomes present.
   // Retain its last observed version until a matching companion actually reports in.
   const missing = !stale && !repairExtension && bridge.running && !bridge.present && isRunning(status.state) && browserExtensionRequired(config);
-  if (!stale && !repairExtension && !missing && !update.latest && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
+  if (!stale && !repairExtension && !missing && !update.latest && !update.latestRevision && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
 
   const lines: string[] = [];
   let tone: UpdateTone = 'work';
+  const beta = update.channel === 'beta-branch';
+  const betaCurrent = update.currentRevision?.slice(0, 12) ?? '';
+  const betaLatest = update.latestRevision?.slice(0, 12) ?? '';
   // #1490: an installer that stopped silently left this start on the old version.
   if (update.notInstalled) {
     lines.push(t("OneCode {0} installation did not finish. Running {1}. Download the installer from GitHub to repair the installation.", [displayReleaseVersion(update.notInstalled), displayReleaseVersion(update.current)]));
     tone = 'bad';
   }
-  if (update.latest && !(update.notInstalled === update.latest && update.stage === 'ready')) {
+  if (beta) {
+    if (update.stage === 'checking') lines.push(t('Checking the Beta branch for updates…'));
+    else if (update.stage === 'failed') { lines.push(t('Could not check the Beta branch: {0}.', [update.error ? updateErrorText(update.error) : t('the check stopped')])); tone = 'bad'; }
+    else if (update.stage === 'ready' && betaLatest) {
+      lines.push(update.installRequested
+        ? updateInstallWaitingText(update)
+        : t('Beta update {0} is ready. Choose Update all to restart after your work finishes.', [betaLatest]));
+    } else if (!update.notInstalled) {
+      lines.push(update.betaRelation === 'local-ahead'
+        ? t('OneCode Beta {0} · local beta branch is ahead of origin/beta.', [betaCurrent || displayReleaseVersion(update.current)])
+        : t('OneCode Beta {0} is up to date.', [betaCurrent || displayReleaseVersion(update.current)]));
+      tone = 'ok';
+    }
+  } else if (update.latest && !(update.notInstalled === update.latest && update.stage === 'ready')) {
     // `latest` set with a stage of `idle` is the deliberate case: a new version exists and this
     // installation - a Linux .deb, macOS, a development tree, an architecture with no artifact -
     // is not one the app can update by itself. That is when the button matters.
@@ -1270,7 +1286,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     tone = 'bad';
   }
   if (missing) { lines.push(providerT("Browser extension not connected. Open Gemini and check the extension in Setup to load models and send messages.")); tone = 'bad'; }
-  return { text: lines.join(' '), tone, notice: Boolean(update.latest || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t("Check extension") : null };
+  return { text: lines.join(' '), tone, notice: Boolean(update.latest || update.latestRevision || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t("Check extension") : null };
 }
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
@@ -1281,13 +1297,19 @@ function updateInstallWaitingText(update: AppState['update']): string {
     terminals: 'open terminal tabs (including hidden panels)', preparation: 'message preparation', unavailable: 'checking activity'
   };
   const reasons = (update.busyReasons ?? []).map(reason => t(labels[reason]));
+  const target = update.channel === 'beta-branch'
+    ? t('Beta update {0}', [update.latestRevision?.slice(0, 12) ?? ''])
+    : t('OneCode {0}', [displayReleaseVersion(update.latest!)]);
   return reasons.length
-    ? t('OneCode {0} is waiting for: {1}. You can cancel this restart.', [displayReleaseVersion(update.latest!), reasons.join(', ')])
-    : t('OneCode {0} is preparing to restart.', [displayReleaseVersion(update.latest!)]);
+    ? t('{0} is waiting for: {1}. You can cancel this restart.', [target, reasons.join(', ')])
+    : t('{0} is preparing to restart.', [target]);
 }
 
 function paintUpdate(next: AppState): void {
   $('settingsWhatsNewRow').hidden = !next.update.current || !hasHighlights(next.update.current);
+  ui($('settingsUpdatesDescription'), 'textContent', () => next.update.channel === 'beta-branch'
+    ? t('Check origin/beta and restart into a clean fast-forward. No GitHub Release is required.')
+    : t('Check GitHub for the latest OneCode release.'));
   const checkButton = $<HTMLButtonElement>('checkForUpdates');
   const checking = next.update.stage === 'checking' || next.update.stage === 'downloading' || checkButton.getAttribute('aria-busy') === 'true';
   checkButton.disabled = checking;
