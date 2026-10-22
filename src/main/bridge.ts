@@ -2208,6 +2208,8 @@ export type SessionControlsView = {
   proLoopDelivery?: boolean;
   objective: string;
   activeTurnId: string | null;
+  /** Exact durable Stop target for explicit steering, even after the activity display expires. */
+  unfinishedTurnId?: string | null;
   finishHeld: boolean;
   queueAtFinish?: boolean;
   canInject?: boolean;
@@ -2252,7 +2254,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
   const plan = await readSessionPlan(sessionId);
   const finishWaiting = await sessionFinishWaiting(sessionId, activeTurnId, id);
   const recovery = await sessionRecoveryCountdowns(sessionId, id);
-  return { sessionId, plan, conversationId: id, activeTurnId, finishHeld,
+  return { sessionId, plan, conversationId: id, activeTurnId, unfinishedTurnId: session.activeTurnId ?? null, finishHeld,
     recovery,
     queueAtFinish: !blocked && inputPolicy.queueAtFinish, canInject: !blocked && inputPolicy.canInject,
     canSendDirectly: !blocked && !!inputPolicy.directTurn,
@@ -2290,8 +2292,11 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string)
   const assertCurrent = async () => {
     const latest = await getSession(sessionId);
     if (latest?.conversationId !== id || latest.activeTurnId !== expectedTurnId || !expectedTurnId ||
-        await conversationWasSuperseded(id) || (await sessionControlsFor(sessionId)).activeTurnId !== expectedTurnId) throw new Error('active_turn_changed');
+        await conversationWasSuperseded(id)) throw new Error('active_turn_changed');
   };
+  // This explicit request targets the durable unfinished turn. The activity display's
+  // deadline cannot revoke Stop while the provider still runs; native redemption and
+  // the exact question/turn guards below remain the authority for the actual click.
   await assertCurrent();
   await setSessionAutomation(sessionId, 'off');
   await assertCurrent();

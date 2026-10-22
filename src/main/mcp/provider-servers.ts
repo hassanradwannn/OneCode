@@ -67,9 +67,14 @@ export async function startProviderMcpServers(
             response.end(body);
           } catch { response.writeHead(502); response.end(); }
         });
-      } else { response.writeHead(result.statusCode ?? 502, result.headers); result.pipe(response); }
+      } else {
+        response.writeHead(result.statusCode ?? 502, result.headers);
+        result.once('error', () => response.destroy());
+        result.once('aborted', () => response.destroy());
+        result.pipe(response);
+      }
     });
-    upstream.once('error', () => { if (!response.headersSent) response.writeHead(502); response.end(); });
+    upstream.once('error', () => { if (response.headersSent) response.destroy(); else response.writeHead(502).end(); });
     request.once('aborted', () => upstream.destroy());
     response.once('close', () => { if (!response.writableFinished) upstream.destroy(); });
     request.pipe(upstream);

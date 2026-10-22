@@ -15,6 +15,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.4.8': {
+    lead: () => t('Continue stops the unfinished response, and long tool calls keep their connection active.'),
+    highlights: [
+      { icon: 'i-check-circle', title: () => t('Continue stops the exact unfinished turn'), text: () => t('An immediate follow-up retains its Stop target after the activity display expires. It waits for the provider to confirm the end before sending your message.') },
+      { icon: 'i-retry', title: () => t('Keep long tool responses connected'), text: () => t('Long tool calls stream keepalive comments through the connector, including modern clients, while waiting for the result.') },
+      { icon: 'i-lock', title: () => t('Interrupted calls are never replayed'), text: () => t('An interrupted proxy stream closes as a failure. OneCode records premature response closure for diagnosis and does not automatically repeat the operation.') }
+    ]
+  },
   '0.4.7': {
     lead: () => t('Steering keeps the replacement turn working and recovery watching.'),
     highlights: [
