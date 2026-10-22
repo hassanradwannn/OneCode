@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { app, session, WebContentsView, type BrowserWindow, type Rectangle, type Session } from 'electron';
 import { BROWSER_LIMITS, type BrowserCommand, type BrowserResult } from '../shared/browser-control.js';
-import type { WorkbenchBrowserBounds, WorkbenchBrowserState, WorkbenchBrowserTab } from '../shared/workbench-browser.js';
+import { workbenchBrowserContentBounds, type WorkbenchBrowserBounds, type WorkbenchBrowserState, type WorkbenchBrowserTab } from '../shared/workbench-browser.js';
 import { browserControl, type InternalBrowserClient } from './browser-control.js';
 import { readDurable, writeDurableSoon } from './durable.js';
 import { workbenchBrowserBoundedValue, workbenchBrowserPage } from './workbench-browser-page.js';
@@ -52,10 +52,7 @@ function ownerSession(command: BrowserCommand): string | null {
 
 function boundedRect(value: WorkbenchBrowserBounds, window: BrowserWindow): Rectangle {
   const content = window.getContentBounds();
-  const x = Math.max(0, Math.min(content.width, Math.round(value.x)));
-  const y = Math.max(0, Math.min(content.height, Math.round(value.y)));
-  return { x, y, width: Math.max(0, Math.min(content.width - x, Math.round(value.width))),
-    height: Math.max(0, Math.min(content.height - y, Math.round(value.height))) };
+  return workbenchBrowserContentBounds(value, window.webContents.getZoomFactor(), content);
 }
 
 function keyEvent(chord: string): { key: string; code: string; windowsVirtualKeyCode: number; modifiers: number; text?: string } {
