@@ -9,7 +9,7 @@ import { cosSignInTransfer, SignInTransferError } from './cos-browser/sign-in-tr
 import { forgetCosBrowserSignIn, noteCosBrowserPresence, noteCosBrowserLogin, cosBrowserSignInLease } from './cos-browser/sign-in.js';
 import { externalBrowserProof, noteExternalInstalled, noteExternalSignedIn, resetBrowserProofForTests } from './browser-proof.js';
 import { notePluginInstalled, notePluginMissing } from './connector-proof.js';
-import { connectorNames } from '../shared/connector-names.js';
+import { configuredConnectorName } from './mcp/surfaces.js';
 import { connectorApps, conversationCreatedAt, noteAppSightings, type AppSighting } from './connector-identity.js';
 import { messageReaction } from '../shared/message-reaction.js';
 import { browserControl } from './browser-control.js';
@@ -2777,7 +2777,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // This endpoint's caller is Gemini regardless of the new-chat selector. Its
         // approval policy must come from that same server, never the selected UI preview.
         .map(surface => ({ ...surface, tools: connection.liveSurfaceToolNames(surface.id, 'gemini') }));
-      const names = connectorNames(getConfig().connectorSuffix);
+      const names = { core: configuredConnectorName('core'), desktop: configuredConnectorName('desktop'), plugins: configuredConnectorName('plugins') };
       const tools = surfaces.flatMap(surface => surface.tools);
       const titles: Record<string, string> = { plugins: 'External MCP plugins', read: 'Read files and folders', find: 'Find files or text', exec: 'Run JavaScript', agents: 'Multi-agent run', usage: 'Usage and limits' };
       const toolLabels = (list: string[]) => [...new Set(list.flatMap(tool => [tool, tool.replaceAll('_', ' '),
@@ -3033,7 +3033,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         stopTurns: await pendingStopCommands(),
         modelCatalogRequest: pendingChatModelRequest(),
         // This install's connector names, so the extension recognizes exactly its own traffic.
-        connectorNames: connectorNames(getConfig().connectorSuffix),
+        connectorNames: { core: configuredConnectorName('core'), desktop: configuredConnectorName('desktop'), plugins: configuredConnectorName('plugins') },
         // Apps proven to be this install's connectors, so a renamed connector is still recognized.
         connectorApps: Object.fromEntries(Object.entries(connectorApps()).map(([surface, apps]) =>
           [surface, apps.map(({ appId, linkId, name }) => ({ appId, linkId, name }))])),

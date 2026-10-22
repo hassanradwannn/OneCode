@@ -961,15 +961,13 @@
   // computer's suffix, if any) when it inserts the mention, whenever the app's names arrived.
   let coreCandidates = [];
   // This install's Core as another tab of this browser last saw it listed (background `status`).
-  let knownOwnCore = null;
   window.addEventListener('message', (event) => {
     if (!alive || event.source !== window || event.origin !== location.origin || event.data?.type !== 'cos-core-mention') return;
     const valid = (path) => typeof path === 'string' && /^app:\/\/asdk_app_[A-Za-z0-9_-]{1,160}$/.test(path) ? path : null;
     coreCandidates = Array.isArray(event.data.candidates)
       ? event.data.candidates.slice(0, 16).filter(entry => typeof entry?.name === 'string' && entry.name.length <= 80)
         .map(entry => ({ name: entry.name, path: valid(entry.path) }))
-      // An observer from before suffixes names only the plain Core.
-      : event.data.name === 'OneCode Core' ? [{ name: event.data.name, path: valid(event.data.path) }] : [];
+      : [];
     corePluginList = event.data.pluginList === true;
     reportCorePlugin();
   });
@@ -990,25 +988,17 @@
     const message = report === 'missing' ? { type: 'core_plugin', missing: true } : { type: 'core_plugin', appId: report.slice('app://'.length) };
     void ask(message).catch(() => { reportedCorePlugin = null; });
   }
-  /** This install's proven Core apps (`app://asdk_app_…`), from the app's status; may be empty. */
-  function provenCorePaths() {
-    return CLF_DOM.connectorApps().filter(app => app.surface === 'core').map(app => `app://${app.appId}`);
-  }
   /**
-   * This install's Core in the page's app list: a proven app id first (it survives a rename in
-   * ChatGPT), else the configured name. Once a Core app is proven, a same-named app with another
-   * id is somebody else's. Until the app has said its names, the plain name stands in only as a
-   * default: on a computer with a suffix it is the other computer's Core, so nothing matches by
-   * name before then.
+   * This install's Core in the page's app list. The exact current name supplied by OneCode is the
+   * only identity authority. No remembered app id, provider rename, legacy alias or plain-name
+   * default may substitute for it. Two entries with the same configured name are ambiguous.
    */
   function ownCoreCandidate() {
-    const proven = provenCorePaths();
-    const byId = coreCandidates.find(entry => entry.path && proven.includes(entry.path));
-    if (byId) return byId;
     if (!ownNamesKnown) return null;
     const own = CLF_DOM.connectorNames()[0];
-    const byName = coreCandidates.find(entry => entry.name === own);
-    return byName && (!proven.length || (byName.path && proven.includes(byName.path))) ? byName : null;
+    if (!own) return null;
+    const named = coreCandidates.filter(entry => entry.name === own && entry.path);
+    return named.length === 1 ? named[0] : null;
   }
   /** This install's Core app as this page itself lists it, or null when missing or ambiguous. */
   function pageCoreMention() {
@@ -1016,15 +1006,7 @@
     return match?.path ? { path: match.path, name: match.name } : null;
   }
   function currentCoreMention() {
-    if (ownCoreCandidate()) return pageCoreMention();
-    // A fresh tab can send before its own plugin list arrives; then this browser's last sighting of
-    // this install's Core stands in. Never once this page's complete list says the Core is missing,
-    // and never against a proven Core id: a sighting is only as good as the names it was taken under.
-    const own = CLF_DOM.connectorNames()[0];
-    const proven = provenCorePaths();
-    if (corePluginList || !knownOwnCore ||
-        (proven.length ? !proven.includes(knownOwnCore.path) : !ownNamesKnown || knownOwnCore.name !== own)) return null;
-    return { path: knownOwnCore.path, name: knownOwnCore.name };
+    return pageCoreMention();
   }
   /**
    * Whether the user's own prompts carry the Core mention (the app's ui.mentionCore, on unless off).
@@ -7099,15 +7081,12 @@
    * Exact names, never a prefix: `OneCode Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    */
-  const LEGACY_CONNECTORS = ['TobisComputer'];
-
   function ourConnectorApp(name) {
-    return typeof name === 'string' && (CLF_DOM.connectorNames().includes(name) || LEGACY_CONNECTORS.includes(name));
+    return typeof name === 'string' && CLF_DOM.connectorNames().includes(name);
   }
 
   function ourConnectorSeen(seen) {
     if (!seen) return false;
-    if (typeof seen.own === 'boolean') return seen.own;
     if (ourConnectorApp(seen.app)) return true;
     if (typeof seen.path !== 'string' || !seen.path.startsWith('/')) return false;
     const end = seen.path.indexOf('/', 1);
@@ -12126,9 +12105,6 @@
 
   /** This install's names, proven apps and remembered Core, from `status` or a redeemed command. */
   function applyCoreIdentity(reply) {
-    const known = reply?.ownCoreApp;
-    knownOwnCore = known && typeof known.appId === 'string' && /^asdk_app_[A-Za-z0-9_-]{1,160}$/.test(known.appId) &&
-      typeof known.name === 'string' ? { path: `app://${known.appId}`, name: known.name } : null;
     if (reply?.connectorNames && CLF_DOM.setConnectorNames(reply.connectorNames)) { ownNamesKnown = true; reportCorePlugin(); }
     if (reply?.connectorApps && CLF_DOM.setConnectorApps(reply.connectorApps)) reportCorePlugin();
   }
