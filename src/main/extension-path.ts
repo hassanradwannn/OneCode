@@ -27,6 +27,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import path from 'node:path';
+import { packagedApplicationResources } from './application-resources.js';
 import { app } from 'electron';
 
 const MATERIALIZED_FINGERPRINT = '.chat-on-steroids-source';
@@ -267,7 +268,7 @@ function materializePackagedExtension(bundled: string, stable: string): string |
  */
 export function extensionDir(): string | null {
   if (app.isPackaged) {
-    const bundled = path.join(process.resourcesPath, 'extension');
+    const bundled = path.join(packagedApplicationResources(), 'extension');
     const stable = path.join(app.getPath('userData'), 'extension');
     try {
       return materializePackagedExtension(bundled, stable);
@@ -300,7 +301,7 @@ export function extensionDir(): string | null {
  */
 function shippedExtensionDir(): string | null {
   const candidates = app.isPackaged
-    ? [() => path.join(process.resourcesPath, 'extension'), () => path.join(app.getPath('userData'), 'extension')]
+    ? [() => path.join(packagedApplicationResources(), 'extension'), () => path.join(app.getPath('userData'), 'extension')]
     : [() => path.join(app.getAppPath(), 'extension'), () => path.join(process.cwd(), 'extension')];
   for (const candidate of candidates) {
     try {

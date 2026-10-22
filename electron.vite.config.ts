@@ -12,7 +12,7 @@ export default defineConfig({
     // rather than being inlined by the bundler.
     plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') }
+      rollupOptions: { input: { bootstrap: resolve(__dirname, 'src/main/bootstrap.ts'), index: resolve(__dirname, 'src/main/index.ts') } }
     }
   },
   preload: {

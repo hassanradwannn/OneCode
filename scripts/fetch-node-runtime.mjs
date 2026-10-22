@@ -73,7 +73,14 @@ export async function stageNodeRuntime(platform, arch) {
     const files = asset.platform === 'win32'
       ? ['node.exe', 'node_modules', 'LICENSE', 'README.md', 'CHANGELOG.md']
       : ['bin', 'lib', 'LICENSE', 'README.md', 'CHANGELOG.md'];
-    for (const file of files) await cp(path.join(source, file), path.join(stage, file), { recursive: true });
+    for (const file of files) await cp(path.join(source, file), path.join(stage, file), {
+      recursive: true,
+      // Official Linux Node archives expose npm/npx/corepack as bin/ symlinks. The runtime is
+      // later fingerprinted by the hotfix base receipt, whose security contract deliberately
+      // rejects links. Materialize only that public bin tree as regular files rather than
+      // weakening the verifier or excluding executable entry points from the runtime identity.
+      ...(asset.platform === 'linux' && file === 'bin' ? { dereference: true } : {})
+    });
     if (asset.platform === 'win32') for (const file of ['npm', 'npm.cmd', 'npm.ps1', 'npx', 'npx.cmd', 'npx.ps1'])
       if (existsSync(path.join(source, file))) await cp(path.join(source, file), path.join(stage, file));
     const npmPackage = asset.platform === 'win32'

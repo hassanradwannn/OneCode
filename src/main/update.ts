@@ -53,6 +53,7 @@ import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 import { startWindowsUpdate } from './update-bootstrap.js';
 import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
 import { baseRelease } from '../../resources/updater/hotfix-contract.cjs';
+import { activateLinuxHotfix } from './linux-hotfix.js';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
@@ -152,7 +153,7 @@ export function releaseVersion(tag: unknown): string | null {
 const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle', error: null, checkedAt: null };
 
 let status: UpdateStatus = CLEAR;
-let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'composite'; target: string; digest: string; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
+let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'linux-hotfix' | 'composite'; target: string; digest: string; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
@@ -290,6 +291,7 @@ async function runPass(): Promise<void> {
   }
   logInfo(`update: ${release.version} is available; this app is ${APP_VERSION}`);
   const artifact = stagedArtifact();
+  const hotfixCapable = artifact?.kind === 'installer' || artifact?.kind === 'appimage';
   if (artifact?.kind === 'installer') {
     const target = await installTarget();
     if (!target) {
@@ -302,7 +304,16 @@ async function runPass(): Promise<void> {
   // `latest` and what is being done about it are set in one go. Published separately, the
   // renderer would paint one frame of "a new version exists, and this install updates by
   // hand" for every install, including the ones about to download it themselves.
-  if (!artifact) {
+  if (!artifact && !hotfixCapable) {
+    const manual = manualDownloadName();
+    if (manual) {
+      const digests = await releaseDigests(release.version);
+      if (!digests.has(manual)) {
+        logInfo('update: ' + release.version + ' has no artifact for this ' + process.platform + '-' + process.arch + ' installation');
+        set({ latest: null, stage: 'idle' });
+        return;
+      }
+    }
     set({ latest: release.version, stage: 'idle' });
     return;
   }
@@ -314,44 +325,58 @@ async function runPass(): Promise<void> {
   // both the manifest of what the release contains and the proof of what may be executed, so
   // neither adopting a file nor fetching one happens without it.
   const digests = await releaseDigests(release.version);
-  const hotfixName = `OneCode-Hotfix-${process.arch}.json`;
-  const hotfixDigest = artifact.kind === 'installer' ? digests.get(hotfixName) : undefined;
+  const hotfixName = process.platform === 'linux' ? `OneCode-Linux-Hotfix-${process.arch}.json` : `OneCode-Hotfix-${process.arch}.json`;
+  const hotfixDigest = hotfixCapable ? digests.get(hotfixName) : undefined;
   if (hotfixDigest) {
     const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
     const manifest = await readHotfixManifest(manifestFile, release.version);
     const compatible = await compatibleHotfix(manifestFile, release.version);
-    const needsBase = !digests.has(artifact.name) && !compatible;
-    if ((compatible && !needsBase) || (needsBase && manifest.base)) {
+    if (compatible) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
-      let baseFile: string | undefined;
-      const base = needsBase ? manifest.base : undefined;
-      const total = manifest.size + (base?.size ?? 0);
-      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
-      if (base) {
-        if (!isNewer(release.version, base.version)) throw Error('A hotfix-only release requires an earlier complete base');
-        const baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
-        if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
-        const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
-        const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
-        for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
-        baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
-        if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
-      }
-      const progress = (bytes: number) => report((base?.size ?? 0) + bytes);
-      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, progress);
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => {
+        const percent = Math.min(99, Math.floor(bytes / manifest.size * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent });
+      });
       const hotfix = await stageHotfix(file, manifest);
-      staged = base && baseFile ? { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 }
-        : { version: release.version, file, kind: 'hotfix', target: artifact.target, digest: manifest.sha256, hotfix };
+      staged = process.platform === 'linux'
+        ? { version: release.version, file, kind: 'linux-hotfix', target: '', digest: manifest.sha256, hotfix }
+        : { version: release.version, file, kind: 'hotfix', target: artifact?.target ?? '', digest: manifest.sha256, hotfix };
       set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
       logInfo(`update: ${release.version} application hotfix is verified and ready; native runtime retained`);
       return;
     }
+    const needsBase = process.platform === 'win32' && artifact?.kind === 'installer' && !digests.has(artifact.name);
+    if (needsBase && manifest.base) {
+      if (manifest.base.platform !== 'win32') throw Error('The Windows hotfix names a non-Windows base');
+      if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
+      if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
+      set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+      const base = manifest.base, baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
+      if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
+      const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
+      const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
+      for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
+      const total = manifest.size + base.size;
+      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
+      const baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
+      if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => report(base.size + bytes));
+      const hotfix = await stageHotfix(file, manifest);
+      staged = { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 };
+      set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
+      logInfo(`update: ${release.version} composite Windows update is verified and ready`);
+      return;
+    }
     logInfo('update: hotfix runtime differs; checking for a full installer');
-    if (!digests.has(artifact.name)) { set({ latest: release.version, stage: 'idle' }); return; }
+    if (!artifact || !digests.has(artifact.name)) { set({ latest: null, stage: 'idle' }); return; }
   }
+  if (!artifact) { set({ latest: release.version, stage: 'idle' }); return; }
   const expected = digests.get(artifact.name);
-  if (!expected) throw new Error(`release ${release.version} publishes no ${artifact.name}`);
+  if (!expected) {
+    logInfo('update: ' + release.version + ' publishes no ' + artifact.name + '; release does not apply to this installation');
+    set({ latest: null, stage: 'idle' });
+    return;
+  }
   const carried = await adopt(release.version, artifact.name, expected);
   if (carried) {
     staged = { version: release.version, file: carried, kind: artifact.kind, target: artifact.target, digest: expected };
@@ -605,7 +630,8 @@ function checkInstallIntent(): Promise<void> {
       try {
         if (await fileDigest(ready.file) !== ready.digest) throw new Error('The staged update changed after verification');
         if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('The staged hotfix changed after verification');
-        if (ready.kind !== 'appimage' && await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+        if ((ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') && await installTarget() !== ready.target)
+          throw new Error('The OneCode installation registration changed');
         // Re-read after filesystem/registry waits. No sampled timer or model status grants idleness.
         reasons = await busyProjection();
       } catch (error) {
@@ -679,7 +705,12 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!ready) return;
   try {
     if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
-    if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
+    if (ready.kind === 'linux-hotfix') {
+      if (!ready.hotfix) throw new Error('the Linux application layer manifest is missing');
+      await prepareUpdateHandoff?.(ready.version);
+      await activateLinuxHotfix(ready.hotfix);
+      if (relaunch) app.relaunch({ execPath: process.env.APPIMAGE || process.execPath });
+    } else if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.

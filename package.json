@@ -7,7 +7,7 @@
   "author": "OneCode contributors",
   "homepage": "https://github.com/hassanradwannn/OneCode",
   "desktopName": "io.onecode.desktop",
-  "main": "out/main/index.js",
+  "main": "out/main/bootstrap.js",
   "scripts": {
     "dev": "npm run build:remote && electron-vite dev",
     "build": "electron-vite build && vite build --config remote.vite.config.ts",
@@ -50,7 +50,9 @@
     "dist:dir:linux:arm64": "node scripts/package.mjs --platform linux --arch arm64 --dir",
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
     "test:kill": "node scripts/kill-stray-vitest.mjs",
-    "release:hotfix": "node scripts/write-hotfix-package.mjs"
+    "release:hotfix": "node scripts/write-hotfix-package.mjs",
+    "release:hotfix:linux": "node scripts/write-linux-hotfix-package.mjs",
+    "release:prepare:linux": "node scripts/prepare-linux-release.mjs"
   },
   "dependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",

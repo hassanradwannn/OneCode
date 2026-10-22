@@ -129,7 +129,8 @@ import { editContextMenuTemplate } from './edit-context-menu.js';
 import { observeWindowPresentation } from './window-presentation.js';
 import { showConnectionLossNotice } from './connection-loss-notice.js';
 import { repairWindowsShortcuts } from './windows-shortcuts.js';
-import { APP_ID, PRODUCT_NAME, appDataDirectory, windowsAppId } from './app-identity.js';
+import { APP_ID, PRODUCT_NAME } from './app-identity.js';
+import { confirmActiveApplicationLayer } from './application-resources.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -146,12 +147,8 @@ let shutdownStarted = false;
 let shutdownComplete = false;
 const usageWarmup = new AbortController();
 
-// One instance only: two copies would fight over the tunnel and the config file.
-// Isolate storage, secrets and the single-instance namespace before startup work.
-app.setName(PRODUCT_NAME);
-app.setAppUserModelId(windowsAppId(app.isPackaged));
-app.commandLine.appendSwitch('force-renderer-accessibility');
-app.setPath('userData', appDataDirectory(app.getPath('appData')));
+// The immutable bootstrap establishes product identity/userData before selecting a Linux
+// application layer. One instance only: two copies would fight over the tunnel and config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   // `app.quit()` does not make the rest of this module stop executing. Mark this process as a
@@ -231,6 +228,7 @@ function createWindow(): void {
         savedWindowBounds = placement;
         writeDurableSoon(WINDOW_BOUNDS_STATE, placement);
       });
+      void confirmActiveApplicationLayer().catch(error => logWarn(`linux application layer confirmation: ${error instanceof Error ? error.message : String(error)}`));
     }
   });
 
