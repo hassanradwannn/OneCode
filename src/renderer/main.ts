@@ -1315,7 +1315,13 @@ function paintUpdate(next: AppState): void {
   checkButton.disabled = checking;
   ui(checkButton, 'textContent', () => checking ? t('Checking…') : t('Check for updates'));
   ui($('settingsUpdateStatus'), 'textContent', () => updateSummary(next)?.text ?? t('OneCode {0}', [displayReleaseVersion(next.update.current)]));
-  $('settingsInstallUpdateRow').hidden = next.update.stage !== 'ready' || !next.update.latest;
+  const betaReady = next.update.channel === 'beta-branch' && next.update.stage === 'ready' && Boolean(next.update.latestRevision);
+  $('settingsInstallUpdateRow').hidden = !betaReady && (next.update.stage !== 'ready' || !next.update.latest);
+  ui($('settingsInstallUpdateTitle'), 'textContent', () => betaReady ? t('Beta update ready') : t('Update ready'));
+  ui($('settingsInstallUpdateHint'), 'textContent', () => betaReady
+    ? t('Fast-forward origin/beta and restart when active work finishes. No release installer is required.')
+    : t('Install the verified download and restart when active work finishes.'));
+  ui($('settingsInstallUpdate'), 'textContent', () => betaReady ? t('Update Beta when done') : t('Install when done'));
   const summary = updateSummary(next);
   const notice = $('updateNotice');
   const line = $('updateLine');
@@ -2720,7 +2726,10 @@ function installUpdate(): void {
 
 $('updateInstall').addEventListener('click', installUpdate);
 $('installUpdate').addEventListener('click', installUpdate);
-$('settingsInstallUpdate').addEventListener('click', installUpdate);
+$('settingsInstallUpdate').addEventListener('click', () => {
+  if (state?.update.channel === 'beta-branch' && state.update.latestRevision) updateAllButton.click();
+  else installUpdate();
+});
 $('cancelUpdateInstall').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('cancelUpdateInstallNotice').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('updateShowTerminals').addEventListener('click', () => { showTab('chat'); revealUpdateTerminals(); });
