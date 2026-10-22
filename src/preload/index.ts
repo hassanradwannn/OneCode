@@ -1,6 +1,7 @@
 import type { ChatSchedule } from '../shared/chat-schedules.js';
 import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/workspace-terminal.js';
 import type { RemoteStatus } from '../shared/remote.js';
+import type { TailscaleSetupStep } from '../shared/tailscale-setup.js';
 import type { ApprovalCardView } from '../shared/approval-wait.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
@@ -247,6 +248,7 @@ const api = {
   connect: () => call<AppState>('connection:connect'),
   disconnect: () => call<AppState>('connection:disconnect'),
   repairTailscale: () => call<AppState>('connection:repairTailscale'),
+  runTailscaleSetup: (step: TailscaleSetupStep) => call<boolean>('connection:tailscaleSetup', step),
   runDiagnostics: () => call<Diagnosis>('diagnostics:run'),
   saveDiagnosticsReport: () => call<{ saved: false } | { saved: true; name: string }>('diagnostics:saveReport'),
   requestDesktopAccessibility: () => call<AppState>('desktop:requestAccessibility'),

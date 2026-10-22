@@ -1842,12 +1842,13 @@ function apply(next: AppState): void {
   const tailscale = tailscaleSetupView(next);
   $('tailscaleSetup').hidden = tailscale === null;
   if (tailscale) {
-    const action = next.status.tailscale?.setup && TAILSCALE_SETUP_ACTIONS[next.status.tailscale.setup.step];
+    const setupStep = next.status.tailscale?.setup?.step;
+    const action = setupStep && TAILSCALE_SETUP_ACTIONS[setupStep];
     const setupButton = $<HTMLButtonElement>('tailscaleSetupAction'); setupButton.hidden = !action;
     const canRepair = next.status.tailscale?.canRepair === true;
     const recovery = $('tailscaleRecovery'); recovery.hidden = !action && !canRepair && !['tunnel-unavailable', 'offline'].includes(next.status.state);
     if (!recovery.hidden) paintTailscaleRecovery(recovery, next.status.tailscale?.setup?.step, 'tunnel', canRepair);
-    if (action) { setupButton.textContent = t(action.label); setupButton.onclick = () => { void run(api.openLink(action.url, { external: true })); }; }
+    if (action && setupStep) { setupButton.textContent = t(action.label); setupButton.onclick = () => { void run(api.runTailscaleSetup(setupStep)); }; }
     ui($('tailscaleCli'), 'textContent', () => t(tailscale.cli) + (tailscale.version ? ` (${tailscale.version})` : ''));
     ui($('tailscaleAccount'), 'textContent', () => t(tailscale.account));
     ui($('tailscaleFunnel'), 'textContent', () => t(tailscale.funnel));

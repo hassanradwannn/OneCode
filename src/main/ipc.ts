@@ -11,6 +11,8 @@ import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
 import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink } from './remote/server.js';
+import { TAILSCALE_SETUP_ACTIONS, tailscaleSetupAction, type TailscaleSetupStep } from '../shared/tailscale-setup.js';
+import { retryTailscaleSetup } from './tunnel/tailscale-setup.js';
 import { onRemotePreferencesChange } from './remote/preferences.js';
 import { desktopPreviews } from './artifacts/preview-documents.js';
 import { appearanceSchema } from './appearance-schema.js';
@@ -1384,6 +1386,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('connection:repairTailscale', async () => {
     await repairTailscaleConnection();
     return buildState();
+  });
+
+  handle('connection:tailscaleSetup', async payload => {
+    const step = z.string().parse(payload);
+    if (!Object.hasOwn(TAILSCALE_SETUP_ACTIONS, step)) throw new Error('Invalid Tailscale setup step.');
+    const ok = await retryTailscaleSetup(tailscaleSetupAction(step as TailscaleSetupStep));
+    if (!ok) {
+      if (step === 'operator') throw new Error('Tailscale authorization was not completed. Approve the system authorization prompt, or use the recovery command and retry Connect.');
+      throw new Error('Tailscale setup could not be opened.');
+    }
+    return true;
   });
 
   handle('diagnostics:run', async () => runDiagnostics());
