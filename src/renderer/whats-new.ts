@@ -15,6 +15,15 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.5.0': {
+    lead: () => t('OneCode now ships as a full Windows and Linux release, with verified hotfix foundations on both platforms.'),
+    highlights: [
+      { icon: 'i-sparkle', title: () => t('Linux joins the release'), text: () => t('Linux x64 ships as AppImage and DEB with the same chats, Core connector, Companion and local-tool workflow. AppImage installs can take future verified application hotfixes without replacing the native runtime.') },
+      { icon: 'i-lock', title: () => t('Authorization stays with the exact task'), text: () => t('Fresh OneCode task authorization keeps plans, plugins and sub-agents inside the authenticated Core execution path instead of dropping them into Unattributed activity.') },
+      { icon: 'i-image', title: () => t('Preview an image before sending'), text: () => t('Click an attached image in the composer to inspect the staged photo at useful resolution before you send it.') },
+      { icon: 'i-browser', title: () => t('Steadier Linux browser and connection behavior'), text: () => t('The embedded browser follows Linux zoom and dock motion, selected web links use your configured browser, and established connectors stay published through transient public-health misses.') }
+    ]
+  },
   '0.4.8': {
     lead: () => t('Continue stops the unfinished response, and long tool calls keep their connection active.'),
     highlights: [
