@@ -15,6 +15,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.4.6': {
+    lead: () => t('Keep tool access when a handoff message is still rendering.'),
+    highlights: [
+      { icon: 'i-check-circle', title: () => t('Handoff authorization recovery'), text: () => t('An acknowledged message starts its turn even when its browser bubble is temporarily unreadable, so local tools can use its fresh authorization.') },
+      { icon: 'i-lock', title: () => t('Existing authorization checks stay in place'), text: () => t('Recovery keeps the exact chat and accepted message. It does not resend your task or reuse an older authorization.') },
+      { icon: 'i-sparkle', title: () => t('Small application hotfix'), text: () => t('Install through Settings → General → Check for updates, then Install when done. Your chats and settings stay in place.') }
+    ]
+  },
   '0.4.5': {
     lead: () => t('Clear download progress and complete updates in one restart.'),
     highlights: [

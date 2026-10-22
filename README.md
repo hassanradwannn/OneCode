@@ -2,11 +2,15 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.5)** · **[Windows installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.4.6 hotfix](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.6)** · **[Windows installer (0.4.5 base)](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.5. This full release includes the earlier hotfixes and enables repaired downloads and combined updates. New users can run the installer above. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.6. Compatible 0.4.5 installations receive the small application hotfix. The 0.4.5 updater stages its required full base first when needed, then applies the hotfix before one final relaunch. New users install the base above, then check for updates. Your profile and saved chats are preserved. If an older updater cannot offer this hotfix, install the complete 0.4.5 base first, then check again.
+
+## What's new in 0.4.6
+
+An acknowledged message now registers its turn even when its browser bubble is mounted but temporarily unreadable. This repairs a case where a long handoff arrived with fresh authorization but local tools waited two minutes and rejected it because the turn was missing. Recovery retains the exact accepted chat/message and does not resend the task or relax authorization. The Companion recorder updates with the application. See [release notes](docs/release-notes/v0.4.6.md) and [validation](docs/release-acceptance/v0.4.6.md).
 
 ## What's new in 0.4.5
 

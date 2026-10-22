@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.6] — 2026-10-22
+
+Register the exact acknowledged message's turn while its mounted browser bubble is temporarily unreadable, preventing local authorization from waiting for a missing turn. Preserve accepted-Send custody, cancellation and exactly-once registration without resending the task or extending credentials. Upgrade the paired Companion recorder and include the fix in What's new. See [0.4.6 release notes](docs/release-notes/v0.4.6.md).
+
 ## [0.4.5] — 2026-10-22
 
 Report hotfix byte progress, pin full-installer downloads to the selected tag, and stage a verified required full release plus its hotfix for one shutdown and final relaunch. Add publisher-verified base metadata and fail closed before installation on mismatched inputs. Ship a complete cumulative installer containing the 0.4.4 What's new pane and earlier connection fixes. See [0.4.5 release notes](docs/release-notes/v0.4.5.md).

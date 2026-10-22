@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 66;
+  const RECORDER_VERSION = 67;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -2708,9 +2708,11 @@
     // A confirmed Send whose question ChatGPT no longer shows (#942). In a brand-new chat the
     // shell redraws the first exchange after promoting its route, and the question can vanish
     // from the page and the page model alike, while its answer arrives. The receipt then holds
-    // the only proof of that question: its exact native id, accepted by the app for this chat in
-    // this document. Waiting to see the question again opened no turn at all, so the answer
-    // arrived with no turn_start/turn_end, no tool ownership and no Copy or Export.
+    // proof of that question: its exact native id, accepted by the app for this chat in
+    // this document. A mounted bubble can still have a pending canonical source; its presence
+    // must not veto this independent accepted-Send proof. Waiting for readable text opened no
+    // turn at all, so the answer arrived with no turn_start/turn_end, no tool ownership and no
+    // Copy or Export.
     // Only a new answer or a live generation spends it, and never over a running turn.
     if (!newUserMessage && !generating) {
       const receipt = userSendReceipt, accepted = receipt?.accepted;
@@ -2718,11 +2720,10 @@
       if (accepted?.messageId && accepted.messageId !== openedUserMessageId &&
           accepted.conversationId === CLF_DOM.conversationId() && accepted.epoch === epoch &&
           Date.now() - receipt.at <= DESKTOP_RECEIPT_MS &&
-          !rendered.some(message => message.id === accepted.messageId) &&
           (nowGenerating || CLF_DOM.turns().some(turn => turn.role === 'assistant' &&
             !(turn.nodes || [turn.node]).some(node => baseline.has(node))))) {
         // The exact native Send POST + committed app ACK owns these frozen
-        // submitted bytes even before the shell renders its question. Publish
+        // submitted bytes even before the shell makes its question readable. Publish
         // the question before its turn, so the first tool need not wait for a
         // page read that itself can be waiting on that tool. A foreign route,
         // replaced receipt or later authored Send cannot spend this proof.
