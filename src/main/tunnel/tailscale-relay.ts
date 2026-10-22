@@ -1,7 +1,7 @@
 /** Tailscale preserves Host. Keep MCP's loopback guard intact at this transport boundary. */
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { logInfo } from '../logger.js';
+import { logInfo, logWarn } from '../logger.js';
 
 export interface TailscaleRelay { origin: string; stop(): Promise<void> }
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
@@ -24,16 +24,28 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
   }
   const expectedHosts = new Set([publicHost, publicHost.replace(/:443$/, '')]);
   let diagnosticAt = Date.now(), diagnosticCount = 0;
+  const diagnostic = (message: string, warn = false): void => {
+    if (Date.now() - diagnosticAt >= 60_000) { diagnosticAt = Date.now(); diagnosticCount = 0; }
+    if (diagnosticCount++ >= 20) return;
+    (warn ? logWarn : logInfo)(message);
+  };
   const server = http.createServer((req, res) => {
+    const startedAt = Date.now();
     const path = (req.url ?? '').split('?')[0] ?? '';
     const metadataPath = path.startsWith(METADATA) ? path.slice(METADATA.length) : null;
     const family = MCP_PATH.test(path) ? 'mcp' : metadataPath !== null && MCP_PATH.test(metadataPath) ? 'metadata' : 'unmatched';
+    let incompleteReported = false;
+    const incomplete = (): void => {
+      if (!incompleteReported) {
+        incompleteReported = true;
+        diagnostic(`OneCode Funnel response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
+      }
+      if (!res.destroyed) res.destroy();
+    };
     res.once('finish', () => {
-      if (Date.now() - diagnosticAt >= 60_000) { diagnosticAt = Date.now(); diagnosticCount = 0; }
-      if (diagnosticCount++ >= 20) return;
       const method = ['GET', 'POST', 'DELETE', 'OPTIONS', 'HEAD'].includes(req.method ?? '') ? req.method : 'OTHER';
       const status = res.statusCode >= 100 && res.statusCode <= 599 ? String(res.statusCode) : '000';
-      logInfo(`OneCode Funnel request family=${family} method=${method} status=${status}`);
+      diagnostic(`OneCode Funnel request family=${family} method=${method} status=${status}`);
     });
     // No arbitrary local-service proxy, redirects, credentials or non-MCP routes.
     if (!expectedHosts.has((req.headers.host ?? '').toLowerCase()) ||
@@ -73,13 +85,21 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
       }
       res.writeHead(response.statusCode ?? 502, headers(response.headers));
       // A cut upstream stream is not a successfully completed MCP result.
-      response.once('error', () => res.destroy());
-      response.once('aborted', () => res.destroy());
+      response.once('error', incomplete);
+      response.once('aborted', incomplete);
       response.pipe(res);
     });
     outgoing.on('error', () => { if (res.headersSent) res.destroy(); else res.writeHead(502).end(); });
     req.on('aborted', () => outgoing.destroy());
-    res.on('close', () => { if (!res.writableEnded) outgoing.destroy(); });
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        if (!incompleteReported) {
+          incompleteReported = true;
+          diagnostic(`OneCode Funnel response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
+        }
+        outgoing.destroy();
+      }
+    });
     req.pipe(outgoing);
   });
   server.on('connect', (_req, socket) => socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'));

@@ -11,7 +11,7 @@
  *  2. Relabel. The app knows what every MCP tool call actually did, because it ran it.
  *     Each recorded call is matched to one "Called tool" block and given the real thing.
  *     Matching is per call and incremental: a block that cannot be matched confidently
- *     keeps ChatGPT's own label, and — this is the part that used to be wrong — it no
+ *     keeps ChatGPT's own label, and â€” this is the part that used to be wrong â€” it no
  *     longer suppresses the blocks around it that *can* be matched.
  *
  *  3. Offer Compact & resume, as a control beside ChatGPT's own composer buttons that
@@ -83,11 +83,11 @@
    * only the OBSERVE_MS loop: watchTranscript() also runs it from a MutationObserver, via a
    * microtask, on every relevant transcript mutation. A React rerender that unmounts the
    * stop button is itself a burst of such mutations, so a counter of quiet observations can
-   * run out inside the same millisecond as the dropout it exists to filter — measuring the
+   * run out inside the same millisecond as the dropout it exists to filter â€” measuring the
    * one thing that cannot be inflated by rerender churn is the whole point.
    *
-   * Four seconds covers the dropouts the live sessions show — 400 ms to 2.7 s, see
-   * `quietSince` — with headroom, while delaying an honest `turn_end` by a few seconds,
+   * Four seconds covers the dropouts the live sessions show â€” 400 ms to 2.7 s, see
+   * `quietSince` â€” with headroom, while delaying an honest `turn_end` by a few seconds,
    * which nothing downstream reads as anything but the turn having taken that much longer.
    */
   const TURN_SETTLE_MS = 4000;
@@ -112,7 +112,7 @@
   const STATUS_MS = 15_000;
   /** Longer than any honest tool call: past this a silent turn is called stalled. */
   const STALL_MS = 10 * 60 * 1000;
-  /** How long the button says "Starting…" before believing something went wrong. */
+  /** How long the button says "Startingâ€¦" before believing something went wrong. */
   const PRESS_GRACE_MS = 12_000;
   /** Persistent popup preference. On by default as of 1.7.4; the popup can turn it off. */
   const RENDER_STREAM_KEY = 'renderStreamEnabled';
@@ -237,7 +237,7 @@
      * Why the service worker last refused to take anything from this document, or null.
      *
      * The popup's queue counter only ever showed the worker's own journal, so a document the
-     * worker was rejecting outright reported "0 held" and the drawer concluded "Delivered —
+     * worker was rejecting outright reported "0 held" and the drawer concluded "Delivered â€”
      * the app has not opened a session for this chat yet". Everything was in fact still in
      * this script's own queue, and the one layer that knew said nothing.
      */
@@ -251,7 +251,7 @@
    * script has to read the request id off the page, the service worker has to accept and
    * journal the observation carrying it, the app has to receive that observation, and the
    * app has to resolve the id to this conversation. Until now a failure at any one of them
-   * looked identical from the browser — the row simply never got relabelled — so the only
+   * looked identical from the browser â€” the row simply never got relabelled â€” so the only
    * way to tell them apart was to read the app's log beside the browser's. Each stage
    * stamps its own time here as it happens, which is enough to name the hand-off that did
    * not complete.
@@ -306,17 +306,17 @@
    * Every asynchronous thing this script starts belongs to the conversation that was
    * current when it started. ChatGPT is a single-page app, so `location.pathname` can
    * name a different chat before that work comes back, and a reply applied afterwards is
-   * applied to the wrong chat. Comparing ids is not enough on its own — A → B → A returns
-   * to the same id — so the counter is what makes "still the same conversation" exact.
+   * applied to the wrong chat. Comparing ids is not enough on its own â€” A â†’ B â†’ A returns
+   * to the same id â€” so the counter is what makes "still the same conversation" exact.
    */
   let epoch = 0;
 
   /**
-   * Messages already reported from this page load — each as an id *and what it said*.
+   * Messages already reported from this page load â€” each as an id *and what it said*.
    *
    * Not the id alone, and this is the producer half of a bug whose consumer half the app
    * already fixes. ChatGPT gives streaming assistant prose no id of its own, so an id is
-   * derived from the section's turn id — and the page reuses those. Worse, the mapping
+   * derived from the section's turn id â€” and the page reuses those. Worse, the mapping
    * that would make the derived id unique (`settledGenerations`) lives in memory and is
    * empty after this content script reloads, which is exactly when the whole visible
    * transcript is offered again. Several genuinely different historical answers then
@@ -339,8 +339,8 @@
    * One reported occurrence: this id having said this.
    *
    * Four independent lanes, so the identity is 128 bits wide rather than 32. That is not
-   * cryptographic and does not need to be — nobody is choosing these strings adversarially
-   * — but the width matters, because of what a collision costs here. Two different answers
+   * cryptographic and does not need to be â€” nobody is choosing these strings adversarially
+   * â€” but the width matters, because of what a collision costs here. Two different answers
    * that hashed alike would make the second one look like the first already reported, and
    * this filter runs *before* the app sees anything: the message would not be de-duplicated,
    * it would be destroyed, and the log would be silently missing an answer with nothing to
@@ -430,7 +430,7 @@
    * The stop button is the only signal ChatGPT gives for "a turn is running", and it is not
    * continuous: the page tears it down and remounts it across tool phases, streaming
    * reconnects and plain rerenders. Ending the turn on the first sample that misses it is
-   * what session `2026-01-01-00000017` records again and again — `turn_start` at seq 342 and
+   * what session `2026-01-01-00000017` records again and again â€” `turn_start` at seq 342 and
    * `turn_end` at 343 four hundred milliseconds later with `outcome: "unknown"`, then the
    * same run reopened at 347 under a fresh generation id; the same shape at 357/358/360 with
    * a 2.7 s gap, and at 249/251. `unknown` is the signature: endOutcome() found no answer, no
@@ -438,13 +438,13 @@
    *
    * The cost is not just a split log. The app clears `turnStartedAt`, the pending sightings
    * and the named-call evidence at `turn_end` (recorder.ts), so every connector call made in
-   * the gap grades as `inferred` and is filed into "Unattributed activity" — 54 of that
+   * the gap grades as `inferred` and is filed into "Unattributed activity" â€” 54 of that
    * session's own calls, the first of them 194 ms after a `turn_end` that closed a turn still
    * in flight.
    *
    * So a missing stop button opens a settle window instead of ending the turn, and the button
-   * coming back closes the window with the generation intact. Anything stronger — the user
-   * pressing stop — still ends the turn at once.
+   * coming back closes the window with the generation intact. Anything stronger â€” the user
+   * pressing stop â€” still ends the turn at once.
    */
   let quietSince = 0;
   /**
@@ -454,7 +454,7 @@
    * evidence endOutcome() reads is perishable: an error banner dismissed during the settle
    * window would turn a failed turn into an `unknown` one, and the assistant section can be
    * replaced under the turn entirely. Held here, the recorded outcome is exactly the one the
-   * unsettled code would have recorded — only published later, and only if the turn really
+   * unsettled code would have recorded â€” only published later, and only if the turn really
    * did end.
    */
   let quietTurn = null;
@@ -471,22 +471,22 @@
   /**
    * The identity every event of the turn in flight carries.
    *
-   * This is a *local* key — `g-<run>-<epoch>-<n>` — and not ChatGPT's `data-turn-id`, which is
+   * This is a *local* key â€” `g-<run>-<epoch>-<n>` â€” and not ChatGPT's `data-turn-id`, which is
    * what it used to be. The live page settled that question: `data-turn-id` on a streaming
-   * turn has the form `request-<conversation>-<n>`, and the page reuses `…-0` for turn after
+   * turn has the form `request-<conversation>-<n>`, and the page reuses `â€¦-0` for turn after
    * turn as it virtualises earlier ones out of the DOM. One recorded session has a
-   * `turn_start` for `…-0` after the turns numbered 1 through 4 had all finished, tool rows
-   * from three turns filed under `…-0`, and commentary from four turns folded into one row
+   * `turn_start` for `â€¦-0` after the turns numbered 1 through 4 had all finished, tool rows
+   * from three turns filed under `â€¦-0`, and commentary from four turns folded into one row
    * because they all carried the same derived id. Nothing downstream could put that back in
    * order, because the information had already been destroyed at the point of observation.
    *
    * A counter minted here cannot go backwards and does not depend on the page agreeing with
-   * itself. ChatGPT's own id is still read — as `pageTurnId`, a hint for later
-   * reconciliation — but nothing is identified by it.
+   * itself. ChatGPT's own id is still read â€” as `pageTurnId`, a hint for later
+   * reconciliation â€” but nothing is identified by it.
    *
    * The counter alone is not enough to make the key unique, which is the trap a first
    * version fell into. Both counters live in this document, so reinjecting the content
-   * script into the same conversation — a reload, an extension update — restarts them at
+   * script into the same conversation â€” a reload, an extension update â€” restarts them at
    * zero and mints `gen-0-1` a second time for a different turn, recreating the reused-id
    * collision under a new name. `RUN_ID` is a random per-document namespace, so two
    * injections of the same page can never name the same generation.
@@ -506,7 +506,7 @@
    * What the last activity pull said this chat has open in the app.
    *
    * Read once, at boot, by resumeOpenTurn(). Reloading a ChatGPT page in the middle of an
-   * assistant turn kills this script and every piece of state in it, `RUN_ID` included — and
+   * assistant turn kills this script and every piece of state in it, `RUN_ID` included â€” and
    * `RUN_ID` is the random per-document namespace that makes a generation id unique, so the
    * new document cannot reconstruct the id the old one was using. Left alone it sees a stop
    * button, finds no generation of its own, and opens a second one: one assistant run
@@ -518,14 +518,14 @@
    * it observes anything.
    */
   let appActiveTurnId = null;
-  /** The question of the app's newest turn once it has ended — see claimUnrecordedGeneration. */
+  /** The question of the app's newest turn once it has ended â€” see claimUnrecordedGeneration. */
   let appSettledQuestionId = null;
   /**
    * When this document first saw ChatGPT generating a turn that nobody has recorded.
    *
-   * A reloaded document normally adopts the app's `activeTurnId`. When the app has none — the
+   * A reloaded document normally adopts the app's `activeTurnId`. When the app has none â€” the
    * previous document never got its `turn_start` out before the reload, or the app was not
-   * running when the message was sent — the page is the only witness: a rendered user message
+   * running when the message was sent â€” the page is the only witness: a rendered user message
    * and a Stop control that stays. Read once, that control is the hydration artifact described
    * at the open branch in observe(); kept for a whole settle window over a rendered transcript,
    * it is a generation. See claimUnrecordedGeneration.
@@ -536,9 +536,9 @@
   /**
    * This document has adopted an identified chat whose durable state the app has not answered
    * for yet: neither "is one of my turns still open?" nor "which user messages do I already
-   * have?". Both boot and an SPA move into another chat land here — in each the transcript on
+   * have?". Both boot and an SPA move into another chat land here â€” in each the transcript on
    * screen is entirely unknown to this document, so nothing in it can be told apart from a
-   * send that has just happened. While true, observe() does not read the transcript at all —
+   * send that has just happened. While true, observe() does not read the transcript at all â€”
    * not "reads it and declines to open a turn", which is what the first version did and which
    * is worse than useless: consuming a message marks it seen forever, so the one send that
    * really did just happen is spent before the answer that could have recognised it arrives,
@@ -572,7 +572,7 @@
    * The evidence for the one case freshness cannot decide: ChatGPT writing a new turn into
    * a section that already existed. A prior section whose text has changed since the
    * generation began is demonstrably being written into now, which is a fact about the page
-   * rather than a timer expiring, and a timer is what this replaced — the old fallback took
+   * rather than a timer expiring, and a timer is what this replaced â€” the old fallback took
    * the newest assistant section after four seconds whether or not it had moved, which is
    * false attribution with a delay on it.
    */
@@ -583,7 +583,7 @@
   /** What the newest of those said then, so a reused section can prove it has moved. */
   let baselineMarks = [];
   /**
-   * Assistant section node → the local generation that finished writing into it.
+   * Assistant section node â†’ the local generation that finished writing into it.
    *
    * How a settled turn's prose gets the same identity as the rest of that turn, without
    * asking the page for an id it does not keep stable. Weak, so a section ChatGPT drops
@@ -591,7 +591,7 @@
    */
   const settledGenerations = new WeakMap();
   /**
-   * Local generation key → ChatGPT's own turn id for it, when the page had one.
+   * Local generation key â†’ ChatGPT's own turn id for it, when the page had one.
    *
    * A hint, never an identity. Kept so a later reconciliation pass has something to line
    * the two models up by; bounded, because a tab left open all day would otherwise grow it.
@@ -608,7 +608,7 @@
    * committed before the reload. Live 2026-09-02: that transcript was interim prose of a turn
    * still running, the Stop control had not come back yet, and the degraded DOM rule closed
    * the adopted turn as completed four seconds in while the same request id went on calling
-   * tools for twenty-four minutes — after which Goal wrote the next user message against an
+   * tools for twenty-four minutes â€” after which Goal wrote the next user message against an
    * answer that had never been given. So until this document sees the turn running, visible
    * prose never closes it: only the page model, an error, a user stop, a new send or the stall
    * budget may. See endOutcome.
@@ -717,13 +717,13 @@
    * exact revision back, and that echo is not guaranteed: `upsertMessageEvent` answers an
    * unchanged observation with `changed:false`, which writes no new seq and therefore puts
    * nothing on the feed this page reads. A re-scan that re-emits an already durable final answer
-   * is not rare — `resetConversation()` and the `messagesReported` overflow clear both make the
-   * page re-report the whole visible transcript — so the unreleased case was reachable in
+   * is not rare â€” `resetConversation()` and the `messagesReported` overflow clear both make the
+   * page re-report the whole visible transcript â€” so the unreleased case was reachable in
    * ordinary use, and every chat that hit it kept polling four times a minute at the live rate,
    * hidden or not, with a full Fiber walk and a 1200-event app read on every pass.
    *
-   * So: `until` is the deadline, after which the obligation is simply over — one round trip is
-   * all it was ever for — and the revision key is remembered past its release, so re-observing
+   * So: `until` is the deadline, after which the obligation is simply over â€” one round trip is
+   * all it was ever for â€” and the revision key is remembered past its release, so re-observing
    * the same exact answer can never re-arm it. A genuinely newer revision still arms a new one.
    */
   let pendingPresentation = null;
@@ -754,7 +754,7 @@
   function settlePresentation() {
     if (pendingPresentation) pendingPresentation.until = 0;
   }
-  /** Stable user-message id → durable event position, used only to anchor page responses. */
+  /** Stable user-message id â†’ durable event position, used only to anchor page responses. */
   const userAnchorByMessage = new Map();
   /**
    * The newest user message this document has already opened a turn for.
@@ -776,7 +776,7 @@
   let pulling = false;
 
   /**
-   * `'resume' | 'worker' | null` — whether this chat was opened by the app, and how.
+   * `'resume' | 'worker' | null` â€” whether this chat was opened by the app, and how.
    *
    * From the session record, so it survives a reload of a chat opened days ago.
    */
@@ -808,7 +808,7 @@
    * composer, and for the same reason: it is a rich-text editor, a blank line in the text
    * becomes a paragraph break, and `textContent` stitches the paragraphs back together with
    * no separator at all. Collapsing runs to a single space instead left the receipt for every
-   * multi-paragraph send unable to match the message it had just sent — so a Compact & Resume
+   * multi-paragraph send unable to match the message it had just sent â€” so a Compact & Resume
    * bootstrap, which is always multi-paragraph and always lands in a brand-new zero-anchor
    * chat, opened no turn in the replacement chat. With no live generation there is no owned
    * page turn, the fresh chat's provisional client thread is then the only conversation its
@@ -821,7 +821,7 @@
   const sendText = (value) => String(value || '').replace(/\s+/g, '');
   /** Undo page-readback punctuation escapes only; never rewrite authored Send text. */
   // Two escapes, both measured: ASCII punctuation (2026-09-11), and a backslash before a line
-  // break — ChatGPT stores the composer's hard breaks as Markdown `\<newline>`. The second made a
+  // break â€” ChatGPT stores the composer's hard breaks as Markdown `\<newline>`. The second made a
   // worker's 20k-character bootstrap unrecognisable to its own receipt (2026-09-26, #426): every
   // hard break kept its backslash, so the page never bound the worker until its turn had ended.
   // A third (#821): an indented line's first space reads back as `&#x20;`. A 96,000-character
@@ -1135,7 +1135,7 @@
    * How full this conversation is, and what the app intends to do about it.
    *
    * `tokens` is the recorder's estimate of what has been said and returned so far;
-   * `context` carries the lines it is measured against — the two the app already draws in
+   * `context` carries the lines it is measured against â€” the two the app already draws in
    * its own session view, and the automatic threshold with the provider that would write
    * the brief. All of them come from /activity rather than being decided here, so the bar
    * the user is watching and the number that acts are the same number.
@@ -1153,12 +1153,12 @@
   /**
    * The goal loop, as this page sees it.
    *
-   * `goalConfig` is the app's answer to "is it on, and can it work" — the switch plus
+   * `goalConfig` is the app's answer to "is it on, and can it work" â€” the switch plus
    * whether an OpenRouter key exists at all, because the second is the difference between a
    * feature that is off and one that is broken, and only the app knows it.
    *
    * `goalDraft` is whatever draft the app currently holds for this chat: its stage, the text
-   * as it streams in, and — once, at `ready` — the message to type. Both arrive on the same
+   * as it streams in, and â€” once, at `ready` â€” the message to type. Both arrive on the same
    * /activity poll as everything else.
    */
   let goalConfig = null;
@@ -1168,15 +1168,15 @@
    *
    * One draft per finished turn, decided here rather than by the app alone: a page that asked
    * twice for one turn would be asking the app to be idempotent about a message it has
-   * already sent. The app is idempotent anyway — that is what `turnId` is for on /goal/draft —
+   * already sent. The app is idempotent anyway â€” that is what `turnId` is for on /goal/draft â€”
    * and this is the near-side half of the same rule.
    */
   let goalTurnId = null;
   /**
    * Retries already spent on the claimed turn, and the wait the next one was announced with.
    *
-   * Each failed draft is a full request — the whole conversation, twenty thousand tokens on a
-   * long chat — so asking again every fifteen seconds for as long as a provider keeps answering
+   * Each failed draft is a full request â€” the whole conversation, twenty thousand tokens on a
+   * long chat â€” so asking again every fifteen seconds for as long as a provider keeps answering
    * badly is a key being emptied at four requests a minute (2026-09-03: three unreadable
    * answers in a row, then more). The wait doubles per failure of the same turn, up to four
    * minutes; a new turn starts at fifteen seconds again.
@@ -1228,8 +1228,8 @@
    *
    * The app keys a specific goal by conversation, and a New Chat has no conversation until
    * its first message has been sent. That first message is the one this very goal is about
-   * to produce, so the goal waits here across exactly one gap — from Save until the id
-   * arrives — and is handed to the app the moment there is something to key it to. See the
+   * to produce, so the goal waits here across exactly one gap â€” from Save until the id
+   * arrives â€” and is handed to the app the moment there is something to key it to. See the
    * "same chat has just learned its own id" branch in observe().
    */
   let pendingObjective = '';
@@ -1238,7 +1238,7 @@
    *
    * It has to travel with the text and cannot be re-derived at the other end: the chat this
    * is about to become has no switch of its own yet, so anything asking "goal or loop?" once
-   * the id arrives would be asking the app-wide default — which is exactly the answer that
+   * the id arrives would be asking the app-wide default â€” which is exactly the answer that
    * turned an unattended Loop into a Goal that stopped at the second turn.
    */
   let pendingObjectiveMode = 'goal';
@@ -1457,8 +1457,8 @@
    * Two gates in this script wait on the app for an identity fact: which user messages it
    * already holds (`resumeIdentityPending`) and whether a marked continuation still exists
    * (`commandJournalGate`). Both may keep waiting only while the app or worker is genuinely
-   * unreachable. A structured refusal — 409 `no_such_continuation`, a rejected commit, any other
-   * application error — *is* the answer, and holding a gate on it froze this document for good.
+   * unreachable. A structured refusal â€” 409 `no_such_continuation`, a rejected commit, any other
+   * application error â€” *is* the answer, and holding a gate on it froze this document for good.
    */
   function appAnswered(reply) {
     if (!reply) return false;
@@ -1474,7 +1474,7 @@
    *
    * The conversation id is captured here rather than read at flush time. This tab can
    * navigate from chat A to chat B in the moment between the two, and labelling a
-   * whole batch with whatever is current then files A's messages into B's history —
+   * whole batch with whatever is current then files A's messages into B's history â€”
    * silently, permanently, and with no way to tell afterwards which entries were real.
    */
   function emit(observation) {
@@ -1505,7 +1505,7 @@
     }
     if (typeof bounded.renderedHtml === 'string') {
       // Never a partial one: takeUtf8 cuts at a byte count and appends a plain-text notice,
-      // which inside markup lands mid-tag — often inside a code block, whose chrome is far
+      // which inside markup lands mid-tag â€” often inside a code block, whose chrome is far
       // larger than the code in it. The canonical text above is the message; this is only
       // ChatGPT's presentation of it, and half a presentation is worth less than none.
       const room = Math.max(0, wireBudget);
@@ -1587,7 +1587,7 @@
         .map(([name, count]) => `${count} ${name}`)
         .join(', ');
       held.entry.event.text =
-        `⚠ ${held.count} observation(s) (${detail}) were lost before the extension service worker accepted them ` +
+        `âš  ${held.count} observation(s) (${detail}) were lost before the extension service worker accepted them ` +
         'because the page-local queue hit its count or byte budget. This part of the history is incomplete.';
       accountQueueEntry(held.entry);
     }
@@ -1705,12 +1705,12 @@
    * What it deliberately does *not* do is decide, from this one moment, whether the turn is
    * still running. A reload lands mid-rerender as often as not, so a stop button missing at
    * the instant the script starts is the same unreliable sample the settle window exists to
-   * discount — and here it would be worse than unreliable, because publishing the section
+   * discount â€” and here it would be worse than unreliable, because publishing the section
    * being written as the answer is what closes the turn on the app side. Against that, "the
    * app has this turn open" is real, durable evidence.
    *
-   * So the generation is restored either way, with no `turn_start` — the app already has one
-   * — and the ordinary lifecycle in observe() decides the rest from there. If the page is
+   * So the generation is restored either way, with no `turn_start` â€” the app already has one
+   * â€” and the ordinary lifecycle in observe() decides the rest from there. If the page is
    * still generating, work carries on under the same id. If it is not, the restored turn
    * enters the same quiet window as any other, its section stays live for the duration, and
    * only continuous silence closes it: one final answer under the resumed id, one `turn_end`.
@@ -1718,7 +1718,7 @@
    */
   /**
    * The newest rendered user message, once this document has watched ChatGPT generate for a
-   * whole settle window without any turn — local or app-side — owning that generation.
+   * whole settle window without any turn â€” local or app-side â€” owning that generation.
    *
    * This is the only way a turn the app never heard of gets recorded, and it exists for the
    * 2026-09-02 failure: a tab reloaded mid-turn, the app holding no turn for the chat, and the
@@ -1728,7 +1728,7 @@
    *
    * Deliberately narrow. It fires only before this document has opened or adopted any
    * generation, only while the app reports no active turn and the identity gate is answered,
-   * never during a bootstrap command, and only after Stop has stayed for TURN_SETTLE_MS — the
+   * never during a bootstrap command, and only after Stop has stayed for TURN_SETTLE_MS â€” the
    * same window the lifecycle already uses to discount ChatGPT's control flicker. Everything
    * after the first generation keeps using send receipts and durable anchors.
    */
@@ -1759,7 +1759,7 @@
     // minted a turn with no work that stalled, earned another reload and hid the dead turn from
     // the automatic Continue (measured 2026-09-26, three rounds in 41 minutes).
     //
-    // A genuine regeneration of that same question — ChatGPT's own Retry after a lost stream —
+    // A genuine regeneration of that same question â€” ChatGPT's own Retry after a lost stream â€”
     // is different: its Stop stays, with no failure banner, for as long as it writes. That
     // is how a Compact & Resume brief is rewritten after "Resume stream unavailable", and
     // refusing it left the rewritten brief unrecorded. So the settled question needs a clean
@@ -1788,7 +1788,7 @@
    * A claimed turn has no Send baseline, and ChatGPT can finish inside the settle window: Fiber
    * then carries the turn's own final before its section mounts. Settling that final too left
    * the turn open until the ten-minute watchdog (#1226). History is what Fiber had reported
-   * before the generation was first seen, plus every final drawn above the claimed question —
+   * before the generation was first seen, plus every final drawn above the claimed question â€”
    * a reloaded page can receive its first Fiber reply only after the window began.
    */
   function claimedHistoryFinals(questionId) {
@@ -1837,7 +1837,7 @@
    * durable anchor set cannot: a reload that lands between ChatGPT accepting the message and
    * the app journalling it would otherwise find the message newest and unanchored, read the
    * question as freshly asked, and end the very turn this document just adopted in order to
-   * keep. Only that one id, and only alongside an adoption — everything else on the page
+   * keep. Only that one id, and only alongside an adoption â€” everything else on the page
    * still has to be recognised from what the app actually holds.
    */
   function anchorAdoptedQuestion(questionId = null) {
@@ -1870,7 +1870,7 @@
    * Tells a resumed turn which of the sections on screen it did not write.
    *
    * `priorSections` is normally sampled from the previous observation, and on the first
-   * observation of a page load there is no previous one — so every section on screen looks
+   * observation of a page load there is no previous one â€” so every section on screen looks
    * new and the whole visible transcript would be treated as this generation's output.
    * Seeding it from the DOM here fixes that, with the live turn's own sections deliberately
    * left out: those are the ones still being written, and calling them history would publish
@@ -1880,7 +1880,7 @@
     const turns = CLF_DOM.turns();
     // The adopted turn's own section, when the page shows one: the newest assistant section,
     // and only if it comes *after* the newest user message. A turn is the answer to the
-    // question that opened it, so a section above that question is a previous answer — one
+    // question that opened it, so a section above that question is a previous answer â€” one
     // ChatGPT already finished, with the end-turn bit to prove it. Taking the newest section
     // regardless is how the 2026-09-03 prime was closed "completed" nine seconds after every
     // reload: the page came back showing only the question, the previous answer was bound to
@@ -1913,8 +1913,8 @@
    * Called on a genuine move from chat A to chat B, before anything is attributed to B.
    * ChatGPT changes `/c/<id>` and replaces the transcript as two separate steps, and the
    * URL can win. In that window `resetConversation()` had cleared `seenMessages` while A's
-   * messages were still rendered, so the very next pass through observe() — the same one,
-   * in fact — saw them as unseen and emitted every one of them under B's id. A whole
+   * messages were still rendered, so the very next pass through observe() â€” the same one,
+   * in fact â€” saw them as unseen and emitted every one of them under B's id. A whole
    * conversation could be copied into the session of the chat the user opened next.
    *
    * The proof used here is neither a timeout nor an assumption about which step wins: a
@@ -1923,7 +1923,7 @@
    *
    * That also settles the opposite ordering safely. If ChatGPT had already replaced the
    * transcript before the URL changed, none of the visible turn ids would have been seen
-   * under A, so nothing is retired and B's opening messages are recorded normally — which
+   * under A, so nothing is retired and B's opening messages are recorded normally â€” which
    * is the behaviour that must not regress, since the first message of a fresh chat is the
    * one this whole pipeline exists to keep.
    */
@@ -1992,12 +1992,12 @@
     operationProgress = null;
     // An SPA move into another identified chat leaves this document facing a full transcript
     // it has never seen, exactly as a reload does. Until the app has said which of those user
-    // messages it already holds, none of them can be read as a send — see resumeIdentityPending.
+    // messages it already holds, none of them can be read as a send â€” see resumeIdentityPending.
     resumeIdentityPending = Boolean(conversationId);
     // The journal gate belongs to the chat that raised it. It exists so a fresh app-opened chat
-    // is not journalled before its A→B rebind commits; the chat this tab is moving to has no
-    // such transaction. Carrying it across an SPA move silently unrecorded the next chat —
-    // its first message, its title, its turn — until the tab was reloaded.
+    // is not journalled before its Aâ†’B rebind commits; the chat this tab is moving to has no
+    // such transaction. Carrying it across an SPA move silently unrecorded the next chat â€”
+    // its first message, its title, its turn â€” until the tab was reloaded.
     continuationJournalPending = false;
     commandJournalGate = false;
     nativeBusy = false;
@@ -2007,8 +2007,8 @@
     retirementHandledFor = null;
     // The goal loop's state belongs to the chat it was watching. None of it was cleared
     // here, so opening a second chat inherited the first one's: its phase and its error were
-    // drawn above the new composer — "The goal loop stopped", about a conversation that is no
-    // longer on screen — and `goalTurnId` carried a finished turn's id across as the id this
+    // drawn above the new composer â€” "The goal loop stopped", about a conversation that is no
+    // longer on screen â€” and `goalTurnId` carried a finished turn's id across as the id this
     // chat must not draft twice. The watch loop itself notices the change on its own tick and
     // exits; what it leaves behind is what this clears.
     goalTurnId = null;
@@ -2246,7 +2246,7 @@
    * The assistant section this generation is writing into, or null while that is unknown.
    *
    * Two kinds of evidence, and nothing else. A section that was not on the page before the
-   * generation began is this generation's — that is the ordinary case, and the reason the
+   * generation began is this generation's â€” that is the ordinary case, and the reason the
    * baseline has to come from the previous observation rather than from the DOM as it
    * stands now. Otherwise, a section that *was* there but whose text has changed since is
    * also this generation's, which covers ChatGPT continuing to write into an existing
@@ -2304,13 +2304,13 @@
    *
    * Scoped to the turn on purpose. This used to scan the whole conversation for the last
    * assistant message, which meant that once *any* answer existed anywhere above, every
-   * later turn had evidence of completion whether or not it produced anything — a turn
+   * later turn had evidence of completion whether or not it produced anything â€” a turn
    * that failed silently, or was cut off before it wrote a word, was recorded as
    * `completed`. That outcome is not cosmetic: it is what compaction and the resume
    * handoff read to decide whether the last turn's work needs redoing.
    */
   /**
-   * The settled *final* answer of one turn — the last assistant prose it authored.
+   * The settled *final* answer of one turn â€” the last assistant prose it authored.
    *
    * Deliberately not `answerText`, which returns the first and only ever answers "did this
    * turn say anything at all". One logical turn routinely exposes several assistant-authored
@@ -2380,7 +2380,7 @@
     };
     // Only this turn's failures. An error inside another turn's section is that turn's,
     // and a toast still on screen from an earlier failure was already on screen when this
-    // turn began — neither says anything about how this one ended.
+    // turn began â€” neither says anything about how this one ended.
     const failures = CLF_DOM.errors().filter(
       (error) => !isStale(error.node) && Boolean(turnId) && localErrorGeneration(error) === turnId &&
         (!nativeFinal || error.recoverable !== true) &&
@@ -2410,7 +2410,7 @@
     // its end_turn bit is the authority on successful completion and mere visible prose is
     // never enough to close a quiet turn: interim commentary is public assistant prose too.
     // A browser where Fiber genuinely is unavailable still needs a usable lifecycle, so the
-    // old DOM rule remains there behind this capability check — for generations this
+    // old DOM rule remains there behind this capability check â€” for generations this
     // document has seen running. An adopted one it has not has no document-side evidence of
     // finishing at all, and its visible prose is whatever was committed before the reload.
     // See unwitnessedGeneration. Pro can hide its Stop control while still thinking:
@@ -2485,10 +2485,10 @@
   /**
    * The local generation a rendered assistant turn belongs to, by node identity.
    *
-   * Deliberately not a reverse lookup through `pageTurnIds`. That map runs generation →
+   * Deliberately not a reverse lookup through `pageTurnIds`. That map runs generation â†’
    * page id, and ChatGPT reuses `data-turn-id` across turns, so inverting it is ambiguous
    * by construction: several generations can claim one page id and the newest entry is not
-   * reliably the one on screen. The node is unambiguous — the live turn is whichever holds
+   * reliably the one on screen. The node is unambiguous â€” the live turn is whichever holds
    * `genNode`, and a settled section carries the generation that finished writing into it,
    * seeded for every node of the turn at `turn_end`. The page id stays a hint.
    */
@@ -2529,8 +2529,8 @@
    * Returns a just-authored message's id and witnessed Send baseline, or null. That is a much
    * narrower fact than "a user message this document had not journalled yet", and the
    * difference is the whole of two live bugs. `seenMessages` is per document, so after a
-   * reload the entire transcript is unjournalled — including the prompt of the turn that is
-   * still running — and on a fresh chat ChatGPT mounts the Stop control before it mounts the
+   * reload the entire transcript is unjournalled â€” including the prompt of the turn that is
+   * still running â€” and on a fresh chat ChatGPT mounts the Stop control before it mounts the
    * user bubble that caused it. Both used to read as "the user has moved on", which closed a
    * turn that had not ended. See `authoredNow`.
    */
@@ -2542,7 +2542,7 @@
     const rendered = CLF_DOM.messages();
     // The newest user message on screen, by document order. A send the user has just made is
     // always the last one; anything above it is transcript, however new it is to this
-    // document — which is what makes scrolling an old turn back into a virtualized page
+    // document â€” which is what makes scrolling an old turn back into a virtualized page
     // harmless while a turn is open.
     let newestUserId = null;
     for (const message of rendered) {
@@ -2553,7 +2553,7 @@
      *
      * This is the only opening evidence in the script, so it is stated as facts about the
      * conversation rather than about this document's uptime: the message is the newest user
-     * message on the page, and the app — which holds the durable record — does not have it.
+     * message on the page, and the app â€” which holds the durable record â€” does not have it.
      * A reloaded or renavigated document therefore recognises every message it is
      * rediscovering as history without needing to have seen it itself, which a per-document
      * set can never do and which no one-observation grace period ever approximated correctly:
@@ -2596,7 +2596,7 @@
     for (const message of rendered) {
       if (!message.id || (!message.text && !userMessagePresent(message))) continue;
       // Left over from a chat this tab has already navigated away from. Not "probably
-      // old" — the section it is in was one this script watched under the previous
+      // old" â€” the section it is in was one this script watched under the previous
       // conversation, so filing it here would be filing chat A's transcript into chat B.
       if (retiredMessages.has(message.id) || isStale(message.node)) continue;
       if (message.role === 'user') {
@@ -2718,11 +2718,15 @@
         if (!seenMessages.has(key)) {
           markSeen(key);
           emit({ kind: 'user_message', text: shown, messageId: accepted.messageId, authoredNow: true });
+          try { console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'accepted-question-published',
+            sameQuestion: accepted.messageId === receipt.accepted?.messageId,
+            sameRoute: accepted.conversationId === CLF_DOM.conversationId(), sameEpoch: accepted.epoch === epoch })); }
+          catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
           reportedUserMessages.set(accepted.messageId, { text: shown, createTime: null,
             conversationId: accepted.conversationId, model: null });
         }
         userSendReceipt = null;
-        newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline };
+        newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline, acceptedReceipt: true };
       }
     }
     return newUserMessage;
@@ -2794,7 +2798,7 @@
     if (endedTurnId) emit({ kind: 'turn_end', turnId: endedTurnId, ...result,
       ...(imageEnd ? { providerMessageId: nativeEnd.endMessageId } : {}) });
     // Same moment, the other reader: the goal loop wants this turn's answer while `ended`
-    // still names its section. It decides for itself whether the turn is one to answer —
+    // still names its section. It decides for itself whether the turn is one to answer â€”
     // and waits for it to hold still first. See noteGoalTurn.
     noteGoalTurn(ended, result.outcome, endedTurnId);
     turnStartedAt = 0;
@@ -2842,7 +2846,7 @@
       const abandonedOpening = Boolean(pendingObjective) && !opening;
       if (conversationId) {
         // A genuine move to another *identified* chat: close the old one out and start
-        // clean. The order matters — what the old chat left on screen is retired before
+        // clean. The order matters â€” what the old chat left on screen is retired before
         // the new id is adopted, because from the next line onwards everything emitted
         // carries that id.
         void ask({ type: 'closed', conversationId });
@@ -2961,7 +2965,7 @@
       // belongs to injectStage() alone, which asks the same question every tick and knows the
       // one id-less case worth painting: a chat being opened on a goal, whose opening message
       // is being written right now. Tearing the panel down here as well made every tick
-      // destroy and rebuild the node injectStage() had just put back — a fresh element once a
+      // destroy and rebuild the node injectStage() had just put back â€” a fresh element once a
       // second, so its progress animation never survived long enough to play a single cycle.
       void flush();
       return;
@@ -2995,7 +2999,7 @@
 
     const nowGenerating = CLF_DOM.generating();
     // The Stop control on screen for a turn this document adopted, over a section that turn
-    // is writing, is the document seeing that turn run — from here its lifecycle evidence is
+    // is writing, is the document seeing that turn run â€” from here its lifecycle evidence is
     // as good as for a turn it opened itself. Stop alone is not: ChatGPT mounts it for a
     // second or so over an empty transcript while a reloaded page hydrates, and a witness
     // taken from that flicker let the degraded DOM rule close the adopted turn from the
@@ -3004,7 +3008,7 @@
       unwitnessedGeneration = false;
     }
 
-    // The transcript that is already settled goes in first — before this tick can open a
+    // The transcript that is already settled goes in first â€” before this tick can open a
     // new generation. The recorded order used to be the other way round: `turn_start` for
     // the live turn at sequence 2, the user message that asked for it at 3, and the
     // conversation's earlier history at 4 and 5. A log whose first assistant turn precedes
@@ -3064,14 +3068,14 @@
       // of that request under the next turn only past an end marked so (#1301). A turn that ended
       // with its answer is not marked: its trailing calls stay with it. Where Fiber answers, its
       // end_turn is that proof, and interim prose without it is an unfinished answer too (live
-      // 2026-10-12: ten calls and the final answer followed a message sent after "I'll pick up…").
+      // 2026-10-12: ten calls and the final answer followed a message sent after "I'll pick upâ€¦").
       const replacedUnfinished = result.outcome === 'unknown' && (bounded.outcome === 'interrupted' || fiberPresent === true);
       finishGeneration(ended, steering || replacedUnfinished ? { ...bounded, continued: true } : bounded, false);
     }
 
     // A turn is opened by a send, and by nothing else.
     //
-    // The Stop control used to be the opener, and it is not evidence that a turn began — it is
+    // The Stop control used to be the opener, and it is not evidence that a turn began â€” it is
     // evidence that the page is busy, which is a different claim and one the browser makes on
     // its own account. Measured live, on every page load of a conversation: ChatGPT mounts
     // `data-testid="stop-button"` about 2.7 s in and holds it for roughly 1.2 s over an empty
@@ -3082,9 +3086,9 @@
     // transcript alongside Stop only narrows that window; it leaves the same wrong premise in
     // place, and any later flicker of the control over a settled transcript reproduces it.
     //
-    // The premise is replaced instead. `newUserMessage` is a conversation-level fact —
+    // The premise is replaced instead. `newUserMessage` is a conversation-level fact â€”
     // ChatGPT's own stable id for the newest user message, which the app has no durable record
-    // of — so it is true exactly once per send and false for every reload, renavigation and
+    // of â€” so it is true exactly once per send and false for every reload, renavigation and
     // rehydration of that same send. It is also what the user means by a turn: the question
     // starts it. The two branches above and here are therefore one boundary read twice: a send
     // ends whatever generation was running and opens the one it asked for.
@@ -3092,7 +3096,7 @@
     // Everything Stop still does is downstream of this, describing a turn that already exists:
     // its liveness, the quiet window that closes it, the flicker that cancels that window. A
     // turn a previous document opened arrives by adoptOpenTurn() from the app's `activeTurnId`,
-    // which is adoption and not opening — no second `turn_start` for one generation. A turn no
+    // which is adoption and not opening â€” no second `turn_start` for one generation. A turn no
     // document ever recorded arrives by claimUnrecordedGeneration(), which is an opening.
     if (newUserMessage && !generating) {
       if (!steering) steeredTurns.clear();
@@ -3120,16 +3124,21 @@
       pressedAt = 0;
       // Unconditional, unlike before. The old code only announced a turn once it had a
       // ChatGPT turn id to name it by, so a generation whose section had not mounted yet
-      // was never reported at all — and the app, which places a tool call by asking which
+      // was never reported at all â€” and the app, which places a tool call by asking which
       // conversation is mid-turn, therefore could not place the calls of exactly the turns
       // that call tools fastest.
       //
       // A turn resumed at boot never reaches this branch: resumeOpenTurn() restores
       // `generating` before the first observation, so there is no transition to open. That is
-      // what keeps the app's `turn_start` the only one — repeating it would clear the very
+      // what keeps the app's `turn_start` the only one â€” repeating it would clear the very
       // state the resume exists to keep, since recorder.ts empties `progress`, `pageTools`
       // and the pending sightings on every turn_start.
       emit({ kind: 'turn_start', turnId });
+      if (submission?.acceptedReceipt === true) {
+        try { console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'accepted-turn-published',
+          sameQuestion: openedUserMessageId === submission.messageId, turnOpened: generating === true })); }
+        catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
+      }
       // A witnessed Send's baseline is exact. A claimed turn keeps its own final (#1226);
       // any other turn without a baseline files every final already on the page as history.
       const finalsAtSend = submission ? submission.baseline?.finals : claimedHistoryFinals(newUserMessage);
@@ -3146,7 +3155,7 @@
     // appeared. By generation and not by clock: the previous version stored `Date.now()`
     // and endOutcome compared it against `turnStartedAt`, two stamps taken microseconds
     // apart in the same tick. At millisecond resolution they tie, and a tie read as "this
-    // turn's" — so an undismissed banner from an earlier failure could fail the next turn,
+    // turn's" â€” so an undismissed banner from an earlier failure could fail the next turn,
     // which is the exact thing that comparison exists to prevent.
     if (generating && turnId && turnSelection?.turnId !== turnId && modelSelection &&
         !modelCatalogBusy && !desktopInputBusy && !bootstrapModelRestoreBusy) turnSelection = { turnId, ...modelSelection };
@@ -3173,7 +3182,7 @@
     // worker calls into Unattributed. Scan whenever a generation is live. If ChatGPT's
     // message model is not available yet the helper simply returns no evidence, and the next
     // observation tries again while the exact MCP request waits in the recorder grace window.
-    // A refused `bind` is not a decision, it is an outage — a sleeping worker, or a tab whose
+    // A refused `bind` is not a decision, it is an outage â€” a sleeping worker, or a tab whose
     // ownership was wrongly retired. Keep asking until the worker agrees, throttled so a real
     // outage costs one message every few seconds rather than one per tick.
     if (conversationId && boundId !== conversationId && Date.now() - bindRetryAt >= 5000) {
@@ -3206,12 +3215,12 @@
       });
     } else if (fiberSettleUntil > Date.now()) {
       // ChatGPT does not always have `metadata.request_id` on a connector request by the time
-      // the turn it belongs to ends — sometimes it appears seconds later, sometimes only when
+      // the turn it belongs to ends â€” sometimes it appears seconds later, sometimes only when
       // the conversation is next synced. Until 1.8.8 the only reader of that field ran while
       // `generating` was true, so an id that landed a second after the stop button vanished
       // was never read at all: the call stayed in Unattributed activity until the *next* turn
       // started, or the user reloaded. Keep scanning after the turn, but only while a call is
-      // actually still missing its id, and never past the ceiling — see `fiberSettleUntil`.
+      // actually still missing its id, and never past the ceiling â€” see `fiberSettleUntil`.
       // Flushed straight away rather than on the idle 10-second cadence: the app is usually
       // already blocked waiting for exactly this id, and the wait is measured in seconds.
       void refreshFiber(fiberSettled).then(() => {
@@ -3222,9 +3231,9 @@
 
     // `turnId` and not `turn`: the report below is about the *absence* of output, and requiring a
     // mounted assistant section to say so kept it silent in the one state where it is the only
-    // thing left. A turn adopted after a reload frequently has no section of its own — see
+    // thing left. A turn adopted after a reload frequently has no section of its own â€” see
     // seedResumeBaseline, where a page that came back showing only the question deliberately
-    // leaves the adopted turn with no evidence on screen — and the outcome verdict below is
+    // leaves the adopted turn with no evidence on screen â€” and the outcome verdict below is
     // locked behind the Stop control going away. Measured on 2026-09-25: a turn whose generation
     // died at 19:14 had both paths closed, so nothing was ever said about it; the app reloaded
     // that chat twelve times over two and a half hours, each reload re-arming this clock and
@@ -3258,8 +3267,8 @@
 
     if (generating && nowGenerating && quietSince > 0) {
       // The stop button came back, so it never went away in the sense that matters: this is
-      // one turn that flickered, not two turns. Everything the generation holds — its id,
-      // its baselines, its reported-progress map — is still the right state to carry on
+      // one turn that flickered, not two turns. Everything the generation holds â€” its id,
+      // its baselines, its reported-progress map â€” is still the right state to carry on
       // with, so the settle window is simply abandoned.
       quietSince = 0;
       quietTurn = null;
@@ -3338,7 +3347,7 @@
     /**
      * One rendered occurrence, one record.
      *
-     * The identity is the node the error is rendered in plus its text — never the text on
+     * The identity is the node the error is rendered in plus its text â€” never the text on
      * its own, which was the bug: the same wording failing on turn nine was taken for the
      * banner already recorded on turn three and dropped, so a repeated failure left no
      * trace and, because endOutcome() consulted the same filter, was written down as a
@@ -3413,7 +3422,7 @@
    *
    * The poll cannot carry this on its own. A tool call the app answers immediately can be
    * consumed, answered and the whole turn finished inside one observe interval, and the
-   * next tick then sees a page that is no longer generating and reports nothing — so the
+   * next tick then sees a page that is no longer generating and reports nothing â€” so the
    * chat's own call is filed as if it came from another device. Insertion is the moment
    * the evidence exists, so that is when it is taken.
    *
@@ -3425,7 +3434,7 @@
    * as they happen, so a row appended into a section that was already on the page is this
    * chat working, while a whole section arriving with its rows inside it is history being
    * drawn. Only that second case has to ask whether the page is generating, and it is the
-   * uncommon one — which matters, because the stop button that answers it is a selector
+   * uncommon one â€” which matters, because the stop button that answers it is a selector
    * like any other and a page that stops matching it must not take attribution with it.
    */
   function watchToolRows() {
@@ -3671,7 +3680,7 @@
   /**
    * Whether the page is still on the chat these counts were taken from.
    *
-   * A brand-new chat being given its id — `/` to `/c/<id>` — is the same chat, not another
+   * A brand-new chat being given its id â€” `/` to `/c/<id>` â€” is the same chat, not another
    * one. ChatGPT assigns the id only once the first turn is under way, so treating that as
    * a navigation banked the rows of the turn in flight as history and lost the evidence for
    * the first call a fresh chat makes. In an agent chat that call is the one that says who
@@ -3684,7 +3693,7 @@
       // Through the canonical parser, not a second `/c/` test of its own. In a Project the
       // route is `/g/<project>/c/<id>`, so the local test recognised no id there: a fresh
       // Project chat being given its id looked like a navigation to a different chat, which
-      // banked the turn in flight as history and lost the evidence for the first call — the
+      // banked the turn in flight as history and lost the evidence for the first call â€” the
       // call that says who the chat is.
       const named =
         CLF_DOM.conversationFromPath(path) !== null && CLF_DOM.conversationFromPath(seededPath) === null;
@@ -3745,14 +3754,14 @@
   }
 
   function labelText(entry) {
-    return entry.summary.detail ? `${entry.summary.title} · ${entry.summary.detail}` : entry.summary.title;
+    return entry.summary.detail ? `${entry.summary.title} Â· ${entry.summary.detail}` : entry.summary.title;
   }
 
   /**
    * Metrics worth showing in the compact browser transcript.
    *
    * A successful exec can return while its child is still running. In that case the
-   * recorder's `✓ 10.0s` is the duration of the initial wait/tool response, not the duration
+   * recorder's `âœ“ 10.0s` is the duration of the initial wait/tool response, not the duration
    * of the command the user thinks the row represents. That number is useful forensic data
    * and stays in the session record, but presenting it as a completion badge is misleading.
    * Keep concrete output metrics (line deltas, hit counts, exit failures) and suppress only
@@ -3761,7 +3770,7 @@
   function displayMetric(summary) {
     const metric = summary && typeof summary.metric === 'string' ? summary.metric.trim() : '';
     if (!metric) return '';
-    if (summary.kind === 'run' && /^✓\s+\d+(?:\.\d+)?(?:ms|s|m)$/.test(metric)) return '';
+    if (summary.kind === 'run' && /^âœ“\s+\d+(?:\.\d+)?(?:ms|s|m)$/.test(metric)) return '';
     return metric;
   }
 
@@ -3776,7 +3785,7 @@
    * standing in for.
    *
    * **This is untrusted input.** The page can post exactly these messages itself, so a
-   * descriptor is never proof that a call happened — it may only change how a row that is
+   * descriptor is never proof that a call happened â€” it may only change how a row that is
    * *already on the page* is labelled. It must never reach the app: nothing here writes a
    * recorded event, decides an agent's identity, or counts as evidence that a tool call in
    * the app belongs to this chat. `connectorRows()` remains the only thing that vouches
@@ -3830,7 +3839,7 @@
    * How long a finished turn keeps being re-read for request ids that were not there yet.
    *
    * `metadata.request_id` is the only ownership evidence there is, and ChatGPT publishes it
-   * on its own schedule — usually while the turn runs, sometimes seconds after it ends. The
+   * on its own schedule â€” usually while the turn runs, sometimes seconds after it ends. The
    * window is a ceiling, not a schedule: scanning stops the moment every call on screen has
    * an id, so a normal turn pays nothing for it. Ninety seconds is chosen against the live
    * failures, where the id landed twenty seconds after the turn completed and, in one case,
@@ -3895,7 +3904,7 @@
   }
 
   function fiberBusyCaption(label) {
-    const plain = String(label || '').toLowerCase().replace(/[.…\s]+$/, '').trim();
+    const plain = String(label || '').toLowerCase().replace(/[.â€¦\s]+$/, '').trim();
     return FIBER_BUSY_CAPTIONS.has(plain) || FIBER_TIMER_CAPTION.test(plain);
   }
 
@@ -3934,7 +3943,7 @@
    *
    * Same trust posture as readDescriptor, and it matters more here: this evidence decides
    * which *session* a recorded call is written into, so a page that could forge it could
-   * pull another chat's work into this one. Nothing is copied through — the tool name is
+   * pull another chat's work into this one. Nothing is copied through â€” the tool name is
    * checked against its pattern and never trimmed to fit, every other field is rebuilt with
    * its own bound, and a message id reported twice is dropped rather than resolved, because
    * two calls sharing one identity is a contradiction and picking one would spend the same
@@ -3982,7 +3991,7 @@
     // `calls` above is the *renderable* view and needs a tool name to be one; this is the
     // attribution view and needs nothing but the id. ChatGPT stamps the id on the plain
     // assistant message as soon as a connector request is issued and only materializes the
-    // `api_tool` row once its safety check clears — up to a minute later, long past the app's
+    // `api_tool` row once its safety check clears â€” up to a minute later, long past the app's
     // fifteen second evidence window. Those ids are readable the entire time, and every one of
     // them belongs to whatever conversation this document is pinned to.
     const requests = [];
@@ -4891,7 +4900,7 @@
   }
 
   /**
-   * Refreshes the cache. `null` means no answer — keep whatever was last known.
+   * Refreshes the cache. `null` means no answer â€” keep whatever was last known.
    *
    * The per-call evidence is reported onwards from here rather than being kept for the
    * renderer's own use. It is the only thing that can tell the app a call it just ran
@@ -4905,7 +4914,7 @@
    * lifecycle. Everything else used to be recorded with no turn at all, and that is a real
    * gap rather than a tidy conservatism: ChatGPT does not always expose a turn's thinking
    * headline in its message model while the turn is running, so the headline is first seen
-   * long afterwards — in session `2026-01-01-00000019`, three and a half minutes and one page
+   * long afterwards â€” in session `2026-01-01-00000019`, three and a half minutes and one page
    * load after the turn it describes. A row with no turn belongs to no group, and a group
    * missing a row ChatGPT is visibly showing cannot be proven complete, so one late headline
    * dropped that entire response back to ChatGPT's native rendering.
@@ -4950,8 +4959,8 @@
    * connector request and its metadata.request_id while its internal clientThreadId still names the provisional
    * thread, then assign the real /c/<conversation-id> a moment later. Transcript delivery can
    * safely wait for that convergence; MCP attribution cannot, because the recorder has a finite
-   * evidence window. Once both facts are simultaneously true in this document — a concrete
-   * current route and the request id inside the assistant section this local generation owns —
+   * evidence window. Once both facts are simultaneously true in this document â€” a concrete
+   * current route and the request id inside the assistant section this local generation owns â€”
    * send the exact pair to the app and require a read-back ACK before considering it placed.
    *
    * This is intentionally live-turn-only. Historical/reloaded turns keep the stricter Fiber
@@ -4970,7 +4979,7 @@
    *
    * `data-turn-id` is presentation metadata and the current virtualized renderer omits it
    * from perfectly readable assistant sections (see the note in fiber.js turnsOf). Every
-   * ownership decision keyed on it therefore evaluates, silently, to `no owned turn` —
+   * ownership decision keyed on it therefore evaluates, silently, to `no owned turn` â€”
    * which is exactly how a whole chat's exact request ids landed in `Unattributed
    * activity` while the popup showed them as read: with no owned turn there is no
    * request-id -> conversation handshake, and the Fiber-conversation fallback is then
@@ -4980,7 +4989,7 @@
    * so the stamp is an exact, non-positional DOM<->Fiber anchor tied to one descriptor frame
    * whether or not the page id is present. Ambiguity (two nodes of one page turn pointing at
    * different descriptors, or an index shared by two descriptors) still answers null; no
-   * positional or clock guess is involved. Ephemeral join only — the scan-qualified stamp is
+   * positional or clock guess is involved. Ephemeral join only â€” the scan-qualified stamp is
    * never written into recorder evidence.
    */
   function stampedFiberTurn(pageTurn, turns, scanToken) {
@@ -5205,8 +5214,8 @@
       //
       // The URL is already pinned across the async round-trip above. A descriptor carrying a
       // different concrete conversation id is individually stale and is discarded, with one
-      // narrow exception: an exact turn owner established above — either this document's local
-      // generation or the answer to the current server-authored Resume marker — may still carry
+      // narrow exception: an exact turn owner established above â€” either this document's local
+      // generation or the answer to the current server-authored Resume marker â€” may still carry
       // the fresh chat's provisional client thread. That turn is retained only so
       // confirmLiveRequestOwners() can perform the explicit request-id -> real-route handshake;
       // historical mismatches are still discarded. An absent/non-concrete id keeps the old
@@ -5308,8 +5317,8 @@
       // Ownership evidence is no longer gated on `activeTurnIndex`.
       //
       // Live failure, 2026-08-21: `activeTurnIndex` required a non-null page turn id, so on
-      // a virtualized render it stayed -1 for the whole conversation and this handshake —
-      // the only path that puts a request id into the app's durable correlation registry —
+      // a virtualized render it stayed -1 for the whole conversation and this handshake â€”
+      // the only path that puts a request id into the app's durable correlation registry â€”
       // simply never ran. Every call in the chat then fell to `Unattributed activity`.
       //
       // The handshake's own safety does not come from the local turn binding; it comes from
@@ -5321,7 +5330,7 @@
       //
       // Both views of the turn feed it: the labelled connector rows, and the bare
       // `metadata.request_id` sightings that have no row yet. The tool name is not part of
-      // the join — the app maps request id -> conversation and nothing else — so requiring
+      // the join â€” the app maps request id -> conversation and nothing else â€” so requiring
       // one only delayed the mapping until ChatGPT's safety check released the `api_tool`
       // message, which is precisely the window the app spends deciding the call is
       // unattributed. Labelled rows go first so the id carries its tool when both exist.
@@ -5445,23 +5454,23 @@
     //
     // `settledTurnOwner` claims a page turn for the local turn that recorded its request
     // id, which is exact only while an id names one request. ChatGPT reuses a single
-    // `request_id` across the retries within a turn — live 2026-08-21, session
-    // `2026-01-01-00000022` had one id on three calls and a second on two — so after a
+    // `request_id` across the retries within a turn â€” live 2026-08-21, session
+    // `2026-01-01-00000022` had one id on three calls and a second on two â€” so after a
     // Retry several distinct page turns resolve to the same local turn, every one of them
     // emits its prose under that id, and the app paints one answer twice.
     //
     // A local turn can own exactly one page turn. When more than one claims it, none of
-    // them is proven, so all of them drop to unowned — the same fail-closed answer
+    // them is proven, so all of them drop to unowned â€” the same fail-closed answer
     // `settledTurnOwner` already gives for an ambiguous id. The live generation's own
     // binding is authoritative and is seeded first, so a settled turn can never take a
     // turn id out from under the turn currently being written.
     //
     // The seed is not conditional on that binding being *resolvable*. Live 2026-08-31,
     // session `2026-01-01-00000023`: ChatGPT held a tool-heavy turn's whole output back and
-    // released it in one burst at 12:00:41, while generation `…-0-3` was live and
+    // released it in one burst at 12:00:41, while generation `â€¦-0-3` was live and
     // `ownedPageTurn` unresolved. `activeTurnIndex` was therefore -1, the seed was skipped,
-    // and a historical section — carrying prose authored at 11:28:07, two minutes before
-    // `…-0-3` even started — claimed `…-0-3` unopposed through a reused request id. Its two
+    // and a historical section â€” carrying prose authored at 11:28:07, two minutes before
+    // `â€¦-0-3` even started â€” claimed `â€¦-0-3` unopposed through a reused request id. Its two
     // messages were journalled under a turn that had not begun when they were written, which
     // merges two responses into one group and paints both of them into the first section.
     // An unresolved live binding is not evidence that the live turn owns nothing; it is
@@ -5852,7 +5861,7 @@
   /**
    * The Fiber turn descriptor attached to this rendered assistant turn, or null.
    *
-   * This is an ephemeral DOM↔scan join only. Durable identity remains the ChatGPT website
+   * This is an ephemeral DOMâ†”scan join only. Durable identity remains the ChatGPT website
    * ids inside `messages`/`activities`; the scan reference is never written to the recorder.
    */
   function fiberTurnFor(turn) {
@@ -5985,11 +5994,11 @@
    * the request went out, and to nothing else. Without that check a reply requested for
    * chat A could come back after the tab had moved to chat B and repopulate the stream,
    * `job` and `bootstrap` from A, then fold what it took to be the bootstrap
-   * instruction — which in chat B is the user's own first message — and paint A's tool
+   * instruction â€” which in chat B is the user's own first message â€” and paint A's tool
    * labels onto B's rows. `resetConversation()` cannot prevent this: it clears state, but
    * a request already in flight is not state, and it lands afterwards.
    *
-   * Both the id and the epoch are checked. The id alone would pass for A → B → A, which is
+   * Both the id and the epoch are checked. The id alone would pass for A â†’ B â†’ A, which is
    * one back button away and would apply a reply from a genuinely different visit.
    */
   /**
@@ -6025,7 +6034,7 @@
     }
     // The message that ended a turn is the last thing in that turn by definition, so it is
     // placed there rather than by the `create_time` ChatGPT stamped when it *opened* the
-    // message — which can precede a connector call the same turn still had to make. See the
+    // message â€” which can precede a connector call the same turn still had to make. See the
     // long note on `closing()` in src/shared/chronology.ts; the two must not disagree.
     const rank = (entry, ends) =>
       entry.kind === 'turn_start' ? -1 : entry.kind === 'turn_end' ? 1 : entry === ends ? 0.5 : 0;
@@ -6113,11 +6122,11 @@
    * This is what makes a reload survivable: `settledGenerations` is a WeakMap owned by one
    * page lifetime, while the app's `turn_start` / `turn_end` events are durable. Visible
    * assistant turns and recorded app turns are both chronological lists, so the renderer can
-   * align their newest tails even when no in-memory node→generation mapping survived.
+   * align their newest tails even when no in-memory nodeâ†’generation mapping survived.
    *
    * Turns are indexed by their durable id, not tracked with a pointer at the newest one. A
    * tool call is appended only once attribution has resolved, and the grace window for that
-   * is 5 s — long enough for the user to have sent the next message already. A pointer at the
+   * is 5 s â€” long enough for the user to have sent the next message already. A pointer at the
    * newest open turn would hand that call to the turn after the one that made it.
    */
   function streamTurnGroups(entries) {
@@ -6145,8 +6154,8 @@
       // opened belongs to that turn however late it lands and whatever has started since;
       // an event this feed cannot name belongs to no group at all.
       //
-      // The alternative — dropping an unowned event into whichever turn is open where it was
-      // observed — is a guess, and it is the guess that made reloads swirl: backfill re-reports
+      // The alternative â€” dropping an unowned event into whichever turn is open where it was
+      // observed â€” is a guess, and it is the guess that made reloads swirl: backfill re-reports
       // historical answers under ChatGPT's own recycled request ids, and by position those land
       // in the live turn. An unattributed tool call has the same shape with no id at all. The
       // renderer falls back to ChatGPT's native rendering for a turn it has no group for, so
@@ -6241,8 +6250,8 @@
       const seq = Number(start && start.seq);
       if (!Number.isFinite(seq) || seq <= anchorSeq || seq >= nextAnchorSeq) return false;
       // A generation that produced nothing is not a candidate reconstruction of a visible
-      // response. ChatGPT re-mounting its stop control for a couple of seconds — which a page
-      // load can do on its own — opens and closes a local generation with no message, no
+      // response. ChatGPT re-mounting its stop control for a couple of seconds â€” which a page
+      // load can do on its own â€” opens and closes a local generation with no message, no
       // activity and no call in it. Counting that as a second candidate forces the request-id
       // tie-break below, and a plain answer that called no tools has no request id to offer,
       // so a phantom two-second turn could veto the reconstruction of the real one.
@@ -6600,16 +6609,16 @@
             ? t('content_tool_outcome_internal_error', 'internal error')
             : t('content_tool_outcome_unknown', 'unknown'));
     const duration = typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0
-      ? ` · ${Math.round(entry.durationMs)} ms` : '';
-    const lines = [{ kind: 'meta', text: `${tool} · ${outcome}${duration}` }];
+      ? ` Â· ${Math.round(entry.durationMs)} ms` : '';
+    const lines = [{ kind: 'meta', text: `${tool} Â· ${outcome}${duration}` }];
     const changes = Array.isArray(entry.changes) ? entry.changes : [];
     for (const change of changes.slice(0, 12)) {
       if (!change || typeof change.path !== 'string') continue;
       const counts = [];
       if (Number.isFinite(change.added) && change.added >= 0) counts.push(`+${change.added}`);
-      if (Number.isFinite(change.removed) && change.removed >= 0) counts.push(`−${change.removed}`);
-      const path = change.path.length > 1024 ? `${change.path.slice(0, 1023)}…` : change.path;
-      lines.push({ kind: 'change', text: path + (counts.length ? `  ${change.approximate === true ? '≈ ' : ''}${counts.join(' ')}` : '') });
+      if (Number.isFinite(change.removed) && change.removed >= 0) counts.push(`âˆ’${change.removed}`);
+      const path = change.path.length > 1024 ? `${change.path.slice(0, 1023)}â€¦` : change.path;
+      lines.push({ kind: 'change', text: path + (counts.length ? `  ${change.approximate === true ? 'â‰ˆ ' : ''}${counts.join(' ')}` : '') });
     }
     if (changes.length > 12) {
       const count = changes.length - 12;
@@ -6671,7 +6680,7 @@
     if (state !== 'ready') {
       recorded.classList.add('clf-stream-detail-note');
       recorded.textContent = state === 'loading'
-        ? t('content_tool_details_loading', 'Loading recorded details…')
+        ? t('content_tool_details_loading', 'Loading recorded detailsâ€¦')
         : t('content_tool_details_unavailable', 'Recorded details are unavailable for this activity revision.');
       panel.append(recorded);
       return;
@@ -6767,7 +6776,7 @@
 
   function streamRow(entry, expandedTools) {
     // A reload row that names its turn arrives on the ordinary feed as 'progress' and is
-    // painted here among the turn's tool calls. It keeps the repair look — the ↻ and the time —
+    // painted here among the turn's tool calls. It keeps the repair look â€” the â†» and the time â€”
     // because what it says is what the app did to this tab, not what ChatGPT said.
     if (browserRepairRow(entry) && entry.kind !== 'repair') entry = { ...entry, kind: 'repair' };
     const row = document.createElement(entry.kind === 'tool_call' ? 'summary' : 'div');
@@ -6779,7 +6788,7 @@
     icon.setAttribute('aria-hidden', 'true');
     if (entry.kind === 'tool_call') setToolIcon(icon, entry.summary && entry.summary.kind);
     else if (entry.kind === 'page_tool') setToolIcon(icon, 'thought');
-    else icon.textContent = entry.kind === 'chat_error' ? '!' : entry.kind === 'agent_message' ? '↔' : entry.kind === 'repair' ? '↻' : '';
+    else icon.textContent = entry.kind === 'chat_error' ? '!' : entry.kind === 'agent_message' ? 'â†”' : entry.kind === 'repair' ? 'â†»' : '';
     row.append(icon);
 
     if (entry.agent && entry.agent !== 'prime') {
@@ -6802,7 +6811,7 @@
         body.append(' ', detail);
       }
     } else if (entry.kind === 'agent_message') {
-      body.textContent = `${entry.from || 'agent'} → ${entry.to || 'agent'}: ${entry.text || ''}`;
+      body.textContent = `${entry.from || 'agent'} â†’ ${entry.to || 'agent'}: ${entry.text || ''}`;
     } else if (entry.kind === 'page_tool') {
       body.textContent = entry.label || t('content_chatgpt_tool', "The provider tool");
     } else if (entry.kind === 'turn_start') {
@@ -6810,7 +6819,7 @@
     } else if (entry.kind === 'turn_end') {
       const outcome = entry.outcome ? String(entry.outcome).replace(/_/g, ' ') : 'completed';
       const label = t('content_turn_outcome', 'Turn $1', outcome);
-      body.textContent = `${label}${entry.detail ? ` · ${entry.detail}` : ''}`;
+      body.textContent = `${label}${entry.detail ? ` Â· ${entry.detail}` : ''}`;
     } else {
       body.textContent = entry.text || '';
     }
@@ -6975,15 +6984,15 @@
   }
 
   /**
-   * Paints "Reloaded chat to recover …" into the conversation where it happened.
+   * Paints "Reloaded chat to recover â€¦" into the conversation where it happened.
    *
    * The session log already holds this row: the app files one per repair, and rewrites it in
-   * place from "Trying to reload…" to "Reloaded…". It reaches this page on the same feed as
+   * place from "Trying to reloadâ€¦" to "Reloadedâ€¦". It reaches this page on the same feed as
    * every other row and was then dropped, because it names no turn and the turn renderer
    * refuses to guess one. It needs no turn. Its place in the transcript is between turns,
    * and the app's own durable user anchors say which: a notice sits before the first user
    * message the app recorded after it, or after the last turn when none has been. That is
-   * the reader's question — "which reload was that?" — answered from the log rather than
+   * the reader's question â€” "which reload was that?" â€” answered from the log rather than
    * from a tab that no longer remembers being reloaded.
    *
    * Independent of Overwrite: the notice is about what the app did to this tab, not a
@@ -7024,7 +7033,7 @@
     // ChatGPT virtualises the thread, so the user message a notice belongs before may be off
     // screen and out of the DOM. The app's anchors still know it exists: a notice with a later
     // user message anywhere in the chat is not at the tail, and is left unpainted until its
-    // slot scrolls back in rather than being pinned under whatever turn happens to be last —
+    // slot scrolls back in rather than being pinned under whatever turn happens to be last â€”
     // which had it travelling with the viewport. Only a notice with nothing after it sits
     // after the last turn.
     const laterAnchor = (seq) => {
@@ -7072,7 +7081,7 @@
    * Kept in one place because getting it wrong is silent and total: 1.7.1 split the model
    * surface into a Core and a Desktop connector, and while this test still spelled the
    * single pre-1.7.1 name, no descriptor on any page matched it. Every call then looked
-   * like a stranger's — so it produced no attribution evidence and, worse, local rows were
+   * like a stranger's â€” so it produced no attribution evidence and, worse, local rows were
    * classified as ChatGPT-native activity and re-recorded as the assistant's own captions.
    * The names are this install's: the plain ones, or with this computer's suffix when one
    * ChatGPT account is used on several computers ("OneCode Core (Windows)"). The other
@@ -7384,8 +7393,8 @@
       // Through the generation key, not the page's turn id. Everything this script reports
       // is now filed under a locally minted key, because ChatGPT reuses `data-turn-id` from
       // one turn to the next; comparing the DOM id against that key matches nothing, so the
-      // live turn was never recognised as live and the reconstruction it is for — the page
-      // ordering, the commentary in its own place — never ran at all.
+      // live turn was never recognised as live and the reconstruction it is for â€” the page
+      // ordering, the commentary in its own place â€” never ran at all.
       let localId = localGenerationOf(turn);
       if (generating && turn === newest) {
         const active = generationTurn();
@@ -7592,7 +7601,7 @@
    * Rows the app rewrites in place under the seq they first appeared at. Canonical assistant
    * messages update by messageId instead. `progress` is here because the app's supersession
    * contract sends the rewrite under `origin`: the repair row that turns from "Trying to
-   * reload…" into "Reloaded…" is one row, and the page can only show that if it takes it.
+   * reloadâ€¦" into "Reloadedâ€¦" is one row, and the page can only show that if it takes it.
    */
   const UPSERT_KINDS = new Set(['progress', 'page_tool', 'tool_call']);
 
@@ -7611,7 +7620,7 @@
    * The two settings, read without a conversation to read them from.
    *
    * Only for the id-less case. Everywhere else /activity carries the same fields plus the
-   * ones that are per chat — the objective, the block, the draft — and taking them from here
+   * ones that are per chat â€” the objective, the block, the draft â€” and taking them from here
    * instead would quietly drop those. The goal typed into a New Chat is this tab's own until
    * ChatGPT issues an id, so it is layered back on rather than read from an app that has
    * nowhere to store it yet.
@@ -7671,7 +7680,7 @@
       // A New Chat has no feed: /activity is addressed by conversation, and this composer is
       // in none. The sheet above it still has to say what the settings are, because a goal
       // can be written here and the first message is what the goal produces. Deliberately
-      // read off the route rather than the id this tab is holding — that id belongs to the
+      // read off the route rather than the id this tab is holding â€” that id belongs to the
       // chat before this composer, and so does its goal. See composerChat().
       await pullSettings();
       return;
@@ -7804,7 +7813,7 @@
           continue;
         }
         // Commentary and native tool rows arrive again as they change, under the seq they
-        // first appeared at — that is what keeps one caption one row instead of a new row
+        // first appeared at â€” that is what keeps one caption one row instead of a new row
         // per redraw, and one tool row instead of one per relabel. So a repeat of a seq we
         // hold replaces it rather than being discarded as already seen.
         //
@@ -7883,7 +7892,7 @@
       if (typeof data.followOutput === 'boolean') followOutput = data.followOutput;
       if (typeof data.mentionCore === 'boolean') mentionCore = data.mentionCore;
       // The goal loop's settings and, while one is running, the draft itself: its stage, the
-      // text OpenRouter has streamed so far, and — once it is `ready` — the message to type.
+      // text OpenRouter has streamed so far, and â€” once it is `ready` â€” the message to type.
       // Nothing is typed here; maybeSendGoalReply below owns that, after the pull has
       // finished and the page has been repainted with what the draft is doing.
       const goalBefore = JSON.stringify([goalConfig?.enabled ?? null, goalConfig?.objective ?? null, bootstrap]);
@@ -7893,7 +7902,7 @@
       bootstrapOwner = nextBootstrap && typeof data.bootstrapMessageId === 'string' && data.bootstrapMessageId
         ? { conversationId: forId, epoch: forEpoch, messageId: data.bootstrapMessageId } : null;
       bootstrap = nextBootstrap;
-      // The app has this conversation as a resume destination: the continuation committed —
+      // The app has this conversation as a resume destination: the continuation committed â€”
       // from this page's ACK, or from the marker another observation found. Either way the
       // marked message is history now and the gate that kept this document from journaling
       // into a shadow session has nothing left to protect. Only a session with a resume origin
@@ -7905,7 +7914,7 @@
       if (job && job.busy) pressedAt = 0;
       // The local phase describes this tab's part of a native compaction, which is over
       // the moment the app's job has moved past waiting for the handoff. Leaving it set
-      // would make the button go on saying "ChatGPT is writing…" over a finished job.
+      // would make the button go on saying "ChatGPT is writingâ€¦" over a finished job.
       if (!job || job.stage !== 'handoff-pending') {
         nativePhase = '';
         if (!job || !job.busy) nativeBusy = false;
@@ -7965,7 +7974,7 @@
     if (phase === 'delivering') {
       return {
         mode: 'busy',
-        label: NATIVE_PHASE_LABELS[phase] || t('content_saving', 'Saving…'),
+        label: NATIVE_PHASE_LABELS[phase] || t('content_saving', 'Savingâ€¦'),
         hint: error || t('content_compact_waiting_store', 'The brief is finished; waiting for the app to store it.'),
         action: 'cancel'
       };
@@ -7982,7 +7991,7 @@
       if (job.stage === 'opening') {
         return {
           mode: 'busy',
-          label: t('content_opening', 'Opening…'),
+          label: t('content_opening', 'Openingâ€¦'),
           hint: t('content_compact_opening_fresh', 'Handoff saved, opening the fresh chat'),
           action: 'cancel'
         };
@@ -7990,7 +7999,7 @@
       if (job.stage === 'waiting-for-browser') {
         return {
           mode: 'waiting',
-          label: t('content_waiting', 'Waiting…'),
+          label: t('content_waiting', 'Waitingâ€¦'),
           hint: job.error || t('content_compact_app_opening_fresh', 'The app is trying to open the fresh chat.'),
           action: 'cancel'
         };
@@ -7998,14 +8007,14 @@
       if (summary?.state === 'stopped' || summary?.state === 'failed') {
         return { mode: 'error', label: t('content_paused', 'Paused'), hint: summary.detail, action: 'cancel' };
       }
-      // The progress of this is local — interrupting, waiting for tools, typing — and only
+      // The progress of this is local â€” interrupting, waiting for tools, typing â€” and only
       // the last stretch is something the app can report. `phase` is what this tab is doing
       // right now; `handoff-pending` is the app saying it has asked and is waiting.
       return {
         mode: 'busy',
         label: summary?.state === 'writing'
-          ? t('content_writing', 'Writing…')
-          : NATIVE_PHASE_LABELS[phase] || t('content_waiting', 'Waiting…'),
+          ? t('content_writing', 'Writingâ€¦')
+          : NATIVE_PHASE_LABELS[phase] || t('content_waiting', 'Waitingâ€¦'),
         hint: summary?.state === 'writing'
           ? t('content_compact_chatgpt_writing', "The provider is writing the handoff")
           : t('content_compact_waiting_response', 'Waiting for the handoff response'),
@@ -8044,7 +8053,7 @@
       };
     }
     if (pressedAt > 0 && now - pressedAt < PRESS_GRACE_MS) {
-      return { mode: 'busy', label: t('content_compact_starting', 'Starting…'), hint: '', action: 'none' };
+      return { mode: 'busy', label: t('content_compact_starting', 'Startingâ€¦'), hint: '', action: 'none' };
     }
     if (error) return { mode: 'error', label: t('content_failed', 'Failed'), hint: error, action: 'start' };
     if (disconnected) {
@@ -8065,13 +8074,13 @@
     }
     if (!conversationId) {
       // Off, not hidden: there is nothing to compact yet, and the sheet behind this button is
-      // still where a goal is written — which is the one thing that can start the chat.
+      // still where a goal is written â€” which is the one thing that can start the chat.
       return {
         mode: 'off',
         label: t('content_compact', 'Compact'),
         hint: t(
           'content_compact_nothing_yet',
-          'Nothing to compact yet — send a message, or set a goal and it writes one.'
+          'Nothing to compact yet â€” send a message, or set a goal and it writes one.'
         ),
         action: 'none'
       };
@@ -8088,10 +8097,10 @@
    * case of wanting to know rather than to change.
    *
    * `context` and `goal` both come from the app on every poll, so this never reports a
-   * setting from memory — a change made in the app's own window shows up here within a tick.
+   * setting from memory â€” a change made in the app's own window shows up here within a tick.
    *
    * `scope` is which of the two composers this sheet is sitting above, and it is the route's
-   * answer rather than the id this tab is holding — see composerChat(). Above a New Chat the
+   * answer rather than the id this tab is holding â€” see composerChat(). Above a New Chat the
    * two switches are gone: they move the app-wide default there, having no chat to belong to,
    * while the goal written in the same sheet starts a chat immediately. Those two scopes read
    * as one control and are not, which is how an unattended run got started as a Goal by
@@ -8109,7 +8118,7 @@
     const blocked = goal && typeof goal.blocked === 'string' ? goal.blocked : '';
     // The two reasons that take every one of these controls away, not only the loop: a
     // worker chat (the prime writes it) and a chat the user blocked in the app (its tools are
-    // refused, so nothing this app types may drive it on). 'continued' is neither — that chat
+    // refused, so nothing this app types may drive it on). 'continued' is neither â€” that chat
     // is finished, and its controls are moot rather than fenced.
     const fenced = blocked === 'worker' || blocked === 'blocked';
     const auto = Boolean(context && context.auto) && !fenced;
@@ -8121,7 +8130,7 @@
     const loopOn = Boolean(goal && (goal.configuredEnabled ?? goal.enabled)) && mode === 'loop';
     // Whether this chat has moved its own switch, which is what tells an Off somebody chose
     // here from an Off inherited from the app-wide setting. Only the second lets a saved goal
-    // speak for the chat — see goalArmedFor() in src/main/goal.ts, which this mirrors.
+    // speak for the chat â€” see goalArmedFor() in src/main/goal.ts, which this mirrors.
     const own = Boolean(goal && goal.own);
     const hasKey = Boolean(goal && goal.hasKey);
     const objective = goal && typeof goal.objective === 'string' ? goal.objective : '';
@@ -8131,13 +8140,13 @@
       ? t('content_tokens_from', 'from $1 tokens', roundK(threshold))
       : '';
     // Is anything driving this chat at all? A saved goal is enough on its own, but only for a
-    // chat that has never moved its own switch — the same rule the app applies.
+    // chat that has never moved its own switch â€” the same rule the app applies.
     const armed = own ? goalOn || loopOn : goalOn || loopOn || Boolean(objective);
     const running = armed && hasKey && !blocked;
     // Which instruction would actually drive this chat, which is not the same question as
     // which switch is on. A chat that runs only because it carries a goal, with the standing
     // switch off, is driven as a Goal and may therefore stop. This mirrors goalDrivingMode()
-    // in src/main/goal.ts exactly, and it is what the task editor below is labelled from — a
+    // in src/main/goal.ts exactly, and it is what the task editor below is labelled from â€” a
     // sheet that named the mode differently from the app would be worse than naming none.
     const driving = loopOn ? 'loop' : 'goal';
     // The slider's position: the one word for everything above. Off is a real position and not
@@ -8151,12 +8160,12 @@
           ? t('content_auto_compaction_on', 'Auto-compaction on$1', from ? `, ${from}` : '')
           : t('content_auto_compaction_off', 'Auto-compaction off'),
         blocked === 'worker'
-          ? t('content_goal_off_prime_writes', 'Goal off — the prime writes this chat')
+          ? t('content_goal_off_prime_writes', 'Goal off â€” the prime writes this chat')
           : blocked === 'blocked'
-            ? t('content_goal_off_blocked', 'Goal off — this chat is blocked in the app')
+            ? t('content_goal_off_blocked', 'Goal off â€” this chat is blocked in the app')
             : fresh
             ? !hasKey
-              ? t('content_goal_no_api_key_unavailable', 'No API key — Goal and Loop unavailable')
+              ? t('content_goal_no_api_key_unavailable', 'No API key â€” Goal and Loop unavailable')
               : objective
                 ? t('content_goal_opening_on_goal', 'Opening this chat on its goal')
                 : t('content_goal_add_to_start', 'Add a goal or a loop to start this chat')
@@ -8164,13 +8173,13 @@
               ? t('content_goal_loop_off', 'Goal and Loop off')
               : position === 'loop'
                 ? hasKey
-                  ? t('content_loop_on_never_stops', 'Loop on — never stops on its own')
-                  : t('content_loop_on_no_api_key', 'Loop on — no API key')
+                  ? t('content_loop_on_never_stops', 'Loop on â€” never stops on its own')
+                  : t('content_loop_on_no_api_key', 'Loop on â€” no API key')
                 : hasKey
                   ? objective
-                    ? t('content_goal_on_chasing', 'Goal on — chasing this chat’s goal')
+                    ? t('content_goal_on_chasing', 'Goal on â€” chasing this chatâ€™s goal')
                     : t('content_goal_on', 'Goal on')
-                  : t('content_goal_on_no_api_key', 'Goal on — no API key')
+                  : t('content_goal_on_no_api_key', 'Goal on â€” no API key')
       ].join('\n'),
       rows: [
         {
@@ -8190,7 +8199,7 @@
         }
       ],
       /**
-       * Off, Goal, Loop — one control, because it was always one setting.
+       * Off, Goal, Loop â€” one control, because it was always one setting.
        *
        * Drawn as two switches it was possible to read the sheet as offering two independent
        * things that happened to cancel each other, and an unattended run got started as a Goal
@@ -8219,7 +8228,7 @@
                 label: t('content_mode_goal', 'Goal'),
                 hint: t(
                   'content_mode_goal_hint',
-                  'Replies as you until this chat’s goal is reached, then stops. Written with $1.',
+                  'Replies as you until this chatâ€™s goal is reached, then stops. Written with $1.',
                   modelLabel(goal && goal.model)
                 )
               },
@@ -8228,7 +8237,7 @@
                 label: t('content_mode_loop', 'Loop'),
                 hint: t(
                   'content_mode_loop_hint',
-                  'Replies as you for ever — only this slider ends it. Written with $1.',
+                  'Replies as you for ever â€” only this slider ends it. Written with $1.',
                   modelLabel(goal && goal.model)
                 )
               }
@@ -8252,7 +8261,7 @@
             disabled: fenced
           },
       /**
-       * The one task, and — above a New Chat only — the mode it is written in.
+       * The one task, and â€” above a New Chat only â€” the mode it is written in.
        *
        * Goal and Loop share it. They are the same instruction read two ways: chase this, and
        * stop when it is reached, or chase this and never stop. So sliding from one to the other
@@ -8269,7 +8278,7 @@
         /**
          * What Save is about to write this task as.
          *
-         * In a chat the slider owns it, not the link that opened the editor — an editor left
+         * In a chat the slider owns it, not the link that opened the editor â€” an editor left
          * open while the handle moves must not save into the mode the sheet has stopped being
          * in. Above a New Chat there is no slider, so there the link that was pressed is the
          * only thing that knows.
@@ -8300,7 +8309,7 @@
                 label: t('content_loop_add_specific', 'add specific loop'),
                 hint: t(
                   'content_loop_add_specific_hint',
-                  'Write what this chat has to reach. It then prompts for ever — nothing but the Loop slider ends it.'
+                  'Write what this chat has to reach. It then prompts for ever â€” nothing but the Loop slider ends it.'
                 )
               }
             ]
@@ -8319,7 +8328,7 @@
                 disabled: position === 'off',
                 hint:
                   position === 'off'
-                    ? t('content_task_pick_mode_first', 'Pick Goal or Loop above first — Off writes nothing.')
+                    ? t('content_task_pick_mode_first', 'Pick Goal or Loop above first â€” Off writes nothing.')
                     : objective
                       ? t(
                         'content_task_change_hint',
@@ -8375,7 +8384,7 @@
     if (flat.length <= max) return flat;
     const cut = flat.slice(0, max);
     const space = cut.lastIndexOf(' ');
-    return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+    return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}â€¦`;
   }
 
   /**
@@ -8385,7 +8394,7 @@
    * and a dark set of its own and one of the two has to be chosen. The choice is the
    * page's: ChatGPT's appearance setting is independent of the operating system's, so a
    * `prefers-color-scheme` rule put the bubble on the opposite surface from the page for
-   * anyone whose two settings disagree — a white pill on a dark conversation.
+   * anyone whose two settings disagree â€” a white pill on a dark conversation.
    *
    * Re-read on the observe tick rather than once at startup, because the setting can be
    * changed while the tab is open, and written only on a change so the common case costs
@@ -8408,7 +8417,7 @@
    * Everything here used the `title` attribute, which the operating system draws: a pale
    * rectangle in the platform's font, on the platform's delay, looking nothing like the page
    * around it. This is the same text on the same trigger, drawn the way the page draws its
-   * own — see `.clf-tip` for the measurements, which are the composer's.
+   * own â€” see `.clf-tip` for the measurements, which are the composer's.
    *
    * One bubble for the document, and the listeners are delegated, because the controls that
    * use it are rebuilt every time ChatGPT replaces the composer and per-control listeners
@@ -8501,7 +8510,7 @@
    *
    * Two different questions depending on the settings, which is why the ceiling is not a
    * constant. With automatic compaction on, the number that matters is the threshold,
-   * because that is where something will actually happen — a bar that filled towards a
+   * because that is where something will actually happen â€” a bar that filled towards a
    * limit while the chat was compacted at half of it would be measuring the wrong thing.
    * With it off, nothing acts, so the bar fills towards the limit the app already warns
    * about and turns amber at the advisory line on the way.
@@ -8528,7 +8537,7 @@
     // One compact line is enough in the composer. The meter itself already conveys the rest.
     const status = t(
       'content_meter_status',
-      '$1/$2 · autocompact $3',
+      '$1/$2 Â· autocompact $3',
       [roundK(tokens), roundK(ceiling), context.auto ? t('content_on', 'on') : t('content_off', 'off')]
     );
     return { filled, level, status, tip: status };
@@ -8544,31 +8553,31 @@
   /**
    * Starts automatic compaction in the middle of the work, which is the only place it helps.
    *
-   * The page does not compare `tokens >= threshold` itself — the app owns the number and
+   * The page does not compare `tokens >= threshold` itself â€” the app owns the number and
    * says, per poll, whether this chat is over it. What the
    * page adds is the half only it can see: ChatGPT is answering *right now*.
    *
    * That condition is the exact inverse of what this used to demand, and the inversion is
    * the point. Waiting for the turn to end meant every automatic compaction landed on a
-   * finished answer — the one moment where a handoff carries nothing across, because the
+   * finished answer â€” the one moment where a handoff carries nothing across, because the
    * job is already done. Interrupting is what the user is asking for at the threshold: stop here,
    * write the brief, carry on in a fresh chat. Mid-tool-call counts as mid-turn, and is
    * handled by the same settle barrier a manual press goes through.
    */
   /** Local phases of a ChatGPT-native compaction, as the button says them. */
   const NATIVE_PHASE_LABELS = {
-    requested: t('content_compact_starting', 'Starting…'),
-    interrupting: t('content_compact_stopping', 'Stopping…'),
-    settling: t('content_compact_settling', 'Settling…'),
-    prompting: t('content_compact_asking', 'Asking…'),
-    waiting: t('content_waiting', 'Waiting…'),
-    delivering: t('content_saving', 'Saving…')
+    requested: t('content_compact_starting', 'Startingâ€¦'),
+    interrupting: t('content_compact_stopping', 'Stoppingâ€¦'),
+    settling: t('content_compact_settling', 'Settlingâ€¦'),
+    prompting: t('content_compact_asking', 'Askingâ€¦'),
+    waiting: t('content_waiting', 'Waitingâ€¦'),
+    delivering: t('content_saving', 'Savingâ€¦')
   };
 
   /**
    * A gear, because the control is now a settings control.
    *
-   * It used to be the compaction glyph — two arrows folding towards a line — from when
+   * It used to be the compaction glyph â€” two arrows folding towards a line â€” from when
    * pressing it did exactly one thing. It opens a sheet of switches now, and a button whose
    * icon promises one action and delivers a menu is worse than either.
    *
@@ -8613,12 +8622,12 @@
   /**
    * Which native run is the live one. Bumped by a press and by a cancel.
    *
-   * A press spends tens of seconds before it types anything — stopping the turn, then waiting
-   * for local tools — and the Cancel offered throughout that window used to change nothing
+   * A press spends tens of seconds before it types anything â€” stopping the turn, then waiting
+   * for local tools â€” and the Cancel offered throughout that window used to change nothing
    * but the durable ticket. The run itself carried on, reached the app with the ticket
    * already aborted, opened a *fresh* continuation for it and typed the prompt in anyway. So
    * the button did nothing that anybody could see, twice over: the pill went straight back to
-   * "Asking…", and the second press was the one that appeared to work.
+   * "Askingâ€¦", and the second press was the one that appeared to work.
    *
    * Every await in the run rechecks this alongside the conversation and the epoch, which is
    * the same rule those two already enforce: a run whose world moved on under it must stop
@@ -8641,7 +8650,7 @@
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'clf-cancel';
-    cancel.textContent = '×';
+    cancel.textContent = 'Ã—';
     cancel.setAttribute('aria-label', t('content_compact_cancel_aria', 'Cancel Compact & resume'));
     pill.append(spinner, text, cancel);
 
@@ -8653,7 +8662,7 @@
     /**
      * The context meter: a bar around the button that fills as the conversation does.
      *
-     * On the control rather than beside it, because it is the same subject — how full the
+     * On the control rather than beside it, because it is the same subject â€” how full the
      * chat is, and the thing that does something about it. Composer width is scarce, and a
      * separate widget would have to earn its own space and then explain its relationship
      * to the button next to it.
@@ -8689,7 +8698,7 @@
       'data-clf-tip',
       t(
         'content_chat_blocked_tip',
-        'This chat is blocked in the OneCode app: its tool calls are refused and Goal, Loop and auto-compaction are off. To release it, open the app’s Chat tab, hover this chat in the sessions list and press its block symbol.'
+        'This chat is blocked in the OneCode app: its tool calls are refused and Goal, Loop and auto-compaction are off. To release it, open the appâ€™s Chat tab, hover this chat in the sessions list and press its block symbol.'
       )
     );
     blocked.hidden = true;
@@ -8699,10 +8708,10 @@
   }
 
   function currentState() {
-    // Whose composer this is, on the same terms as the panel above it — see injectStage.
+    // Whose composer this is, on the same terms as the panel above it â€” see injectStage.
     // A run belongs to the chat it is running in, and this tab deliberately keeps holding
     // that chat's id across an id-less route because React unmounts one for a frame at a
-    // time. New Chat is an id-less route too, so the pill went on spinning "Asking…" above
+    // time. New Chat is an id-less route too, so the pill went on spinning "Askingâ€¦" above
     // an empty composer, with a Cancel that would have cancelled a handoff in a conversation
     // no longer on screen. The panel already refused to paint there; the pill did not.
     const mine = composerChat().state === 'chat';
@@ -8722,15 +8731,15 @@
   /**
    * Puts the control in the composer and keeps it there.
    *
-   * ChatGPT replaces the composer's subtree on its own schedule — switching chats, going
-   * from empty to non-empty, finishing a turn — and the previous attempt at this lived in
+   * ChatGPT replaces the composer's subtree on its own schedule â€” switching chats, going
+   * from empty to non-empty, finishing a turn â€” and the previous attempt at this lived in
    * the + menu precisely to avoid that fight. It also meant nobody ever found it. So the
    * node is re-attached whenever it has been detached, from both a MutationObserver and
    * the one-second tick, and it is never rebuilt while it is still connected so pressing
    * it cannot be interrupted by a repaint.
    */
   function injectControl() {
-    // A brand-new ChatGPT tab used to have nothing to offer — nothing to compact, no feed to
+    // A brand-new ChatGPT tab used to have nothing to offer â€” nothing to compact, no feed to
     // read, and a disabled "send a message first" button is not worth half a composer. It has
     // something now: a goal written here is what writes the chat's first message, so the sheet
     // has to be reachable before there is a chat. Compaction stays unavailable and says why.
@@ -8772,8 +8781,8 @@
    * The sheet is a function of that input, so a repaint whose input is unchanged has nothing
    * to draw and must not touch the DOM. It used to rebuild anyway, once a second on the
    * activity tick, and everything a rebuild destroys was destroyed with it: the node the
-   * pointer was over — so the hover bubble blinked out and came back on its 350 ms delay,
-   * for ever — and the selection, so text could not be selected in the sheet at all.
+   * pointer was over â€” so the hover bubble blinked out and came back on its 350 ms delay,
+   * for ever â€” and the selection, so text could not be selected in the sheet at all.
    */
   let menuPainted = '';
 
@@ -8811,8 +8820,8 @@
   /**
    * Writes one switch to the app and shows the result, not the intent.
    *
-   * The row is not painted from the click. The app owns these settings — its own window can
-   * change them, and it is the thing that has to accept the change — so the click asks, and
+   * The row is not painted from the click. The app owns these settings â€” its own window can
+   * change them, and it is the thing that has to accept the change â€” so the click asks, and
    * the answer (or the next poll) is what moves the switch. A toggle that flips optimistically
    * and then flips back is how a user learns not to trust the control.
    */
@@ -8851,7 +8860,7 @@
    * Goal and Loop are one write each and the app turns the other off. Off is the write that
    * used to have no button: whichever of the two is on goes off, and a chat that is running
    * only on its saved task names Goal, because that is the mode a task alone runs in. Either
-   * way the write is chat-scoped, so the app records this chat's own answer — which is what
+   * way the write is chat-scoped, so the app records this chat's own answer â€” which is what
    * makes Off mean off here rather than deferring to the task still saved beside it.
    */
   async function setMode(next, now) {
@@ -8864,7 +8873,7 @@
   function menuView() {
     // The route, not the id this tab is still holding. Clicking New Chat leaves that id in
     // place on purpose (see composerChat), so a sheet drawn from it would keep offering the
-    // previous chat's switches — and its goal — above a composer that belongs to no chat at
+    // previous chat's switches â€” and its goal â€” above a composer that belongs to no chat at
     // all. `moving` counts as a chat: the switches are drawn, and saving into it is refused
     // by name rather than by silently writing somewhere.
     const where = composerChat();
@@ -8945,7 +8954,7 @@
       if (where.state === 'moving') {
         // The route names a chat this tab has not observed yet. Neither id is safe to write
         // into, and the next observation is a tick away.
-        objectiveError = t('content_chat_still_opening', 'this chat is still opening — try again');
+        objectiveError = t('content_chat_still_opening', 'this chat is still opening â€” try again');
         return;
       }
       if (where.state === 'new') {
@@ -8970,7 +8979,7 @@
       // The switch the app just pinned, taken from its answer rather than assumed from the
       // button: what the sheet draws is what was actually written down.
       // Pinning the mode is this chat answering for itself, so the sheet stops reading the saved
-      // task as the thing that speaks for it — which is what makes a clear here land on Off.
+      // task as the thing that speaks for it â€” which is what makes a clear here land on Off.
       const switched =
         reply.data && typeof reply.data.mode === 'string' && typeof reply.data.enabled === 'boolean'
           ? { enabled: reply.data.enabled, mode: reply.data.mode, own: true }
@@ -8980,7 +8989,7 @@
       menuDraft = '';
       if (!stored) return;
       // A chat that is idle right now would otherwise sit on its new goal until ChatGPT
-      // happened to finish a turn of its own — which, in a chat nobody is typing into, is
+      // happened to finish a turn of its own â€” which, in a chat nobody is typing into, is
       // never. The turn key is the save, so a second save writes a second message and a
       // retried one does not.
       if (!generating && !CLF_DOM.generating() && !goalBusy && !nativeBusy && !(job && job.busy)) {
@@ -9010,15 +9019,15 @@
    *
    * The one goal draft that is not streamed onto the activity feed, because /activity is
    * addressed by conversation and this chat has no address. It is a plain awaited request,
-   * and the panel above the composer is driven from here rather than from a polled draft —
+   * and the panel above the composer is driven from here rather than from a polled draft â€”
    * the run is still visible, it is simply this tab reporting it rather than the app.
    */
   /**
    * Whether asking for this opening again could answer differently.
    *
    * The app says so itself for the refusals it owns, and a deadline says it by being one: the
-   * request outlived the wait rather than being turned down. Everything else — no key, no
-   * objective, a model that refused the goal — is a decision, and repeating it only spends
+   * request outlived the wait rather than being turned down. Everything else â€” no key, no
+   * objective, a model that refused the goal â€” is a decision, and repeating it only spends
    * somebody's credit on the same answer.
    */
   function openRetryable(reply) {
@@ -9044,7 +9053,7 @@
     pendingObjectiveSend = null;
     // Enough of a config for the panel to draw: the model comes back with the reply, so
     // until then it says "the model", which is what modelLabel('') is for. The mode is this
-    // tab's own claim until the app answers with what it stored — drawn from the button that
+    // tab's own claim until the app answers with what it stored â€” drawn from the button that
     // was pressed rather than from the standing switch, which is what the whole change is for.
     goalConfig = {
       ...(goalConfig || { hasKey: true, model: '' }),
@@ -9059,7 +9068,7 @@
     // Asked again on a retryable refusal, on the same quarter-minute clock as the in-chat
     // loop and with the same absence of an attempt limit. A goal opening is a single request
     // holding a whole model completion, and there is no later turn for the ordinary Goal loop
-    // to try again from: a rate limit that outlives a few seconds — the usual kind — used to
+    // to try again from: a rate limit that outlives a few seconds â€” the usual kind â€” used to
     // land the whole run on the one attempt the user made and paint "stopped" over it. The
     // only things that end this loop are the ones that end the in-chat one: the app refusing
     // for a settled reason, the composer no longer being this empty New Chat, or a different
@@ -9142,7 +9151,7 @@
     const view = menuView();
     // Everything the sheet is drawn from: the view, and the three pieces of local state the
     // view does not carry because they are this tab's rather than the app's. The draft is
-    // deliberately absent — the textarea already holds it, and Save is kept in step by the
+    // deliberately absent â€” the textarea already holds it, and Save is kept in step by the
     // input listener, so typing a goal repaints nothing.
     const painted = JSON.stringify([view, menuBusy, objectiveBusy, objectiveError,
       goalConfig?.proLoopDelivery, goalConfig?.afterTurn]);
@@ -9161,7 +9170,7 @@
         : null;
     // Where the box was scrolled to, kept whether or not it has the focus. A goal long enough
     // to scroll is exactly the one somebody reads back before saving, and a rebuilt textarea
-    // starts at the top — so without this a rebuild threw the reader back to the first line,
+    // starts at the top â€” so without this a rebuild threw the reader back to the first line,
     // whichever way they were scrolling.
     const scrolled = typing ? typing.scrollTop : 0;
     root.textContent = '';
@@ -9322,7 +9331,7 @@
   /**
    * The specific goal, and the mode it is written in.
    *
-   * Closed it is a link — two only above a New Chat, where the mode is still to be chosen and
+   * Closed it is a link â€” two only above a New Chat, where the mode is still to be chosen and
    * there is no slider to choose it on. Open it is a box, a Save that names the mode it is
    * about to save in, a Cancel, and a Clear once there is something to clear.
    */
@@ -9369,16 +9378,16 @@
         link.disabled = objectiveBusy || menuBusy || action.disabled === true;
         // The reason hangs on the row, not on the button, whenever the button is the thing
         // that is off. A disabled control receives no pointer events at all, so a tooltip
-        // put on it is a tooltip nobody can read — and this one is the whole explanation of
+        // put on it is a tooltip nobody can read â€” and this one is the whole explanation of
         // why the task cannot be opened here.
         if (action.disabled === true) links.setAttribute('data-clf-tip', action.hint);
         else link.setAttribute('data-clf-tip', action.hint);
         const plus = document.createElement('span');
         plus.className = 'clf-menu-goal-plus';
-        plus.textContent = objective.summary ? '✎' : '+';
+        plus.textContent = objective.summary ? 'âœŽ' : '+';
         plus.setAttribute('aria-hidden', 'true');
         const word = document.createElement('span');
-        word.textContent = objectiveBusy ? t('content_working', 'working…') : action.label;
+        word.textContent = objectiveBusy ? t('content_working', 'workingâ€¦') : action.label;
         link.append(word, plus);
         link.addEventListener('click', (event) => {
           event.preventDefault();
@@ -9421,7 +9430,7 @@
     // Named, not just "Save". This button is the moment the mode is decided, and the two
     // outcomes are a run that may stop and a run that may not.
     save.textContent = objectiveBusy
-      ? t('content_saving', 'Saving…')
+      ? t('content_saving', 'Savingâ€¦')
       : objective.mode === 'loop'
         ? t('content_loop_save', 'Save as loop')
         : t('content_goal_save', 'Save as goal');
@@ -9441,7 +9450,7 @@
       event.stopPropagation();
       closeObjectiveEditor();
     });
-    // Typing does not repaint the sheet — it would take the caret with it — so the one thing
+    // Typing does not repaint the sheet â€” it would take the caret with it â€” so the one thing
     // in it that depends on what has been typed is kept in step by hand.
     input.addEventListener('input', () => {
       menuDraft = input.value;
@@ -9450,7 +9459,7 @@
     // On the row rather than on Save, for the same reason as the link above: the button this
     // explains is disabled, and a disabled button is deaf to the pointer.
     if (objective.savable === false) {
-      buttons.setAttribute('data-clf-tip', t('content_task_pick_mode_first', 'Pick Goal or Loop above first — Off writes nothing.'));
+      buttons.setAttribute('data-clf-tip', t('content_task_pick_mode_first', 'Pick Goal or Loop above first â€” Off writes nothing.'));
     }
     buttons.append(save, cancel);
     if (objective.text) {
@@ -9459,7 +9468,7 @@
       clear.className = 'clf-menu-goal-clear';
       clear.textContent = t('content_clear', 'Clear');
       // Deleting the task is an edit like any other, so Off stops it too. Reachable only from
-      // an editor that was already open when the handle moved — and letting it through there
+      // an editor that was already open when the handle moved â€” and letting it through there
       // would delete the sentence from under a slider that says nothing is written here.
       clear.disabled = objectiveBusy || objective.savable === false;
       clear.addEventListener('click', (event) => {
@@ -9517,7 +9526,7 @@
     };
     const scroll = (event) => {
       // Scrolling a long goal back into view inside the sheet is not "I am doing something
-      // else now" — it is using the sheet. Only the page moving underneath closes it.
+      // else now" â€” it is using the sheet. Only the page moving underneath closes it.
       const at = event.target;
       if (at && at.nodeType === 1 && at.closest && at.closest('[data-clf-menu]')) return;
       closeMenu();
@@ -9557,24 +9566,24 @@
     }
     // The hover says what the settings are, because that is what the button is now. A run in
     // progress, or a failure, is the more urgent thing and takes the line back for as long as
-    // it lasts — the pill beside it is already saying so in one word.
+    // it lasts â€” the pill beside it is already saying so in one word.
     const settings = menuView();
     const tip =
       state.mode === 'idle'
         ? settings.tip
         : state.hint
-          ? `${state.label} — ${state.hint}`
+          ? `${state.label} â€” ${state.hint}`
           : state.label;
     setAttr(control.button, 'data-clf-tip', meter ? `${tip}\n${meter.tip}` : tip);
     if (menuOpen) renderMenu();
-    // The pill carries transient run state — progress, the opened chat, a failure. `idle` and
+    // The pill carries transient run state â€” progress, the opened chat, a failure. `idle` and
     // `off` are neither, and their label is the button's own name: a pill reading "Compact"
     // beside the Compact button said nothing and spent scarce composer width doing it. Why the
     // control is off is real information, but it is a sentence, so it lives on the hover tip.
     setHidden(control.pill, state.mode === 'idle' || state.mode === 'off');
     setHidden(control.cancel, state.action !== 'cancel');
     // One word, always. The pill sits inside ChatGPT's composer and has a button's width
-    // to work with; `label · hint` spent all of it on a sentence that then got ellipsed
+    // to work with; `label Â· hint` spent all of it on a sentence that then got ellipsed
     // halfway through, so it read as neither. The hint is on the hover tip, in full.
     //
     // The one exception is a failure, where the identifying detail *is* the message and a
@@ -9587,7 +9596,7 @@
    * Folds away the instruction this app typed to start the chat.
    *
    * A resumed chat opens with the whole handoff brief and a worker chat with "You are
-   * worker agent worker-n …", and both of them arrive as an ordinary user message — a
+   * worker agent worker-n â€¦", and both of them arrive as an ordinary user message â€” a
    * screenful of machinery at the top of the transcript, sitting where the thing the user
    * actually asked for belongs. It has to be sent: ChatGPT needs it. It does not have to
    * be the first thing anybody reads.
@@ -9633,12 +9642,12 @@
       bootstrap === 'worker'
         ? t(
           'content_bootstrap_worker',
-          'This is $1 — the instruction this app gave the worker, not something you typed',
+          'This is $1 â€” the instruction this app gave the worker, not something you typed',
           bootstrapAgent || agent || t('content_worker_generic', 'a worker')
         )
         : t(
           'content_bootstrap_handoff',
-          'The handoff brief this app carried over — not something you typed'
+          'The handoff brief this app carried over â€” not something you typed'
         );
     head.append(label);
     // The first lines of the folded text, clamped. Not only a courtesy: ChatGPT sizes the user
@@ -9747,7 +9756,7 @@
                     : t('content_compact_waiting_response', 'Waiting for the handoff response');
       // The prompt's durable position, not this document's memory of typing it. A reload
       // during the compaction turn starts a page whose `phase` is empty while the marked
-      // prompt has been with ChatGPT for minutes — and the bar then said "Preparing" about
+      // prompt has been with ChatGPT for minutes â€” and the bar then said "Preparing" about
       // work that was two steps further on, for as long as the answer took. The app's
       // checkpoint outlives the page, so the page reads its progress off that instead.
       const at =
@@ -9781,10 +9790,10 @@
       const summary = workers.failed
         ? t(
           'content_workers_summary_failed',
-          '$1 finished · $2 running · $3 failed',
+          '$1 finished Â· $2 running Â· $3 failed',
           [workers.finished, workers.active, workers.failed]
         )
-        : t('content_workers_summary', '$1 finished · $2 running', [workers.finished, workers.active]);
+        : t('content_workers_summary', '$1 finished Â· $2 running', [workers.finished, workers.active]);
       // Running siblings are not proof that the prime is blocked on them.
       return frame(
         workers.active === 1
@@ -9821,7 +9830,7 @@
    *
    * Split out because it is the half with states in it, and because it is the half worth
    * testing on its own. The rule throughout: say what is happening in the words of the thing
-   * that is happening, and show the message itself as it arrives — a loop that types into
+   * that is happening, and show the message itself as it arrives â€” a loop that types into
    * somebody's chat unattended should never have a step nobody can see.
    *
    * `phase` is what this tab is doing and `draft.stage` is what the app is doing, and they
@@ -9831,9 +9840,9 @@
   /**
    * The stages of one goal run, in the order they happen, as the bar names them.
    *
-   * Four, because four different things can be the one taking the time — ChatGPT finishing
+   * Four, because four different things can be the one taking the time â€” ChatGPT finishing
    * its answer, the request opening, the model writing, the message going into the composer
-   * — and a caption on its own only ever answered "what now". It never answered "how far",
+   * â€” and a caption on its own only ever answered "what now". It never answered "how far",
    * so a run that had stopped and a run that was merely slow looked identical for minutes.
    */
   const GOAL_STEPS = [
@@ -9847,7 +9856,7 @@
    * Which of those a phase is.
    *
    * A run that stops is drawn where it stopped, which means the phase has to survive the
-   * failure — so the failing paths keep their own phase and record the reason beside it
+   * failure â€” so the failing paths keep their own phase and record the reason beside it
    * rather than collapsing everything into one `failed`. `failed` itself is the older shape
    * and still means the request, so a stale state does not draw a bar with nothing lit.
    */
@@ -9914,7 +9923,7 @@
     if (goal.phase === 'done') {
       // The loop's own success condition, and the one state worth spelling out: nothing was
       // typed, and that is the answer rather than a failure to produce one. The bar stops at
-      // the reply for the same reason — there was never anything to send.
+      // the reply for the same reason â€” there was never anything to send.
       return {
         stage: t('content_goal_reached', 'Goal reached'),
         detail: t('content_goal_nothing_sent', 'nothing was sent'),
@@ -9934,13 +9943,13 @@
         )
         : '';
       const stage = wait?.reason === 'native-busy'
-        ? t('content_goal_wait_resumed', "The provider resumed work · waiting before retry")
+        ? t('content_goal_wait_resumed', "The provider resumed work Â· waiting before retry")
         : wait?.reason === 'silence'
           ? t('content_goal_wait_recovery_reload', 'Waiting before recovery reload')
           : wait?.reason === 'quiet'
             ? t('content_goal_wait_tool_inactivity', 'Waiting for tool inactivity')
             : wait?.reason === 'workers'
-              ? t('content_goal_wait_workers', 'Waiting for this chat’s sub-agents')
+              ? t('content_goal_wait_workers', 'Waiting for this chatâ€™s sub-agents')
               : wait?.reason === 'tools'
                 ? t('content_goal_wait_running_tools', 'Waiting for running tools')
                 : wait?.reason === 'listening'
@@ -10062,7 +10071,7 @@
     const close = document.createElement('button');
     close.className = 'clf-stage-close';
     close.type = 'button';
-    close.textContent = '×';
+    close.textContent = 'Ã—';
     close.title = t('content_dismiss', 'Dismiss');
     close.setAttribute('aria-label', t('content_goal_status_dismiss', 'Dismiss Goal status'));
     close.hidden = true;
@@ -10094,8 +10103,8 @@
    * panel whose text has not changed.
    *
    * `now` is the segment being worked on and the only one that moves; `done` is behind it,
-   * `next` ahead of it, and `stopped` is where a run ended. Nothing here is load-bearing —
-   * the caption above still says the whole truth in a sentence — so reduced motion simply
+   * `next` ahead of it, and `stopped` is where a run ended. Nothing here is load-bearing â€”
+   * the caption above still says the whole truth in a sentence â€” so reduced motion simply
    * fills the active segment instead.
    */
   function paintStageSteps(host, view) {
@@ -10141,8 +10150,8 @@
    * The chat this composer is really sitting in.
    *
    * The route is the authority here, not the id this tab is still holding. Clicking New Chat
-   * leaves that id in place on purpose — an id-less route is also ordinary React churn, and
-   * dropping the conversation on it was its own bug — but a goal written into the composer
+   * leaves that id in place on purpose â€” an id-less route is also ordinary React churn, and
+   * dropping the conversation on it was its own bug â€” but a goal written into the composer
    * that follows belongs to the chat about to be created, not to the one before it. The third
    * state is the honest one: the route names a chat this tab has not observed yet, and
    * neither id is safe to write a message into.
@@ -10264,9 +10273,9 @@
     // first; the bridge remains the final authority and still rejects every worker /compact call.
     if (workerCompactionBlocked()) return;
     // One press, one run. The native path spends tens of seconds interrupting and typing,
-    // and a second press inside that window would submit the instruction twice — which is
+    // and a second press inside that window would submit the instruction twice â€” which is
     // the one thing the app cannot fix afterwards, because the second prompt is a second
-    // request the model will try to answer — and then two turns each claim to be the brief.
+    // request the model will try to answer â€” and then two turns each claim to be the brief.
     // Bring the page lifecycle up to the native turn before retaining its Stop authority.
     observe();
     let stoppedTurnId = turnId;
@@ -10406,7 +10415,7 @@
     // What is being summarised is this conversation plus the local recording of the work
     // done in it, and the app takes its copy of that the moment it accepts this request.
     // Asking first and stopping afterwards would cut the brief from a conversation whose
-    // last turn was still being written and whose tool calls were still running — a
+    // last turn was still being written and whose tool calls were still running â€” a
     // summary of a machine state that had already moved on.
     // Automatic runs stop the turn exactly like a press does. They are *started* by a turn
     // being in flight, so refusing to interrupt one would refuse every automatic run.
@@ -10444,7 +10453,7 @@
     }
     const data = reply.data || {};
     if (data.job) job = data.job;
-    // No prompt means the app has already handed one out for this transaction — this tab
+    // No prompt means the app has already handed one out for this transaction â€” this tab
     // pressed twice, or reloaded, or its first request's answer was lost. There is nothing
     // to submit: submitting a second instruction would start a second turn, and then two
     // answers would each have a claim on being the brief. Whichever page armed it is
@@ -10487,7 +10496,7 @@
    *
    * `not-attempted` and `attempted-unresolved` are both reversible for the same reason: both are
    * written before the composer is submitted, so neither can have left a prompt with ChatGPT.
-   * `dispatched-unresolved` is the one that cannot be replayed — it is taken immediately before
+   * `dispatched-unresolved` is the one that cannot be replayed â€” it is taken immediately before
    * the click, and a document that died there may or may not have sent. That state ends at
    * ChatGPT's own marker or at an explicit cancel, never at a second Send.
    */
@@ -10512,7 +10521,7 @@
     // An automatic ticket is the app's decision about a chat nobody is necessarily looking at,
     // and a hidden tab is a throttled one: on 2026-09-03 the source page froze solid while the
     // brief was being written in the background. Raising it first is presentation, not
-    // authority — a refused focus changes nothing about the ticket.
+    // authority â€” a refused focus changes nothing about the ticket.
     if (automatic) void ask({ type: 'focus_tab', conversationId: forId }).catch(() => undefined);
     await startCompact(automatic);
   }
@@ -10622,12 +10631,12 @@
   /**
    * Brings the conversation to a standstill so its recording can be copied.
    *
-   * Returns an empty string when it is standing still, or the reason it would not — which
+   * Returns an empty string when it is standing still, or the reason it would not â€” which
    * the caller reports and treats as a refusal to compact at all, because a brief cut from
    * a moving conversation is worse than no brief.
    *
    * Two halves, and the second is the one that is easy to forget: stopping ChatGPT stops
-   * ChatGPT. A local call the app is already running — an edit half-written to disk — does
+   * ChatGPT. A local call the app is already running â€” an edit half-written to disk â€” does
    * not hear about it, and the handoff would describe a machine that no longer exists by
    * the time the fresh chat reads it.
    */
@@ -10740,7 +10749,7 @@
         "The provider has not confirmed receiving the latest tool results. Nothing was compacted."
       );
     }
-    // INTERRUPTING — stop the turn rather than wait it out. That is the whole request, by
+    // INTERRUPTING â€” stop the turn rather than wait it out. That is the whole request, by
     // hand or automatically: this happens because the turn is long, not because it is
     // nearly done.
     if (CLF_DOM.generating()) {
@@ -10760,7 +10769,7 @@
       );
     }
 
-    // SETTLING — bounded and fail-closed. A call that is still running at the deadline is
+    // SETTLING â€” bounded and fail-closed. A call that is still running at the deadline is
     // exactly the state this barrier exists to keep out of a handoff: proceeding would copy
     // a description of a machine while an edit/command is still changing that machine.
     nativePhase = 'settling';
@@ -10768,7 +10777,7 @@
     // An app that will not say how many calls are running is a different situation from a
     // busy one, and waiting the full budget for it buys nothing: the budget ends by going
     // ahead regardless, so the only thing the silence costs is twenty seconds of a control
-    // that says "Finishing local tools…" about an app that is not listening. A couple of
+    // that says "Finishing local toolsâ€¦" about an app that is not listening. A couple of
     // retries covers a dropped answer; past that, refuse because "could not verify zero" is
     // not the same fact as zero.
     // Zero here is a reading, not a proof: a turn that Stop did not actually end keeps
@@ -10937,7 +10946,7 @@
         ));
       }
       // Claiming the prompt. Nothing has been submitted under this state, and the app knows
-      // that because this write happens before the composer is submitted at all — so a
+      // that because this write happens before the composer is submitted at all â€” so a
       // document that dies between here and the next line leaves the prompt claimable again.
       const permit = await compactionCheckpoint({ type: 'compact', conversationId: forId, token, sourceAttempt: true }, () => current() && sameSource());
       if (!current()) return;
@@ -10948,7 +10957,7 @@
         pressedAt = 0;
         localError = replyError(permit) || t(
           'content_compact_attempt_owned',
-          "The durable handoff attempt is already owned; reconciling the provider’s marked message."
+          "The durable handoff attempt is already owned; reconciling the providerâ€™s marked message."
         );
         renderControl();
         return;
@@ -11046,7 +11055,7 @@
         renderControl();
       }
     } finally {
-      // Cancelled while this was composing. Nothing was armed, so nothing was sent — but the
+      // Cancelled while this was composing. Nothing was armed, so nothing was sent â€” but the
       // instruction may already be sitting in the composer, and leaving a wall of handoff
       // machinery in somebody's message box is not what pressing Cancel asked for.
       if (nativeRun !== forRun && !attemptCrossed) CLF_DOM.clearPromptExact(prompt);
@@ -11066,7 +11075,7 @@
    * the person's draft again, which is preserved (#134).
    */
   // ChatGPT's editor keeps paragraphs as elements, so in its text the marker runs straight into the
-  // instruction ("]]OneCode…"); CONTINUATION_MARKER, which wants a space, missed it live.
+  // instruction ("]]OneCodeâ€¦"); CONTINUATION_MARKER, which wants a space, missed it live.
   const HANDOFF_MARKED = /^\s*\[\[CLF-HANDOFF:[A-Za-z0-9_-]{16,64}\]\]/;
   /** A composer holding a handoff request this app typed (any attempt's), and no attachment. */
   function handoffMarked(box) {
@@ -11083,7 +11092,7 @@
   const CONTINUATION_MARKER_ESCAPED = /^\s*(?:\\?\[){2}CLF\\?-(HANDOFF|RESUME)\\?:((?:[A-Za-z0-9]|\\?[_-]){16,64})(?:\\?\]){2}\\?(?:\s|$)/;
   const continuationReconciliations = new Map();
   /**
-   * Proof key → how the app answered the marker: `committed` is ownership proof for the
+   * Proof key â†’ how the app answered the marker: `committed` is ownership proof for the
    * continuation's answer turn; `settled` means the app refused or no longer knows the token.
    * Both stop the marker being asked about again; only `committed` is ever authority.
    */
@@ -11094,7 +11103,7 @@
    * The turn that answered a marked prompt, or null while there is not one yet.
    *
    * ChatGPT's own turn model does not put a prompt and its reply in the same turn. The marked
-   * user message lands in one turn — beside nothing but a `model_editable_context` record —
+   * user message lands in one turn â€” beside nothing but a `model_editable_context` record â€”
    * and the assistant's prose opens the next one. So a turn holding a user message has
    * `endMessageId === null` by construction, and reading the finished answer off the marked
    * message's own turn finds one only in the shape the page never produces.
@@ -11104,7 +11113,7 @@
    * brief on screen that no pass could ever capture, so no chat was ever opened.
    *
    * The prompt's own turn is still checked first, because a build (or a fixture) that does
-   * group them must keep working. Otherwise the answer is the next turn along — and a later
+   * group them must keep working. Otherwise the answer is the next turn along â€” and a later
    * *user* message means the reply this prompt opened is not on screen, which fails closed
    * rather than adopting somebody else's answer as the brief.
    */
@@ -11184,7 +11193,7 @@
         // The app has spoken and there is no transaction to wait for: the continuation was
         // committed and forgotten long ago (a resumed chat merely reopened), or it was rejected.
         // Either way this marked message is ordinary history now. Holding the journal shut on a
-        // refusal is what left a whole document — and every chat it moved to — unrecorded.
+        // refusal is what left a whole document â€” and every chat it moved to â€” unrecorded.
         releaseContinuationJournal();
         return 'settled';
       }
@@ -11216,7 +11225,7 @@
       renderControl();
       return 'committed';
     }
-    // The answer turn, not the prompt's — see answerTurnFor. Its calls are the ones that have
+    // The answer turn, not the prompt's â€” see answerTurnFor. Its calls are the ones that have
     // to be finished, too: a brief cut while the compaction turn is still running a tool
     // describes a machine that is still changing.
     const answer = marked.answer;
@@ -11307,7 +11316,7 @@
    * Prose is not the only thing a turn produces, and during the phase that caused all of this
    * it is the one thing that does *not* move: the model had written 28 characters and spent
    * the next seven minutes making tool calls. Watching the text alone would have found it
-   * perfectly stable and handed over those 28 characters, so the tool rail is read too — how
+   * perfectly stable and handed over those 28 characters, so the tool rail is read too â€” how
    * many blocks the turn has, and how much each of them currently renders. A call starting, a
    * result streaming in, a block finishing: each of them changes this string.
    *
@@ -11354,7 +11363,7 @@
    * Long enough that a provider outage costs one small request every quarter minute rather
    * than a storm, short enough that a passing error is not felt. There is deliberately no
    * attempt limit: the loop is finished when the model answers, and until then the only
-   * things that end it are the ones that end it anyway — Goal switched off, the user typing,
+   * things that end it are the ones that end it anyway â€” Goal switched off, the user typing,
    * a new generation, this chat left behind.
    */
   const GOAL_RETRY_MS = 15_000;
@@ -11365,7 +11374,7 @@
   /** The turn endings worth writing a next message about. See noteGoalTurn for the rest. */
   // Goal answers a finished, non-partial reply and nothing else: `completed` carries Fiber's
   // `end_turn` bit, `stopped` is the user's own decision, and interrupted/failed/stalled/unknown
-  // are turns with no final answer to continue from — those belong to recovery, not to Goal.
+  // are turns with no final answer to continue from â€” those belong to recovery, not to Goal.
   const GOAL_CONTINUABLE = new Set(['completed']);
 
   /**
@@ -11394,13 +11403,13 @@
       !desktopDecisionChat() &&
         conversationId &&
         goalConfig &&
-        // Either the standing switch, or this chat's own goal — unless this chat has moved its
+        // Either the standing switch, or this chat's own goal â€” unless this chat has moved its
         // own switch, in which case that switch is the whole answer and Off means off. The app
         // applies the same rule to the request itself (goalArmedFor), and reports no goal at
         // all for a chat the loop may not drive.
         (goalConfig.enabled === true || (goalConfig.own !== true && currentObjective() !== '')) &&
         goalConfig.hasKey === true &&
-        // A worker chat is already being driven — by the prime agent, through the agents
+        // A worker chat is already being driven â€” by the prime agent, through the agents
         // tool. A second author typing into it is two conversations in one composer.
         bootstrap !== 'worker' &&
         // A chat the user blocked in the app has its tools refused; the app already reports
@@ -11422,8 +11431,8 @@
     // A renderer lifecycle edge must not create a second, captured-node owner.
     if (desktopDecision && desktopDecision.onTarget()) return;
     if (!endedTurnId || !goalUsable() || goalConfig?.queuePending) return;
-    // Only a finished, non-partial answer. See GOAL_CONTINUABLE for why every other outcome —
-    // including `interrupted` — belongs to recovery rather than to this loop.
+    // Only a finished, non-partial answer. See GOAL_CONTINUABLE for why every other outcome â€”
+    // including `interrupted` â€” belongs to recovery rather than to this loop.
     if (!GOAL_CONTINUABLE.has(outcome)) return;
     // A compaction owns this turn: its answer is the brief, not a message to reply to, and
     // the chat is about to be replaced anyway.
@@ -11448,7 +11457,7 @@
    *
    * Chrome may suspend/throttle a hidden replacement tab long enough for React to mount Stop,
    * render the whole first answer and remove Stop before this isolated world runs another
-   * observation. There is then no local `turn_start`, so the ordinary `finishGeneration()` →
+   * observation. There is then no local `turn_start`, so the ordinary `finishGeneration()` â†’
    * `noteGoalTurn()` edge can never happen. The resume command itself is the missing provenance:
    * this document sent the only user message in a fresh chat, and the app ACKed the continuation
    * into that exact conversation. That lets us recover this one new answer without ever treating
@@ -11573,7 +11582,7 @@
    * local calls all have to agree, and hold agreeing, before a word is typed into anybody's
    * chat. An app that cannot be asked counts as busy, exactly as it does for a brief.
    *
-   * A new generation opening is not a delay — it is the answer: the conversation moved on by
+   * A new generation opening is not a delay â€” it is the answer: the conversation moved on by
    * itself, and the message this loop was about to write is about a turn that is no longer
    * the last one.
    */
@@ -11591,7 +11600,7 @@
       while (Date.now() < deadline) {
         await sleep(GOAL_POLL_MS);
         if (!current()) return;
-        // Somebody — the user, or a turn ChatGPT started on its own — is talking again.
+        // Somebody â€” the user, or a turn ChatGPT started on its own â€” is talking again.
         if (generating) return void setGoalPhase('');
         if (nativeBusy || (job && job.busy)) return void setGoalPhase('');
         if (!goalUsable()) return void setGoalPhase('');
@@ -11639,7 +11648,7 @@
    *
    * **The wait is taken outside the lock.** `goalBusy` is the one thing that makes
    * `noteGoalTurn` refuse a finished turn, and holding it across a fifteen-second sleep makes
-   * every turn that finishes inside that window invisible — with no later edge to recover it,
+   * every turn that finishes inside that window invisible â€” with no later edge to recover it,
    * because the only edge there is was the turn ending. A single retryable draft failure would
    * silently cost the next real answer its Goal run. The claim on this turn is `goalTurnId`,
    * which is what stops two retries of the same turn, and the lock is taken only for the
@@ -11718,8 +11727,8 @@
         setGoalPhase('');
         return;
       }
-      // The app still has this chat working — its record of the turn is open, or a local
-      // tool ran within the last minute — so the end this page saw was not the answer. Not
+      // The app still has this chat working â€” its record of the turn is open, or a local
+      // tool ran within the last minute â€” so the end this page saw was not the answer. Not
       // a failure, and not a released claim either: the obligation is filed app-side, and
       // this document keeps the turn and asks again on a fixed short wait until the app
       // says the chat has finished. The bar stays on the settling step meanwhile.
@@ -11744,7 +11753,7 @@
       }
       return;
     }
-    // From here the draft lives on /activity: its stage, its streaming text and — once — the
+    // From here the draft lives on /activity: its stage, its streaming text and â€” once â€” the
     // message to type. See maybeSendGoalReply, which runs on every pull.
     goalDraft = (reply.data && reply.data.goal) || null;
     setGoalPhase('drafting');
@@ -11756,7 +11765,7 @@
    *
    * Called from the activity pull, because that is where the draft arrives. Every exit
    * acknowledges the draft: a message that was sent and one that will never be sent are the
-   * same fact to the app — this draft is spent — and the difference between them is what the
+   * same fact to the app â€” this draft is spent â€” and the difference between them is what the
    * user is told, not what the app holds.
    *
    * The composer belongs to the user. `insertPrompt` refuses one that already holds text, so
@@ -11845,7 +11854,7 @@
       setGoalPhase(retrying ? 'retrying' : 'drafting', why);
       await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
       // The two answers that end a Goal run are `[no reply]` and words to type. This is
-      // neither, so the turn is still owed one and the loop keeps its claim on it — with the
+      // neither, so the turn is still owed one and the loop keeps its claim on it â€” with the
       // reason on screen in the meantime, which is the only thing a failure was ever good for.
       if (retrying) void retryGoalDraft(draft.turnId);
       return;
@@ -11859,7 +11868,7 @@
       return;
     }
     if (draft.stage !== 'ready' || !draft.reply) return;
-    // A turn started while the draft was being written — the user typed, or ChatGPT began
+    // A turn started while the draft was being written â€” the user typed, or ChatGPT began
     // something of its own. The draft is about a conversation that has moved on.
     const sourceBusy = () => goalSourceGenerating(draft.turnId) || CLF_DOM.generating() || pendingTools > 0 ||
       nativeBusy || job?.busy || turnProgressRevision !== workRevision;
@@ -11877,7 +11886,7 @@
       // After whatever is already in the box, never instead of it and never blocked by it:
       // a character left behind is not somebody's draft, and the loop waiting on it was the
       // loop stopped for no reason. A refusal here is a composer that cannot be written to at
-      // all; keep the draft and try again on the next pull, until the window runs out — at
+      // all; keep the draft and try again on the next pull, until the window runs out â€” at
       // which point the message is dropped rather than queued forever.
       if (!CLF_DOM.insertPrompt(draft.reply, 'append')) {
         if (Date.now() - goalTypingSince < GOAL_TYPING_WINDOW_MS) return;
@@ -11952,7 +11961,7 @@
       if (!sendAttempted && (workResumed || sourceBusy())) await deferGoalDraftForWork(draft);
       goalBusy = false;
       // Only once the draft is spent. This marks when *this draft* first found the composer
-      // in use, and the retry path above measures its two-minute patience against it — so
+      // in use, and the retry path above measures its two-minute patience against it â€” so
       // clearing it on every pull, as this used to, restarted the window each time and the
       // give-up could never arrive. A draft that is still waiting keeps its start time.
       if (!goalDraft) goalTypingSince = 0;
@@ -11992,7 +12001,7 @@
    * How many local calls are running right now, asked fresh.
    *
    * The stored `pendingTools` is only refreshed by the activity loop, which ticks on its
-   * own schedule — far too coarse to wait on, and stalled entirely while a pull is already
+   * own schedule â€” far too coarse to wait on, and stalled entirely while a pull is already
    * in flight. This asks the same endpoint from the cursor the page already holds, which
    * returns whatever it would return anyway and advances nothing, and reads one number off
    * the answer. Null means the app could not be asked, which is not the same as zero.
@@ -12035,7 +12044,7 @@
     // Retire the live run first, and before the await: a press that is still stopping the turn
     // or waiting for local tools must not come back from that with a prompt to type. It would
     // be typing it into a transaction the next line is about to abort, which the app can only
-    // read as a fresh continuation — so the one thing Cancel is for would have started another.
+    // read as a fresh continuation â€” so the one thing Cancel is for would have started another.
     nativeRun++;
     pressedAt = 0;
     nativeBusy = false;
@@ -12126,7 +12135,7 @@
   /**
    * The conversation this document was opened at, read once before ChatGPT rewrites anything.
    *
-   * Null for the ordinary case — a chat with no id of its own yet — and set only when the app
+   * Null for the ordinary case â€” a chat with no id of its own yet â€” and set only when the app
    * pointed the browser at one exact conversation, which it does for exactly one reason: waking
    * a sleeping worker in the chat it already has. Read at script start rather than at send time
    * so that the SPA navigating this document afterwards cannot turn a stale marker into
@@ -12162,8 +12171,8 @@
   /**
    * Picks up the instruction this tab was opened for. Once per document, and that is all.
    *
-   * On a conversation that does not exist yet — a worker's own chat, or the replacement for
-   * a compacted session — or, for a revival, in the one existing chat the app named when it
+   * On a conversation that does not exist yet â€” a worker's own chat, or the replacement for
+   * a compacted session â€” or, for a revival, in the one existing chat the app named when it
    * opened this page and nowhere else. A marked fresh worker/resume page may replace ChatGPT's
    * restored New Chat draft; an exact-chat revival still waits for a genuinely free composer.
    * No command ever types in a chat it did not name.
@@ -12175,7 +12184,7 @@
    * after the user had given up on it. The transaction is now flat: redeem the marker, wait
    * for the composer, insert, send, report which conversation it became. Anything that goes
    * wrong is reported as a failure straight away, and the app ends the worker slot or the
-   * continuation rather than arranging for it to happen again somewhere else — which is
+   * continuation rather than arranging for it to happen again somewhere else â€” which is
    * what the user can act on, and what nothing else in this file has to know about.
    *
    * A message this tab actually sent is reported as sent even if the conversation id never
@@ -12220,7 +12229,7 @@
    * This is deliberately page provenance, not "the newest finished answer" recovery. Merely
    * opening an old resumed conversation must never restart Goal from transcript history. The
    * marker exists only after this document itself sent a resume bootstrap and the app ACKed the
-   * A→B continuation commit. sessionStorage keeps that proof across a content-script reload in
+   * Aâ†’B continuation commit. sessionStorage keeps that proof across a content-script reload in
    * the same tab without turning it into durable chat state that could fire days later.
    */
   const RESUME_GOAL_STORAGE = 'clf-resume-goal-v1';
@@ -12424,7 +12433,7 @@
    * Fresh app-opened chats do not journal their first observations until identity commits.
    *
    * For a resume, ChatGPT's marked destination message is the transaction commit that moves
-   * durable session A→B. `observe()` starts in parallel with command delivery, so without this
+   * durable session Aâ†’B. `observe()` starts in parallel with command delivery, so without this
    * gate B could flush that user message first, eagerly creating a second local session; the
    * later rebind then fails because B already has an owner. Hold the opening batch through the
    * first Fiber scan, and keep holding it while a RESUME marker is unresolved. Workers benefit
@@ -12546,8 +12555,8 @@
     // For a marker in this document's own URL it is the one the app opened the page at, read
     // before ChatGPT could rewrite anything: `/c/<id>` for a revival, nothing at all for the
     // two commands that open a chat which does not exist yet. A marker that turns up in an
-    // existing chat with no conversation in its own opening URL is neither of those — a stale
-    // marker carried in by history, a back button or a copied link — and is refused before the
+    // existing chat with no conversation in its own opening URL is neither of those â€” a stale
+    // marker carried in by history, a back button or a copied link â€” and is refused before the
     // redeem, so it neither types into somebody's chat nor claims a command a genuinely fresh
     // tab is still holding.
     //
@@ -12555,7 +12564,7 @@
     // opening URL either: a worker's tab was opened at `/` and only became `/c/<id>` when its
     // own bootstrap was answered, so the page it was opened at says nothing about the chat it
     // has now. What fences that path instead is the pair of exact conversation checks around
-    // it — the service worker only offers the job to a document already showing the chat the
+    // it â€” the service worker only offers the job to a document already showing the chat the
     // command names, and the redeemed command's own `conversationId` is compared below.
     const openedConversation = fromUrl ? OPENED_CONVERSATION : CLF_DOM.conversationId();
     if (CLF_DOM.conversationId() && !openedConversation) return;
@@ -12668,7 +12677,7 @@
     const step = (name) => { void ask({ type: 'command_step', id: boot.id, client: RUN_ID, step: name }).catch(() => undefined); };
     // What this command is for, as the app states it. A revival names the conversation and
     // will not be typed anywhere else; the two chat-opening commands name none, and their
-    // precondition is the opposite one — that this page still has no conversation at all.
+    // precondition is the opposite one â€” that this page still has no conversation at all.
     const target = typeof boot.conversationId === 'string' && boot.conversationId ? boot.conversationId : null;
     const projectEntry = boot.type === 'resume' ? boot.projectEntry : null;
     if (projectEntry) {
@@ -12979,7 +12988,7 @@
     // Record it before send() clicks so reportMessages can open B's turn immediately instead
     // of waiting until Fiber eventually exposes the first connector request.
     rememberUserSend();
-    // The bootstrap's own receipt, which allows for the composer's Markdown escaping — see
+    // The bootstrap's own receipt, which allows for the composer's Markdown escaping â€” see
     // matchesSubmittedBootstrap. Every other caller keeps the exact comparison.
     let resumeDispatchRequested = false, bootstrapAuthorizationFailure = null;
     const authorizeBootstrapSend = async sendCurrent => {
@@ -13060,12 +13069,12 @@
     // commit before ordinary journal events, which also prevents a shadow session from claiming
     // chat B. But that commit needs this page to find the marked message, and on 2026-09-02 it
     // never did: the brief was sent, the prime in chat B read its predecessor session and went
-    // to work, and the marker was never redeemed — so the session stayed on chat A, chat B was
+    // to work, and the marker was never redeemed â€” so the session stayed on chat A, chat B was
     // refused AGENTS_BUSY as a stranger, and the loop was dead until the user noticed. So the
     // id this send produces is reported like a worker's, below, and the app commits from the
     // ACK exactly as it does from the marker; whichever arrives first wins, the other is
     // already committed. The journal gate is released when the app's own feed says this chat
-    // is the resume destination — see pullActivity — not here, because this ACK's reply is the
+    // is the resume destination â€” see pullActivity â€” not here, because this ACK's reply is the
     // outbox's, not the app's.
     if (boot.type === 'resume') {
       const found = bootstrapConversation();
@@ -13122,7 +13131,7 @@
     // `persisted` means the page went into the back/forward cache: it is frozen, not
     // gone, and the same script resumes on pageshow. Reporting that as a close ended the
     // session and the next observation reopened it, which is where the flood of
-    // "session … reopened" came from — several tabs each cycling with nothing changed.
+    // "session â€¦ reopened" came from â€” several tabs each cycling with nothing changed.
     if (event.persisted) return;
     // Conversation lifetime is owned by the service worker's tab tracking. A document
     // pagehide also happens on reload, so closing here corrupts live turn identity.
@@ -13150,8 +13159,8 @@
    * Presses ChatGPT's own Retry when a conversation route shows its "could not be loaded"
    * surface instead of the chat. Seen live after a reload that landed mid-turn: the model went
    * on calling tools server-side while this page showed nothing, so the turn could never be
-   * seen to end. The surface must hold for LOAD_FAILURE_SETTLE_MS first — the shell passes
-   * through empty states while it mounts — and later presses back off to once a minute, and stay
+   * seen to end. The surface must hold for LOAD_FAILURE_SETTLE_MS first â€” the shell passes
+   * through empty states while it mounts â€” and later presses back off to once a minute, and stay
    * there: measured the same day, presses in the first half-minute after a reload could fail while
    * a press a minute later restored the chat, so a schedule that gave up after a few minutes left
    * the tab dead. One press of the page's own Retry a minute costs one request.
@@ -13161,7 +13170,7 @@
   /*
    * Once ChatGPT has said it is limiting this history, a press a minute is what keeps the limit
    * alive: measured 2026-10-11, each press after Retry-After drew another 429 with a longer
-   * Retry-After (11 s → 47 s) and the chat stayed unreadable for half an hour. The first press
+   * Retry-After (11 s â†’ 47 s) and the chat stayed unreadable for half an hour. The first press
    * still comes when ChatGPT said it may; the ones after it back off further, to one every 15
    * minutes, and still never stop.
    */
@@ -13225,8 +13234,8 @@
     // A standing approval card polls at the active cadence even hidden: an answer given in the app
     // waits for this document's next poll.
     const active = nativeBusy || Boolean(job && job.busy) || pendingTools > 0 || CLF_DOM.approvalWaiting();
-    // A goal draft lives entirely on this feed — its streamed text is what the stage panel
-    // shows, and the finished message only arrives here — so it polls at the live cadence
+    // A goal draft lives entirely on this feed â€” its streamed text is what the stage panel
+    // shows, and the finished message only arrives here â€” so it polls at the live cadence
     // even in a hidden tab, which is exactly the tab this feature runs in.
     const drafting =
       Boolean(goalDraft) || goalPhase === 'requesting' || goalPhase === 'drafting' || goalPhase === 'retrying';
@@ -13252,7 +13261,7 @@
       // Re-arming is a periodic loop, and periodic loops belong to the live page, exactly as
       // for every(): the harness drives each behaviour through the test hook instead. The
       // harness's setTimeout runs its callback in a microtask, so a loop re-armed there would
-      // be an unbroken microtask chain that starves the event loop — the next test then waits
+      // be an unbroken microtask chain that starves the event loop â€” the next test then waits
       // forever for a window 'load' event that no macrotask could ever deliver.
       armNextActivityPull();
     }, Math.max(0, delay));
@@ -13409,7 +13418,7 @@
     limit.published = limit.retryAt;
     emit({
       kind: 'chat_error',
-      text: t('content_history_rate_limited', 'Loading this chat’s history returned HTTP 429. OneCode is waiting before retrying the history load. This is not a model context limit.'),
+      text: t('content_history_rate_limited', 'Loading this chatâ€™s history returned HTTP 429. OneCode is waiting before retrying the history load. This is not a model context limit.'),
       recoverable: false,
       blocking: true,
       retryAt: limit.retryAt
@@ -13436,7 +13445,7 @@
     for (const [requestId, pending] of pendingStreamOrigins) {
       // Retired by its exact conversation, not by the document epoch. A new chat started from a
       // tab that showed another chat publishes its request id before it has a /c/ route, and the
-      // move from that chat to the new one advances the epoch — which discarded an id naming the
+      // move from that chat to the new one advances the epoch â€” which discarded an id naming the
       // new chat exactly and left page-started chats Unattributed (#393, 2026-09-26). A route to
       // any other conversation still retires it, and so does its deadline.
       if (!alive || Date.now() >= pending.deadline || (route && route !== pending.conversationId)) {
@@ -13938,13 +13947,13 @@
        *
        * Refusing to clobber typing is right, but the guard could not tell the user's draft from the
        * residue of a previous attempt by this same delivery: insert the text, fail to press Send,
-       * release the claim — and from then on the composer holds exactly what the next attempt would
+       * release the claim â€” and from then on the composer holds exactly what the next attempt would
        * type, so every attempt refuses. Measured on 2026-09-26: a recovery ticket claimed 181 times
        * against its own 352 characters, alternating `After-turn pickup was withdrawn before Send.`
        * and this refusal, for thirteen hours. Its original Send failed because the send control was
        * unfindable on the new composer shell; the deadlock outlived that cause by a whole day.
        *
-       * Byte-identical text is not a draft to protect — inserting would produce it again. Compared
+       * Byte-identical text is not a draft to protect â€” inserting would produce it again. Compared
        * with the same `sendText` normaliser the pre-Send check below uses, so the two agree on what
        * "the same message" means. Attachments still block regardless: an attachment draft is not
        * something this delivery could have produced.
@@ -14091,8 +14100,8 @@
       let receipt = null;
       let nativeSendRefusal = null;
       // This text was inserted by the app, and the newer shell stores inserted text
-      // Markdown-escaped — hard breaks as `\<newline>`. Measured 2026-09-26 on a chat started
-      // from the app: its first row read back `[[COS_CONTEXT:19956]]\ You are…`, the raw
+      // Markdown-escaped â€” hard breaks as `\<newline>`. Measured 2026-09-26 on a chat started
+      // from the app: its first row read back `[[COS_CONTEXT:19956]]\ You areâ€¦`, the raw
       // comparison never matched, and that first turn got no ACK, no turn start and no turn end
       // for Goal or Loop to act on. The bootstrap comparison is exact either way (raw, then one
       // unescape); a person's own sends keep the raw comparison in matchesUserSendReceipt.
@@ -14186,7 +14195,7 @@
         decision.conversationId = deliveredConversation;
         decision.epoch = epoch;
         // The newer shell gives a temporary chat a real /c/<id> route shortly after Send
-        // (measured 2026-09-26: `/c/6ab7e420…?temporary-chat=true`). A decision pinned to the
+        // (measured 2026-09-26: `/c/6ab7e420â€¦?temporary-chat=true`). A decision pinned to the
         // route-less page it was sent from then counted as off target for good, so the plan
         // ChatGPT wrote was never collected and the planner timed out. A temporary decision binds
         // once to the first concrete route after its own Send; any later move still leaves it.
@@ -14521,17 +14530,17 @@
         return settle(appId && next?.appId === appId && Array.isArray(next.tools) && (next.tools.length > 0 || next.settled === true) ? next : null);
       }, current, 12000, 250);
       if (!view) {
-        // Say so. `pluginSnapshot()` refuses for two different reasons — the page has not
-        // rendered the card yet, and the page renders a card this build cannot read — and
+        // Say so. `pluginSnapshot()` refuses for two different reasons â€” the page has not
+        // rendered the card yet, and the page renders a card this build cannot read â€” and
         // returning false told the app neither. On 2026-09-11 that cost thirty hours: the
         // durable row carried no `error` at all, so nothing anywhere named a cause while the
-        // request was retried. Reporting is not terminal — `failPluginRefresh` records the
-        // reason and leaves maintenance free to reobserve — so the only thing silence bought
+        // request was retried. Reporting is not terminal â€” `failPluginRefresh` records the
+        // reason and leaves maintenance free to reobserve â€” so the only thing silence bought
         // was the absence of a diagnosis.
         //
         // Gated on still owning the page. `waitPageView` also yields null when it stops
         // because this document is no longer the one the request belongs to, and a navigation
-        // is not the page failing to render a card — blaming it for one would put a false
+        // is not the page failing to render a card â€” blaming it for one would put a false
         // cause in the durable row, which is the opposite of the point.
         if (current()) await fail(t(
           'content_connector_settings_unreadable',
@@ -14846,7 +14855,7 @@
         })().catch(() => {});
         return false;
       }
-      // Popup diagnostics. Ids and counters only — no prose, no transcript, no page text.
+      // Popup diagnostics. Ids and counters only â€” no prose, no transcript, no page text.
       if (message.type === 'clf-repair-ready') {
         const target = conversationId, forEpoch = epoch;
         void (async () => {

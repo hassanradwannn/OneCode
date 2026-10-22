@@ -17,6 +17,7 @@ import '../renderer/icons.css';
 import type { InputAttachment } from '../shared/input.js';
 import { historyRoute, mergeHistory } from './history.js';
 import { pendingMessages, retireSubmittedDraft, type OptimisticMessage } from './pending-messages.js';
+import { settleRemotePoll } from './poll.js';
 
 type RemoteAppearance = { theme: 'system' | 'dark' | 'light'; textSize: 'default' | 'large' | 'extra' };
 function loadAppearance(): RemoteAppearance {
@@ -111,17 +112,28 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const seenPresentations = new Set<string>(); let historyInitialized = false, historyFrom: number | undefined;
     const poll = async () => {
-      try {
+      const fresh = () => !controller.signal.aborted && selectedRef.current === selected;
+      const tasks: Array<() => Promise<void>> = [];
+      tasks.push(async () => {
         // Keep each browser below the host's bounded journal reader limit.
         const list = await request<RemoteSessionList>('sessions?limit=50', undefined, controller.signal);
-        const queued = await request<ControlApiInputs>('inputs?limit=200', undefined, controller.signal);
-        const snapshot = selected ? await request<RemoteSessionDetail>(`sessions/${selected}?live=1`, undefined, controller.signal) : null;
-        const history = selected ? await request<ControlApiEvents>(historyRoute(selected, historyFrom), undefined, controller.signal) : null;
-        const bootstrap = await request<RemoteBootstrap>('bootstrap', undefined, controller.signal);
-        if (controller.signal.aborted || selectedRef.current !== selected) return;
+        if (!fresh()) return;
         setSessions(previous => [...list.sessions.filter(row => row.conversationId || row.origin?.kind === 'desktop'), ...previous.filter(row => !list.sessions.some(current => current.id === row.id))]);
         if (!listLoaded.current) { listLoaded.current = true; setNextCursor(list.nextCursor); }
-        setBootstrap(bootstrap); setInputs(queued.inputs); setDetail(snapshot); setConnected(true); setError('');
+      });
+      tasks.push(async () => {
+        const queued = await request<ControlApiInputs>('inputs?limit=200', undefined, controller.signal);
+        if (!fresh()) return;
+        setInputs(queued.inputs);
+        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); retireSubmittedDraft(drafts.current, attachmentDrafts.current, pendingTarget.current, pendingDraft.current); if (composerKeyRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) { setDraft(''); setAttachments([]); } if (input.deliveredSessionId ?? input.sessionId) setSelected(input.deliveredSessionId ?? input.sessionId); } setNotice(''); } }
+      });
+      if (selected) tasks.push(async () => {
+        const snapshot = await request<RemoteSessionDetail>(`sessions/${selected}?live=1`, undefined, controller.signal);
+        if (fresh()) setDetail(snapshot);
+      });
+      if (selected) tasks.push(async () => {
+        const history = await request<ControlApiEvents>(historyRoute(selected, historyFrom), undefined, controller.signal);
+        if (!fresh()) return;
         if (history) {
           for (const event of history.events) if (event.presentation?.openId) {
             const id = event.presentation.openId;
@@ -132,15 +144,22 @@ function Workspace({ disconnect }: { disconnect(): void }) {
           historyInitialized = true; historyFrom = history.nextFrom;
           setEvents(previous => mergeHistory(previous, history.events));
         }
-        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); retireSubmittedDraft(drafts.current, attachmentDrafts.current, pendingTarget.current, pendingDraft.current); if (composerKeyRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) { setDraft(''); setAttachments([]); } if (input.deliveredSessionId ?? input.sessionId) setSelected(input.deliveredSessionId ?? input.sessionId); } setNotice(''); } }
-      } catch (error) { if (!controller.signal.aborted) {
-        const failed = error as Error;
-        if (failed instanceof RemoteRequestError && failed.status === 503 && failed.message === 'busy') return;
+      });
+      tasks.push(async () => {
+        const value = await request<RemoteBootstrap>('bootstrap', undefined, controller.signal);
+        if (fresh()) setBootstrap(value);
+      });
+      const failures = await settleRemotePoll(tasks);
+      if (!fresh()) return;
+      const relevant = failures.filter(error => !(error instanceof RemoteRequestError && error.status === 503 && error.message === 'busy'));
+      if (relevant.length) {
+        const failed = (relevant.find(error => !(error instanceof RemoteRequestError) || error.status === 401 || error.status >= 500) ?? relevant[0]) as Error;
         // A rejected history query is an application error, not a lost transport.
         if (!(failed instanceof RemoteRequestError) || failed.status === 401 || failed.status >= 500) setConnected(false);
+        else setConnected(true);
         setError(failed.message === 'invalid_query' ? 'Chat history could not load. Reload this page to use the updated client.' : failed.message);
-      } }
-      finally { if (!controller.signal.aborted) timer = setTimeout(() => { void poll(); }, 2500); }
+      } else if (!failures.length) { setConnected(true); setError(''); }
+      if (!controller.signal.aborted) timer = setTimeout(() => { void poll(); }, 2500);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [selected]);

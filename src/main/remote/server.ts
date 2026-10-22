@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import { RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
@@ -46,6 +48,25 @@ let lifecycle = Promise.resolve();
 let setup: TailscaleSetupAction | undefined, setupRetry: NodeJS.Timeout | undefined;
 let routeRetry = false;
 const assetRoot = path.resolve(__dirname, '../remote');
+const gzipAsync = promisify(gzip);
+const compressedAssets = new Map<string, Promise<Buffer>>();
+const COMPRESSIBLE_REMOTE_ASSET = /\.(?:css|js)$/i;
+function acceptsGzip(value: string | string[] | undefined): boolean {
+  return typeof value === 'string' && value.split(',').some(token => /^\s*gzip(?:\s*;\s*q=(?!0(?:\.0*)?\b)[0-9.]+)?\s*$/i.test(token));
+}
+export function remoteStaticCacheControl(pathname: string): string {
+  return pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-store';
+}
+async function remoteStaticBody(file: string, bytes: Buffer, acceptEncoding: string | string[] | undefined): Promise<{ body: Buffer; gzip: boolean }> {
+  if (!COMPRESSIBLE_REMOTE_ASSET.test(file) || bytes.length < 1024 || !acceptsGzip(acceptEncoding)) return { body: bytes, gzip: false };
+  let encoded = compressedAssets.get(file);
+  if (!encoded) {
+    encoded = gzipAsync(bytes, { level: 6 });
+    compressedAssets.set(file, encoded);
+    encoded.catch(() => compressedAssets.delete(file));
+  }
+  return { body: await encoded, gzip: true };
+}
 function json(res: http.ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 async function checkRoute(): Promise<void> {
   if (!serve || !listener || !enabled || (!ready && !routeRetry)) throw new Error('Remote access is unavailable.');
@@ -181,7 +202,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (req.method !== 'GET' || route.search || !/^\/(?:index\.html|assets\/[a-zA-Z0-9_.-]+)?$/.test(route.pathname)) throw new RequestError(404, 'not_found');
   const file = path.join(assetRoot, route.pathname === '/' ? 'index.html' : route.pathname.slice(1));
   const bytes = await fs.readFile(file).catch(() => { throw new RequestError(404, 'not_found'); }); const ext = path.extname(file);
-  res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' } as Record<string, string>)[ext] ?? 'application/octet-stream' }); res.end(bytes);
+  const encoded = await remoteStaticBody(file, bytes, req.headers['accept-encoding']);
+  res.setHeader('Cache-Control', remoteStaticCacheControl(route.pathname));
+  if (encoded.gzip) { res.setHeader('Content-Encoding', 'gzip'); res.setHeader('Vary', 'Accept-Encoding'); }
+  res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' } as Record<string, string>)[ext] ?? 'application/octet-stream' }); res.end(encoded.body);
 }
 async function start(refreshLink = false): Promise<void> {
   if (terminal || listener) return;

@@ -6,6 +6,7 @@ import { validateInputImages } from './input-images.js';
 import sharp from 'sharp';
 import { positionOf } from '../../shared/chronology.js';
 import { notifyChanged } from './recorder.js';
+import { logInfo } from '../logger.js';
 
 /** Project a tool handout or proven delivery into history, never the enqueue intent. */
 export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCommitted?: (seq: number) => void): Promise<boolean> {
@@ -43,7 +44,9 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
   // Delivery and its chronology do not depend on optional preview storage. This
   // stable row survives a quota failure; retry only enriches the same origin.
   const committed = await upsertMessageEvent(sessionId, message);
-  anchorCommitted?.(positionOf(committed.event));
+  const anchor = positionOf(committed.event);
+  anchorCommitted?.(anchor);
+  if (confirmed && committed.changed) logInfo(`input ${entry.id}: accepted Send published to canonical history seq=${anchor}`);
   // Offered → confirmed revises this row in place; count and time cannot reveal it.
   notifyChanged(sessionId);
   if (images.length) {
