@@ -51,8 +51,15 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
       const address = options.address, family = isIP(address);
       if (!isPublicIngressAddress(address)) { finish(new ProbeReadError('transport')); return; }
       requestOptions.lookup = (_hostname, lookupOptions, callback) => {
-        if (lookupOptions.all) callback(null, [{ address, family }]);
-        else callback(null, address, family);
+        // Match dns.lookup's asynchronous callback contract. Calling this synchronously lets
+        // https.request start connect() before it returns to us, so an immediately unreachable
+        // IPv6 route can emit ETUNREACH before request.once('error') below is attached. The
+        // public probe already races A and AAAA addresses; defer only this handoff so a dead
+        // family becomes a normal transport failure and the other family can keep racing.
+        queueMicrotask(() => {
+          if (lookupOptions.all) callback(null, [{ address, family }]);
+          else callback(null, address, family);
+        });
       };
     }
     const request = https.request(url, requestOptions, response => {
