@@ -329,15 +329,19 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
   // Each provider endpoint routes to its declared surface. Core registers the full
   // local contract; legacy Desktop/Plugins routes remain compatible without gaining
   // authority from another connector. Every handler retains the same live guards.
-  const routes = surfacePaths.map((surface) => ({
+  const routes = surfacePaths.map((surface) => {
+    const factory = () => withMcpProvider(provider, () => buildServer(stableContext(surface.id), surface.id, undefined, () => stableContext(surface.id)));
+    const options = { onerror: (error: Error) => logError(`MCP handler error (${surface.id}): ${error.message}`) };
+    return {
     ...surface,
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
-    handler: toNodeHandler(
-      createMcpHandler(() => withMcpProvider(provider, () => buildServer(stableContext(surface.id), surface.id, undefined, () => stableContext(surface.id)))),
-      { onerror: (error) => logError(`MCP handler error (${surface.id}): ${error.message}`) }
-    )
-  }));
+    handler: toNodeHandler(createMcpHandler(factory), options),
+    // Modern auto mode waits for the final JSON result without sending bytes.
+    // Stream tool exchanges so long reads/polls keep public proxies alive too;
+    // discovery and admission failures retain their existing response contract.
+    toolHandler: toNodeHandler(createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: 10_000 }), options)
+  }; });
   const checkHost = localhostHostValidation();
   const checkOrigin = localhostOriginValidation();
 
@@ -368,7 +372,12 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
 
     const startedAt = Date.now();
     const publication = { completedAt: null as number | null, failed: false };
-    res.once('close', () => { if (publication.completedAt === null) publication.failed = true; });
+    res.once('close', () => {
+      if (publication.completedAt === null) {
+        publication.failed = true;
+        if (route && !res.writableFinished) logWarn(`MCP response closed before completion surface=${route.id} elapsedMs=${Date.now() - startedAt}`);
+      }
+    });
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300 && !publication.failed) publication.completedAt = Date.now();
       else publication.failed = true;
@@ -454,7 +463,8 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
       };
       res.once('finish', release);
       res.once('close', release);
-      withMcpProvider(provider, () => withInboundRequestId(geminiBinding ? null : requestId, () => void route.handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
+      const handler = (body as { method?: unknown } | undefined)?.method === 'tools/call' ? route.toolHandler : route.handler;
+      withMcpProvider(provider, () => withInboundRequestId(geminiBinding ? null : requestId, () => void handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       void readBoundedJsonBody(req).then(async (parsed) => {

@@ -1617,6 +1617,7 @@ function mergeDetailDelta(delta: SessionEvent[]): void {
 let controlsGeneration = 0;
 let controlledSessionId: string | null = null;
 let controlledTurnId: string | null = null;
+let controlledUnfinishedTurnId: string | null = null;
 let controlledSelection = -1;
 let controlledStopPending = false;
 let controlledFinishWaiting = false;
@@ -2065,14 +2066,14 @@ async function refreshSessionControls(): Promise<void> {
     for (const action of ['compactSession', 'cancelCompaction']) $(action).hidden = true;
   }
   paintAutomationSwitch();
-  if (!id) { controlledSessionId = null; controlledTurnId = null; paintDeliveryControls(); menu.hidden = false;
+  if (!id) { controlledSessionId = null; controlledTurnId = null; controlledUnfinishedTurnId = null; paintDeliveryControls(); menu.hidden = false;
     $<HTMLTextAreaElement>('sessionObjective').disabled = false;
     paintTaskActions();
     for (const action of ['compactSession', 'cancelCompaction']) $(action).hidden = true;
     return; }
   const opening = pendingComposerInputs.find(row => row.opening && row.sessionId === id && ['queued', 'browser'].includes(row.state));
   if (!sessions.find(row => row.id === id)?.conversationId) {
-    controlledSessionId = id; controlledSelection = selectionGeneration; controlledTurnId = null;
+    controlledSessionId = id; controlledSelection = selectionGeneration; controlledTurnId = null; controlledUnfinishedTurnId = null;
     controlledCanInject = false; controlledCanSendDirectly = false; controlledCanSendQueuedWhenIdle = false; controlledQueueAtFinish = false;
     controlledStopPending = false; controlledFinishWaiting = false;
     menu.hidden = false;
@@ -2093,6 +2094,7 @@ async function refreshSessionControls(): Promise<void> {
   controlledSessionId = id;
   controlledSelection = selectionGeneration;
   controlledTurnId = controls?.activeTurnId ?? null;
+  controlledUnfinishedTurnId = controls?.unfinishedTurnId ?? controls?.activeTurnId ?? null;
   goalDraftView = controls?.goalDraft ?? null;
   goalWaitView = controls?.goalWait ?? null;
   finishGoalDraftView = controls?.finishGoalDraft ?? null;
@@ -6722,9 +6724,13 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
   const dueAt = Date.now();
   const id = crypto.randomUUID();
   const authoredDraft = authoredComposerText();
+  // Activity expiry hides Working/Stop, but does not prove the native turn ended.
+  // An explicit immediate follow-up must still stop that exact unresolved turn.
+  // Admission rechecks this durable ID; a newer question cannot inherit the request.
+  const steerTurnId = controlledSessionId === sessionId && controlledSelection === generation ? controlledUnfinishedTurnId : null;
   const attachmentPayload = { ...(sessionId === null ? { provider: sendProvider } : {}),
-    ...(mode === 'auto' && chosenMode !== 'tool' && !plan && sessionId && controlledSessionId === sessionId && controlledSelection === generation && controlledTurnId
-      ? { steerTurnId: controlledTurnId } : {}),
+    ...(mode === 'auto' && chosenMode !== 'tool' && !plan && sessionId && steerTurnId
+      ? { steerTurnId } : {}),
     images: images.filter((file): file is InputImage => 'dataUrl' in file), attachments: images.filter((file): file is InputAttachment => 'id' in file),
     ...(chosenMode === 'tool' && !plan ? { delivery: 'tool' as const } : {}),
     ...(chosenMode === 'tool' && mode === 'auto' && !plan && selectedId && controlledSessionId === selectedId && controlledSelection === generation &&

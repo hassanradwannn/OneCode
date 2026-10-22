@@ -72,9 +72,12 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
         return;
       }
       res.writeHead(response.statusCode ?? 502, headers(response.headers));
+      // A cut upstream stream is not a successfully completed MCP result.
+      response.once('error', () => res.destroy());
+      response.once('aborted', () => res.destroy());
       response.pipe(res);
     });
-    outgoing.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    outgoing.on('error', () => { if (res.headersSent) res.destroy(); else res.writeHead(502).end(); });
     req.on('aborted', () => outgoing.destroy());
     res.on('close', () => { if (!res.writableEnded) outgoing.destroy(); });
     req.pipe(outgoing);
