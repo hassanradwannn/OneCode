@@ -2123,6 +2123,45 @@
     }
     return [];
   }
+  /**
+   * Public transcript rows from the shell's mounted live mapping, fenced to this exact turn.
+   *
+   * The typed `entry.turn.items` projection is the preferred source, but ChatGPT can publish a
+   * shell commit where it retains the exact user id/messageIds while omitting the public user or
+   * final-assistant payload from those typed items. The live mapping is already tied to the same
+   * mounted `entry.turn` object and exact user id by `shellLiveMapping()`, and
+   * `shellCurrentPath()` proves one current branch from that user to `current_node`. That makes it
+   * a safe recovery source for public transcript bytes without consulting DOM text, cache order,
+   * timing, another branch or a remembered conversation.
+   *
+   * Keep this privacy boundary deliberately narrow: one exact user message, or public assistant
+   * text routed to `all`/no recipient. Tool requests/results, thoughts, hidden rows and analysis
+   * never cross worlds through this recovery path.
+   */
+  function shellLivePublicMessages(snapshot, entry) {
+    const ids = shellCurrentPath(snapshot, entry);
+    if (!ids.length) return [];
+    const mapping = snapshot.renderedConversation.mapping;
+    const user = entry.turn.items.find(item => item?.type === 'user-message');
+    const userId = str(user?.messageId) || str(user?.serverMessageId);
+    if (!userId || ids[0] !== userId) return [];
+    const out = [];
+    for (const id of ids) {
+      const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
+      if (node?.id !== id || message?.id !== id) return [];
+      const role = message.author?.role;
+      if (role === 'user') {
+        if (id !== userId) return [];
+        out.push(message);
+        continue;
+      }
+      if (role !== 'assistant' || requestOf(message) || resultOf(message) || thoughtMessage(message) ||
+          hiddenMessage(message) || analysisMessage(message) || (message.recipient && message.recipient !== 'all') ||
+          message.content?.content_type !== 'text') continue;
+      out.push(message);
+    }
+    return out;
+  }
   /** #318 identified the history cache. Both sources project only explicitly named
    * messages. Typed public items own presentation; cache text cannot supply a final. */
   function shellRequestMetadata(fiber, queries, shell, conversation, sightings = []) {
@@ -2488,6 +2527,20 @@
           callSources.set(id, { id: str(step.widgetStateSource?.messageId), server: step.invocation.server });
         }
       }
+    }
+    // A mounted live mapping can be ahead of (or richer than) the typed shell-item projection.
+    // Recover only exact current-branch public rows and let them replace same-id synthesized rows;
+    // the normal authored-message projection below still decides what is allowed to cross worlds.
+    try {
+      const live = shellLiveMapping(fiber, entry);
+      if (live && live !== false) for (const message of shellLivePublicMessages(live, entry)) {
+        const id = str(message.id), at = messages.findIndex(row => str(row?.id) === id);
+        if (at >= 0) messages[at] = message;
+        else messages.push(message);
+      }
+    } catch {
+      // The typed shell projection remains authoritative when the optional live mapping is absent
+      // or unreadable; never weaken the turn fence merely to recover presentation.
     }
     // Media may share a provider message with other media, never an authored row
     // or local call. Keep malformed cross-kind identities out of the whole scan.

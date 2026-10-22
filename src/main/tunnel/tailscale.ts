@@ -407,10 +407,21 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
             report('tunnel-unavailable', `${details[result.state]} OneCode will keep checking automatically; the saved route and URL were retained.`, publicUrl);
             delay = deps.watchMs;
           } else {
-            // A transient verification failure is not a fresh connection attempt.
-            // Retain the route during the bounded retry window, without advertising
-            // a failed public connection as Connected. A retry never replays a Send.
-            report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
+            // Before the first successful public handshake, Setup is still honestly
+            // connecting. After one successful handshake, however, a single DNS/TLS
+            // miss is only a health-check miss: the native route still has exact custody
+            // and may be serving provider traffic at this very moment. Demoting the whole
+            // connection to `connecting-tunnel` here used to withdraw Core publication,
+            // clear the provider route and stall browser delivery even while live MCP
+            // requests continued returning HTTP 200. Keep an established connector live
+            // throughout the bounded retry window; `publicIngress` still carries the
+            // degraded probe state for diagnostics. Only a sustained failure below, or a
+            // failed native-custody verification, is authority to withdraw it.
+            const transientState = firstPublicReady ? 'connected' : 'connecting-tunnel';
+            const transientDetail = firstPublicReady
+              ? `${details[result.state]} The established connector remains published while OneCode rechecks it.`
+              : `${details[result.state]} OneCode will recheck without changing the configured routes.`;
+            report(transientState, transientDetail, publicUrl);
             delay = Math.max(1, Math.round(Math.min(deps.watchMs, deps.watchMs / 3 * 2 ** Math.min(failures - 1, 2))));
           }
         }

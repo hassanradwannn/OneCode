@@ -42,7 +42,7 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
       if (settled) return; settled = true; clearTimeout(timer);
       if (error) reject(error); else resolve(response!);
     };
-    const requestOptions: https.RequestOptions = {
+    const requestOptions: https.RequestOptions & { autoSelectFamily?: boolean; autoSelectFamilyAttemptTimeout?: number } = {
       method: options.body ? 'POST' : 'GET', agent: false, signal: options.signal, servername: url.hostname, rejectUnauthorized: true,
       headers: { ...options.headers, accept: options.accept, host: url.host, 'cache-control': 'no-cache', 'accept-encoding': 'identity',
         ...(options.body ? { 'content-type': 'application/json', 'mcp-protocol-version': '2025-06-18' } : {}) }
@@ -61,6 +61,16 @@ export async function readPublicJson(url: URL, options: ReadOptions): Promise<Js
           else callback(null, address, family);
         });
       };
+    } else {
+      // DNS-over-HTTPS is itself an ordinary public HTTPS connection. On Linux hosts whose
+      // resolver returns AAAA first but whose network has no usable IPv6 route, leaving family
+      // selection to the platform can burn most or all of the four-second DNS budget before
+      // trying IPv4. Let Node race the resolver's address families with a short Happy-Eyeballs
+      // delay. This changes only how OneCode reaches the trusted DoH resolvers; the Funnel host
+      // is still resolved exclusively by those resolvers and each returned ingress address is
+      // verified explicitly below.
+      requestOptions.autoSelectFamily = true;
+      requestOptions.autoSelectFamilyAttemptTimeout = 250;
     }
     const request = https.request(url, requestOptions, response => {
       if (response.statusCode !== 200) { response.destroy(); finish(undefined, { status: response.statusCode ?? 0, json: null }); return; }
