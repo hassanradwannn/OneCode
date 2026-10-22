@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.4.7] — 2026-10-22
+
+Align the previous native-message identity used during steering and receipt tracking, retain the replacement working turn, restore normal 90-second silence recovery, and extend exact authored-input refresh to ChatGPT before first tool use. Preserve one-shot refresh, current-source checks and no Send replay. See [0.4.7 notes](docs/release-notes/v0.4.7.md).
+
 ## [0.4.6] — 2026-10-22
 
 Register the exact acknowledged message's turn while its mounted browser bubble is temporarily unreadable, preventing local authorization from waiting for a missing turn. Preserve accepted-Send custody, cancellation and exactly-once registration without resending the task or extending credentials. Upgrade the paired Companion recorder and include the fix in What's new. See [0.4.6 release notes](docs/release-notes/v0.4.6.md).

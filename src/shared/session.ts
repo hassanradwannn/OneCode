@@ -17,12 +17,12 @@ export type EventSource = 'extension' | 'mcp' | 'app';
  *
  * Deliberately longer than the recovery window below, and this is the whole point of them being
  * two constants rather than one. They answer different questions. Recovery asks "has this chat
- * been quiet long enough that its page needs putting back together?", and two minutes is the
- * answer that was measured. The badge answers "is this chat still the one doing something?",
+ * been quiet long enough that its page needs putting back together?", with a normal window of
+ * ninety seconds. The badge answers "is this chat still the one doing something?",
  * which stays true across the reload that the first question triggers — a page being reloaded on
  * the app's own instruction is a chat mid-repair, not an idle one.
  *
- * Sharing the two-minute duration made the badge go dark first and the reload arrive afterwards:
+ * Sharing the recovery duration made the badge go dark first and the reload arrive afterwards:
  * the label expired exactly on the boundary while the browser action still had the sweep and the
  * extension's alarm ahead of it. A user watching that sees a chat go idle and then, half a minute
  * later, reload itself for no visible reason. One minute of headroom covers both hops.
@@ -30,7 +30,7 @@ export type EventSource = 'extension' | 'mcp' | 'app';
 export const CHAT_ACTIVE_MS = 3 * 60_000;
 
 /** The inactivity window after which exact-chat browser recovery reloads an open turn once. */
-export const CHAT_SILENCE_MS = 2 * 60_000;
+export const CHAT_SILENCE_MS = 90_000;
 
 /**
  * How a ChatGPT turn ended.

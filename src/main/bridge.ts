@@ -9178,12 +9178,13 @@ function noteSilence(conversationId: string, grant: ActivityGrant, reason: strin
  */
 type SpentSilence = Map<string, { grant: ActivityGrant; repair: Repair | undefined }>;
 
-/** A confirmed authored Gemini Send can earn one page refresh before its first
+/** A confirmed authored Send can earn one page refresh before its first
  * tool call. It cannot earn Stop, Continue, completion or a second Send. Reuse
  * the input owner's exact native receipt and the error-repair question budget. */
 export const GEMINI_RESPONSE_STALL_MS = 10 * 60_000;
-async function inspectSilentGeminiInput(conversationId: string, grant: ActivityGrant, now: number): Promise<'queued' | 'waiting' | null> {
-  if (chatProviderForConversation(conversationId) !== 'gemini' || !grant.turnId ||
+async function inspectSilentAuthoredInput(conversationId: string, grant: ActivityGrant, now: number): Promise<'queued' | 'waiting' | null> {
+  const provider = chatProviderForConversation(conversationId);
+  if (!grant.turnId ||
       !recoveryInputAllowed(grant.sessionId, conversationId) || isChatBlocked(conversationId) ||
       stopRequestedFor(conversationId)) return null;
   const question = await readLatestUserMessage(grant.sessionId);
@@ -9196,7 +9197,8 @@ async function inspectSilentGeminiInput(conversationId: string, grant: ActivityG
   const source = await assistantRepairSource(grant.sessionId);
   if (activeUntil.get(conversationId) !== grant || source.completed || source.turnId !== grant.turnId ||
       source.key !== `user:${receipt.turn.messageId}`) return null;
-  const deadline = grant.evidenceAt + Math.max(GEMINI_RESPONSE_STALL_MS, silenceWindowMs(grant));
+  const deadline = grant.evidenceAt + (provider === 'gemini'
+    ? Math.max(GEMINI_RESPONSE_STALL_MS, silenceWindowMs(grant)) : silenceWindowMs(grant));
   if (now < deadline || silenceHeldByCalls(conversationId, grant, now, true)) {
     grant.until = Math.max(deadline, now + GOAL_QUIET_MS);
     return 'waiting';
@@ -9211,7 +9213,7 @@ async function inspectSilentGeminiInput(conversationId: string, grant: ActivityG
   // The exact question's existing repair now owns recovery, including its claim
   // checks and spent budget. Do not file a silence Continue for a tool-free turn.
   activeUntil.delete(conversationId);
-  if (queued) logInfo('bridge: confirmed Gemini input stalled before tool use; queued its one page refresh');
+  if (queued) logInfo('bridge: confirmed authored input stalled before tool use; queued its one page refresh');
   return 'queued';
 }
 
@@ -9239,7 +9241,7 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
     // Observation owns liveness, never permission to interrupt the native page.
     // Only an exactly recorded local call in this source turn earns silence repair.
     if (!grant.turnId || !await answerHasMcpCall(grant.sessionId, conversationId, grant.turnId)) {
-      const authored = await inspectSilentGeminiInput(conversationId, grant, now);
+      const authored = await inspectSilentAuthoredInput(conversationId, grant, now);
       if (authored) {
         queued ||= authored === 'queued'; deferred ||= authored === 'waiting';
         continue;

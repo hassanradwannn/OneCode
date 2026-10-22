@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 67;
+  const RECORDER_VERSION = 68;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -1093,7 +1093,9 @@
       inserted = true;
     let previousMessageId = null;
     for (const message of CLF_DOM.messages()) {
-      if (userMessagePresent(message)) previousMessageId = message.id;
+      // The previous native identity does not depend on readable prompt text.
+      // The Send owner uses this same raw id even while MAIN's source is pending.
+      if (message.role === 'user' && message.id) previousMessageId = message.id;
     }
     // The submitted question owns its before-state. Identity/route hydration may delay
     // observing that question until its whole answer is already on screen; a rolling

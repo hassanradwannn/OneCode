@@ -15,6 +15,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.4.7': {
+    lead: () => t('Steering keeps the replacement turn working and recovery watching.'),
+    highlights: [
+      { icon: 'i-check-circle', title: () => t('Steer without losing the working turn'), text: () => t('A correction sent after Stop keeps its exact acknowledgement even when the previous message is temporarily unreadable. The new turn regains working state and tool access.') },
+      { icon: 'i-retry', title: () => t('Recovery after 90 seconds without progress'), text: () => t('Normal recovery watches the current turn for 90 seconds. A confirmed ChatGPT message can receive one guarded refresh before its first tool call, too.') },
+      { icon: 'i-lock', title: () => t('Progress and your controls take priority'), text: () => t('New progress, another question, Stop, approvals and running tools prevent an obsolete refresh. Recovery does not resend your steering message.') }
+    ]
+  },
   '0.4.6': {
     lead: () => t('Keep tool access when a handoff message is still rendering.'),
     highlights: [

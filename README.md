@@ -2,11 +2,15 @@
 
 A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.6 hotfix](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.6)** · **[Windows installer (0.4.5 base)](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.4.7 hotfix](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.7)** · **[Windows installer (0.4.5 base)](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
 
 The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.6. Compatible 0.4.5 installations receive the small application hotfix. The 0.4.5 updater stages its required full base first when needed, then applies the hotfix before one final relaunch. New users install the base above, then check for updates. Your profile and saved chats are preserved. If an older updater cannot offer this hotfix, install the complete 0.4.5 base first, then check again.
+**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.7. Compatible 0.4.5 installations receive the small application hotfix. The 0.4.5 updater stages its required full base first when needed, then applies the hotfix before one final relaunch. New users install the base above, then check for updates. Your profile and saved chats are preserved. If an older updater cannot offer this hotfix, install the complete 0.4.5 base first, then check again.
+
+## What's new in 0.4.7
+
+Steering retains the accepted correction's turn when the previous native message is temporarily unreadable, restoring working state and local tool access. Normal no-progress recovery uses a 90-second window, and exactly acknowledged ChatGPT inputs can receive one guarded refresh even before their first tool call. New progress, another question, Stop, approvals, active tools and disabled recovery still take priority. The correction is never resent automatically. See [notes](docs/release-notes/v0.4.7.md) and [validation](docs/release-acceptance/v0.4.7.md).
 
 ## What's new in 0.4.6
 
