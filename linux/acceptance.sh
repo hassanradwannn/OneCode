@@ -18,10 +18,4 @@ dpkg-deb --info "$DEB" >/dev/null
 # tar child exit on SIGPIPE even though the package is valid. Consume the complete listing.
 dpkg-deb --contents "$DEB" | grep -E '/usr/bin/onecode|/opt/OneCode/onecode' >/dev/null
 
-if python3 linux/dictation.py --check >/dev/null 2>&1; then
-  echo "Linux dictation dependencies: ready"
-else
-  echo "Linux dictation dependencies: not installed (AppImage will show an actionable error; DEB installs them)."
-fi
-
 echo "Packaged Linux $ARCH resource/runtime acceptance passed. Interactive GUI/provider/CUA tests remain."

@@ -52,22 +52,29 @@ The first Linux backend is deliberately **basic offline English dictation**. It 
 stream 16 kHz mono PCM directly into PocketSphinx in memory. Audio is never written to disk,
 logged, uploaded or sent through Electron IPC; only transcript/status JSON reaches OneCode.
 
-Ubuntu 22.04 packages:
+Linux packages carry a checksum-pinned Ubuntu 22.04 PocketSphinx runtime and English model under
+`resources/linux/runtime`; AppImage users no longer need `python3-pocketsphinx` or
+`pocketsphinx-en-us` installed globally. The remaining Ubuntu 22.04 platform prerequisites are
+Python 3.10, the PulseAudio/PipeWire compatibility client and the BLAS/LAPACK libraries used by
+Ubuntu's SphinxBase build. The `.deb` declares those prerequisites. OneCode never installs them
+silently; a manually prepared Ubuntu 22.04 host can use:
 
 ```bash
-sudo apt install pulseaudio-utils python3-pocketsphinx pocketsphinx-en-us
+sudo apt install python3 pulseaudio-utils libblas3 liblapack3
 ```
 
-The `.deb` declares these packages. AppImage users who do not have them receive an actionable
-error when they click the microphone. PocketSphinx is materially less accurate than the modern
-Windows recognizer and does not provide comparable punctuation or multilingual coverage. A future
-production-quality backend should reuse this same local PCM/JSON lifecycle with a checksum-verified
-local Whisper-class runtime/model rather than sending microphone audio to a cloud API.
+PocketSphinx is materially less accurate than the modern Windows recognizer and does not provide
+comparable punctuation or multilingual coverage. The bundled recognizer is tied to Ubuntu 22.04's
+CPython 3.10 ABI; this is deliberately narrower than claiming generic-distro AppImage speech
+support. A future production-quality backend should reuse this same local PCM/JSON lifecycle with
+a checksum-verified local Whisper-class runtime/model rather than sending microphone audio to a
+cloud API.
 
 The helper can be checked without opening the microphone:
 
 ```bash
-python3 linux/dictation.py --check
+node scripts/fetch-linux-dictation-runtime.mjs --platform linux --arch x64
+python3 -S linux/dictation.py --runtime-root resources/packaging/dictation/linux/x64 --check
 ```
 
 For a manual microphone test, choose a unique stop file, start the helper, speak English, then

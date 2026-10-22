@@ -6,6 +6,7 @@ NODE_ARCH="x64"
 NODE_SHA256="cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008"
 NODE_ROOT="$HOME/.local/opt/node-${NODE_VERSION}-linux-${NODE_ARCH}"
 CACHE="$HOME/.cache/onecode-linux"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
   echo "This preparation script currently targets Linux x86_64." >&2
@@ -23,19 +24,16 @@ if [[ ! -x "$NODE_ROOT/bin/node" ]]; then
   mv "$NODE_ROOT.stage" "$NODE_ROOT"
 fi
 
-if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-  sudo -n apt-get install -y python3-pocketsphinx pocketsphinx-en-us pulseaudio-utils
-else
-  echo "Dictation prerequisites need installation: pulseaudio-utils python3-pocketsphinx pocketsphinx-en-us" >&2
-  echo "Install them with your system package manager before microphone acceptance." >&2
-fi
-
 "$NODE_ROOT/bin/node" --version
 "$NODE_ROOT/bin/node" "$NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js" --version
-if python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dictation.py" --check; then
+"$NODE_ROOT/bin/node" "$ROOT/scripts/fetch-linux-dictation-runtime.mjs" --platform linux --arch x64
+if ! command -v parec >/dev/null 2>&1; then
+  echo "Linux dictation still needs the host PulseAudio/PipeWire client (parec); install pulseaudio-utils explicitly." >&2
+fi
+if python3 -S "$ROOT/linux/dictation.py" --runtime-root "$ROOT/resources/packaging/dictation/linux/x64" --check; then
   echo "Linux dictation dependencies: ready"
 else
-  echo "Linux dictation dependencies are not ready yet; this does not block the application build." >&2
+  echo "Linux dictation host prerequisites are not ready yet; no system packages were changed." >&2
 fi
 
 cat <<EOF

@@ -9,6 +9,7 @@ Stdout is reserved for OneCode's bounded JSON-line DictationEvent protocol.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import select
@@ -33,27 +34,68 @@ def parent_alive(pid: int) -> bool:
         return True
 
 
-def model_files() -> tuple[str, str, str]:
-    roots = [
-        Path("/usr/share/pocketsphinx/model/en-us"),
-        Path("/usr/local/share/pocketsphinx/model/en-us"),
-    ]
-    for root in roots:
-        hmm = root / "en-us"
-        lm = root / "en-us.lm.bin"
-        dictionary = root / "cmudict-en-us.dict"
+def runtime_root(value: str | None) -> Path | None:
+    candidates = [value, os.environ.get("ONECODE_DICTATION_RUNTIME")]
+    sibling = Path(__file__).resolve().parent / "runtime"
+    if sibling.is_dir():
+        candidates.append(str(sibling))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = Path(candidate).resolve()
+        if not root.is_dir():
+            raise RuntimeError("Bundled Linux speech recognition runtime is missing. Reinstall OneCode.")
+        return root
+    return None
+
+
+def activate_runtime(root: Path | None) -> None:
+    if root is None:
+        return
+    python = root / "python"
+    lib = root / "lib"
+    manifest = root / "runtime.json"
+    if not python.is_dir() or not lib.is_dir() or not manifest.is_file():
+        raise RuntimeError("Bundled Linux speech recognition runtime is incomplete. Reinstall OneCode.")
+    # Load the exact private libraries before importing the CPython extension.  This avoids
+    # depending on a system python3-pocketsphinx installation or a global LD_LIBRARY_PATH.
+    try:
+        ctypes.CDLL(str(lib / "libsphinxbase.so.3"), mode=ctypes.RTLD_GLOBAL)
+        ctypes.CDLL(str(lib / "libpocketsphinx.so.3"), mode=ctypes.RTLD_GLOBAL)
+    except OSError as error:
+        raise RuntimeError("Bundled Linux speech recognition libraries could not load on this system.") from error
+    sys.path.insert(0, str(python))
+
+
+def model_files(runtime: Path | None) -> tuple[str, str, str]:
+    if runtime is not None:
+        roots = [runtime / "model" / "en-us"]
+    else:
+        roots = [
+            Path("/usr/share/pocketsphinx/model/en-us"),
+            Path("/usr/local/share/pocketsphinx/model/en-us"),
+        ]
+    for candidate in roots:
+        hmm = candidate / "en-us"
+        lm = candidate / "en-us.lm.bin"
+        dictionary = candidate / "cmudict-en-us.dict"
         if hmm.is_dir() and lm.is_file() and dictionary.is_file():
             return str(hmm), str(lm), str(dictionary)
-    raise RuntimeError("PocketSphinx English model is missing. Install the pocketsphinx-en-us package.")
+    if runtime is not None:
+        raise RuntimeError("Bundled PocketSphinx English model is incomplete. Reinstall OneCode.")
+    raise RuntimeError("PocketSphinx English model is missing. Install the pocketsphinx-en-us package for a source checkout.")
 
 
-def make_decoder():
+def make_decoder(root: Path | None):
+    activate_runtime(root)
     try:
         from pocketsphinx import Decoder
     except Exception as error:  # pragma: no cover - exact import text varies by distro build
-        raise RuntimeError("PocketSphinx is missing. Install python3-pocketsphinx and pocketsphinx-en-us.") from error
+        if root is not None:
+            raise RuntimeError("Bundled PocketSphinx requires the Ubuntu 22.04 Python 3.10 ABI. Reinstall OneCode or use a supported Linux build.") from error
+        raise RuntimeError("PocketSphinx is missing. Install python3-pocketsphinx and pocketsphinx-en-us for a source checkout.") from error
 
-    hmm, lm, dictionary = model_files()
+    hmm, lm, dictionary = model_files(root)
     config = Decoder.default_config()
     config.set_string("-hmm", hmm)
     config.set_string("-lm", lm)
@@ -70,8 +112,8 @@ def capture_command() -> list[str]:
     return [parec, "--raw", "--rate=16000", "--format=s16le", "--channels=1"]
 
 
-def run(parent_pid: int, stop_file: str) -> int:
-    decoder = make_decoder()
+def run(parent_pid: int, stop_file: str, root: Path | None) -> int:
+    decoder = make_decoder(root)
     command = capture_command()
     capture: subprocess.Popen[bytes] | None = None
     listening = False
@@ -131,16 +173,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent-pid", type=int)
     parser.add_argument("--stop-file")
+    parser.add_argument("--runtime-root")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    root = runtime_root(args.runtime_root)
     if args.check:
-        make_decoder()
+        make_decoder(root)
         capture_command()
-        emit({"ok": True, "engine": "pocketsphinx", "audio": "parec"})
+        emit({"ok": True, "engine": "pocketsphinx", "audio": "parec", "runtime": "bundled" if root else "system"})
         return 0
     if not args.parent_pid or not args.stop_file or not os.path.isabs(args.stop_file):
         raise RuntimeError("Dictation helper requires an absolute stop file and parent PID.")
-    return run(args.parent_pid, args.stop_file)
+    return run(args.parent_pid, args.stop_file, root)
 
 
 if __name__ == "__main__":

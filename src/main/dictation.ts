@@ -264,7 +264,7 @@ export function registerDictationIpc(getWindow: () => BrowserWindow | null): voi
     } catch {
       fs.rmSync(stopFile, { force: true });
       return { ok: false as const, error: process.platform === 'linux'
-        ? 'Could not launch local Linux speech recognition. Install python3-pocketsphinx, pocketsphinx-en-us and pulseaudio-utils.'
+        ? 'Could not launch bundled Linux speech recognition. Reinstall OneCode and check Python 3.10 and microphone access.'
         : 'Could not launch the Windows speech recognizer' };
     }
     const row: OwnedProcess = { child, owner: event.sender, stopping: false, lineBuffer: '', killTimeout: null, stopFile };

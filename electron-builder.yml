@@ -212,6 +212,9 @@ linux:
       filter: ['**/*']
     - from: linux/dictation.py
       to: linux/dictation.py
+    - from: resources/packaging/dictation/linux/${arch}
+      to: linux/runtime
+      filter: ['**/*']
     - from: resources/packaging/native/linux/${arch}/node_modules/@img/sharp-libvips-linux-${arch}/README.md
       to: THIRD-PARTY-NOTICES-sharp-libvips-linux-${arch}.md
     - from: resources/packaging/tunnel/linux/${arch}
@@ -235,5 +238,9 @@ deb:
     - libuuid1
     - libsecret-1-0
     - pulseaudio-utils
-    - python3-pocketsphinx
-    - pocketsphinx-en-us
+    # The AppImage/DEB carries the PocketSphinx bindings, native libraries and English model.
+    # Keep only the Ubuntu 22.04 ABI/audio/math prerequisites system-owned.
+    - python3 (>= 3.10)
+    - python3 (<< 3.11)
+    - libblas3
+    - liblapack3
