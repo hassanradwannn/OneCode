@@ -670,11 +670,33 @@ function paintComposerImages(): void {
   images.forEach((image, index) => {
     const tile = 'dataUrl' in image ? el('div', 'composer-image') : attachmentCard(image, true);
     if ('dataUrl' in image) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; tile.append(preview); }
+    if ('dataUrl' in image || image.mimeType.startsWith('image/')) {
+      tile.classList.add('is-previewable'); tile.setAttribute('role', 'button'); tile.tabIndex = 0;
+      ui(tile, 'aria-label', () => t('Preview {0}', [image.name]));
+      const open = (): void => { void openComposerImagePreview(image); };
+      tile.addEventListener('click', open);
+      tile.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+    }
     const remove = el('button', 'image-remove', '×'); remove.setAttribute('type', 'button'); ui(remove, 'aria-label', () => t("Remove {0}", [image.name]));
-    remove.addEventListener('click', () => { imageDrafts.set(key, images.filter((_entry, at) => at !== index)); paintComposerImages(); });
+    remove.addEventListener('click', event => { event.stopPropagation(); imageDrafts.set(key, images.filter((_entry, at) => at !== index)); paintComposerImages(); });
     tile.append(remove); box.append(tile);
   });
   paintDeliveryControls();
+}
+
+async function openComposerImagePreview(image: InputImage | InputAttachment): Promise<void> {
+  const source = 'dataUrl' in image ? image.dataUrl : await run(api.previewInputAttachment(image.id));
+  if (!source) { toast(t('Image preview unavailable')); return; }
+  const dialog = document.createElement('dialog'); dialog.className = 'composer-image-preview-dialog';
+  const close = el('button', 'composer-image-preview-close', '×') as HTMLButtonElement; close.type = 'button';
+  ui(close, 'aria-label', () => t('Close preview'));
+  const full = document.createElement('img'); full.src = source; full.alt = image.name;
+  const caption = el('div', 'composer-image-preview-name', image.name);
+  dialog.append(close, full, caption);
+  close.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal(); close.focus();
 }
 function attachmentCard(file: InputAttachment, inComposer = false): HTMLElement {
   if (file.preview) {

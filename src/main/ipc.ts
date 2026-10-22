@@ -39,7 +39,7 @@ import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery, se
 import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish.js';
 import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
 import { validateInputImages } from './session/input-images.js';
-import { stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
+import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -1653,6 +1653,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('sessions:attachText', async payload => {
     const { text } = z.object({ text: z.string().min(1).max(4 * 1024 * 1024) }).parse(payload);
     return (await stageFiles([{ text }]))[0]!;
+  });
+  handle('sessions:attachmentPreview', async payload => {
+    const { id } = z.object({ id: z.string().uuid() }).strict().parse(payload);
+    return previewInputAttachment(id);
   });
   handle('sessions:stopTurn', async payload => {
     const { id, expectedTurnId } = sessionIdArg.extend({ expectedTurnId: z.string().min(1).max(256) }).parse(payload);
