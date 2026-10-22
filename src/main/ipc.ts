@@ -1519,10 +1519,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('link:open', async (payload) => {
     const { url, external } = z.object({ url: z.string().max(8192), external: z.boolean().optional() }).parse(payload);
     if (!ALLOWED_LINKS.has(url) && !safeExternalLink(url)) throw new Error('That link is not allowed');
-    // Setup's Gemini and OpenAI pages open where the user is already signed in, unless the
-    // user asked for their own browser instead.
-    if (!external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)) await openInPreferredBrowser(url, { reveal: true });
-    else await shell.openExternal(url);
+    const config = getConfig(), browser = config.ui.chatBrowser ?? 'chrome';
+    if (/^https?:/i.test(url)) {
+      // A concrete browser preference owns ordinary web links too. Previously Chrome/Brave/
+      // Edge/Firefox selections still fell through to the OS default, so Linux opened Firefox
+      // even when OneCode was configured for Brave. external only means "escape COS" when
+      // COS itself is selected; it must not discard an explicit native-browser choice.
+      if (browser !== 'cos' || (!external && opensInCosBrowser(url, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)))
+        await openInPreferredBrowser(url, { reveal: true });
+      else await shell.openExternal(url);
+    } else await shell.openExternal(url);
     return true;
   });
 
