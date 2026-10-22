@@ -16,6 +16,22 @@ export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
 };
 
 /**
+ * Explicit development/test browser isolation. Normal installs leave these unset and keep the
+ * person's ordinary browser profile. The Beta launcher sets the isolated profile so app-authored
+ * URLs cannot escape into the production Chrome profile or production Companion extension.
+ */
+function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+  const userData = env.ONECODE_BROWSER_USER_DATA?.trim();
+  if (!userData) return [];
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const requireAbsolute = (label: string, value: string): string => {
+    if (!p.isAbsolute(value)) throw new Error(`${label} must be an absolute path.`);
+    return p.normalize(value);
+  };
+  return [`--user-data-dir=${requireAbsolute('ONECODE_BROWSER_USER_DATA', userData)}`];
+}
+
+/**
  * Sign-in uses the person's normal profile, including its installed companion extension. Firefox
  * is not offered: the session handoff reads Chromium's single cookie store, and Firefox keeps a
  * store per container, so it is left out until that path is built and tested there.
@@ -31,15 +47,17 @@ export async function installedSignInBrowsers(): Promise<Array<{ browser: Extern
 export async function openBrowserSignIn(browser: ExternalChatBrowser,
   options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch' | 'discover'> = {}): Promise<string> {
   const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
   const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
   for await (const candidate of browserLaunchCandidates(browser, options)) {
     if (!usable(candidate)) continue;
-    // No throwaway profile: it would have neither the person's extension nor their account.
+    // Normal launches use the person's profile. A deliberate development override may instead
+    // name a persistent isolated profile whose own Companion and provider sessions are retained.
     // Start a fresh Gemini login instead of transplanting an embedded OAuth URL/PKCE state.
     // Firefox takes neither Chromium's window-size switch nor its spelling of one.
     const homeUrl = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     await (options.launch ?? launchCommand)(candidate,
-      browser === 'firefox' ? ['--new-window', homeUrl] : ['--new-window', '--window-size=520,760', homeUrl],
+      browser === 'firefox' ? ['--new-window', homeUrl] : [...isolatedChromiumArgs(platform, env), '--new-window', '--window-size=520,760', homeUrl],
       (platform === 'win32' ? path.win32 : path.posix).dirname(candidate));
     return candidate;
   }
@@ -310,6 +328,7 @@ export async function openInPreferredBrowser(
   options: PreferredBrowserOpenOptions = {}
 ): Promise<string> {
   const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
   const usable = options.usable ?? ((candidate: string) => isExecutableBrowser(candidate, platform));
   const launch = options.launch ?? launchCommand;
   const selected = options.browser ?? getConfig().ui.chatBrowser ?? 'chrome';
@@ -326,6 +345,7 @@ export async function openInPreferredBrowser(
   // prevent background timer/renderer throttling of long-running orchestration tabs.
   // Firefox knows none of these Chromium switches; it gets the URL alone.
   const args = selected === 'firefox' ? [url] : [
+    ...isolatedChromiumArgs(platform, env),
     ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
     ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
     url
