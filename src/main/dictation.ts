@@ -1,9 +1,10 @@
 /**
- * Opt-in speech-to-text for Windows. It uses Windows' own dictation engine
+ * Opt-in speech-to-text. Windows uses Windows' own dictation engine
  * (Windows.Media.SpeechRecognition, which Windows runs online when the person's
  * "Online speech recognition" setting is on), else the offline System.Speech
- * recognizer. CoS saves no audio and sends none anywhere; only recognized text
- * reaches our own renderer.
+ * recognizer. Linux uses a local PocketSphinx helper fed by the default PipeWire/PulseAudio
+ * source. OneCode saves no audio and sends none anywhere; only recognized text reaches our
+ * own renderer.
  *
  * This process is spawned only when the user clicks the microphone. The child
  * event loop never reads stdin (a synchronous Windows Console reader can block
@@ -18,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { DictationEvent } from '../shared/dictation.js';
 import { parseDictationEvent } from '../shared/dictation.js';
+import { linuxDictationLaunch } from './linux/dictation.js';
 
 const SCRIPT = [
   "$ErrorActionPreference='Stop'",
@@ -236,20 +238,34 @@ export function registerDictationIpc(getWindow: () => BrowserWindow | null): voi
     const window = getWindow();
     if (!window || window.isDestroyed() || event.sender !== window.webContents)
       return { ok: false as const, error: 'Dictation can only start from the OneCode window' };
-    if (process.platform !== 'win32')
-      return { ok: false as const, error: 'Microphone dictation currently requires Windows' };
+    if (process.platform !== 'win32' && process.platform !== 'linux')
+      return { ok: false as const, error: 'Microphone dictation is unavailable on this platform' };
     if (active)
       return { ok: false as const, error: 'Dictation is already running' };
     const stopFile = path.join(os.tmpdir(), `cos-dictation-${process.pid}-${randomUUID()}.stop`);
-    const script = SCRIPT.replace('__COS_PARENT_PID__', String(process.pid))
-      .replace('__COS_STOP_FILE__', () => stopFile.replaceAll("'", "''"));
-    const encoded = Buffer.from(script, 'utf16le').toString('base64');
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive',
-        '-EncodedCommand', encoded], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      if (process.platform === 'win32') {
+        const script = SCRIPT.replace('__COS_PARENT_PID__', String(process.pid))
+          .replace('__COS_STOP_FILE__', () => stopFile.replaceAll("'", "''"));
+        const encoded = Buffer.from(script, 'utf16le').toString('base64');
+        child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive',
+          '-EncodedCommand', encoded], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      } else {
+        const launch = linuxDictationLaunch({
+          packaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath(),
+          parentPid: process.pid,
+          stopFile
+        });
+        child = spawn(launch.command, launch.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      }
     } catch {
-      return { ok: false as const, error: 'Could not launch the Windows speech recognizer' };
+      fs.rmSync(stopFile, { force: true });
+      return { ok: false as const, error: process.platform === 'linux'
+        ? 'Could not launch local Linux speech recognition. Install python3-pocketsphinx, pocketsphinx-en-us and pulseaudio-utils.'
+        : 'Could not launch the Windows speech recognizer' };
     }
     const row: OwnedProcess = { child, owner: event.sender, stopping: false, lineBuffer: '', killTimeout: null, stopFile };
     active = row;
@@ -271,7 +287,8 @@ export function registerDictationIpc(getWindow: () => BrowserWindow | null): voi
     child.stderr.resume(); // Avoid a blocked stdout pipe; never log spoken text.
     child.once('error', () => {
       fs.rmSync(row.stopFile, { force: true });
-      if (!row.stopping) send(row, { type: 'error', message: 'Windows speech recognition could not start' });
+      if (!row.stopping) send(row, { type: 'error', message: process.platform === 'linux'
+        ? 'Linux speech recognition could not start' : 'Windows speech recognition could not start' });
       if (active === row) {
         if (row.killTimeout) clearTimeout(row.killTimeout);
         send(row, { type: 'status', status: 'stopped' });
@@ -283,7 +300,8 @@ export function registerDictationIpc(getWindow: () => BrowserWindow | null): voi
       fs.rmSync(row.stopFile, { force: true });
       if (active !== row) return;
       if (!row.stopping && code !== 0 && signal !== 'SIGTERM')
-        send(row, { type: 'error', message: 'Windows speech recognition exited unexpectedly' });
+        send(row, { type: 'error', message: process.platform === 'linux'
+          ? 'Linux speech recognition exited unexpectedly' : 'Windows speech recognition exited unexpectedly' });
       send(row, { type: 'status', status: 'stopped' });
       active = null;
     });

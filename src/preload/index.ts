@@ -106,9 +106,9 @@ export interface SessionDetail {
 }
 
 const api = {
-  /** System.Speech is available only through Windows PowerShell. */
-  dictationSupported: process.platform === 'win32',
-  /** Start microphone access only on explicit user action; audio stays in Windows recognizer. */
+  /** Windows uses native speech recognition; Linux uses the local packaged PocketSphinx bridge. */
+  dictationSupported: process.platform === 'win32' || process.platform === 'linux',
+  /** Start microphone access only on explicit user action; raw audio never crosses OneCode IPC. */
   startDictation: () => call<{ status: 'starting' }>('dictation:start'),
   stopDictation: () => call<void>('dictation:stop'),
   onDictationEvent: (listener: (event: DictationEvent) => void): (() => void) => {

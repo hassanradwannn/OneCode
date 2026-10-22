@@ -1,4 +1,4 @@
-/** Private Windows plugin runtime, from one pinned official Node archive; never a system install. */
+/** Private plugin runtime, from one pinned official Node archive; never a system install. */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -6,14 +6,18 @@ import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NODE_RUNTIME } from './packaging-versions.mjs';
-import { normalizeArch, parseTarget } from './packaging-targets.mjs';
+import { normalizeArch, normalizePlatform, parseTarget } from './packaging-targets.mjs';
 import { fetchWithRetry } from './fetch-retry.mjs';
 
 const repository = path.resolve(import.meta.dirname, '..');
-export function nodeRuntimeAsset(arch) {
+export function nodeRuntimeAsset(arch, platform = 'win32') {
   arch = normalizeArch(arch);
-  const file = `node-${NODE_RUNTIME.version}-win-${arch}.zip`;
-  return { file, arch, version: NODE_RUNTIME.version, sha256: NODE_RUNTIME.targets[arch].sha256,
+  platform = normalizePlatform(platform);
+  if (platform !== 'win32' && platform !== 'linux') throw new Error(`No private Node runtime is packaged for ${platform}`);
+  const file = platform === 'win32'
+    ? `node-${NODE_RUNTIME.version}-win-${arch}.zip`
+    : `node-${NODE_RUNTIME.version}-linux-${arch}.tar.xz`;
+  return { file, platform, arch, version: NODE_RUNTIME.version, sha256: NODE_RUNTIME.targets[platform][arch].sha256,
     url: `https://nodejs.org/dist/${NODE_RUNTIME.version}/${file}`,
     checksumUrl: `https://nodejs.org/dist/${NODE_RUNTIME.version}/SHASUMS256.txt` };
 }
@@ -40,10 +44,12 @@ async function cachedDownload(url, file, maxBytes) {
   }
   const bytes = Buffer.concat(chunks, total); await writeFile(file, bytes); return bytes;
 }
-export async function stageNodeRuntime(arch) {
-  const asset = nodeRuntimeAsset(arch);
+export async function stageNodeRuntime(platform, arch) {
+  platform = normalizePlatform(platform); arch = normalizeArch(arch);
+  if (platform !== 'win32' && platform !== 'linux') return null;
+  const asset = nodeRuntimeAsset(arch, platform);
   const cache = path.join(repository, 'node_modules', '.cache', 'node-runtime');
-  const staging = path.join(repository, 'resources', 'packaging', 'node', 'win32');
+  const staging = path.join(repository, 'resources', 'packaging', 'node', platform);
   const target = contained(staging, path.join(staging, asset.arch));
   const stage = contained(staging, path.join(staging, `${asset.arch}.stage`));
   const extracted = contained(cache, path.join(cache, `${asset.arch}.extract`));
@@ -58,20 +64,27 @@ export async function stageNodeRuntime(arch) {
   try {
     execFileSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
     const names = await readdir(extracted);
-    const expected = `node-${asset.version}-win-${asset.arch}`;
+    const expected = asset.platform === 'win32'
+      ? `node-${asset.version}-win-${asset.arch}`
+      : `node-${asset.version}-linux-${asset.arch}`;
     if (names.length !== 1 || names[0] !== expected) throw new Error('Unexpected official Node archive layout');
     const source = path.join(extracted, expected);
     // Keep npm's complete dependency/license tree, the untouched Node executable and its notices.
-    for (const file of ['node.exe', 'node_modules', 'LICENSE', 'README.md', 'CHANGELOG.md'])
-      await cp(path.join(source, file), path.join(stage, file), { recursive: true });
-    for (const file of ['npm', 'npm.cmd', 'npm.ps1', 'npx', 'npx.cmd', 'npx.ps1'])
+    const files = asset.platform === 'win32'
+      ? ['node.exe', 'node_modules', 'LICENSE', 'README.md', 'CHANGELOG.md']
+      : ['bin', 'lib', 'LICENSE', 'README.md', 'CHANGELOG.md'];
+    for (const file of files) await cp(path.join(source, file), path.join(stage, file), { recursive: true });
+    if (asset.platform === 'win32') for (const file of ['npm', 'npm.cmd', 'npm.ps1', 'npx', 'npx.cmd', 'npx.ps1'])
       if (existsSync(path.join(source, file))) await cp(path.join(source, file), path.join(stage, file));
-    const npm = JSON.parse(await readFile(path.join(stage, 'node_modules/npm/package.json'), 'utf8'));
-    await writeFile(path.join(stage, 'runtime.json'), JSON.stringify({ version: asset.version, platform: 'win32', arch: asset.arch,
+    const npmPackage = asset.platform === 'win32'
+      ? path.join(stage, 'node_modules/npm/package.json')
+      : path.join(stage, 'lib/node_modules/npm/package.json');
+    const npm = JSON.parse(await readFile(npmPackage, 'utf8'));
+    await writeFile(path.join(stage, 'runtime.json'), JSON.stringify({ version: asset.version, platform: asset.platform, arch: asset.arch,
       npm: npm.version, source: asset.url, sha256: asset.sha256 }, null, 2) + '\n');
     await writeFile(path.join(stage, 'SHASUMS256.txt'), `${asset.sha256}  ${asset.file}\n`);
     await rm(target, { recursive: true, force: true }); await rename(stage, target);
-    process.stdout.write(`Official Node ${asset.version} win32-${asset.arch} verified and staged with npm ${npm.version}.\n`);
+    process.stdout.write(`Official Node ${asset.version} ${asset.platform}-${asset.arch} verified and staged with npm ${npm.version}.\n`);
     return target;
   } finally {
     await rm(extracted, { recursive: true, force: true }); await rm(stage, { recursive: true, force: true });
@@ -79,5 +92,5 @@ export async function stageNodeRuntime(arch) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const { platform, arch } = parseTarget();
-  if (platform === 'win32') await stageNodeRuntime(arch);
+  await stageNodeRuntime(platform, arch);
 }

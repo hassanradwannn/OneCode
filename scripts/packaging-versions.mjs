@@ -6,8 +6,14 @@ export { SUPPORTED_ARCHES, SUPPORTED_PLATFORMS };
 export const NODE_RUNTIME = Object.freeze({
   version: 'v24.22.0',
   targets: Object.freeze({
-    x64: Object.freeze({ sha256: 'f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3' }),
-    arm64: Object.freeze({ sha256: '3a5c209a5bc59e65b3bc0fa13ed5e166a26bd3d55332847f498b76b037408d61' })
+    win32: Object.freeze({
+      x64: Object.freeze({ sha256: 'f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3' }),
+      arm64: Object.freeze({ sha256: '3a5c209a5bc59e65b3bc0fa13ed5e166a26bd3d55332847f498b76b037408d61' })
+    }),
+    linux: Object.freeze({
+      x64: Object.freeze({ sha256: 'cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008' }),
+      arm64: Object.freeze({ sha256: 'fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143' })
+    })
   })
 });
 

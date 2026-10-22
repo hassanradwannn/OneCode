@@ -453,7 +453,7 @@ function paintDictation(): void {
   button.setAttribute('aria-pressed', String(active));
   button.setAttribute('aria-label', t(label));
   button.title = t(label);
-  // Native Windows errors remain verbatim; known UI labels/statuses use the
+  // Native recognizer errors remain verbatim; known UI labels/statuses use the
   // existing locale catalog with English fallback until translations are merged.
   status.textContent = dictationNotice ? t(dictationNotice) : '';
   status.hidden = !dictationNotice;
@@ -557,7 +557,8 @@ function onDictationEvent(event: DictationEvent): void {
       dictationPhase = ['starting', 'initializing', 'requesting'].includes(status) ? 'starting' : 'listening';
       dictationNotice = dictationPhase === 'starting' ? 'Preparing microphone…'
         : event.engine === 'legacy' ? 'Listening with basic accuracy. For punctuation and better results, turn on online speech recognition in Windows settings.'
-          : 'Listening…';
+          : event.engine === 'pocketsphinx' ? 'Listening locally with PocketSphinx (English).'
+            : 'Listening…';
       paintDictation();
     }
   }

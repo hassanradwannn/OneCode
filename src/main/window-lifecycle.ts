@@ -1,3 +1,5 @@
+import { applyLinuxLoginStartup } from './linux/autostart.js';
+
 /** Minimal app-event shape kept separate so macOS activation behavior is unit-testable. */
 export interface ActivateEventSource {
   on(event: 'activate', listener: () => void): unknown;
@@ -145,15 +147,20 @@ export function isBackgroundLaunch(argv: readonly string[]): boolean {
 }
 
 export function supportsLoginStartup(platform: NodeJS.Platform, packaged: boolean): boolean {
-  return platform === 'win32' && packaged;
+  return packaged && (platform === 'win32' || platform === 'linux');
 }
 
 export function applyLoginStartup(
   app: { isPackaged: boolean; setLoginItemSettings(settings: { openAtLogin: boolean; path: string; args: string[] }): void },
   enabled: boolean,
   platform: NodeJS.Platform = process.platform,
-  executable = process.execPath
+  executable = process.execPath,
+  linuxApply: typeof applyLinuxLoginStartup = applyLinuxLoginStartup
 ): void {
   if (!supportsLoginStartup(platform, app.isPackaged)) return;
+  if (platform === 'linux') {
+    linuxApply(enabled, { executable, appImage: process.env.APPIMAGE });
+    return;
+  }
   app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--background'] });
 }

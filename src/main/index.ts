@@ -527,7 +527,7 @@ void app.whenReady().then(async () => {
   setInterval(() => void refreshAppProxy(), 2 * 60_000).unref();
   if (windowActivation.isDisabled()) return;
   try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }
-  catch (error) { logWarn(`Windows login startup: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) { logWarn(`login startup: ${error instanceof Error ? error.message : String(error)}`); }
   // The renderer has its own explicit light/dark palette, so native chrome must follow the same
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.

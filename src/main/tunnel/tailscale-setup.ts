@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { childEnv } from '../exec.js';
 import { locateBinary } from './locate.js';
 import { TAILSCALE_SETUP_ACTIONS, type TailscaleSetupAction } from '../../shared/tailscale-setup.js';
+import { startLinuxTailscaleLogin } from '../linux/tailscale.js';
 
 const run = promisify(execFile);
 // Exact community repository identity; WinGet retains installer hash checks and OS consent.
@@ -59,7 +60,8 @@ export class TailscaleSetupLauncher {
     catch { /* Keep the spent launch: a failed reply cannot prove no browser opened. Manual setup remains available. */ }
   }
 }
-const launcher = new TailscaleSetupLauncher({ install: installWindowsTailscale, login: openWindowsTailscale,
+const launcher = new TailscaleSetupLauncher({ install: installWindowsTailscale,
+  login: () => process.platform === 'linux' ? startLinuxTailscaleLogin() : openWindowsTailscale(),
   open: url => shell.openExternal(url) });
 /** The prerequisite owner resumes only after actual CLI/account/capability verification. */
 export const requestTailscaleSetup = (action: TailscaleSetupAction): Promise<void> => launcher.request(action);

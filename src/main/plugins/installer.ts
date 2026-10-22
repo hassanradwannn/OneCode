@@ -9,7 +9,7 @@ import { getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
 import { terminateProcessTree } from '../exec.js';
 import { envValue, pathEntries, setEnvValue } from '../env.js';
 import { ensureManagedUv, managedUvDirectory } from './uv-runtime.js';
-import { bundledNodeRuntime } from './node-runtime.js';
+import { bundledNodeRuntime, stablePluginNodeRuntime } from './node-runtime.js';
 
 /** One minimal environment for runtime discovery, installation and plugin startup. */
 export function pluginEnvironment(inherited = getDefaultEnvironment(), platform = process.platform): Record<string, string> {
@@ -234,7 +234,10 @@ export async function installSource(source: PluginSource, dir: string): Promise<
     throw new Error('Specify a package name and an explicit version (no URLs or version ranges)');
   if (source.kind === 'npm') {
     // Use npm's JS entry point on Windows: .cmd files need a shell and untrusted shell interpolation is not acceptable.
-    let node = await findExecutable('node').catch(() => bundledNodeRuntime()?.node ?? null);
+    const privateRuntime = process.platform === 'linux' ? await stablePluginNodeRuntime(dir) : bundledNodeRuntime();
+    let node = process.platform === 'linux' && privateRuntime
+      ? privateRuntime.node
+      : await findExecutable('node').catch(() => privateRuntime?.node ?? null);
     if (!node) throw new Error('The Node.js plugin runtime is unavailable. Reinstall OneCode or install the standard Node.js distribution.');
     const args = [
       'install',
@@ -246,7 +249,9 @@ export async function installSource(source: PluginSource, dir: string): Promise<
       dir,
       `${source.package}@${source.version}`,
     ];
-    if (process.platform === 'win32') {
+    if (privateRuntime && node === privateRuntime.node) {
+      await runInstaller(node, [privateRuntime.npm, ...args], dir);
+    } else if (process.platform === 'win32') {
       let npm = path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
       try {
         await fs.access(npm);

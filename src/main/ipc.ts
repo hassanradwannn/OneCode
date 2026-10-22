@@ -1552,12 +1552,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   handle('browser:pickExecutable', async payload => {
     const browser = z.enum(['chrome', 'edge', 'brave', 'firefox']).parse(payload);
-    if (process.platform !== 'win32') throw new Error('Executable selection is available on Windows.');
+    if (process.platform !== 'win32' && process.platform !== 'linux') throw new Error('Executable selection is not available on this platform.');
     const window = getWindow(); if (!window) throw new Error('No window');
-    const result = await dialog.showOpenDialog(window, { title: `Locate ${browser}`, properties: ['openFile'], filters: [{ name: 'Browser executable', extensions: ['exe'] }] });
+    const result = await dialog.showOpenDialog(window, { title: `Locate ${browser}`, properties: ['openFile'],
+      ...(process.platform === 'win32' ? { filters: [{ name: 'Browser executable', extensions: ['exe'] }] } : {}) });
     if (result.canceled || !result.filePaths[0]) return buildState();
-    const { windowsBrowserExecutable } = await import('./browser-windows.js');
-    const executable = windowsBrowserExecutable(result.filePaths[0], browser);
+    const executable = process.platform === 'win32'
+      ? (await import('./browser-windows.js')).windowsBrowserExecutable(result.filePaths[0], browser)
+      : (await import('./linux/browser-executable.js')).linuxBrowserExecutable(result.filePaths[0], browser);
     if (!executable || !await (await import('node:fs/promises')).stat(executable).then(row => row.isFile(), () => false)) throw new Error('Choose the executable for the selected browser.');
     await updateConfig(config => ({ ...config, ui: { ...config.ui, browserExecutables: { ...config.ui.browserExecutables, [browser]: executable } } }));
     return buildState();
