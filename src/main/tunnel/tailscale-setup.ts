@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { childEnv } from '../exec.js';
 import { locateBinary } from './locate.js';
 import { TAILSCALE_SETUP_ACTIONS, type TailscaleSetupAction } from '../../shared/tailscale-setup.js';
-import { startLinuxTailscaleLogin } from '../linux/tailscale.js';
+import { authorizeLinuxTailscaleOperator, startLinuxTailscaleLogin } from '../linux/tailscale.js';
 
 const run = promisify(execFile);
 // Exact community repository identity; WinGet retains installer hash checks and OS consent.
@@ -41,6 +41,7 @@ async function openWindowsTailscale(): Promise<boolean> {
 export interface TailscaleSetupDeps {
   install(): Promise<boolean>;
   login(): Promise<boolean>;
+  operator?(): Promise<boolean>;
   open(url: string): Promise<void>;
 }
 /** One launch owner shared by MCP and Remote; polling cannot start repeated installers. */
@@ -55,6 +56,7 @@ export class TailscaleSetupLauncher {
     try {
       if (action.step === 'install' && await this.deps.install()) return;
       if (action.step === 'login' && await this.deps.login()) return;
+      if (action.step === 'operator' && await this.deps.operator?.()) return;
     } catch { /* A missing/failed native setup falls back once to first-party instructions. */ }
     try { await this.deps.open(destination.url); }
     catch { /* Keep the spent launch: a failed reply cannot prove no browser opened. Manual setup remains available. */ }
@@ -62,6 +64,7 @@ export class TailscaleSetupLauncher {
 }
 const launcher = new TailscaleSetupLauncher({ install: installWindowsTailscale,
   login: () => process.platform === 'linux' ? startLinuxTailscaleLogin() : openWindowsTailscale(),
+  operator: () => authorizeLinuxTailscaleOperator(),
   open: url => shell.openExternal(url) });
 /** The prerequisite owner resumes only after actual CLI/account/capability verification. */
 export const requestTailscaleSetup = (action: TailscaleSetupAction): Promise<void> => launcher.request(action);

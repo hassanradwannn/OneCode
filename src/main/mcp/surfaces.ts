@@ -6,7 +6,7 @@
 import type { Capabilities } from '../../shared/types.js';
 import { desktopAutomationSupported } from '../platform.js';
 import { getConfig } from '../config.js';
-import { CONNECTOR_BRAND, connectorName } from '../../shared/connector-names.js';
+import { CONNECTOR_BRAND, connectorName, connectorSuffixForPlatform } from '../../shared/connector-names.js';
 import { learnedConnectorName } from '../connector-identity.js';
 import { WINDOWS_COMPUTER_METHODS, WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_INPUT_METHODS } from '../../shared/windows-computer.js';
 import { BROWSER_TOOLS, BROWSER_READ_TOOLS, BROWSER_WRITE_TOOLS } from '../../shared/browser-control.js';
@@ -140,8 +140,8 @@ export function surfaceDefinition(id: SurfaceId): SurfaceDefinition {
 }
 
 /** The name this install tells the user to give the connector, and serves as its resource name. */
-export function configuredConnectorName(id: SurfaceId): string {
-  return connectorName(id, getConfig().connectorSuffix);
+export function configuredConnectorName(id: SurfaceId, platform: NodeJS.Platform = process.platform): string {
+  return connectorName(id, connectorSuffixForPlatform(getConfig().connectorSuffix, platform));
 }
 
 /**

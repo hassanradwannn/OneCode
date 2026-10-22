@@ -581,6 +581,7 @@ function firstLaunchCapabilities(platform: NodeJS.Platform, release?: string): C
 
 export function defaultConfig(platform: NodeJS.Platform = process.platform, release?: string): Config {
   return {
+    ...(platform === 'linux' ? { connectorSuffix: 'Linux' } : {}),
     roots: [],
     capabilities: firstLaunchCapabilities(platform, release),
     readOnly: false,

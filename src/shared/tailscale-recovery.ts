@@ -13,6 +13,8 @@ export function recoverySteps(step: string | undefined, mode: 'remote' | 'tunnel
   const steps: RecoveryStep[] = [];
   if (step === 'install') steps.push({ text: 'Install Tailscale, then open it. OneCode checks again automatically; no PATH or terminal setup is needed.', url: 'https://tailscale.com/download' });
   if (step === 'login' || step === 'install') steps.push({ text: 'In the Tailscale tray menu, sign in and connect this computer to your account. Leave Tailscale running.' });
+  if (step === 'operator') steps.push(
+    { text: 'On Linux, Tailscale must authorize your desktop user before OneCode can publish its own Serve/Funnel paths. Approve the system authorization prompt from Connect. If you dismissed it, run this once in a terminal and then retry Connect.', command: 'sudo tailscale set --operator="$USER"' });
   if (step === 'dns') steps.push(
     { text: 'Open the DNS page of your Tailscale admin console.', url: 'https://login.tailscale.com/admin/dns' },
     { text: 'Turn on MagicDNS. Under HTTPS Certificates, select Enable HTTPS and approve the certificate notice. A tailnet administrator may need to do this.' });
