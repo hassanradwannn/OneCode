@@ -109,7 +109,20 @@ def capture_command() -> list[str]:
     parec = shutil.which("parec")
     if not parec:
         raise RuntimeError("Microphone capture is unavailable. Install pulseaudio-utils (parec).")
-    return [parec, "--raw", "--rate=16000", "--format=s16le", "--channels=1"]
+    command = [parec, "--raw", "--rate=16000", "--format=s16le", "--channels=1"]
+    pactl = shutil.which("pactl")
+    if pactl:
+        try:
+            source = subprocess.check_output([pactl, "get-default-source"], text=True, stderr=subprocess.DEVNULL, timeout=2.0).strip()
+            if source:
+                if source.endswith(".monitor"):
+                    raise RuntimeError("The default audio source is a system-output monitor, not a microphone. Select a microphone as the default input first.")
+                command.append(f"--device={source}")
+        except subprocess.TimeoutExpired:
+            pass
+        except subprocess.CalledProcessError:
+            pass
+    return command
 
 
 def run(parent_pid: int, stop_file: str, root: Path | None) -> int:
@@ -117,6 +130,7 @@ def run(parent_pid: int, stop_file: str, root: Path | None) -> int:
     command = capture_command()
     capture: subprocess.Popen[bytes] | None = None
     listening = False
+    utterance_had_speech = False
     last_partial = ""
     try:
         if not parent_alive(parent_pid):
@@ -138,25 +152,28 @@ def run(parent_pid: int, stop_file: str, root: Path | None) -> int:
                 continue
             decoder.process_raw(chunk, False, False)
             now_listening = bool(decoder.get_in_speech())
+            if now_listening:
+                utterance_had_speech = True
             hypothesis = decoder.hyp()
             text = hypothesis.hypstr.strip() if hypothesis and hypothesis.hypstr else ""
-            if text and text != last_partial:
+            if utterance_had_speech and text and text != last_partial:
                 last_partial = text
                 emit({"type": "partial", "text": text})
             if listening and not now_listening:
                 decoder.end_utt()
                 hypothesis = decoder.hyp()
                 text = hypothesis.hypstr.strip() if hypothesis and hypothesis.hypstr else ""
-                if text:
+                if utterance_had_speech and text:
                     emit({"type": "final", "text": text})
                 decoder.start_utt()
+                utterance_had_speech = False
                 last_partial = ""
             listening = now_listening
 
         decoder.end_utt()
         hypothesis = decoder.hyp()
         text = hypothesis.hypstr.strip() if hypothesis and hypothesis.hypstr else ""
-        if text:
+        if utterance_had_speech and text:
             emit({"type": "final", "text": text})
         return 0
     finally:
