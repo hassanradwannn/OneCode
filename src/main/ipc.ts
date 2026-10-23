@@ -582,6 +582,14 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
 }
 
 const sessionIdArg = z.object({ id: z.string().min(8).max(64).regex(/^[0-9a-z-]+$/i) });
+/** A reserved local chat exists before its exact native opening finishes. */
+async function pendingOpeningTabReadiness(sessionId: string): Promise<import('../shared/chat-readiness.js').SelectedChatReadiness | null> {
+  const opening = (await listInputs()).find(row => row.opening && row.sessionId === sessionId &&
+    row.purpose !== 'decision' && (row.state === 'queued' || row.state === 'browser'));
+  return opening ? { phase: 'loading', reason: opening.state === 'browser'
+    ? 'Preparing this chat in the browser. Task delivery is not confirmed yet.'
+    : 'This chat is queued to open in the browser.' } : null;
+}
 /** A chat's own name in the app (#1107): one line, no control characters; null or blank clears it. */
 const sessionNameArg = sessionIdArg.extend({ title: z.string().max(2000).nullable() });
 export function cleanSessionName(title: string | null): string | null {
@@ -1873,11 +1881,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const conversationId = (await getSession(id))?.conversationId;
     if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
     if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) return ensureSelectedChatReady(id);
+    const opening = conversationId ? null : await pendingOpeningTabReadiness(id);
+    if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
+    if (opening) return opening;
     return { phase: 'refused' as const, reason: 'This chat has no current provider conversation.' };
   });
   handle('sessions:tabReadiness', async payload => {
     const { id } = sessionIdArg.parse(payload);
-    return selectedChatReadinessFor(id, (await getSession(id))?.conversationId ?? null);
+    const conversationId = (await getSession(id))?.conversationId ?? null;
+    return conversationId ? selectedChatReadinessFor(id, conversationId)
+      : await pendingOpeningTabReadiness(id) ?? { phase: 'refused' as const, reason: 'This chat has no current provider conversation.' };
   });
 
   /**
