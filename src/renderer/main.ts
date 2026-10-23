@@ -1349,7 +1349,8 @@ function paintUpdate(next: AppState): void {
   const installable = update.stage === 'ready' && !update.installRequested;
   $<HTMLButtonElement>('updateInstall').hidden = !installable;
   $<HTMLButtonElement>('installUpdate').hidden = !installable;
-  $('updateNow').hidden = update.stage !== 'ready' || update.installMode === 'now';
+  $('updateNow').hidden = update.channel === 'beta-branch' || update.stage !== 'ready' || update.installMode === 'now';
+  $('settingsUpdateNow').hidden = update.channel === 'beta-branch';
   $<HTMLButtonElement>('settingsUpdateNow').disabled = update.installMode === 'now';
   $<HTMLButtonElement>('settingsInstallUpdate').disabled = !!update.installRequested;
   $('cancelUpdateInstall').hidden = !update.installRequested || update.installCommitted === true;
