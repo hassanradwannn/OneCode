@@ -945,7 +945,7 @@ export function followChatInBackground(conversationId: string): void {
 
 export type SelectedChatReadiness = { phase: 'ready' | 'loading' | 'history-wait' | 'reconnecting' | 'refused'; retryAt?: number; reason?: string };
 const selectedChatReadiness = new Map<string, { conversationId: string; token: string; browser?: string;
-  state: SelectedChatReadiness; startedAt: number; dismissedAt?: number }>();
+  state: SelectedChatReadiness; startedAt: number; dismissedAt?: number; reads?: number; reports?: number }>();
 const selectedChatFlights = new Map<string, Promise<SelectedChatReadiness>>();
 const SELECTED_CHAT_READY_MS = 60_000;
 function selectedReadinessState(request: NonNullable<ReturnType<typeof selectedChatReadiness.get>>): SelectedChatReadiness {
@@ -956,10 +956,22 @@ function selectedReadinessState(request: NonNullable<ReturnType<typeof selectedC
 }
 export function selectedChatReadinessFor(sessionId: string, currentConversationId?: string | null): SelectedChatReadiness | null {
   const request = selectedChatReadiness.get(sessionId);
+  if (request) request.reads = (request.reads ?? 0) + 1;
   if (request && currentConversationId !== undefined && request.conversationId !== currentConversationId)
     return { phase: 'refused', reason: 'The chat attachment changed.' };
   const state = request && selectedReadinessState(request);
   return state ? { ...state } : null;
+}
+/** Read-only report of the existing selection owner; no chat IDs, tokens or browser identity. */
+export function selectedChatReadinessDiagnostics(): Array<{
+  phase: SelectedChatReadiness['phase']; ageMs: number; opening: boolean; assigned: boolean; reads: number; reports: number;
+}> {
+  return [...selectedChatReadiness].slice(-50).map(([sessionId, request]) => ({
+    phase: selectedReadinessState(request).phase,
+    ageMs: Math.max(0, Date.now() - request.startedAt),
+    opening: selectedChatFlights.has(sessionId), assigned: Boolean(request.browser),
+    reads: request.reads ?? 0, reports: request.reports ?? 0
+  }));
 }
 /** Explicit chat selection owns opening/readiness; history/status reads cannot open tabs. */
 export function ensureSelectedChatReady(sessionId: string): Promise<SelectedChatReadiness> {
@@ -3211,6 +3223,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 200, { ok: false }, origin);
     const [sessionId, request] = entry;
     if ((await getSession(sessionId))?.conversationId !== request.conversationId) return json(res, 200, { ok: false }, origin);
+    request.reports = (request.reports ?? 0) + 1;
     const reasons: Record<string, string> = {
       'opening-failed': 'The chosen browser could not open the provider tab. Select this chat again to retry.',
       'opening-spent': 'This selection already opened a tab that was closed. Select this chat again to reopen it.',
