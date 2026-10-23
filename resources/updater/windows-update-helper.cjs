@@ -38,6 +38,24 @@ function successorArguments(record) {
     ...(record.browserUserData ? [`--onecode-browser-user-data=${record.browserUserData}`] : []),
     ...(record.bridgePorts ? [`--onecode-bridge-ports=${record.bridgePorts}`] : [])];
 }
+function quoteWindowsArgument(argument) {
+  if (!/[\s"]/.test(argument)) return argument;
+  let result = '"', slashes = 0;
+  for (const character of argument) {
+    if (character === '\\') { slashes += 1; continue; }
+    if (character === '"') result += '\\'.repeat(slashes * 2 + 1) + '"';
+    else result += '\\'.repeat(slashes) + character;
+    slashes = 0;
+  }
+  return result + '\\'.repeat(slashes * 2) + '"';
+}
+function shortcutArguments(record = {}) {
+  return [
+    ...(record.userData ? [`--user-data-dir=${record.userData}`] : []),
+    ...(record.browserUserData ? [`--onecode-browser-user-data=${record.browserUserData}`] : []),
+    ...(record.bridgePorts ? [`--onecode-bridge-ports=${record.bridgePorts}`] : [])
+  ].map(quoteWindowsArgument).join(' ');
+}
 function noLinks(file) {
   for (let item = file; ; item = path.dirname(item)) {
     if (fs.lstatSync(item).isSymbolicLink()) throw new Error('Update paths must not redirect');
@@ -88,12 +106,19 @@ function ownedShortcutIcon(value, executable) {
   // An empty icon path means the link target's own icon, not a foreign resource.
   return !icon || same(icon, executable) || same(icon, path.win32.join(path.win32.dirname(executable), 'resources', 'runtime-icon.ico'));
 }
-function shortcuts(executable) {
+function shortcuts(executable, record = {}) {
   const product = currentChannel === 'beta' ? 'OneCode Beta' : 'OneCode';
-  const rows = JSON.parse(ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\${product}.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) '${product}.lnk';if(-not(Test-Path -LiteralPath $menu)){throw '${product} Start-menu shortcut is missing'};$rows=@(foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);@{target=$link.TargetPath;icon=$link.IconLocation}}});ConvertTo-Json -InputObject $rows -Compress`));
+  const rows = JSON.parse(ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\${product}.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) '${product}.lnk';if(-not(Test-Path -LiteralPath $menu)){throw '${product} Start-menu shortcut is missing'};$rows=@(foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);@{file=$file;target=$link.TargetPath;icon=$link.IconLocation}}});ConvertTo-Json -InputObject $rows -Compress`));
   for (const row of rows) {
     if (!same(row.target, executable)) throw new Error('OneCode shortcut points outside the installed app');
     if (!ownedShortcutIcon(row.icon, executable)) throw new Error('OneCode shortcut icon points outside the installed app');
+  }
+  const argumentsText = shortcutArguments(record);
+  if (!argumentsText) return; // Preserve legacy receipts and the normal stable shortcut defaults.
+  for (const row of rows) {
+    const file = quote(row.file), target = quote(executable), icon = quote(row.icon);
+    const expected = quote(argumentsText);
+    ps(`if(-not(Test-Path -LiteralPath ${file})){throw 'OneCode shortcut disappeared'};$shell=New-Object -ComObject WScript.Shell;$link=$shell.CreateShortcut(${file});if(-not [string]::Equals($link.TargetPath,${target},[StringComparison]::OrdinalIgnoreCase) -or $link.IconLocation -cne ${icon}){throw 'OneCode shortcut changed before profile restore'};$link.Arguments=${expected};$link.Save();$verify=$shell.CreateShortcut(${file});if(-not [string]::Equals($verify.TargetPath,${target},[StringComparison]::OrdinalIgnoreCase) -or $verify.IconLocation -cne ${icon} -or $verify.Arguments -cne ${expected}){throw 'OneCode shortcut profile restore did not verify'}`);
   }
 }
 
@@ -152,7 +177,7 @@ async function run(note, dependencies = {}) {
     const normalizedVersion = value => /^\d+\.\d+\.\d+(?:\.\d+)?$/.test(value) ? value.split('.').concat('0').slice(0, 4).join('.') : null;
     if (normalizedVersion(installed) !== normalizedVersion(record.fileVersion)) throw new Error(`Installed version ${installed} differs from ${record.fileVersion}`);
     log(`installed version ${installed}; sha256 ${crypto.createHash('sha256').update(fs.readFileSync(record.executable)).digest('hex')}`);
-    (dependencies.shortcuts || shortcuts)(record.executable);
+    (dependencies.shortcuts || shortcuts)(record.executable, record);
     log('installed shortcuts verified');
     if(patch) {
       if(listing(record.executable).length) throw Error('Base installer unexpectedly started OneCode before the hotfix');
@@ -234,7 +259,7 @@ async function runHotfix(record, note, dependencies, listing, log, persist) {
     for (const entry of previous) if (!names.has(entry.path)) { fs.unlinkSync(contract.location(resources, entry.path)); changed.add(entry.path); }
     await contract.verify(resources, manifest.files);
     (dependencies.registration || registration)(record.target);
-    (dependencies.shortcuts || shortcuts)(record.executable);
+    (dependencies.shortcuts || shortcuts)(record.executable, record);
     persist('relaunching');
     await launchSuccessor(record, dependencies, listing, log, record.version);
     log('success: application hotfix loaded; native runtime retained');
@@ -267,5 +292,5 @@ async function launchSuccessor(record, dependencies, listing, log, version) {
     await sleep(1000);
   }
 }
-module.exports = { validate, run, readyWindow, ownedShortcutIcon, runHotfix, uninstallerName };
+module.exports = { validate, run, readyWindow, ownedShortcutIcon, runHotfix, uninstallerName, successorArguments, shortcutArguments };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });
