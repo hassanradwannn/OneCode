@@ -48,6 +48,7 @@ import {
 import { terminateProcessTree } from '../exec.js';
 import { prefixPowershellScriptWithUtf8, type ShellType } from './shell.js';
 import { FileExecSpool, MemoryExecSpool, type CompletedExecSpoolRecord, type ExecSpool, type LiveExecSpoolRecord } from './unified-exec-spool.js';
+import { FileWslExecCustody, type WslExecCustodyRecord, type WslExecCustodyPublicRow } from './wsl-exec-custody.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 
 // --------------------------------------------------------------------------- errors
@@ -283,7 +284,7 @@ function quoteWindowsArgument(argument: string): string {
  * see new bytes while work runs. Once completed delivery is acknowledged, the manager's
  * bounded history permits explicitly labeled rereads without executing the command again.
  */
-class UnifiedExecProcess {
+export class UnifiedExecProcess {
   readonly identity = {};
   private readonly startedAt = Date.now();
   private resolveCompletion!: (value: ProcessCompletion) => void;
@@ -603,7 +604,8 @@ class UnifiedExecProcess {
     }
   }
 
-  async terminate(): Promise<void> {
+  async terminate(): Promise<boolean> {
+    let treeSignalConfirmed = true;
     if (this.pty) {
       try {
         this.pty.kill();
@@ -613,9 +615,9 @@ class UnifiedExecProcess {
       // node-pty queues `kill()` until the pty reports ready and drops it silently if that
       // never happens, so the process tree is the authority here, not the handle. `pid` is a
       // live read for exactly this reason.
-      if (this.pid > 0) await terminateProcessTree(this.pid, true);
+      if (this.pid > 0) treeSignalConfirmed = await terminateProcessTree(this.pid, true);
     } else if (this.child?.pid !== undefined) {
-      await terminateProcessTree(this.child.pid, true);
+      treeSignalConfirmed = await terminateProcessTree(this.child.pid, true);
     }
     this.signalExit(this.exit);
     if (!this.outputClosed && !(await this.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS))) {
@@ -623,6 +625,7 @@ class UnifiedExecProcess {
       // bytes already received and report that the captured output ended under the close cap.
       this.sealInterruptedOutput();
     }
+    return treeSignalConfirmed;
   }
 }
 
@@ -771,9 +774,12 @@ export interface BackgroundTerminalInfo {
   incarnation: number;
   command: string;
   cwd: string;
-  pid: number;
+  /** Undefined while the durable launch intent is committed but OS spawn is in flight. */
+  pid?: number;
   tty: boolean;
   startedAt: number;
+  detachedWsl?: true;
+  terminationState?: WslExecCustodyRecord['state'];
 }
 
 interface ProcessEntry {
@@ -842,10 +848,17 @@ export class UnifiedExecProcessManager {
   private nextLocalProcessId = 1_000;
   private nextLocalIncarnation = 1;
   private readonly liveOperations = new Map<number, LiveExecSpoolRecord>();
+  private readonly cancelBeforeSpawnReturns = new Set<number>();
+  private readonly unconfirmedTerminationIncarnations = new Map<number, number>();
   private readonly checkpointTimers = new Map<number, NodeJS.Timeout>();
   private readonly checkpointFlights = new Map<number, Promise<void>>();
   private readonly maxWriteStdinYieldTimeMs: number;
   private readonly requireDurableSpool: boolean;
+  private wslCustody: FileWslExecCustody | null = null;
+  private readonly wslNeedsRevalidation = new Set<number>();
+  private readonly wslLeaderExitUnconfirmed = new Set<number>();
+  private wslStorageFailures = 0;
+  private wslStorageError: string | null = null;
 
   constructor(maxWriteStdinYieldTimeMs: number, requireDurableSpool = false) {
     this.maxWriteStdinYieldTimeMs = Math.max(maxWriteStdinYieldTimeMs, MIN_EMPTY_YIELD_TIME_MS);
@@ -876,7 +889,15 @@ export class UnifiedExecProcessManager {
       const durable = new FileExecSpool(userDataDir);
       try {
         const records = await durable.initialize();
+        let wslCustody: FileWslExecCustody | null = null;
+        if (process.platform === 'win32') {
+          wslCustody = new FileWslExecCustody(userDataDir);
+          await wslCustody.initialize();
+          this.wslStorageFailures = 0;
+          this.wslStorageError = null;
+        }
         this.spool = durable;
+        this.wslCustody = wslCustody;
         for (const record of records) {
           this.spooled.set(record.processId, record);
         }
@@ -884,6 +905,12 @@ export class UnifiedExecProcessManager {
         this.spoolInitializationError = null;
         this.lazyInitRetryUsed = false;
         this.spoolRestoreListener?.(records);
+        if (wslCustody) {
+          // A stored tag may be stale after a crash. Do not scan/kill or block app startup;
+          // show it as unknown until the user requests exact-token revalidation/cancellation.
+          this.wslNeedsRevalidation.clear();
+          for (const row of wslCustody.list()) this.wslNeedsRevalidation.add(row.processId);
+        }
         this.notifyProcessChange();
         return records;
       } catch (error) {
@@ -958,6 +985,8 @@ export class UnifiedExecProcessManager {
       entry.sessionId = sessionId;
       if (conversationId) entry.conversationId = conversationId;
     }
+    const wsl = this.wslCustody?.list().find(row => row.processId === processId && row.ownerPrincipal === requestPrincipal);
+    if (wsl) await this.wslCustody?.promote(processId, wsl.incarnation, requestPrincipal, sessionId);
     const record = this.spooled.get(processId);
     if (!record || record.principal !== requestPrincipal) return;
     const promoted: CompletedExecSpoolRecord = { ...record, principal: sessionId, sessionId,
@@ -993,7 +1022,7 @@ export class UnifiedExecProcessManager {
     this.reservedProcessIds.delete(processId);
     this.processes.delete(processId);
     this.completed.delete(processId);
-    if (!this.spooled.has(processId)) this.releaseListener?.(processId);
+    if (!this.spooled.has(processId) && !this.wslCustody?.list().some(row => row.processId === processId)) this.releaseListener?.(processId);
     this.notifyProcessChange();
   }
 
@@ -1068,6 +1097,76 @@ export class UnifiedExecProcessManager {
     this.processes.delete(entry.processId);
     this.reservedProcessIds.delete(entry.processId);
     this.spoolFailures.delete(entry.processId);
+    this.notifyProcessChange();
+    if (this.wslCustody) void this.reconcileWslCustody(entry.processId, entry.incarnation);
+  }
+
+  private async reconcileWslCustody(processId: number, incarnation: number): Promise<void> {
+    const store = this.wslCustody;
+    if (this.wslLeaderExitUnconfirmed.has(processId)) {
+      const current = store?.get(processId, incarnation);
+      if (current) await this.noteWslTerminationUnknown(current,
+        'The Windows process-tree termination was not confirmed; exact WSL custody remains open.');
+      return;
+    }
+    await store?.markLeaderExited(processId, incarnation).catch(error => this.noteWslStorageFailure(error));
+    const record = store?.get(processId, incarnation);
+    if (!store || !record) return;
+    const scan = await store.scan(record);
+    let persisted = false;
+    if (!scan.complete) {
+      await store.update({ ...record, state: 'termination-unknown', lastScanAt: Date.now(), lastError: scan.error })
+        .then(() => { persisted = true; }, error => this.noteWslStorageFailure(error));
+    } else if (scan.identities.length === 0) {
+      await store.remove(processId, incarnation).then(() => { persisted = true; }, error => this.noteWslStorageFailure(error));
+    } else {
+      await store.update({ ...record, state: 'tagged', identities: scan.identities, lastScanAt: Date.now(), lastError: null })
+        .then(() => { persisted = true; }, error => this.noteWslStorageFailure(error));
+    }
+    if (persisted && scan.complete) this.wslNeedsRevalidation.delete(processId);
+    else this.wslNeedsRevalidation.add(processId);
+    this.releaseOwnerIfUnretained(processId);
+    this.notifyProcessChange();
+  }
+
+  private releaseOwnerIfUnretained(processId: number): void {
+    if (!this.spooled.has(processId) && !this.processes.has(processId) &&
+        !this.wslCustody?.list().some(row => row.processId === processId)) this.releaseListener?.(processId);
+  }
+
+  private noteWslStorageFailure(error: unknown): void {
+    this.wslStorageFailures++;
+    this.wslStorageError = error instanceof Error ? error.message : 'Durable WSL custody storage failed.';
+    this.notifyProcessChange();
+  }
+
+  private async terminateWslCustody(record: WslExecCustodyRecord, allowUnconfirmedLeader = false,
+    leaderExitConfirmedNow = false): Promise<boolean> {
+    try {
+      if (leaderExitConfirmedNow) await this.wslCustody!.markLeaderExited(record.processId, record.incarnation);
+      const latest = this.wslCustody!.get(record.processId, record.incarnation) ?? record;
+      if (!latest.leaderExited && !allowUnconfirmedLeader) {
+        this.wslLeaderExitUnconfirmed.add(record.processId);
+        await this.noteWslTerminationUnknown(latest, 'The Windows process-tree termination could not be confirmed; WSL descendants may remain.');
+        return false;
+      }
+      const complete = (await this.wslCustody!.terminate(latest)).complete;
+      if (complete) {
+        this.wslNeedsRevalidation.delete(record.processId);
+        this.wslLeaderExitUnconfirmed.delete(record.processId);
+      }
+      else this.wslNeedsRevalidation.add(record.processId);
+      return complete;
+    }
+    catch (error) { this.noteWslStorageFailure(error); throw error; }
+  }
+
+  private async noteWslTerminationUnknown(record: WslExecCustodyRecord, message: string): Promise<void> {
+    try {
+      const current = this.wslCustody?.get(record.processId, record.incarnation);
+      if (current) await this.wslCustody!.update({ ...current, state: 'termination-unknown', lastScanAt: Date.now(), lastError: message });
+    } catch (error) { this.noteWslStorageFailure(error); }
+    this.wslNeedsRevalidation.add(record.processId);
     this.notifyProcessChange();
   }
 
@@ -1150,12 +1249,25 @@ export class UnifiedExecProcessManager {
     }
     const start = Date.now();
     const liveOperation = this.liveSpoolRecord(request, incarnation, start);
+    let wslRecord: WslExecCustodyRecord | null = null;
     try {
       // This durable operation record precedes OS process creation. A restart turns it into an
       // interrupted unread result; it can never be interpreted as permission to respawn.
       await this.spool.putLive(liveOperation);
       this.liveOperations.set(request.processId, liveOperation);
+      if (globalThis.process.platform === 'win32' && this.requireDurableSpool) {
+        if (!this.wslCustody) throw new Error('Durable WSL process custody is not initialized.');
+        try {
+          wslRecord = await this.wslCustody.putPending({ processId: request.processId, incarnation,
+            ownerPrincipal: request.ownerPrincipal ?? null, command: request.hookCommand, startedAt: start });
+        } catch (error) {
+          this.noteWslStorageFailure(error);
+          throw error;
+        }
+      }
     } catch {
+      await this.spool.removeLive(request.processId, incarnation).catch(() => undefined);
+      this.liveOperations.delete(request.processId);
       this.releaseProcessId(request.processId);
       throw UnifiedExecError.terminalStorageUnavailable();
     }
@@ -1171,7 +1283,7 @@ export class UnifiedExecProcessManager {
         command,
         shellType: request.shellType,
         cwd: request.cwd,
-        env: request.env,
+        env: wslRecord && this.wslCustody ? this.wslCustody.environmentFor(wslRecord, request.env) : request.env,
         tty: request.tty,
         onOutputCheckpoint: () => {
           if (spawnedProcess) this.scheduleLiveCheckpoint(spawnedProcess, request.processId, incarnation);
@@ -1180,8 +1292,22 @@ export class UnifiedExecProcessManager {
       });
       spawnedProcess = process;
       if (checkpointBeforeSpawnReturned) this.scheduleLiveCheckpoint(process, request.processId, incarnation);
+      // Stop may arrive while the native spawn promise is still pending. Once it yields the
+      // exact child handle, terminate that incarnation before exposing it as an ordinary run.
+      if (this.cancelBeforeSpawnReturns.delete(request.processId)) {
+        const confirmed = await process.terminate();
+        if (confirmed && wslRecord) await this.terminateWslCustody(wslRecord, false, true);
+        if (!confirmed) this.unconfirmedTerminationIncarnations.set(request.processId, incarnation);
+        if (!confirmed && wslRecord) {
+          this.wslLeaderExitUnconfirmed.add(request.processId);
+          await this.terminateWslCustody(wslRecord, true);
+        }
+        if (confirmed) this.unconfirmedTerminationIncarnations.delete(request.processId);
+      }
     } catch (error) {
       await this.spool.removeLive(request.processId, incarnation).catch(() => undefined);
+      if (wslRecord) await this.reconcileWslCustody(request.processId, incarnation);
+      this.cancelBeforeSpawnReturns.delete(request.processId);
       this.liveOperations.delete(request.processId);
       this.releaseProcessId(request.processId);
       throw error instanceof UnifiedExecError
@@ -1471,7 +1597,8 @@ export class UnifiedExecProcessManager {
 
   /** Live sessions, oldest id first. */
   listProcesses(): BackgroundTerminalInfo[] {
-    return [...this.processes.values()]
+    const wslRows = new Map(this.wslCustodyRows().map(row => [row.processId, row]));
+    const active = [...this.processes.values()]
       .filter((entry) => !entry.process.hasExited())
       .sort((left, right) => left.processId - right.processId)
       .map((entry) => ({
@@ -1481,8 +1608,47 @@ export class UnifiedExecProcessManager {
         cwd: entry.cwd,
         pid: entry.process.pid,
         tty: entry.tty,
-        startedAt: entry.startedAt
+        startedAt: entry.startedAt,
+        ...(wslRows.has(entry.processId) ? {
+          detachedWsl: true as const,
+          terminationState: wslRows.get(entry.processId)!.terminationState
+        } : {})
       }));
+    const activeIds = new Set(active.map(row => row.processId));
+    const launching = [...this.liveOperations.values()]
+      .filter(operation => !activeIds.has(operation.processId) && this.reservedProcessIds.has(operation.processId))
+      .map(operation => ({ processId: operation.processId, incarnation: operation.incarnation, command: operation.command,
+        cwd: operation.cwd, tty: false, startedAt: operation.startedAt,
+        ...(wslRows.has(operation.processId) ? { detachedWsl: true as const,
+          terminationState: wslRows.get(operation.processId)!.terminationState } : {}) }));
+    return [...active, ...launching].sort((left, right) => left.processId - right.processId);
+  }
+
+  /** Manager-owned principal for both pre-spawn durable intent and live child rows. */
+  processOwner(processId: number): string | null | undefined {
+    const entry = this.processes.get(processId);
+    if (entry) return entry.ownerPrincipal;
+    const live = this.liveOperations.get(processId);
+    if (live) return live.principal;
+    const wsl = this.wslCustody?.list().find(row => row.processId === processId);
+    if (wsl) return wsl.ownerPrincipal;
+    const retained = this.spooled.get(processId);
+    return retained?.principal;
+  }
+
+  terminationWasUnconfirmed(processId: number, incarnation: number): boolean {
+    return this.unconfirmedTerminationIncarnations.get(processId) === incarnation;
+  }
+
+  wslCustodyRows(principal?: string): WslExecCustodyPublicRow[] {
+    return (this.wslCustody?.list() ?? [])
+      .filter(row => principal === undefined || row.ownerPrincipal === principal)
+      .map(({ processId, incarnation, command, startedAt, state }) => ({ processId, incarnation, command,
+        startedAt, detachedWsl: true, terminationState: this.wslNeedsRevalidation.has(processId) ? 'termination-unknown' : state }));
+  }
+
+  wslCustodyOwner(processId: number): string | null {
+    return this.wslCustody?.list().find(row => row.processId === processId)?.ownerPrincipal ?? null;
   }
 
   /** Non-destructive obligation view for a caller-owned set of retained sessions. */
@@ -1500,6 +1666,9 @@ export class UnifiedExecProcessManager {
     }
     for (const record of this.spooled.values()) {
       if (processIds.has(record.processId)) exitedUnread.push({ processId: record.processId, exitCode: record.exitCode });
+    }
+    for (const record of this.wslCustody?.list() ?? []) {
+      if (record.ownerPrincipal && processIds.has(record.processId) && !running.includes(record.processId)) running.push(record.processId);
     }
     return {
       running: running.sort((left, right) => left - right),
@@ -1613,12 +1782,41 @@ export class UnifiedExecProcessManager {
 
   async terminateProcess(processId: number, expectedIncarnation?: number): Promise<boolean> {
     const entry = this.processes.get(processId);
-    if (!entry) return false;
+    const liveOperation = this.liveOperations.get(processId);
+    if (!entry && liveOperation) {
+      if (expectedIncarnation !== undefined && liveOperation.incarnation !== expectedIncarnation) return false;
+      this.cancelBeforeSpawnReturns.add(processId);
+      this.unconfirmedTerminationIncarnations.delete(processId);
+      this.notifyProcessChange();
+      return true;
+    }
+    const wslRecord = this.wslCustody?.list().find(row => row.processId === processId &&
+      (expectedIncarnation === undefined || row.incarnation === expectedIncarnation));
+    if (!entry) {
+      if (!wslRecord || (expectedIncarnation !== undefined && wslRecord.incarnation !== expectedIncarnation)) return false;
+      const stopped = await this.terminateWslCustody(wslRecord, !wslRecord.leaderExited);
+      if (stopped) this.unconfirmedTerminationIncarnations.delete(processId);
+      else this.unconfirmedTerminationIncarnations.set(processId, wslRecord.incarnation);
+      this.releaseOwnerIfUnretained(processId);
+      this.notifyProcessChange();
+      return stopped;
+    }
     // Renderer actions carry the exact live incarnation they displayed. Refuse a stale row after
     // natural exit, and refuse ABA reuse of the same numeric id without consuming retained output.
     if (expectedIncarnation !== undefined &&
-        (entry.incarnation !== expectedIncarnation || entry.process.hasExited())) return false;
-    if (!entry.process.hasExited() || !entry.process.outputClosed) await entry.process.terminate();
+        (entry.incarnation !== expectedIncarnation || (entry.process.hasExited() && !wslRecord))) return false;
+    let treeTerminationConfirmed = true;
+    if (!entry.process.hasExited() || !entry.process.outputClosed) treeTerminationConfirmed = await entry.process.terminate();
+    this.cancelBeforeSpawnReturns.delete(processId);
+    let wslTerminationConfirmed = true;
+    if (wslRecord) {
+      if (treeTerminationConfirmed) wslTerminationConfirmed = await this.terminateWslCustody(wslRecord, false, true);
+      else {
+        this.wslLeaderExitUnconfirmed.add(processId);
+        wslTerminationConfirmed = await this.terminateWslCustody(wslRecord, true);
+      }
+    }
+    this.releaseOwnerIfUnretained(processId);
     const current = this.processes.get(processId);
     if (current && current.process === entry.process) {
       // Match Codex's InitialExecCommandGuard: the initial exec response still
@@ -1634,29 +1832,62 @@ export class UnifiedExecProcessManager {
         );
       }
     }
-    return true;
+    const confirmed = treeTerminationConfirmed && wslTerminationConfirmed;
+    if (confirmed) this.unconfirmedTerminationIncarnations.delete(processId);
+    else this.unconfirmedTerminationIncarnations.set(processId, entry.incarnation);
+    return confirmed;
   }
 
   async terminateAllProcesses(): Promise<void> {
     const entries = [...this.processes.values()];
     // This cache contains only results whose output was already acknowledged. Keep unread
     // durable spool records and their custody across a forced update or app shutdown.
-    for (const id of this.completed.keys()) this.releaseListener?.(id);
+    for (const id of this.completed.keys()) this.releaseOwnerIfUnretained(id);
     this.completed.clear();
     this.notifyProcessChange();
     // Handle every process independently so one kill or disk error cannot leave the rest
     // running. A failed commit deliberately leaves that process and its reservation visible.
     const results = await Promise.allSettled(entries.map(async (entry) => {
-      if (this.processes.get(entry.processId) !== entry) return;
+      if (this.processes.get(entry.processId) !== entry) return { processId: entry.processId, confirmed: true };
       // An exited leader can still have descendants holding inherited output pipes open.
       // Ask the process-tree helper to close those pipes before waiting on the spool boundary.
-      if (!entry.process.hasExited() || !entry.process.outputClosed) await entry.process.terminate();
+      const confirmed = !entry.process.hasExited() && !entry.process.outputClosed
+        ? await entry.process.terminate() : true;
+      if (!confirmed && this.wslCustody?.get(entry.processId, entry.incarnation)) {
+        this.wslLeaderExitUnconfirmed.add(entry.processId);
+        await this.noteWslTerminationUnknown(this.wslCustody.get(entry.processId, entry.incarnation)!,
+          'Forced shutdown could not confirm Windows process-tree termination; exact WSL custody is retained.');
+      }
       await this.sealExitedEntry(entry, true);
+      return { processId: entry.processId, confirmed };
     }));
     const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failed.length > 0) {
       throw new Error(`${failed.length} terminal session(s) could not be safely sealed during shutdown; their reservations remain held.`);
     }
+    const unconfirmedWslLeaders = new Set(results.flatMap(result => result.status === 'fulfilled' && !result.value.confirmed
+      ? [result.value.processId] : []));
+    const confirmedWslLeaders = new Set(results.flatMap(result => result.status === 'fulfilled' && result.value.confirmed
+      ? [result.value.processId] : []));
+    const wslRows = this.wslCustody?.list() ?? [];
+    const wslResults: PromiseSettledResult<boolean>[] = [];
+    for (let index = 0; index < wslRows.length; index += 4) {
+      wslResults.push(...await Promise.allSettled(wslRows.slice(index, index + 4).map(async row => {
+        if (unconfirmedWslLeaders.has(row.processId) || !row.leaderExited) {
+          if (!unconfirmedWslLeaders.has(row.processId) && confirmedWslLeaders.has(row.processId))
+            await this.wslCustody?.markLeaderExited(row.processId, row.incarnation);
+          else {
+            await this.noteWslTerminationUnknown(row, 'Forced shutdown could not prove the Windows leader exited; WSL custody is retained.');
+            return false;
+          }
+        }
+        return this.terminateWslCustody(row);
+      })));
+    }
+    if (wslResults.some(result => result.status === 'rejected' || !result.value))
+      throw new Error('Tagged WSL processes could not all be proven stopped; durable cancellation records remain available.');
+    if (results.some(result => result.status === 'fulfilled' && !result.value.confirmed))
+      throw new Error('One or more Windows process trees could not be confirmed stopped; any exact WSL custody remains available.');
   }
 
   private refreshProcessState(processId: number): ProcessStatus {
@@ -1672,6 +1903,7 @@ export class UnifiedExecProcessManager {
 
   inventory(): { reserved: number; running: number; exitedOutputOpen: number; exitedOutputClosed: number; exitedOutputInterrupted: number;
     unreadSpooled: number; interruptedSpooled: number; checkpointedSpooled: number; completedCache: number; spoolBytes: number; storageFailures: number;
+    wslTagged: number; wslTerminationUnknown: number; wslPending: number; wslStorageFailures: number; wslStorageError: string | null;
     spoolState: 'memory' | 'ready' | 'unavailable' | 'not-initialized'; spoolError: string | null } {
     let running = 0, exitedOutputOpen = 0, exitedOutputClosed = 0, exitedOutputInterrupted = 0;
     for (const entry of this.processes.values()) {
@@ -1682,8 +1914,14 @@ export class UnifiedExecProcessManager {
     }
     const interruptedSpooled = [...this.spooled.values()].filter(record => record.outputInterrupted).length;
     const checkpointedSpooled = [...this.spooled.values()].filter(record => record.outputCaptureIncomplete === true).length;
+    const wslRows = this.wslCustodyRows();
     return { reserved: this.reservedProcessIds.size, running, exitedOutputOpen, exitedOutputClosed, exitedOutputInterrupted,
       unreadSpooled: this.spooled.size, interruptedSpooled, checkpointedSpooled, completedCache: this.completed.size, spoolBytes: this.spool.bytes(), storageFailures: this.spoolFailures.size,
+      wslTagged: wslRows.filter(row => row.terminationState === 'tagged').length,
+      wslTerminationUnknown: wslRows.filter(row => row.terminationState === 'termination-unknown').length,
+      wslPending: wslRows.filter(row => row.terminationState === 'pending').length,
+      wslStorageFailures: this.wslStorageFailures,
+      wslStorageError: this.wslStorageError,
       spoolState: this.spoolInitialized ? 'ready' : this.requireDurableSpool
         ? this.spoolInitializationError ? 'unavailable' : 'not-initialized' : 'memory',
       spoolError: this.spoolInitializationError ?? (this.spoolFailures.size ? 'Some terminal output could not be durably stored.' : null) };

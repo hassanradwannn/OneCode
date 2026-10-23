@@ -205,7 +205,7 @@ export async function terminateProcessTree(
   pid: number,
   force = true,
   helperTimeoutMs = force ? 1_000 : 500
-): Promise<void> {
+): Promise<boolean> {
   // child.kill() leaves grandchildren running on Windows; taskkill /T handles the tree.
   // taskkill itself can block while waiting on an uncooperative console process, so
   // bound the helper too. The caller owns the larger graceful/forced deadline.
@@ -248,7 +248,7 @@ export async function terminateProcessTree(
         finish(false);
       }
     });
-    if (killed) return;
+    if (killed) return true;
     // The helper could not do it. Killing the process directly leaves grandchildren behind
     // — which is why taskkill is tried first — but it does end the child the caller is
     // waiting on, and a caller that gets its close event and a partial result is strictly
@@ -258,7 +258,7 @@ export async function terminateProcessTree(
     } catch {
       /* already gone */
     }
-    return;
+    return false;
   }
   // POSIX has a first-class process-group primitive. Every child this module owns is
   // started as its own group leader below, so signalling -pid reaches descendants too.
@@ -267,7 +267,7 @@ export async function terminateProcessTree(
   const signal = force ? 'SIGKILL' : 'SIGTERM';
   try {
     process.kill(-pid, signal);
-    return;
+    return true;
   } catch {
     /* group is gone or was not created */
   }
@@ -276,6 +276,7 @@ export async function terminateProcessTree(
   } catch {
     /* already gone */
   }
+  return false;
 }
 
 function killTree(pid: number): void {

@@ -32,16 +32,20 @@ function paint(snapshot: UpdateWorkSnapshot): void {
     }
     view.owner.textContent = row.owner;
     view.command.textContent = row.command;
-    ui(view.detail, 'textContent', () => t('Session {0} · PID {1} · running for {2} min', [row.processId, row.pid,
-      Math.max(0, Math.floor((Date.now() - row.startedAt) / 60_000))]));
+    ui(view.detail, 'textContent', () => row.detachedWsl
+      ? t('Session {0} · WSL descendants · {1}', [row.processId, row.terminationState === 'termination-unknown'
+        ? t('Termination not verified') : row.terminationState === 'pending' ? t('Checking owned processes') : t('Owned processes tracked')])
+      : t('Session {0} · PID {1} · running for {2} min', [row.processId, row.pid,
+        Math.max(0, Math.floor((Date.now() - row.startedAt) / 60_000))]));
     ui(view.stop, 'textContent', () => stopping.has(id) ? t('Stopping…') : t('Stop'));
     ui(view.stop, 'aria-label', () => t('Stop background process') + ` #${row.processId}: ${row.command}`);
     view.stop.disabled = stopping.has(id);
   }
   for (const [id, view] of rows) if (!present.has(id)) { view.host.remove(); rows.delete(id); stopping.delete(id); }
-  ui(status, 'textContent', () => snapshot.processes.length
-    ? t('{0} background processes running', [snapshot.processes.length])
-    : t('No background processes are running.'));
+  ui(status, 'textContent', () => snapshot.inventory?.wslStorageError
+    ? t('Background process status is unavailable. Some owned WSL processes may still be running.')
+    : snapshot.processes.length ? t('{0} background processes tracked', [snapshot.processes.length])
+      : t('No background processes are running.'));
   const messages: string[] = [];
   if (snapshot.browserActions.length) messages.push(t('{0} pending browser actions', [snapshot.browserActions.length]) + ': ' +
     snapshot.browserActions.map(row => row.kind + (row.error ? ` (${row.error})` : '')).join(', '));
@@ -50,6 +54,9 @@ function paint(snapshot: UpdateWorkSnapshot): void {
   other.hidden = !messages.length;
   if (snapshot.inventory?.spoolError) {
     other.hidden = false; other.textContent += '\n' + snapshot.inventory.spoolError;
+  }
+  if (snapshot.inventory?.wslStorageError) {
+    other.hidden = false; other.textContent += '\n' + snapshot.inventory.wslStorageError;
   }
   const quarantined = snapshot.quarantined ?? [];
   const signature = JSON.stringify([quarantined, snapshot.quarantinedTotal, snapshot.quarantineOffset]);
@@ -156,7 +163,11 @@ export function showUpdateWork(): void {
     retained = el('section'); output = el('pre', 'update-work-output'); output.hidden = true;
     dialog.append(header, lead, status, list, other, retained, output);
     dialog.addEventListener('close', () => { revision++; if (timer !== null) window.clearInterval(timer); timer = null; });
-    dialog.addEventListener('click', event => { if (event.target === dialog) dialog?.close(); });
+    dialog.addEventListener('click', event => {
+      if (!dialog || event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+    });
     document.body.append(dialog);
   }
   if (!dialog.open) { revision++; quarantineOffset = 0; retainedSignature = ''; output.hidden = true; output.textContent = ''; dialog.showModal(); timer = window.setInterval(() => void refresh(), 2000); }
