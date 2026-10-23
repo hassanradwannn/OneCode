@@ -3,6 +3,7 @@ appId: io.onecode.desktop.beta
 productName: OneCode Beta
 executableName: onecode-beta
 extraMetadata:
+  name: onecode-beta
   onecodeBuildChannel: beta
   desktopName: io.onecode.desktop.beta
 publish:

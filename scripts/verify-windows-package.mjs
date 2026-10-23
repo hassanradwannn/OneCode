@@ -20,7 +20,7 @@ export function assertWindowsPackageIsolation(resources) {
   const manifest = JSON.parse(extractFile(archive, 'package.json').toString('utf8'));
   const channel = manifest.onecodeBuildChannel === 'beta' ? 'beta' : 'stable';
   const appId = channel === 'beta' ? 'io.onecode.desktop.beta' : 'io.onecode.desktop';
-  if (manifest.name !== 'onecode' || manifest.desktopName !== appId) throw new Error('Unexpected packaged app identity');
+  if (manifest.name !== (channel === 'beta' ? 'onecode-beta' : 'onecode') || manifest.desktopName !== appId) throw new Error('Unexpected packaged app identity');
   let ownedFiles = 0;
   for (const raw of listPackage(archive)) {
     const file = normalize(raw);
