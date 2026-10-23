@@ -545,7 +545,8 @@ export function projectStatus(sources: StatusSources): ControlApiStatus {
       latest: update.latest,
       stage: update.stage,
       error: text(update.error),
-      checkedAt: update.checkedAt
+      checkedAt: update.checkedAt,
+      ...(update.installation ? { installation: update.installation } : {})
     },
     toolCalls: { ...sources.toolCalls }
   };
