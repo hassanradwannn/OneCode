@@ -7,6 +7,7 @@ import { providerText } from './provider-text.js';
  * language ships them like the rest of the interface. A version without an entry shows nothing.
  */
 import { releaseNotesUrl, whatsNewAction } from '../shared/whats-new.js';
+import { channelVersion } from '../shared/build-channel.js';
 import { $, el, icon, run } from './dom.js';
 import { t, ui } from './i18n.js';
 import { primaryShortcut } from './shortcuts.js';
@@ -203,7 +204,7 @@ export function hasHighlights(version: string): boolean {
 export function paintWhatsNew(version: string): boolean {
   const release = RELEASES[version];
   if (!release) return false;
-  ui($('whatsNewVersion'), 'textContent', () => t('Version {0}', [version]));
+  ui($('whatsNewVersion'), 'textContent', () => t('Version {0}', [channelVersion(version)]));
   ui($('whatsNewLead'), 'textContent', release.lead);
   $('whatsNewList').replaceChildren(...release.highlights.map((item, index) => {
     const row = el('li', 'whats-new-item');
