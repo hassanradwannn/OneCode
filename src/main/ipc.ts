@@ -132,7 +132,8 @@ import {
   sweepStaleSwarm,
   unpair,
   ensureSelectedChatReady,
-  selectedChatReadinessFor
+  selectedChatReadinessFor,
+  selectedChatReadinessDiagnostics
 } from './bridge.js';
 import { extensionDir } from './extension-path.js';
 import { APP_VERSION } from './version.js';
@@ -1421,7 +1422,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const workers = swarmState().agents;
     const text = renderDiagnosticsReport({
       app: systemFacts(app), home: app.getPath('home'),
-      bridge: await bridgeStatus(), extension: await companionDiagnostics().catch(() => null),
+      bridge: { ...await bridgeStatus(), selectedChats: selectedChatReadinessDiagnostics() }, extension: await companionDiagnostics().catch(() => null),
       selfTest: selfTest && { summary: selfTest.summary, checks: selfTest.checks.map(({ name, status, detail }) => ({ name, status, detail })) },
       commands: pendingCommands().map(({ id, what, lastError }) => ({ command: id, what, lastError })),
       workers: workers.map(({ id, role, state, model, reasoningEffort, createdAt, activatedAt, finishedAt, pending, delivered, conversationId, revivable }) =>
