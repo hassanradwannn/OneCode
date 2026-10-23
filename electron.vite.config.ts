@@ -6,8 +6,11 @@ export const rendererAssetsInlineLimit = (file: string): boolean | undefined => 
 
 const nixNodeModules = process.env.npmDeps ? resolve(process.env.npmDeps, 'node_modules') : null;
 
+const channelDefine = { __ONECODE_BUILD_CHANNEL__: JSON.stringify(process.env.ONECODE_BUILD_CHANNEL === 'beta' ? 'beta' : 'stable') };
+
 export default defineConfig({
   main: {
+    define: channelDefine,
     // Keep node_modules external so the MCP SDK ships as real files in the asar
     // rather than being inlined by the bundler.
     plugins: [externalizeDepsPlugin()],
@@ -30,6 +33,7 @@ export default defineConfig({
     }
   },
   renderer: {
+    define: channelDefine,
     root: resolve(__dirname, 'src/renderer'),
     // nixpkgs' development hook links dependencies from its immutable node_modules
     // derivation. Vite resolves those symlinks before its filesystem check, so allow

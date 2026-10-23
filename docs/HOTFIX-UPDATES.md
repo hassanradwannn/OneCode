@@ -90,6 +90,14 @@ Linux capsule assets are platform-qualified:
 
 Native runtime changes, a different bootstrap, a different packaged Node/native module/tunnel/rg payload, or another incompatible immutable resource require a new full AppImage/DEB release.
 
+## Isolated Beta builds
+
+Build a Beta from the same canonical `release` checkout with `node scripts/package.mjs --channel beta --platform win32 --arch x64` (or `--platform linux`). The numeric package version stays three-part; the product displays that version followed by **Beta**. Windows uses its own NSIS identity and executable, Linux its own package name, and the default profile and Companion bridge ranges are separate from stable.
+
+Beta publication uses the exact prerelease tag `beta-v<version>` and `OneCode-Beta-` artifact names. Its updater selects only Beta prereleases and verifies channel-bound base/runtime/capsule metadata. Stable updates never select Beta artifacts. The same verified full, compatible-hotfix and combined-base-plus-hotfix paths serve each channel. A development checkout's optional Git updater is a separate workflow and does not establish installed updater acceptance.
+
+Explicit acceptance profiles and browser-profile overrides survive the Windows updater handoff. A Beta launch refuses the normal or legacy production application profile. Preserve an existing Beta profile when replacing an earlier development launcher; do not migrate production credentials or history into it.
+
 ## Platform-aware release selection
 
 GitHub's moving `/releases/latest` is a repository-wide concept, but OneCode update applicability is platform/install-type specific. The updater therefore treats a release with no applicable delivery artifact as not applicable to that installation instead of surfacing a broken update. Publication policy should still prefer synchronized versions that provide a valid delivery path for every supported platform.

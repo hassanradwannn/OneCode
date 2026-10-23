@@ -1,5 +1,5 @@
 import { providerText } from './provider-text.js';
-import { displayReleaseVersion } from '../shared/release-version.js';
+import { displayBuildVersion } from '../shared/release-version.js';
 import type { AppState } from '../shared/types.js';
 import { isNewer } from '../shared/types.js';
 import { t } from './i18n.js';
@@ -25,9 +25,9 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
   const appDetail = update.stage === 'failed' ? t('Update check failed')
     : update.installRequested ? t('Restart requested; waiting for active work to finish')
     : update.stage === 'checking' ? t(beta ? 'Checking the Beta branch…' : 'Checking for a newer version…')
-    : update.stage === 'downloading' ? t('Downloading {0}', [displayReleaseVersion(update.latest!)])
+    : update.stage === 'downloading' ? t('Downloading {0}', [displayBuildVersion(update.latest!)])
     : beta && update.stage === 'ready' && betaLatest ? t('Beta revision {0} ready to restart', [betaLatest])
-    : update.latest ? (update.stage === 'ready' ? t('Ready to install {0}', [displayReleaseVersion(update.latest!)]) : t('Install {0} manually', [displayReleaseVersion(update.latest!)]))
+    : update.latest ? (update.stage === 'ready' ? t('Ready to install {0}', [displayBuildVersion(update.latest!)]) : t('Install {0} manually', [displayBuildVersion(update.latest!)]))
     : appReady ? beta && update.betaRelation === 'local-ahead' ? t('Local beta branch is ahead of origin/beta') : t('Up to date') : t('Not checked yet');
   const extensionReady = bridge.running && bridge.paired && bridge.present && bridge.extensionVersion === update.current && !bridge.extensionUpdateRequired;
   const extensionOlder = bridge.extensionUpdateRequired === true || !!bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion);
@@ -35,7 +35,7 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
   const connectionFailed = ['offline', 'auth-failed', 'tunnel-unavailable'].includes(status.state);
   const rows: ReadinessRow[] = [
     { id: 'app', label: beta ? 'OneCode Beta' : 'OneCode', status: appReady ? 'pass' : update.stage === 'failed' ? 'fail' : 'not-run',
-      detail: (beta && betaCurrent ? t('Revision {0}', [betaCurrent]) : t('Version {0}', [displayReleaseVersion(update.current!)])) + ' · ' + appDetail,
+      detail: (beta && betaCurrent ? t('Revision {0}', [betaCurrent]) : t('Version {0}', [displayBuildVersion(update.current!)])) + ' · ' + appDetail,
       reason: update.stage === 'failed' && update.error ? updateErrorText(update.error) : undefined,
       nextStep: update.stage === 'failed' ? t('Choose Update all to retry. You can keep using the current app.')
         : next.platform?.family === 'macos' && update.stage === 'idle' && update.latest

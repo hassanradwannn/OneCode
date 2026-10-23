@@ -8725,8 +8725,11 @@
     );
     blocked.hidden = true;
 
-    root.append(blocked, pill, button);
-    return { root, blocked, pill, text, button, cancel, meter, meterFill };
+    const approvalNotice = document.createElement('span');
+    approvalNotice.className = 'clf-blocked clf-approval-mismatch'; approvalNotice.hidden = true;
+    approvalNotice.setAttribute('role', 'status');
+    root.append(blocked, approvalNotice, pill, button);
+    return { root, blocked, approvalNotice, pill, text, button, cancel, meter, meterFill };
   }
 
   function currentState() {
@@ -9566,6 +9569,12 @@
     const busy = state.mode === 'busy' || state.mode === 'waiting';
     setHidden(control.root, state.mode === 'hidden');
     setData(control.root, 'clfMode', state.mode);
+    const approvalIssue = composerChat().state === 'chat' ? CLF_DOM.approvalIssue?.() : null;
+    setHidden(control.approvalNotice, !approvalIssue);
+    if (approvalIssue) {
+      control.approvalNotice.textContent = t('content_connector_mismatch', 'Connector mismatch');
+      setAttr(control.approvalNotice, 'data-clf-tip', t('content_connector_mismatch_tip', 'This approval names “$1”; Setup expects “$2”. Auto-allow is paused for this card. Check and refresh the connector in Setup.', [approvalIssue.connector, approvalIssue.expectedConnector]));
+    }
     // Only over the chat it is about: an id-less New Chat route inherits nothing.
     setHidden(control.blocked, !(
       composerChat().state === 'chat' &&
@@ -15069,6 +15078,8 @@
           painted: false,
           bridge: { connected: status.connected === true, paired: status.paired === true },
           geminiApprovalAudit: CLF_DOM.approvalAudit?.() || [],
+          geminiApprovalIssue: CLF_DOM.approvalIssue?.() || null,
+          geminiApprovalDecisions: CLF_DOM.approvalObservations?.() || [],
           ...observed
         });
         return false;

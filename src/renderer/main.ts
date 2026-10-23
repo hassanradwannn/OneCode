@@ -1,5 +1,8 @@
 import { initChatSchedules } from './chat-schedules.js';
-import { displayReleaseVersion } from '../shared/release-version.js';
+import { displayBuildVersion } from '../shared/release-version.js';
+import { PRODUCT_LABEL } from '../shared/build-channel.js';
+document.title = PRODUCT_LABEL;
+document.querySelector('.sidebar-brand strong')?.replaceChildren(PRODUCT_LABEL);
 import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { initRemoteSettings } from './remote-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
@@ -32,7 +35,7 @@ import { initSkillsLibrary } from './skills-library.js';
 import { hasHighlights, initWhatsNew, showWhatsNew } from './whats-new.js';
 import { initSettingsSearch } from './settings-search.js';
 import type { AppearanceSettings } from '../shared/appearance.js';
-import type { BrowserBridgePort } from '../shared/browser-bridge.js';
+import { BROWSER_BRIDGE_PORTS, type BrowserBridgePort } from '../shared/browser-bridge.js';
 import { parseCommandAllowlistText } from '../shared/command-allowlist.js';
 /**
  * Renderer. No Node, no filesystem, no network — everything goes through window.api.
@@ -837,6 +840,9 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     if (state && (!requestedSettings || requestedSettings.ui.browserBridgePort === patch.ui.browserBridgePort)) {
       $<HTMLSelectElement>('browserBridgePort').value = String(state.config.ui.browserBridgePort ?? 'auto');
     }
+    if (state && (!requestedSettings || requestedSettings.ui.chatBrowser === patch.ui.chatBrowser)) {
+      $<HTMLSelectElement>('chatBrowser').value = state.config.ui.chatBrowser ?? 'chrome';
+    }
     // The same for the control API switches: a box that stayed ticked after a failed save would
     // send its value again with the next unrelated save, and grant what was never saved.
     if (state && (!requestedSettings || requestedSettings.controlApi?.allowActions === patch.controlApi?.allowActions)) {
@@ -1235,7 +1241,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   const betaLatest = update.latestRevision?.slice(0, 12) ?? '';
   // #1490: an installer that stopped silently left this start on the old version.
   if (update.notInstalled) {
-    lines.push(t("OneCode {0} installation did not finish. Running {1}. Download the installer from GitHub to repair the installation.", [displayReleaseVersion(update.notInstalled), displayReleaseVersion(update.current)]));
+    lines.push(t("{0} {1} installation did not finish. Running {2}. Download the installer from GitHub to repair the installation.", [PRODUCT_LABEL, displayBuildVersion(update.notInstalled), displayBuildVersion(update.current)]));
     tone = 'bad';
   }
   if (beta) {
@@ -1247,8 +1253,8 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
         : t('Beta update {0} is ready. Choose Update all to restart after your work finishes.', [betaLatest]));
     } else if (!update.notInstalled) {
       lines.push(update.betaRelation === 'local-ahead'
-        ? t('OneCode Beta {0} · local beta branch is ahead of origin/beta.', [betaCurrent || displayReleaseVersion(update.current)])
-        : t('OneCode Beta {0} is up to date.', [betaCurrent || displayReleaseVersion(update.current)]));
+        ? t('OneCode Beta {0} · local beta branch is ahead of origin/beta.', [betaCurrent || displayBuildVersion(update.current)])
+        : t('OneCode Beta {0} is up to date.', [betaCurrent || displayBuildVersion(update.current)]));
       tone = 'ok';
     }
   } else if (update.latest && !(update.notInstalled === update.latest && update.stage === 'ready')) {
@@ -1261,16 +1267,16 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
         : update.stage === 'ready'
         ? update.installRequested
           ? updateInstallWaitingText(update)
-          : t("OneCode {0} is downloaded and ready. Choose Install when done to restart after your work finishes.", [displayReleaseVersion(update.latest!)])
+          : t("{0} {1} is downloaded and ready. Choose Install when done to restart after your work finishes.", [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
         : update.stage === 'downloading'
-          ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [displayReleaseVersion(update.latest), String(update.downloadPercent ?? 0)])
+          ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent ?? 0)])
           : update.stage === 'failed'
-            ? t("OneCode {0} could not be downloaded: {1}.", [displayReleaseVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
+            ? t("{0} {1} could not be downloaded: {2}.", [PRODUCT_LABEL, displayBuildVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
             : update.installation === 'linux-unpacked'
               ? t('Unpacked Linux build — automatic updates are disabled. Launch the installed OneCode AppImage or DEB.')
               : update.installation === 'deb'
-                ? t('OneCode {0} requires a full package upgrade. Compatible application hotfixes install internally; use your package manager for this release.', [displayReleaseVersion(update.latest!)])
-                : t("OneCode {0} is out. This installation has to be updated by hand.", [displayReleaseVersion(update.latest!)])
+                ? t('{0} {1} requires a full package upgrade. Compatible application hotfixes install internally; use your package manager for this release.', [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
+                : t("{0} {1} is out. This installation has to be updated by hand.", [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
     );
     if (update.stage === 'failed' || update.notInstalled) tone = 'bad';
   } else if (update.stage === 'failed') {
@@ -1280,7 +1286,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     lines.push(t("Checking for a newer version…"));
   } else if (!stale && !repairExtension && !missing && !update.notInstalled) {
     const extension = bridge.present && bridge.extensionVersion ? t(" · extension {0}", [bridge.extensionVersion]) : '';
-    lines.push(t("Up to date! OneCode {0}{1}", [displayReleaseVersion(update.current), extension]));
+    lines.push(t("Up to date! {0} {1}{2}", [PRODUCT_LABEL, displayBuildVersion(update.current), extension]));
     tone = 'ok';
   }
   if (stale || repairExtension) {
@@ -1296,7 +1302,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
 function updateInstallWaitingText(update: AppState['update']): string {
-  if (update.installMode === 'now') return t('Stopping active work and installing OneCode {0}…', [displayReleaseVersion(update.latest!)]);
+  if (update.installMode === 'now') return t('Stopping active work and installing {0} {1}…', [PRODUCT_LABEL, displayBuildVersion(update.latest!)]);
   const labels = {
     tools: 'running tools', generation: 'a provider response', messages: 'queued messages', workers: 'active workers',
     automation: 'Goal or Loop', continuation: 'Compact & Resume', commands: 'background commands', browser: 'pending browser actions',
@@ -1305,7 +1311,7 @@ function updateInstallWaitingText(update: AppState['update']): string {
   const reasons = (update.busyReasons ?? []).map(reason => t(labels[reason]));
   const target = update.channel === 'beta-branch'
     ? t('Beta update {0}', [update.latestRevision?.slice(0, 12) ?? ''])
-    : t('OneCode {0}', [displayReleaseVersion(update.latest!)]);
+    : t('{0} {1}', [PRODUCT_LABEL, displayBuildVersion(update.latest!)]);
   return reasons.length
     ? t('{0} is waiting for: {1}. You can cancel this restart.', [target, reasons.join(', ')])
     : t('{0} is preparing to restart.', [target]);
@@ -1320,7 +1326,7 @@ function paintUpdate(next: AppState): void {
   const checking = next.update.stage === 'checking' || next.update.stage === 'downloading' || checkButton.getAttribute('aria-busy') === 'true';
   checkButton.disabled = checking;
   ui(checkButton, 'textContent', () => checking ? t('Checking…') : t('Check for updates'));
-  ui($('settingsUpdateStatus'), 'textContent', () => updateSummary(next)?.text ?? t('OneCode {0}', [displayReleaseVersion(next.update.current)]));
+  ui($('settingsUpdateStatus'), 'textContent', () => updateSummary(next)?.text ?? t('{0} {1}', [PRODUCT_LABEL, displayBuildVersion(next.update.current)]));
   const betaReady = next.update.channel === 'beta-branch' && next.update.stage === 'ready' && Boolean(next.update.latestRevision);
   $('settingsInstallUpdateRow').hidden = !betaReady && (next.update.stage !== 'ready' || !next.update.latest);
   ui($('settingsInstallUpdateTitle'), 'textContent', () => betaReady ? t('Beta update ready') : t('Update ready'));
@@ -1725,7 +1731,7 @@ function apply(next: AppState): void {
   const previousProvider = previousState?.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   applyValue($<HTMLSelectElement>('chatProvider'), provider, previousProvider);
   applyValue($<HTMLSelectElement>('setupChatProvider'), provider, previousProvider);
-  applyValue($<HTMLSelectElement>('chatBrowser'), config.ui.chatBrowser ?? 'chrome', previousState?.config.ui.chatBrowser ?? 'chrome');
+  applyValue($<HTMLSelectElement>('chatBrowser'), requestedSettings?.ui.chatBrowser ?? config.ui.chatBrowser ?? 'chrome', previousState?.config.ui.chatBrowser ?? 'chrome');
   applyValue($<HTMLSelectElement>('cosBrowserMinimize'), config.ui.cosBrowserMinimize ?? 'taskbar', previousState?.config.ui.cosBrowserMinimize ?? 'taskbar');
   // Retain old values for data compatibility without offering unsupported embedded controls.
   $('cosBrowserMinimizeRow').hidden = true;
@@ -1739,10 +1745,14 @@ function apply(next: AppState): void {
   applyValue($<HTMLSelectElement>('followUp'), config.ui.followUp ?? 'steer', previousState?.config.ui.followUp ?? 'steer');
   applyValue($<HTMLSelectElement>('enterSends'), config.ui.enterSends === false ? 'modifier' : 'enter', previousState ? (previousState.config.ui.enterSends === false ? 'modifier' : 'enter') : undefined);
   const bridgePortControl = $<HTMLSelectElement>('browserBridgePort');
+  if (bridgePortControl.options.length !== BROWSER_BRIDGE_PORTS.length + 1 ||
+      BROWSER_BRIDGE_PORTS.some((port, index) => bridgePortControl.options[index + 1]?.value !== String(port))) {
+    bridgePortControl.replaceChildren(new Option(t('Auto'), 'auto'), ...BROWSER_BRIDGE_PORTS.map(port => new Option(String(port), String(port))));
+  }
   applyValue(bridgePortControl, String(config.ui.browserBridgePort ?? 'auto'), String(previousState?.config.ui.browserBridgePort ?? 'auto'));
   bridgePortControl.disabled = next.bridge.portOverridden === true;
   ui($('browserBridgePortHint'), 'textContent', () => next.bridge.portOverridden
-    ? t('Controlled by CLF_BRIDGE_PORTS. Change the environment override to choose a port here.')
+    ? t('Controlled by launch options. Change the bridge port override to choose a port here.')
     : t('Auto uses the first available port. A fixed port must be available.'));
   applyChecked($<HTMLInputElement>('autoContinue'), config.ui.autoContinue !== false, previousState?.config.ui.autoContinue);
   applyChecked($<HTMLInputElement>('browserOnly'), config.ui.browserOnly === true, previousState?.config.ui.browserOnly);

@@ -63,6 +63,11 @@ const backgroundExecListeners = new Set<() => void>();
 /** Restore durable unread output and its exact owner before MCP tools are made available. */
 export async function initializeExecSpool(userDataDir: string): Promise<void> {
   await unifiedExecManager.initializeSpool(userDataDir);
+  for (const row of unifiedExecManager.wslCustodyRows()) {
+    owners.set(row.processId, unifiedExecManager.wslCustodyOwner(row.processId));
+    attendedAt.set(row.processId, row.startedAt);
+  }
+  publishBackgroundExecChange();
 }
 
 function restoreExecOwners(records: readonly CompletedExecSpoolRecord[]): void {
@@ -280,6 +285,13 @@ export function executionPrincipal(
 function processIdsOwnedBy(principal: string): Set<number> {
   const processIds = new Set<number>();
   for (const [processId, owner] of owners) if (samePrincipal(owner, principal)) processIds.add(processId);
+  // During native spawn the durable live-operation record is already authoritative, while no
+  // ProcessEntry exists yet. Include that manager-owned principal so Stop can reach the exact
+  // launch in that short but real window without relying on the response post-hook.
+  for (const { processId } of unifiedExecManager.listProcesses()) {
+    const owner = unifiedExecManager.processOwner(processId);
+    if (samePrincipal(owner, principal)) processIds.add(processId);
+  }
   return processIds;
 }
 
@@ -348,9 +360,24 @@ export function backgroundExecObligations(principal: string | null | undefined):
 /** Running app-spawned processes owned by one durable local session. */
 export function runningExecProcesses(sessionId: string): RunningExecProcess[] {
   const owned = processIdsOwnedBy(sessionId);
-  return unifiedExecManager.listProcesses()
+  const active = unifiedExecManager.listProcesses()
     .filter(process => owned.has(process.processId))
-    .map(({ processId, incarnation, command, startedAt, tty }) => ({ processId, incarnation, command, startedAt, tty }));
+    .map(({ processId, incarnation, command, startedAt, tty, detachedWsl, terminationState }) => ({ processId, incarnation,
+      command, startedAt, tty, ...(detachedWsl ? { detachedWsl } : {}), ...(terminationState ? { terminationState } : {}) }));
+  const activeIds = new Set(active.map(row => row.processId));
+  const detached = unifiedExecManager.wslCustodyRows()
+    .filter(row => owned.has(row.processId))
+    .filter(row => !activeIds.has(row.processId))
+    .map(({ processId, incarnation, command, startedAt, detachedWsl, terminationState }) => ({ processId, incarnation,
+      command, startedAt, tty: false, detachedWsl, terminationState }));
+  return [...active, ...detached].sort((left, right) => left.processId - right.processId);
+}
+
+/** Trusted desktop inventory for durable WSL-only rows whose Windows leader has exited. */
+export function trustedWslExecProcesses(): RunningExecProcess[] {
+  return unifiedExecManager.wslCustodyRows().map(({ processId, incarnation, command, startedAt, detachedWsl, terminationState }) => ({
+    processId, incarnation, command, startedAt, tty: false, detachedWsl, terminationState
+  }));
 }
 
 /**
@@ -378,11 +405,16 @@ export async function stopExecProcess(sessionId: string, processId: number, inca
   return unifiedExecManager.terminateProcess(processId, incarnation);
 }
 
+/** Main-process action for the trusted local desktop inventory; never expose through model tools. */
+export async function stopExecProcessFromTrustedDesktop(processId: number, incarnation: number): Promise<boolean> {
+  return unifiedExecManager.terminateProcess(processId, incarnation);
+}
+
 export interface OwnedExecStopOutcome {
   processId: number;
   incarnation: number;
-  /** `termination-requested` is not an OS-level proof for WSL descendants. */
-  outcome: 'termination-requested' | 'already-exited' | 'capture-failed';
+  /** The manager accepted termination; this is not an OS-level proof for WSL descendants. */
+  outcome: 'termination-requested' | 'termination-unconfirmed' | 'already-exited' | 'capture-failed';
 }
 
 /** Stop only the live processes opened by this exact durable chat, preserving their output. */
@@ -391,7 +423,18 @@ export async function stopExecProcessesForSession(sessionId: string): Promise<Ow
   return Promise.all(rows.map(async ({ processId, incarnation }): Promise<OwnedExecStopOutcome> => {
     try {
       const accepted = await stopExecProcess(sessionId, processId, incarnation);
-      return { processId, incarnation, outcome: accepted ? 'termination-requested' : 'already-exited' };
+      if (!accepted) {
+        const custodyRemains = processIdsOwnedBy(sessionId).has(processId) && unifiedExecManager.wslCustodyRows()
+          .some(row => row.processId === processId && row.incarnation === incarnation);
+        return { processId, incarnation, outcome: custodyRemains || unifiedExecManager.terminationWasUnconfirmed(processId, incarnation)
+          ? 'termination-unconfirmed' : 'already-exited' };
+      }
+      const retained = unifiedExecManager.retainedResultRecord(processId);
+      const tagged = processIdsOwnedBy(sessionId).has(processId) &&
+        unifiedExecManager.wslCustodyRows().some(row => row.processId === processId && row.incarnation === incarnation);
+      return { processId, incarnation,
+        outcome: tagged || (retained?.incarnation === incarnation && (retained.outputInterrupted || retained.outputCaptureIncomplete))
+          ? 'termination-unconfirmed' : 'termination-requested' };
     } catch {
       // The manager keeps the process reservation when it cannot durably commit its final bytes.
       return { processId, incarnation, outcome: 'capture-failed' };

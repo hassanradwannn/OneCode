@@ -6,4 +6,8 @@ export interface RunningExecProcess {
   command: string;
   startedAt: number;
   tty: boolean;
+  /** Present when this exec also owns token-tagged descendants in one or more WSL distros. */
+  detachedWsl?: true;
+  /** Custody state for tagged WSL processes; unknown means termination could not be verified. */
+  terminationState?: 'pending' | 'tagged' | 'termination-unknown';
 }

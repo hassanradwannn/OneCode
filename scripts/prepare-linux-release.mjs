@@ -11,23 +11,26 @@ const output = path.resolve(process.argv[2] || path.join(root, 'release'));
 const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
 const resources = path.join(output, 'linux-unpacked/resources');
 const packaged = JSON.parse(extractFile(path.join(resources, 'app.asar'), 'package.json'));
+const channel = packaged.onecodeBuildChannel === 'beta' ? 'beta' : 'stable';
+const prefix = channel === 'beta' ? 'OneCode-Beta' : 'OneCode';
+const tag = channel === 'beta' ? `beta-v${version}` : `v${version}`;
 assert.equal(packaged.version, version);
 const extension = JSON.parse(await fs.readFile(path.join(resources, 'extension/manifest.json'), 'utf8'));
 assert.equal(extension.version, version);
-assert.equal(extension.version_name, version);
+assert.equal(extension.version_name, channel === 'beta' ? `${version} Beta` : version);
 const runtime = contract.runtime(JSON.parse(await fs.readFile(path.join(resources, 'updater/runtime.json'), 'utf8')));
 assert.equal(runtime.platform, 'linux');
 assert.equal(runtime.baseVersion, version);
 await contract.verify(resources, runtime.files);
 
-const appImageName = 'OneCode-Linux-' + runtime.arch + '.AppImage';
-const debName = 'OneCode-Linux-' + runtime.arch + '.deb';
+const appImageName = `${prefix}-Linux-${runtime.arch}.AppImage`;
+const debName = `${prefix}-Linux-${runtime.arch}.deb`;
 const appImage = await fs.readFile(path.join(output, appImageName));
 const deb = await fs.readFile(path.join(output, debName));
 assert.ok(appImage.length > 0 && deb.length > 0, 'Linux release packages must not be empty');
-const baseName = 'OneCode-Linux-Base-' + runtime.arch + '.json';
+const baseName = `${prefix}-Linux-Base-${runtime.arch}.json`;
 await fs.writeFile(path.join(output, baseName), JSON.stringify(contract.baseRelease({ schema: 2, version, platform: 'linux', arch: runtime.arch,
-  runtime: runtime.id, installer: appImageName, size: appImage.length, sha256: await contract.hash(path.join(output, appImageName)) })));
+  runtime: runtime.id, installer: appImageName, size: appImage.length, sha256: await contract.hash(path.join(output, appImageName)), ...(channel==='beta'?{channel,tag}:{}) })));
 
 const names = [appImageName, debName, baseName];
 const sumsFile = path.join(output, 'SHA256SUMS.txt');

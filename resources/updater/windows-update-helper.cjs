@@ -7,23 +7,36 @@ const cp = require('node:child_process');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const same = (a, b) => path.win32.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.win32.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
 function validate(record) {
+  const channel = record?.channel ?? 'stable', beta = channel === 'beta';
+  const product = beta ? 'OneCode Beta' : 'OneCode';
+  const prefix = beta ? 'OneCode-Beta-' : 'OneCode-';
   if (![1, 2, 3].includes(record?.schema) || !/^\d+\.\d+\.\d+$/.test(record.version) ||
+      !['stable', 'beta'].includes(channel) ||
       !/^\d+\.\d+\.\d+\.\d+$/.test(record.fileVersion) || !/^[a-f0-9]{64}$/.test(record.digest) ||
       !Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isSafeInteger(record.at) ||
       Date.now() - record.at < -60000 || Date.now() - record.at > 30 * 60000 ||
       !['installer', 'target', 'executable', 'log'].every(key => typeof record[key] === 'string' && path.win32.isAbsolute(record[key]) && !/[\r\n"\0]/.test(record[key])) ||
-      !same(record.executable, path.win32.join(record.target, 'OneCode.exe')) ||
-      !(record.schema !== 2 ? /^OneCode-Setup-(x64|arm64)\.exe$/.test(path.win32.basename(record.installer)) :
-        /^OneCode-Hotfix-(x64|arm64)\.zip$/.test(path.win32.basename(record.installer)) &&
+      !same(record.executable, path.win32.join(record.target, beta ? 'onecode-beta.exe' : 'OneCode.exe')) ||
+      !(record.schema !== 2 ? new RegExp(`^${prefix}Setup-(x64|arm64)\\.exe$`).test(path.win32.basename(record.installer)) :
+        new RegExp(`^${prefix}Hotfix-(x64|arm64)\\.zip$`).test(path.win32.basename(record.installer)) &&
         typeof record.manifest === 'string' && same(record.manifest, path.win32.join(path.win32.dirname(record.installer), 'hotfix-manifest.json')) &&
         /^[a-f0-9]{64}$/.test(record.manifestDigest) && record.elevate === false)) {
     throw new Error('Invalid or expired update handoff');
   }
   if(record.schema===3 && (!/^\d+\.\d+\.\d+$/.test(record.baseVersion) || record.fileVersion!==`${record.baseVersion}.0` ||
     typeof record.patchArchive!=='string' || !path.win32.isAbsolute(record.patchArchive) || /[\r\n"\0]/.test(record.patchArchive) ||
-    !/^OneCode-Hotfix-(x64|arm64)\.zip$/.test(path.win32.basename(record.patchArchive)) ||
+    !new RegExp(`^${prefix}Hotfix-(x64|arm64)\\.zip$`).test(path.win32.basename(record.patchArchive)) ||
     typeof record.manifest!=='string' || !same(record.manifest,path.win32.join(path.win32.dirname(record.patchArchive),'hotfix-manifest.json')) || !/^[a-f0-9]{64}$/.test(record.manifestDigest) || !/^[a-f0-9]{64}$/.test(record.patchDigest))) throw Error('Invalid composite update handoff');
+  for (const key of ['userData', 'browserUserData']) if (record[key] !== undefined &&
+      (typeof record[key] !== 'string' || !path.win32.isAbsolute(record[key]) || /[\r\n"\0]/.test(record[key]))) throw Error('Invalid update profile path');
+  if (record.bridgePorts !== undefined && (typeof record.bridgePorts !== 'string' || !/^\d+(?:,\d+)*$/.test(record.bridgePorts) ||
+      record.bridgePorts.split(',').length > 32 || record.bridgePorts.split(',').some(port => Number(port) < 1 || Number(port) > 65535))) throw Error('Invalid update bridge ports');
   return record;
+}
+function successorArguments(record) {
+  return ['--updated', ...(record.userData ? [`--user-data-dir=${record.userData}`] : []),
+    ...(record.browserUserData ? [`--onecode-browser-user-data=${record.browserUserData}`] : []),
+    ...(record.bridgePorts ? [`--onecode-bridge-ports=${record.bridgePorts}`] : [])];
 }
 function noLinks(file) {
   for (let item = file; ; item = path.dirname(item)) {
@@ -57,12 +70,15 @@ function readyWindow(text, since, version) {
   return loaded && visible && (!version || lines.some(line => line.endsWith(`app version ${version}`)));
 }
 function registration(target) {
-  const guid = '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
+  const beta = currentChannel === 'beta', guid = beta ? '35baded0-d4e2-5fee-872a-11b461352695' : '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
+  const uninstaller = beta ? 'Uninstall OneCode Beta.exe' : 'Uninstall OneCode.exe';
   const rows = JSON.parse(ps(`$rows=@(foreach($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)){$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,$view);try{$a=$base.OpenSubKey('Software\\${guid}');$b=$base.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${guid}');if($a -or $b){@{location=$(if($a){$a.GetValue('InstallLocation')});uninstall=$(if($b){$b.GetValue('UninstallString')})}}}finally{if($a){$a.Dispose()};if($b){$b.Dispose()};$base.Dispose()}});ConvertTo-Json -InputObject $rows -Compress`));
-  if (!rows.length || rows.some(row => !row.location || !same(row.location, target) || row.uninstall !== `"${path.win32.join(target, 'Uninstall OneCode.exe')}" /currentuser`)) throw new Error('Installation registration changed');
+  if (!rows.length || rows.some(row => !row.location || !same(row.location, target) || row.uninstall !== `"${path.win32.join(target, uninstaller)}" /currentuser`)) throw new Error('Installation registration changed');
 }
+let currentChannel = 'stable';
 function processes(executable) {
-  return JSON.parse(ps(`ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name='OneCode.exe'" | Where-Object {$_.ExecutablePath -eq ${quote(executable)}} | Select-Object ProcessId,ParentProcessId) -Compress`));
+  const name = currentChannel === 'beta' ? 'onecode-beta.exe' : 'OneCode.exe';
+  return JSON.parse(ps(`ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name='${name}'" | Where-Object {$_.ExecutablePath -eq ${quote(executable)}} | Select-Object ProcessId,ParentProcessId) -Compress`));
 }
 function ownedShortcutIcon(value, executable) {
   const match = /^(.*),\s*0$/.exec(String(value).trim());
@@ -72,7 +88,8 @@ function ownedShortcutIcon(value, executable) {
   return !icon || same(icon, executable) || same(icon, path.win32.join(path.win32.dirname(executable), 'resources', 'runtime-icon.ico'));
 }
 function shortcuts(executable) {
-  const rows = JSON.parse(ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\OneCode.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'OneCode.lnk';if(-not(Test-Path -LiteralPath $menu)){throw 'OneCode Start-menu shortcut is missing'};$rows=@(foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);@{target=$link.TargetPath;icon=$link.IconLocation}}});ConvertTo-Json -InputObject $rows -Compress`));
+  const product = currentChannel === 'beta' ? 'OneCode Beta' : 'OneCode';
+  const rows = JSON.parse(ps(`$shell=New-Object -ComObject WScript.Shell;$menu=Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\${product}.lnk';$desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) '${product}.lnk';if(-not(Test-Path -LiteralPath $menu)){throw '${product} Start-menu shortcut is missing'};$rows=@(foreach($file in @($menu,$desktop)){if(Test-Path -LiteralPath $file){$link=$shell.CreateShortcut($file);@{target=$link.TargetPath;icon=$link.IconLocation}}});ConvertTo-Json -InputObject $rows -Compress`));
   for (const row of rows) {
     if (!same(row.target, executable)) throw new Error('OneCode shortcut points outside the installed app');
     if (!ownedShortcutIcon(row.icon, executable)) throw new Error('OneCode shortcut icon points outside the installed app');
@@ -95,6 +112,7 @@ function execute(file, args, elevate) {
 }
 async function run(note, dependencies = {}) {
   const record = validate(JSON.parse(fs.readFileSync(note, 'utf8')));
+  currentChannel = record.channel ?? 'stable';
   noLinks(note); noLinks(record.installer); noLinks(record.executable);
   const logFile = path.join(path.dirname(note), 'bootstrap.log');
   if (fs.existsSync(logFile) && fs.statSync(logFile).size > 65536) fs.writeFileSync(logFile, tail(logFile, 32768));
@@ -145,7 +163,7 @@ async function run(note, dependencies = {}) {
       // An explicit Update and restart must show the GUI successor. Only the
       // helper/installer are hidden; do not pass SW_HIDE to the app itself.
       const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-      const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false, env });
+      const child = (dependencies.launch || cp.spawn)(record.executable, successorArguments(record), { detached: true, stdio: 'ignore', windowsHide: false, env });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       child.unref();
       log(`launched installed executable pid ${child.pid}`);
@@ -185,6 +203,7 @@ async function runHotfix(record, note, dependencies, listing, log, persist) {
   const resources = path.join(record.target, 'resources');
   const {manifest,payload}=await verifiedPayload(record);
   const runtime = contract.runtime(JSON.parse(fs.readFileSync(path.join(resources, 'updater/runtime.json'), 'utf8')));
+  if ((runtime.channel ?? 'stable') !== currentChannel) throw Error('Installed OneCode channel differs from update handoff');
   if (!contract.compatibleBase(runtime,manifest)) throw Error('Hotfix native runtime or installed base differs');
   await contract.verify(resources, runtime.files);
   const previous = await contract.inventory(resources, contract.mutable);
@@ -236,7 +255,7 @@ async function runHotfix(record, note, dependencies, listing, log, persist) {
 }
 async function launchSuccessor(record, dependencies, listing, log, version) {
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-  const child = (dependencies.launch || cp.spawn)(record.executable, ['--updated'], { detached: true, stdio: 'ignore', windowsHide: false, env });
+  const child = (dependencies.launch || cp.spawn)(record.executable, successorArguments(record), { detached: true, stdio: 'ignore', windowsHide: false, env });
   await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
   const deadline = Date.now() + 45000; let stable = 0;
   while (true) {

@@ -70,8 +70,8 @@ function entries(files, payload, platform = 'win32') {
 }
 function runtimeId(...args) {
   const legacy = args.length === 3;
-  const [platform, arch, files, electron, loader] = legacy ? ['win32', ...args] : args;
-  const value = { platform, arch, electron, files, ...(loader ? { loader } : {}) };
+  const [platform, arch, files, electron, loader, channel = 'stable'] = legacy ? ['win32', ...args] : args;
+  const value = { platform, arch, electron, files, ...(loader ? { loader } : {}), ...(channel === 'beta' ? { channel } : {}) };
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 function runtime(value) {
@@ -81,11 +81,16 @@ function runtime(value) {
   entries(value.files, false, value.platform);
   if(value.baseVersion!==undefined && (typeof value.baseVersion!=='string' || !/^\d+\.\d+\.\d+$/.test(value.baseVersion))) throw Error('Invalid installed base version');
   if(linux && !value.baseVersion) throw Error('Linux hotfix runtime must name its complete base');
-  const expected = windows ? runtimeId(value.arch, value.files, value.electron) : runtimeId(value.platform, value.arch, value.files, value.electron, value.loader);
+  const channel = value.channel ?? 'stable';
+  if (!['stable', 'beta'].includes(channel)) throw Error('Invalid hotfix channel');
+  const expected = windows
+    ? channel === 'beta' ? runtimeId('win32', value.arch, value.files, value.electron, undefined, channel) : runtimeId(value.arch, value.files, value.electron)
+    : runtimeId(value.platform, value.arch, value.files, value.electron, value.loader, channel);
   if (value.id !== expected) throw Error('Hotfix runtime fingerprint changed');
   return value;
 }
 function compatibleBase(runtime,manifest) {
+  if ((runtime.channel ?? 'stable') !== (manifest.channel ?? 'stable')) return false;
   if(runtime.id!==manifest.runtime || runtime.arch!==manifest.arch || runtime.platform!==manifest.platform) return false;
   if(!manifest.base) return true;
   if(!runtime.baseVersion) return false;
@@ -94,23 +99,26 @@ function compatibleBase(runtime,manifest) {
   return true;
 }
 function manifest(value) {
-  const windows = value?.schema === 1 && value.platform === 'win32' && value.archive === `OneCode-Hotfix-${value.arch}.zip`;
-  const linux = value?.schema === 2 && value.platform === 'linux' && value.archive === `OneCode-Linux-Hotfix-${value.arch}.zip`;
-  if ((!windows && !linux) || !/^\d+\.\d+\.\d+$/.test(value.version) || !['x64','arm64'].includes(value.arch) ||
+  const channel = value?.channel ?? 'stable', prefix = channel === 'beta' ? 'OneCode-Beta-' : 'OneCode-';
+  const windows = value?.schema === 1 && value.platform === 'win32' && value.archive === `${prefix}Hotfix-${value.arch}.zip`;
+  const linux = value?.schema === 2 && value.platform === 'linux' && value.archive === `${prefix}Linux-Hotfix-${value.arch}.zip`;
+  if (!['stable','beta'].includes(channel) || (!windows && !linux) || !/^\d+\.\d+\.\d+$/.test(value.version) || !['x64','arm64'].includes(value.arch) ||
       !HEX.test(value.runtime) || !HEX.test(value.sha256) ||
       !Number.isSafeInteger(value.size) || value.size < 1 || value.size > 64 * 1024 * 1024) throw Error('Invalid hotfix manifest');
   entries(value.files, true, value.platform);
   if (value.base !== undefined) {
     baseRelease(value.base);
     const compare = (a,b) => { const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<3;i++)if(x[i]!==y[i])return x[i]-y[i];return 0; };
-    if(value.base.platform!==value.platform || value.base.arch!==value.arch || value.base.runtime!==value.runtime || compare(value.base.version,value.version)>0) throw Error('Hotfix base differs from its platform, runtime or release');
+    if(value.base.platform!==value.platform || value.base.arch!==value.arch || value.base.runtime!==value.runtime || (value.base.channel ?? 'stable') !== channel || compare(value.base.version,value.version)>0) throw Error('Hotfix base differs from its platform, runtime, channel or release');
   }
   return value;
 }
 function baseRelease(value) {
-  const windows = value?.schema===1 && value.platform==='win32' && value.installer===`OneCode-Setup-${value.arch}.exe`;
-  const linux = value?.schema===2 && value.platform==='linux' && value.installer===`OneCode-Linux-${value.arch}.AppImage`;
-  if((!windows && !linux) || !/^\d+\.\d+\.\d+$/.test(value.version) || !['x64','arm64'].includes(value.arch) ||
+  const channel=value?.channel ?? 'stable',prefix=channel==='beta'?'OneCode-Beta-':'OneCode-';
+  const windows = value?.schema===1 && value.platform==='win32' && value.installer===`${prefix}Setup-${value.arch}.exe`;
+  const linux = value?.schema===2 && value.platform==='linux' && value.installer===`${prefix}Linux-${value.arch}.AppImage`;
+  const expectedTag=channel==='beta'?`beta-v${value?.version}`:`v${value?.version}`;
+  if(!['stable','beta'].includes(channel) || (value.tag!==undefined && value.tag!==expectedTag) || (channel==='beta' && value.tag!==expectedTag) || (!windows && !linux) || !/^\d+\.\d+\.\d+$/.test(value.version) || !['x64','arm64'].includes(value.arch) ||
     !HEX.test(value.runtime) || !HEX.test(value.sha256) || !Number.isSafeInteger(value.size) || value.size<1 || value.size>1024*1024*1024) throw Error('Invalid full release descriptor');
   return value;
 }

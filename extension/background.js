@@ -3383,36 +3383,50 @@ function ensureSelectedChat(request) {
   if (!conversationId || typeof selectionToken !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(selectionToken)) return;
   if (selectedChatFlights.has(conversationId)) return;
   const flight = (async () => {
-    const report = (phase, retryAt) => call('/selected-chat/readiness', { method: 'POST',
-      body: JSON.stringify({ token: selectionToken, phase, ...(retryAt ? { retryAt } : {}) }) });
+    await load();
+    const report = (phase, retryAt, reason) => call('/selected-chat/readiness', { method: 'POST',
+      body: JSON.stringify({ token: selectionToken, phase, ...(retryAt ? { retryAt } : {}), ...(reason ? { reason } : {}) }) });
+    try {
     const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
     const candidates = tabs.filter(tab => conversationForTab(tab) === conversationId).sort((a, b) => a.id - b.id);
     let tab = candidates.find(tab => tabConversations[String(tab.id)] === conversationId) || candidates[0];
     if (!tab) {
       // One explicit selection can open once. Closing it (or an ambiguous
       // creation during worker shutdown) needs a new selection/Send intent.
-      if (selectedChatOpenings[selectionToken]) { await report('refused'); return; }
+      if (selectedChatOpenings[selectionToken]) { await report('refused', null, 'opening-spent'); return; }
       selectedChatOpenings[selectionToken] = { conversationId, opening: true };
       await persistLive();
       try { tab = await createChatTab(providerConversationUrl(conversationId), true, false, conversationId); }
-      catch { await report('refused'); return; }
+      catch { await report('refused', null, 'opening-failed'); return; }
     }
     if (Number.isInteger(tab?.id)) {
-      selectedChatOpenings[selectionToken] = { conversationId, tabId: tab.id };
+      selectedChatOpenings[selectionToken] = { ...selectedChatOpenings[selectionToken], conversationId, tabId: tab.id };
       await persistLive();
     }
-    if (!Number.isInteger(tab?.id)) { await report('loading'); return; }
+    if (!Number.isInteger(tab?.id)) { await report('refused', null, 'opening-failed'); return; }
     const latest = await chrome.tabs.get(tab.id).catch(() => null);
-    if (!latest || conversationForTab(latest) !== conversationId) { await report('loading'); return; }
-    if (latest.pendingUrl || latest.status === 'loading' || latest.discarded || latest.frozen) { await report('loading'); return; }
+    if (!latest || conversationForTab(latest) !== conversationId) { await report('refused', null, 'tab-changed'); return; }
+    if (latest.discarded || latest.frozen) {
+      // One explicit selection may wake its exact suspended tab. Persist before
+      // activation; status polling cannot repeatedly switch tabs or reload work.
+      if (!selectedChatOpenings[selectionToken].awakened && !latest.pendingUrl) {
+        selectedChatOpenings[selectionToken].awakened = true; await persistLive();
+        const before = await chrome.tabs.get(tab.id).catch(() => null);
+        if (!before || before.pendingUrl || conversationForTab(before) !== conversationId) { await report('refused', null, 'tab-changed'); return; }
+        await chrome.tabs.update(tab.id, { active: true });
+      }
+      await report('reconnecting', null, 'tab-suspended'); return;
+    }
+    if (latest.pendingUrl || latest.status === 'loading') { await report('loading', null, 'page-loading'); return; }
     const documentId = tabDocuments[String(tab.id)];
-    if (!documentId) { await restoreChatgptTab(tab.id); await report('reconnecting'); return; }
+    if (!documentId) { await restoreChatgptTab(tab.id); await report('reconnecting', null, 'companion-document'); return; }
     const current = () => tabDocuments[String(tab.id)] === documentId && tabConversations[String(tab.id)] === conversationId;
-    if (!await restoreChatgptTab(tab.id, current, documentId) || !current()) { await report('reconnecting'); return; }
+    if (!await restoreChatgptTab(tab.id, current, documentId) || !current()) { await report('reconnecting', null, 'companion-document'); return; }
     const ready = await tabReply(tab.id, { type: 'clf-selection-ready', conversationId }, { documentId });
-    if (!current()) { await report('reconnecting'); return; }
+    if (!current()) { await report('reconnecting', null, 'companion-document'); return; }
     await report(ready?.ok === true && ready.recorderVersion === PAGE_RECORDER_VERSION ? 'ready'
-      : ready?.retryAt > Date.now() ? 'history-wait' : 'loading', ready?.retryAt);
+      : ready?.retryAt > Date.now() ? 'history-wait' : 'loading', ready?.retryAt, ready?.ok === true ? null : 'provider-unconfirmed');
+    } catch { await report('refused', null, 'probe-failed').catch(() => undefined); }
   })().finally(() => { if (selectedChatFlights.get(conversationId) === flight) selectedChatFlights.delete(conversationId); });
   selectedChatFlights.set(conversationId, flight);
   void flight.catch(() => undefined);

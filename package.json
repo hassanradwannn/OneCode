@@ -1,7 +1,7 @@
 {
   "name": "onecode",
-  "version": "0.5.0",
-  "shortVersionWindows": "0.5.0.0",
+  "version": "0.5.1",
+  "shortVersionWindows": "0.5.1.0",
   "description": "Desktop workspace for AI providers with local MCP tools, managed chats and parallel agents.",
   "license": "MIT",
   "author": "OneCode contributors",
@@ -31,6 +31,10 @@
     "desktop:mac": "node scripts/prepare-macos-desktop-helper.mjs --platform darwin",
     "dist": "node scripts/package.mjs --arch x64,arm64",
     "dist:win": "node scripts/package.mjs --platform win32 --arch x64,arm64",
+    "dist:beta": "node scripts/package.mjs --channel beta --arch x64,arm64",
+    "dist:beta:win": "node scripts/package.mjs --channel beta --platform win32 --arch x64,arm64",
+    "dist:beta:linux": "node scripts/package.mjs --channel beta --platform linux --arch x64,arm64",
+    "dist:beta:dir": "node scripts/package.mjs --channel beta --arch x64,arm64 --dir",
     "dist:x64": "node scripts/package.mjs --platform win32 --arch x64",
     "dist:arm64": "node scripts/package.mjs --platform win32 --arch arm64",
     "dist:mac": "node scripts/package.mjs --platform darwin --arch x64,arm64",
@@ -50,6 +54,7 @@
     "dist:dir:linux:arm64": "node scripts/package.mjs --platform linux --arch arm64 --dir",
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
     "test:kill": "node scripts/kill-stray-vitest.mjs",
+    "test:build-channel": "node scripts/verify-build-channel.mjs",
     "release:hotfix": "node scripts/write-hotfix-package.mjs",
     "release:hotfix:linux": "node scripts/write-linux-hotfix-package.mjs",
     "release:prepare:linux": "node scripts/prepare-linux-release.mjs"

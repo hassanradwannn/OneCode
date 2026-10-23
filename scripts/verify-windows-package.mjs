@@ -18,7 +18,9 @@ function inspectText(bytes, label) {
 export function assertWindowsPackageIsolation(resources) {
   const archive = path.join(resources, 'app.asar');
   const manifest = JSON.parse(extractFile(archive, 'package.json').toString('utf8'));
-  if (manifest.name !== 'onecode' || manifest.desktopName !== 'io.onecode.desktop') throw new Error('Unexpected packaged app identity');
+  const channel = manifest.onecodeBuildChannel === 'beta' ? 'beta' : 'stable';
+  const appId = channel === 'beta' ? 'io.onecode.desktop.beta' : 'io.onecode.desktop';
+  if (manifest.name !== 'onecode' || manifest.desktopName !== appId) throw new Error('Unexpected packaged app identity');
   let ownedFiles = 0;
   for (const raw of listPackage(archive)) {
     const file = normalize(raw);
@@ -36,7 +38,7 @@ export function assertWindowsPackageIsolation(resources) {
     throw new Error(`Unapproved resource input: ${name}`);
   if (readdirSync(resources).includes('app-update.yml')) {
     const feed = loadYaml(readFileSync(path.join(resources, 'app-update.yml'), 'utf8'));
-    const expected = { owner: 'hassanradwannn', repo: 'OneCode', provider: 'github', updaterCacheDirName: 'onecode-updater' };
+    const expected = { owner: 'hassanradwannn', repo: 'OneCode', provider: 'github', updaterCacheDirName: channel === 'beta' ? 'onecode-beta-updater' : 'onecode-updater' };
     if (!feed || typeof feed !== 'object' || Object.keys(feed).length !== Object.keys(expected).length ||
       Object.entries(expected).some(([key, value]) => feed[key] !== value))
       throw new Error('Unapproved packaged updater feed');

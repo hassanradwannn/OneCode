@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { BUILD_CHANNEL, PRODUCT_LABEL } from '../shared/build-channel.js';
 
-export const PRODUCT_NAME = 'OneCode';
-export const APP_ID = 'io.onecode.desktop';
+export const PRODUCT_NAME = PRODUCT_LABEL;
+export const APP_ID = BUILD_CHANNEL === 'beta' ? 'io.onecode.desktop.beta' : 'io.onecode.desktop';
 /** Development Electron must never register itself as the installed product. */
 export function windowsAppId(packaged: boolean): string { return packaged ? APP_ID : `${APP_ID}.development`; }
 
@@ -16,5 +17,5 @@ export function appDataDirectory(
   if (override) return path.resolve(override);
   const current = path.join(appData, PRODUCT_NAME);
   const legacy = path.join(appData, 'GeminiCode');
-  return !exists(current) && exists(legacy) ? legacy : current;
+  return BUILD_CHANNEL === 'stable' && !exists(current) && exists(legacy) ? legacy : current;
 }

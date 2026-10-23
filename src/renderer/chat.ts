@@ -1284,6 +1284,7 @@ async function loadSessions(detail: 'reread' | 'changed' = 'reread'): Promise<vo
   paintSessions();
   chatSearch?.refresh();
   const row = selectedId === null ? undefined : sessions.find(entry => entry.id === selectedId);
+  if (row) reconcileSelectedProviderAttachment(row.id, row.conversationId);
   if (detail === 'reread' || selectedId === null || detailFor !== selectedId || changed.all || changed.ids.has(selectedId) ||
       row?.updatedAt !== detailStamp?.updatedAt || row?.events !== detailStamp?.events) {
     await loadDetail(); void mediaPanel?.refresh();
@@ -2198,6 +2199,14 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
       $('timeline').removeAttribute('aria-busy');
     }
     return false;
+  }
+  // Detail can attach before the next sidebar page. Promote its canonical owner
+  // so controls (especially explicit Stop) do not remain in the opening state.
+  if (detail.summary?.id === wanted) {
+    const row = sessions.find(entry => entry.id === wanted);
+    if (row) row.conversationId = detail.summary.conversationId;
+    reconcileSelectedProviderAttachment(wanted, detail.summary.conversationId);
+    void refreshSessionControls();
   }
   if (resident) {
     // Refresh canonical revisions only inside the page being read. New work must
@@ -6684,9 +6693,11 @@ async function retryPlannedInput(entry: InputEntry): Promise<void> {
 function showAutoSkillReceipt(entry: Pick<InputEntry, 'autoSkills'>): void {
   if (entry.autoSkills?.length) toast(t('Auto-selected Skill: /{0}', [entry.autoSkills[0]!.id]));
 }
-async function stopCurrentTurn(): Promise<void> {
-  const id = selectedId, turnId = controlledTurnId, generation = selectionGeneration;
-  if (!id || controlledSessionId !== id || controlledSelection !== generation || !turnId || controlledStopPending) return;
+async function stopCurrentTurn(confirmed?: { sessionId: string; selection: number; turnId: string }): Promise<void> {
+  const id = selectedId, turnId = confirmed?.turnId ?? controlledTurnId, generation = selectionGeneration;
+  if (!id || !turnId || controlledStopPending || (confirmed
+    ? confirmed.sessionId !== id || confirmed.selection !== generation
+    : controlledSessionId !== id || controlledSelection !== generation)) return;
   controlledStopPending = true; paintDeliveryControls();
   try { await run(api.stopSessionTurn(id, turnId)); }
   finally { if (selectedId === id && selectionGeneration === generation) { controlledStopPending = false; void refreshSessionControls(); } }
@@ -6705,8 +6716,14 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
     if (!controlAction) return;
     const target = selectedId, selection = selectionGeneration;
     const sameSelection = () => selectedId === target && selectionGeneration === selection;
-    await refreshSessionControls();
+    // Explicit Stop reads the canonical owner even while the sidebar still
+    // projects an opening. A concurrent cosmetic controls refresh cannot erase
+    // this response before the exact turn reaches the Stop IPC.
+    const currentControls = target ? await run(api.getSessionControls(target)) : null;
     if (!sameSelection()) return;
+    if (target && currentControls?.activeTurnId) {
+      await stopCurrentTurn({ sessionId: target, selection, turnId: currentControls.activeTurnId }); return;
+    }
     // An actual turn takes precedence over queued follow-ups. Stop never silently
     // becomes cancellation of a different pending input in that same chat.
     if (target && controlledSessionId === target && controlledSelection === selection && controlledTurnId) {
@@ -6857,6 +6874,14 @@ function showView(name: string): void {
 
 let selectedProviderTimer: number | null = null;
 let selectedProviderEpoch = 0;
+let selectedProviderAttachment: string | null | undefined;
+function reconcileSelectedProviderAttachment(id: string, conversationId: string | null): void {
+  if (id !== selectedId || selectedProviderAttachment === conversationId) return;
+  // Attachment changes retire even an in-flight pre-attachment refusal. Status
+  // refreshes never open a tab; another explicit selection/Send owns opening.
+  selectedProviderAttachment = conversationId;
+  clearSelectedProviderReadiness();
+}
 function clearSelectedProviderReadiness(): void {
   selectedProviderEpoch++;
   if (selectedProviderTimer !== null) window.clearTimeout(selectedProviderTimer);
@@ -6890,8 +6915,8 @@ async function ensureSelectedProvider(id: string, selection: number, poll = fals
   if (!next || next.phase === 'ready' || typeof next !== 'object') { clearSelectedProviderReadiness(); return; }
   ui(status, 'textContent', () => next.phase === 'history-wait'
     ? t('Waiting for provider history until {0}…', [new Date(next.retryAt ?? Date.now()).toLocaleTimeString()])
-    : next.phase === 'reconnecting' ? t('Reconnecting provider tab…')
-      : next.phase === 'refused' ? next.reason ?? t('Provider tab is unavailable.') : t('Loading provider tab…'));
+    : next.phase === 'reconnecting' ? next.reason ?? t('Reconnecting provider tab…')
+      : next.phase === 'refused' ? next.reason ?? t('Provider tab is unavailable.') : next.reason ?? t('Loading provider tab…'));
   if (next.phase !== 'refused') selectedProviderTimer = window.setTimeout(() => {
     selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
   }, next.phase === 'history-wait' ? Math.max(2000, Math.min(15000, (next.retryAt ?? 0) - Date.now())) : 2000);
@@ -6905,6 +6930,7 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
   newChatSelected = false;
   selectedId = id;
+  selectedProviderAttachment = sessions.find(row => row.id === id)?.conversationId ?? null;
   clearSelectedProviderReadiness();
   void ensureSelectedProvider(id, selectionGeneration);
   workbenchBrowserPanel?.sync(id);
