@@ -16,6 +16,12 @@ const betaBuilder = yaml.load(await fs.readFile(path.join(root, 'electron-builde
 assert.equal(betaBuilder.extends, 'electron-builder.yml');
 assert.equal(betaBuilder.productName, 'OneCode Beta');
 assert.equal(betaBuilder.appId, 'io.onecode.desktop.beta');
+assert.equal(betaBuilder.extraMetadata.name, 'onecode-beta');
+// electron-builder replaces publish.updaterCacheDirName from package identity after afterPack.
+const { AppInfo } = require('app-builder-lib/out/appInfo.js');
+const generatedCacheName = Object.getOwnPropertyDescriptor(AppInfo.prototype, 'updaterCacheDirName').get
+  .call({ sanitizedName: betaBuilder.extraMetadata.name });
+assert.equal(generatedCacheName, 'onecode-beta-updater');
 assert.equal(betaBuilder.nsis.guid, '35baded0-d4e2-5fee-872a-11b461352695');
 assert.equal(betaBuilder.publish.updaterCacheDirName, 'onecode-beta-updater');
 assert.equal(betaBuilder.deb.packageName, 'onecode-beta');
