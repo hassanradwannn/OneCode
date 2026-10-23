@@ -2764,8 +2764,8 @@ var CLF_DOM = (() => {
    *
    * A computer that shares its ChatGPT account with another names its connectors with a suffix,
    * "OneCode Core (Windows)", and recognizes exactly its own names; the other computer's
-   * calls run there. Null until the app has said, which keeps the plain names. Every ask to the
-   * page-world helper carries them, so it never judges traffic by names it was not told.
+   * calls run there. Until the app has said its names, there are no eligible OneCode connectors.
+   * Every ask to the page-world helper carries only names supplied by the app.
    */
   const PLAIN_CONNECTORS = ['OneCode Core', 'OneCode Desktop', 'OneCode Plugins'];
   const SUFFIXED_CONNECTOR = /^OneCode (Core|Desktop|Plugins) (?:[\p{L}\p{N} ._-]{1,32}|\([\p{L}\p{N} ._-]{1,32}\))$/u;
@@ -2794,29 +2794,22 @@ var CLF_DOM = (() => {
     return changed;
   }
   const connectorApps = () => ownApps.map(app => ({ ...app }));
-  /** Configured and learned names select one surface; renames never discard its proven IDs. */
+  /** Only one of the app's exact current names may select a surface. IDs can confirm it, never rename it. */
   function provenAppsFor(connectorName) {
     const at = connectorNames().indexOf(connectorName);
-    const surfaces = new Set(ownApps.filter(app => app.name === connectorName).map(app => app.surface));
-    if (at >= 0) surfaces.add(['core', 'desktop', 'plugins'][at]);
-    // A learned name can collide with another surface's learned or configured name.
-    // That ambiguity is not permission to fall back to name-only enrollment.
-    if (surfaces.size > 1) return null;
-    const surface = [...surfaces][0];
+    if (at < 0) return null;
+    const surface = ['core', 'desktop', 'plugins'][at];
     return ownApps.filter(app => app.surface === surface);
   }
-  /** This install's three names, or the plain ones while the app has not said. */
-  const connectorNames = () => [...(ownConnectors || PLAIN_CONNECTORS)];
+  /** This install's three exact names, or none until the app has supplied them. */
+  const connectorNames = () => [...(ownConnectors || [])];
   /** The Plugins connector of any computer: it only selects that connector's larger action limits. */
   const pluginsConnectorName = (name) => name === PLAIN_CONNECTORS[2] || SUFFIXED_CONNECTOR.exec(typeof name === 'string' ? name : '')?.[1] === 'Plugins';
 
   /** Observed ChatGPT Plugins settings surface. Missing/ambiguous structure is not proof. */
   async function pluginRefreshView(connectorName, expectedTools = [], expectedAppId = null) {
-    // A durable exact-ID request already identifies its connector even when names collide.
-    // Use that ID's proven surface for limits too, rather than borrowing another surface's name.
-    const identified = expectedAppId ? ownApps.filter(app => app.appId === expectedAppId) : [];
-    const proven = identified.length ? identified : provenAppsFor(connectorName);
-    if (proven === null && !expectedAppId) return null;
+    const proven = provenAppsFor(connectorName);
+    if (proven === null || (expectedAppId && proven.length && !proven.some(app => app.appId === expectedAppId))) return null;
     const externalPlugins = proven?.length ? proven.every(app => app.surface === 'plugins') : pluginsConnectorName(connectorName);
     const snapshot = await new Promise(resolve => {
       const nonce = crypto.randomUUID();
@@ -2830,7 +2823,8 @@ var CLF_DOM = (() => {
     });
     const route = /^#settings\/Plugins\/plugin_(asdk_app_[a-zA-Z0-9_-]+)$/.exec(location.hash) ||
       (!location.hash ? /^\/(?:settings\/plugins-settings|plugins)\/plugin_(asdk_app_[a-zA-Z0-9_-]+)$/.exec(location.pathname) : null);
-    if (!snapshot || snapshot.appId !== route?.[1] || (expectedAppId ? snapshot.appId !== expectedAppId : !ownSnapshot(snapshot, connectorName)) ||
+    if (!snapshot || snapshot.connectorName !== connectorName || snapshot.appId !== route?.[1] ||
+        (expectedAppId ? snapshot.appId !== expectedAppId : !ownSnapshot(snapshot, connectorName)) ||
         !Array.isArray(snapshot.tools) || (snapshot.tools.length < 1 && !externalPlugins) || snapshot.tools.length > (externalPlugins ? 257 : 128) || JSON.stringify(snapshot.tools).length > 300000 ||
         snapshot.tools.some(tool => !tool || typeof tool.name !== 'string' || !/^[a-z][a-z0-9_]{0,79}$/.test(tool.name) || typeof tool.description !== 'string' || tool.inputSchema?.type !== 'object') ||
         new Set(snapshot.tools.map(tool => tool.name)).size !== snapshot.tools.length) return null;
@@ -2840,20 +2834,17 @@ var CLF_DOM = (() => {
       tunnelId: typeof snapshot.tunnelId === 'string' && /^tunnel_[a-zA-Z0-9]{8,80}$/.test(snapshot.tunnelId) ? snapshot.tunnelId : null, settled: snapshot.settled === true } : null;
   }
   /**
-   * Whether a plugin settings page shows this connector: by a proven app id when one exists (a
-   * same-named app with another id is somebody else's), otherwise by the configured name as before.
+   * Whether a plugin settings page shows this exact configured connector. A proven app id can
+   * reject a collision, but a matching id never overrides a different visible connector name.
    */
   function ownSnapshot(snapshot, connectorName) {
     const proven = provenAppsFor(connectorName);
-    return proven !== null && (proven.length ? proven.some(app => app.appId === snapshot.appId) : snapshot.connectorName === connectorName);
+    return proven !== null && snapshot.connectorName === connectorName && (!proven.length || proven.some(app => app.appId === snapshot.appId));
   }
   function pluginInstalledButtons(connectorName) {
-    // Native links name their exact App Id, even when a fresh provider rename has not reached
-    // the learned name yet. Legacy buttons still need names; the destination proves identity.
     const proven = provenAppsFor(connectorName);
     if (proven === null) return null;
-    const names = [connectorName, ...proven.map(app => app.name).filter(Boolean)];
-    const named = node => names.includes(text(node));
+    const named = node => text(node) === connectorName;
     return safe(() => {
       // The newer shell lists installed plugins on the /settings/plugins-settings page itself.
       if (location.pathname === '/settings/plugins-settings' && !location.hash) {
@@ -2867,7 +2858,7 @@ var CLF_DOM = (() => {
             const url = new URL(button.href, location.href);
             const route = /^\/settings\/plugins-settings\/plugin_(asdk_app_[a-zA-Z0-9_-]+)$/.exec(url.pathname);
             if (url.origin !== location.origin || !route || url.hash) return false;
-            if (proven.length) return proven.some(app => app.appId === route[1]);
+            if (proven.length && !proven.some(app => app.appId === route[1])) return false;
           }
           return [...button.querySelectorAll('*')].some(node => !node.children.length && named(node));
         });

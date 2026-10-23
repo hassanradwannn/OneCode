@@ -64,7 +64,7 @@ export function initBrowserSetup(actions: {
   const lockChoice = (busy: boolean): void => {
     choosing = busy;
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-external-browser], #useExtensionBrowser, #openSelectedChatGpt, #openChatGptBrowser, #openExtensionSettings, #openFirefoxAddon, #pickBrowserExecutable')) button.disabled = busy;
-    $('browserExecutablePicker').hidden = current?.platform?.family !== 'windows';
+    $('browserExecutablePicker').hidden = current?.platform?.family !== 'windows' && current?.platform?.family !== 'linux';
   };
 
   let copiedAt = 0;
@@ -162,7 +162,7 @@ export function initBrowserSetup(actions: {
     const address = `${external}://extensions`;
     $('setupExtensionAddress').textContent = address;
     const label = LABELS[external];
-    $('browserExecutablePicker').hidden = state.platform?.family !== 'windows';
+    $('browserExecutablePicker').hidden = state.platform?.family !== 'windows' && state.platform?.family !== 'linux';
     $('browserExecutableHint').textContent = state.config.ui.browserExecutables?.[external] ?? t('For portable browsers or an installation in another folder or drive.');
     paintInstallSteps(label, providerName);
     ui($('setupExternalChoice'), 'textContent', () => t('Use {0}', [label]));

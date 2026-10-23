@@ -3,10 +3,11 @@ import path from 'node:path';
 import { app, clipboard, dialog, type BrowserWindow } from 'electron';
 import { zipSync } from 'fflate';
 import { GEMINI_WEB_SKILL_NAME, GEMINI_WEB_SKILL_VERSION, type GeminiSkillExportFormat, type GeminiSkillExportResult } from '../shared/gemini-web-skill.js';
+import { packagedApplicationResources } from './application-resources.js';
 
 /** Only the bundled public asset is exportable; callers never supply its contents or path. */
 export async function readBundledGeminiSkill(): Promise<{ bytes: Buffer; instructions: string }> {
-  const root = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
+  const root = app.isPackaged ? packagedApplicationResources() : path.join(app.getAppPath(), 'resources');
   const file = path.join(root, 'skills', GEMINI_WEB_SKILL_NAME, 'SKILL.md');
   let bytes: Buffer;
   try { bytes = await fs.readFile(file); }

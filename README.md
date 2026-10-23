@@ -1,12 +1,16 @@
 # OneCode
 
-A desktop workspace for AI providers and local tools on Windows. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
+A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.4.8 hotfix](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.8)** · **[Windows installer (0.4.5 base)](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe)** · [Setup guide](docs/WINDOWS-SETUP.md)
+**Latest release: [OneCode 0.5.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.5.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-The current release is available for **Windows x64**, with **ChatGPT web and Gemini web** through one Companion extension.
+The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates → Install when done** for 0.4.8. Compatible 0.4.5 installations receive the small application hotfix. The 0.4.5 updater stages its required full base first when needed, then applies the hotfix before one final relaunch. New users install the base above, then check for updates. Your profile and saved chats are preserved. If an older updater cannot offer this hotfix, install the complete 0.4.5 base first, then check again.
+**Already installed?** Open **Settings → General → Check for updates → Install when done**. Windows and Linux AppImage installations use OneCode's verified internal update path. A DEB installation remains package-manager-owned and receives the exact DEB download instead of an implicit root-owned mutation. Your profile and saved chats are preserved.
+
+## What's new in 0.5.0
+
+OneCode now ships as a full Windows + Linux release. Linux gains AppImage/DEB packaging and a verified application-hotfix foundation for future compatible AppImage updates. The release also fixes Linux embedded-browser sizing/positioning, keeps fresh task authorization inside authenticated Core execution for plans/plugins/sub-agents, lets you click an attached image to preview it before Send, and bundles the supported Linux speech-recognition runtime. It includes the accepted connector, Tailscale, transcript and long-response reliability repairs from the Linux port and 0.4.8. See [0.5.0 notes](docs/release-notes/v0.5.0.md).
 
 ## What's new in 0.4.8
 
@@ -93,8 +97,8 @@ Keep chats and projects together, delegate workers, use account-available models
 
 ## Install
 
-1. Run the [0.4.5 Windows installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.4.5/OneCode-Setup-x64.exe), then use **Settings → General → Check for updates → Install when done** for later updates.
-2. Choose Tailscale or Cloudflare in Setup. For Tailscale, [install it](https://tailscale.com/download/windows) and sign in with your own account.
+1. **Windows x64:** run the [0.5.0 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Setup-x64.exe). **Linux x64:** download the [0.5.0 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.AppImage) or [0.5.0 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; DEB upgrades remain package-manager-owned.
+2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
 5. Choose **Gemini** or **ChatGPT** in Setup. Add **OneCode Core** in that provider using the exact URL shown, then approve a working folder and choose the tools you want to enable.
@@ -123,7 +127,7 @@ Remote mode uses a separate private Tailscale Serve route and access key. Keep i
 
 ## Updates and longer tasks
 
-Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible application hotfixes use a smaller verified bundle and retain the native runtime. The Windows updater also validates its cached installer and blockmap before attempting a differential download. When a matching baseline is unavailable, OneCode downloads the complete installer.
+Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible Windows and Linux-AppImage application hotfixes use smaller verified bundles while retaining their immutable native base; incompatible native/runtime changes require a complete installer/AppImage. The Windows updater also validates its cached installer and blockmap before attempting a differential download. DEB installations remain package-manager-owned.
 
 Ask ChatGPT or Gemini to check a local job at an interval, such as every 60 minutes. The agent must register the interval and message with Core `automations` and verify the returned schedule ID and next run. OneCode saves the schedule and sends its message into the same chat at each interval until cancelled. Manage or cancel checks in **Settings → Agents & automation → Scheduled checks**, or ask the agent. Keep the PC awake, OneCode running and the provider signed in. A provider-native Monitoring card alone does not register a OneCode check; a sent message does not prove the check ran or the job succeeded.
 
@@ -131,13 +135,13 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find current checks in the [0.4.5 acceptance record](docs/release-acceptance/v0.4.5.md), with the full installer, required-base descriptor and checksums on the [0.4.5 release](https://github.com/hassanradwannn/OneCode/releases/tag/v0.4.5). Historical releases and their acceptance records remain available.
+Developers can find the 0.5.0 engineering evidence in the [release notes](docs/release-notes/v0.5.0.md) and the acceptance record published with this candidate. Historical releases and their acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
 ## Before you start
 
-- This release supports **Gemini web and ChatGPT web on Windows x64** through one Companion extension.
+- This release supports **Gemini web and ChatGPT web on Windows x64 and Linux x64** through one Companion extension.
 - The selected provider decides which models and custom MCP apps your account can use. OneCode cannot grant subscription features or extra usage.
 - Fresh installs enable file reading only. Enable commands, writes or desktop control deliberately; those tools act with your Windows user's privileges.
 - Enabled tool confirmations on OneCode's own Gemini connector can be handled automatically by its companion. Other apps' approvals are not included.
@@ -154,6 +158,6 @@ npm run typecheck
 npm run build
 ```
 
-Use `npm run dev` for development or `npm run dist:x64` to package Windows x64. Required build, packaging and license-verification scripts are included. `npm run verify` checks the published source and build; the automated test suite, its configuration and manual UI fixtures are maintained locally and excluded from Git. Local development checkouts with those files can run `npm test`.
+Use `npm run dev`, `npm run dist:x64` for Windows x64, or `npm run dist:linux:x64` for Linux x64. Required build, packaging and license-verification scripts are included. `npm run verify` checks the published source and build; the automated test suite, its configuration and manual UI fixtures are maintained locally and excluded from Git. Local development checkouts with those files can run `npm test`.
 
-macOS and Linux packaging configurations are present, but this release's installed acceptance covers Windows x64. Configured macOS targets require macOS 13 Ventura or newer. Linux AppImages may require their conditional `--no-sandbox` fallback on hosts that prohibit unprivileged user namespaces, reducing process isolation.
+Configured macOS targets remain development/porting targets and require macOS 13 Ventura or newer; macOS is not part of the 0.5.0 published acceptance matrix. Linux AppImages may require their conditional `--no-sandbox` fallback on hosts that prohibit unprivileged user namespaces, reducing process isolation.

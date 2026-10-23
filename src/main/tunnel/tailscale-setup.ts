@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { childEnv } from '../exec.js';
 import { locateBinary } from './locate.js';
 import { TAILSCALE_SETUP_ACTIONS, type TailscaleSetupAction } from '../../shared/tailscale-setup.js';
+import { authorizeLinuxTailscaleOperator, startLinuxTailscaleLogin } from '../linux/tailscale.js';
 
 const run = promisify(execFile);
 // Exact community repository identity; WinGet retains installer hash checks and OS consent.
@@ -40,26 +41,52 @@ async function openWindowsTailscale(): Promise<boolean> {
 export interface TailscaleSetupDeps {
   install(): Promise<boolean>;
   login(): Promise<boolean>;
+  operator?(): Promise<boolean>;
   open(url: string): Promise<void>;
 }
 /** One launch owner shared by MCP and Remote; polling cannot start repeated installers. */
 export class TailscaleSetupLauncher {
   private readonly opened = new Set<string>();
+  private readonly pending = new Map<string, Promise<boolean>>();
   constructor(private readonly deps: TailscaleSetupDeps) {}
-  async request(action: TailscaleSetupAction): Promise<void> {
-    if (this.opened.has(action.step)) return;
-    if (!Object.hasOwn(TAILSCALE_SETUP_ACTIONS, action.step)) return;
+  async request(action: TailscaleSetupAction, options: { retry?: boolean } = {}): Promise<boolean> {
+    if (!Object.hasOwn(TAILSCALE_SETUP_ACTIONS, action.step)) return false;
+    const pending = this.pending.get(action.step);
+    if (pending) return options.retry ? pending : false;
+    if (this.opened.has(action.step) && !options.retry) return false;
+    const task = this.launch(action).finally(() => {
+      if (this.pending.get(action.step) === task) this.pending.delete(action.step);
+    });
+    this.pending.set(action.step, task);
+    return task;
+  }
+  private async launch(action: TailscaleSetupAction): Promise<boolean> {
     const destination = TAILSCALE_SETUP_ACTIONS[action.step];
     this.opened.add(action.step);
     try {
-      if (action.step === 'install' && await this.deps.install()) return;
-      if (action.step === 'login' && await this.deps.login()) return;
-    } catch { /* A missing/failed native setup falls back once to first-party instructions. */ }
-    try { await this.deps.open(destination.url); }
-    catch { /* Keep the spent launch: a failed reply cannot prove no browser opened. Manual setup remains available. */ }
+      if (action.step === 'install' && await this.deps.install()) return true;
+      if (action.step === 'login' && await this.deps.login()) return true;
+      // Operator authorization is an OS action, not a documentation action. A cancelled or
+      // unavailable polkit prompt must never be reported as handled by opening a web page.
+      if (action.step === 'operator') return await this.deps.operator?.() === true;
+    } catch {
+      if (action.step === 'operator') return false;
+      // A missing/failed install/login helper can still fall back once to first-party setup.
+    }
+    try { await this.deps.open(destination.url); return true; }
+    catch { return false; /* A failed reply cannot prove no browser opened; keep the spent launch. */ }
   }
 }
-const launcher = new TailscaleSetupLauncher({ install: installWindowsTailscale, login: openWindowsTailscale,
-  open: url => shell.openExternal(url) });
+const launcher = new TailscaleSetupLauncher({ install: installWindowsTailscale,
+  login: () => process.platform === 'linux' ? startLinuxTailscaleLogin() : openWindowsTailscale(),
+  operator: () => authorizeLinuxTailscaleOperator(),
+  open: async url => {
+    // Setup links follow OneCode's selected browser family instead of silently handing them to
+    // the OS default (for example Firefox when the user selected Brave in OneCode).
+    const { openInPreferredBrowser } = await import('../browser.js');
+    await openInPreferredBrowser(url, { reveal: true });
+  } });
 /** The prerequisite owner resumes only after actual CLI/account/capability verification. */
-export const requestTailscaleSetup = (action: TailscaleSetupAction): Promise<void> => launcher.request(action);
+export const requestTailscaleSetup = (action: TailscaleSetupAction): Promise<boolean> => launcher.request(action);
+/** Explicit UI retry: coalesces an in-flight prompt but may retry a previously cancelled action. */
+export const retryTailscaleSetup = (action: TailscaleSetupAction): Promise<boolean> => launcher.request(action, { retry: true });

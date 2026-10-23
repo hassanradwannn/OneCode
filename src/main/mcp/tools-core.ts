@@ -917,7 +917,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               }
             }
 
-            const owner = execPrincipal();
+            const caller = currentCaller();
+            const owner = executionPrincipal(caller.requestId, caller.sessionId ?? null);
             const unread = backgroundExecObligations(owner).exitedUnread;
             if (unread.length >= MAX_UNREAD_EXEC_RESULTS_PER_CONVERSATION) {
               const sessionIds = unread.map((session) => session.processId).join(', ');
@@ -939,11 +940,13 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               );
             }
 
-            const processId = unifiedExecManager.allocateProcessId();
-            // Process ids are deliberately small/reusable, while chat ownership lives in a
-            // separate registry. Clear any stale row at the allocation boundary so a recycled
-            // id cannot briefly authorize its previous chat before this call publishes the new owner.
+            const { processId } = await unifiedExecManager.allocateProcessIdDurably();
+            // The allocator commits this never-reused numeric id before it is exposed to the model.
+            // Clear only a stale in-memory ownership projection; durable tombstones remain.
             forgetExecOwner(processId);
+            // Register exact custody before the child can exit; the manager's durable spool
+            // captures it together with the completed output.
+            noteExecOwner(processId, owner);
 
             const ripgrep = locateRipgrep();
             const executionCommand = deriveExecArgs(shell,
@@ -968,7 +971,13 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               cwd: dir.real,
               displayCwd: dir.virtual,
               env: execChildEnvironment(),
-              tty: input.tty ?? DEFAULT_TTY
+              tty: input.tty ?? DEFAULT_TTY,
+              ownerPrincipal: owner,
+              provider: mcpProvider(),
+              requestId: caller.requestId,
+              sessionId: caller.sessionId,
+              conversationId: caller.conversationId,
+              setupProfileId: caller.setupProfileId
             });
             // Which exact session or temporary request principal may later write to this
             // process id. Request custody upgrades lazily when exact correlation arrives.

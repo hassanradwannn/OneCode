@@ -11,6 +11,8 @@ import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
 import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink } from './remote/server.js';
+import { TAILSCALE_SETUP_ACTIONS, tailscaleSetupAction, type TailscaleSetupStep } from '../shared/tailscale-setup.js';
+import { retryTailscaleSetup } from './tunnel/tailscale-setup.js';
 import { onRemotePreferencesChange } from './remote/preferences.js';
 import { desktopPreviews } from './artifacts/preview-documents.js';
 import { appearanceSchema } from './appearance-schema.js';
@@ -37,7 +39,7 @@ import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery, se
 import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish.js';
 import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
 import { validateInputImages } from './session/input-images.js';
-import { stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
+import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -65,6 +67,7 @@ import { confirmedPluginSchemas, pluginRefreshPublications, pluginRefreshStatuse
  */
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron';
+import path from 'node:path';
 import { z } from 'zod';
 import {
   CAPABILITIES,
@@ -128,7 +131,8 @@ import {
   stopBridge,
   sweepStaleSwarm,
   unpair,
-  followChatInBackground
+  ensureSelectedChatReady,
+  selectedChatReadinessFor
 } from './bridge.js';
 import { extensionDir } from './extension-path.js';
 import { APP_VERSION } from './version.js';
@@ -634,9 +638,15 @@ async function buildState(): Promise<AppState> {
 }
 
 /** Wraps a handler so a thrown error becomes a message the UI can show. */
-function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>): void {
-  ipcMain.handle(channel, async (_event, payload: unknown) => {
+function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>, desktop?: () => BrowserWindow | null): void {
+  ipcMain.handle(channel, async (event, payload: unknown) => {
     try {
+      if (desktop) {
+        const window = desktop();
+        if (!window || window.isDestroyed() || !event || !window.webContents.mainFrame ||
+            event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame)
+          throw new Error('This action requires the trusted OneCode desktop window.');
+      }
       return { ok: true as const, data: await fn(payload) };
     } catch (err) {
       const message =
@@ -674,7 +684,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('remote:status', async () => remoteStatus());
   handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)));
   handle('remote:refresh-link', async () => refreshRemoteLink());
-  handle('remote:revoke', async payload => { revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
+  handle('remote:revoke', async payload => { await revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');
     await requestPluginRefreshes(version, ['core']);
@@ -1386,6 +1396,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return buildState();
   });
 
+  handle('connection:tailscaleSetup', async payload => {
+    const step = z.string().parse(payload);
+    if (!Object.hasOwn(TAILSCALE_SETUP_ACTIONS, step)) throw new Error('Invalid Tailscale setup step.');
+    const ok = await retryTailscaleSetup(tailscaleSetupAction(step as TailscaleSetupStep));
+    if (!ok) {
+      if (step === 'operator') throw new Error('Tailscale authorization was not completed. Approve the system authorization prompt, or use the recovery command and retry Connect.');
+      throw new Error('Tailscale setup could not be opened.');
+    }
+    return true;
+  });
+
   handle('diagnostics:run', async () => runDiagnostics());
   // "Save diagnostics report": one plain-text file for a bug report, personal details removed
   // (see diagnostics-report.ts). Revealed after saving so the user reads what they would share.
@@ -1479,10 +1500,52 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return response === 1 && getWindow() === window && !window.isDestroyed();
   }));
   handle('update:install', async payload => {
-    const { version } = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/) }).parse(payload);
-    return requestUpdateInstall(version);
-  });
-  handle('update:cancel-install', async () => cancelUpdateInstall());
+    const { version, mode } = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/), mode: z.enum(['when-idle', 'now']).default('when-idle') }).strict().parse(payload);
+    return requestUpdateInstall(version, mode);
+  }, getWindow);
+  handle('update:work', async payload => {
+    const { offset } = z.object({ offset: z.number().int().min(0).max(100_000).default(0) }).strict().parse(payload ?? {});
+    const { updateWorkDetails } = await import('./update-install.js');
+    return updateWorkDetails(offset);
+  }, getWindow);
+  handle('update:stop-process', async payload => {
+    const { processId, incarnation } = z.object({ processId: z.number().int().min(1000).max(Number.MAX_SAFE_INTEGER),
+      incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().parse(payload);
+    const { unifiedExecManager } = await import('./codex/manager.js');
+    return unifiedExecManager.terminateProcess(processId, incarnation);
+  }, getWindow);
+  handle('update:cancel-install', async () => cancelUpdateInstall(), getWindow);
+  const retainedTerminal = z.object({ processId: z.number().int().min(1000).max(Number.MAX_SAFE_INTEGER), incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
+  handle('update:inspect-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const { readQuarantinedExecResult } = await import('./codex/ownership.js');
+    const result = readQuarantinedExecResult(processId, incarnation);
+    if (!result) return null;
+    const bytes = result.displayOutput ?? result.rawOutput, preview = bytes.subarray(0, 64 * 1024);
+    return { text: preview.toString('utf8'), retainedBytes: bytes.length, previewBytes: preview.length };
+  }, getWindow);
+  handle('update:export-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const window = getWindow(); if (!window || window.isDestroyed()) return false;
+    const owner = await import('./codex/ownership.js');
+    const result = owner.exportQuarantinedExecResult(processId, incarnation); if (!result) return false;
+    const chosen = await dialog.showSaveDialog(window, { title: 'Export terminal output',
+      defaultPath: path.join(app.getPath('downloads'), result.suggestedFilename), filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (chosen.canceled || !chosen.filePath || getWindow() !== window || window.isDestroyed()) return false;
+    const current = owner.exportQuarantinedExecResult(processId, incarnation); if (!current) return false;
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(chosen.filePath, current.content, { mode: 0o600 }); return true;
+  }, getWindow);
+  handle('update:discard-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const window = getWindow(); if (!window || window.isDestroyed()) return false;
+    const { discardQuarantinedExecResult } = await import('./codex/ownership.js');
+    const choice = await dialog.showMessageBox(window, { type: 'warning', title: 'OneCode', message: 'Discard retained command output?',
+      detail: `Session ${processId}. This removes the retained output without running the command again.`,
+      buttons: ['Keep output', 'Discard output'], defaultId: 0, cancelId: 0, noLink: true });
+    if (choice.response !== 1 || getWindow() !== window || window.isDestroyed()) return false;
+    return discardQuarantinedExecResult(processId, incarnation);
+  }, getWindow);
 
   // "Get update" for an installation that cannot update itself: the exact published file for
   // this machine and the announced version, opened in the user's browser. The renderer names
@@ -1506,10 +1569,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('link:open', async (payload) => {
     const { url, external } = z.object({ url: z.string().max(8192), external: z.boolean().optional() }).parse(payload);
     if (!ALLOWED_LINKS.has(url) && !safeExternalLink(url)) throw new Error('That link is not allowed');
-    // Setup's Gemini and OpenAI pages open where the user is already signed in, unless the
-    // user asked for their own browser instead.
-    if (!external && getConfig().ui.chatBrowser === 'cos' && opensInCosBrowser(url, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)) await openInPreferredBrowser(url, { reveal: true });
-    else await shell.openExternal(url);
+    const config = getConfig(), browser = config.ui.chatBrowser ?? 'chrome';
+    if (/^https?:/i.test(url)) {
+      // A concrete browser preference owns ordinary web links too. Previously Chrome/Brave/
+      // Edge/Firefox selections still fell through to the OS default, so Linux opened Firefox
+      // even when OneCode was configured for Brave. external only means "escape COS" when
+      // COS itself is selected; it must not discard an explicit native-browser choice.
+      if (browser !== 'cos' || (!external && opensInCosBrowser(url, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)))
+        await openInPreferredBrowser(url, { reveal: true });
+      else await shell.openExternal(url);
+    } else await shell.openExternal(url);
     return true;
   });
 
@@ -1552,12 +1621,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   handle('browser:pickExecutable', async payload => {
     const browser = z.enum(['chrome', 'edge', 'brave', 'firefox']).parse(payload);
-    if (process.platform !== 'win32') throw new Error('Executable selection is available on Windows.');
+    if (process.platform !== 'win32' && process.platform !== 'linux') throw new Error('Executable selection is not available on this platform.');
     const window = getWindow(); if (!window) throw new Error('No window');
-    const result = await dialog.showOpenDialog(window, { title: `Locate ${browser}`, properties: ['openFile'], filters: [{ name: 'Browser executable', extensions: ['exe'] }] });
+    const result = await dialog.showOpenDialog(window, { title: `Locate ${browser}`, properties: ['openFile'],
+      ...(process.platform === 'win32' ? { filters: [{ name: 'Browser executable', extensions: ['exe'] }] } : {}) });
     if (result.canceled || !result.filePaths[0]) return buildState();
-    const { windowsBrowserExecutable } = await import('./browser-windows.js');
-    const executable = windowsBrowserExecutable(result.filePaths[0], browser);
+    const executable = process.platform === 'win32'
+      ? (await import('./browser-windows.js')).windowsBrowserExecutable(result.filePaths[0], browser)
+      : (await import('./linux/browser-executable.js')).linuxBrowserExecutable(result.filePaths[0], browser);
     if (!executable || !await (await import('node:fs/promises')).stat(executable).then(row => row.isFile(), () => false)) throw new Error('Choose the executable for the selected browser.');
     await updateConfig(config => ({ ...config, ui: { ...config.ui, browserExecutables: { ...config.ui.browserExecutables, [browser]: executable } } }));
     return buildState();
@@ -1633,6 +1704,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { text } = z.object({ text: z.string().min(1).max(4 * 1024 * 1024) }).parse(payload);
     return (await stageFiles([{ text }]))[0]!;
   });
+  handle('sessions:attachmentPreview', async payload => {
+    const { id } = z.object({ id: z.string().uuid() }).strict().parse(payload);
+    return previewInputAttachment(id);
+  });
   handle('sessions:stopTurn', async payload => {
     const { id, expectedTurnId } = sessionIdArg.extend({ expectedTurnId: z.string().min(1).max(256) }).parse(payload);
     return stopSessionTurn(id, expectedTurnId);
@@ -1706,7 +1781,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('sessions:stopProcess', async (payload) => {
     const { sessionId, processId, incarnation } = z.object({
       sessionId: z.string().min(8).max(64).regex(/^[0-9a-z-]+$/i),
-      processId: z.number().int().min(1_000).max(99_999),
+      processId: z.number().int().min(1_000).max(Number.MAX_SAFE_INTEGER),
       incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
     }).parse(payload);
     return stopExecProcess(sessionId, processId, incarnation);
@@ -1792,9 +1867,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { id } = sessionIdArg.parse(payload);
     const selection = ++followSelection;
     const conversationId = (await getSession(id))?.conversationId;
-    if (selection !== followSelection) return true;
-    if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) followChatInBackground(conversationId);
-    return true;
+    if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
+    if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) return ensureSelectedChatReady(id);
+    return { phase: 'refused' as const, reason: 'This chat has no current provider conversation.' };
+  });
+  handle('sessions:tabReadiness', async payload => {
+    const { id } = sessionIdArg.parse(payload);
+    return selectedChatReadinessFor(id, (await getSession(id))?.conversationId ?? null);
   });
 
   /**

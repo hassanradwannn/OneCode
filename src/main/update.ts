@@ -22,11 +22,9 @@
  *   than spending another hundred megabytes on the same installer.
  *
  * **What updates itself, and what does not.** Windows, and Linux installed as an AppImage. A
- * Linux `.deb` is owned by the system package manager and cannot be replaced without root, and
- * asking for a password during quit is not something this app will do — so a `.deb` install is
- * *told* a new version exists and is given the release page, and nothing is downloaded behind
- * it. That is a real limitation, not parity, and the notice says so rather than implying an
- * update is on its way. macOS is out entirely: those artifacts ship unsigned and unnotarized
+ * Linux `.deb` full packages remain owned by the system package manager. A compatible DEB
+ * application capsule uses an explicitly activated user-space layer; native/full upgrades
+ * offer the package download. macOS is out entirely: those artifacts ship unsigned and unnotarized
  * (see electron-builder.yml), so an app that silently replaced itself there would be handing
  * Gatekeeper a binary the user never chose to trust.
  *
@@ -39,6 +37,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -54,6 +53,8 @@ import { startWindowsUpdate } from './update-bootstrap.js';
 import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
 import { inspectLocalBetaUpdate, localBetaUpdateConfig, startLocalBetaUpdate, verifyLocalBetaUpdate, type LocalBetaUpdateConfig } from './beta-update.js';
 import { baseRelease } from '../../resources/updater/hotfix-contract.cjs';
+import { activateLinuxHotfix } from './linux-hotfix.js';
+import { currentAppImageIdentity, installationKind, type AppImageIdentity } from './installation.js';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
@@ -94,9 +95,8 @@ export const STALE_CHECK_MS = 10 * 60_000;
  * that is what `latest` with a stage of `idle` means, and the notice turns it into a download
  * link — they are simply not updated for.
  *
- * `APPIMAGE` is the environment variable the AppImage runtime sets to the path of the file that
- * is running. Its absence is exactly what distinguishes a portable AppImage from a `.deb`
- * install, so it is both the eligibility test and the target of the swap.
+ * `APPIMAGE` identifies the portable file to replace. Its absence does not prove a DEB:
+ * the immutable bootstrap separately verifies dpkg ownership and isolates directory builds.
  *
  * An unpackaged run — `electron-vite dev`, or a maintainer's working tree — is not an
  * installation. Its version is whatever the source says, so it reads as out of date the moment a
@@ -112,10 +112,26 @@ export function stagedArtifact(
   if (!packaged) return null;
   if (arch !== 'x64' && arch !== 'arm64') return null;
   if (platform === 'win32') return { name: `OneCode-Setup-${arch}.exe`, kind: 'installer', target: '' };
-  if (platform === 'linux' && appImage) {
-    return { name: `OneCode-Linux-${arch}.AppImage`, kind: 'appimage', target: appImage };
+  if (platform === 'linux' && installationKind(platform, packaged, appImage) === 'appimage') {
+    const identity = currentAppImageIdentity();
+    if (identity) return { name: `OneCode-Linux-${arch}.AppImage`, kind: 'appimage', target: identity.target };
   }
   return null;
+}
+
+function appImageEvidence(artifact: { kind: string; target: string }): AppImageIdentity | undefined {
+  if (artifact.kind !== 'appimage') return undefined;
+  const identity = currentAppImageIdentity();
+  if (!identity || identity.target !== artifact.target) throw new Error('The mounted AppImage identity changed');
+  return identity;
+}
+
+function appImageIdentityMatches(identity: AppImageIdentity | undefined, target: string): boolean {
+  if (!identity) return false;
+  const current = currentAppImageIdentity();
+  return !!current && current.target === target && current.appDir === identity.appDir &&
+    current.executable === identity.executable && current.resources === identity.resources &&
+    current.dev === identity.dev && current.ino === identity.ino && current.size === identity.size && current.mtimeMs === identity.mtimeMs;
 }
 
 /**
@@ -130,11 +146,12 @@ export function manualDownloadName(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
   appImage: string | undefined = process.env.APPIMAGE,
-  packaged: boolean = app.isPackaged
+  packaged: boolean = app.isPackaged,
+  kind = installationKind(platform, packaged, appImage)
 ): string | null {
   if (!packaged || (arch !== 'x64' && arch !== 'arm64')) return null;
   if (platform === 'darwin') return `OneCode-macOS-${arch}.dmg`;
-  if (platform === 'linux' && !appImage) return `OneCode-Linux-${arch}.deb`;
+  if (platform === 'linux' && kind === 'deb') return `OneCode-Linux-${arch}.deb`;
   return null;
 }
 
@@ -163,13 +180,14 @@ const CLEAR: UpdateStatus = {
 };
 
 let status: UpdateStatus = CLEAR;
-let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'composite'; target: string; digest: string; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
+let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'linux-hotfix' | 'composite'; target: string; digest: string; appImageIdentity?: AppImageIdentity; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
 let betaStaged: { config: LocalBetaUpdateConfig; currentRevision: string; targetRevision: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
 let requestedVersion: string | null = null;
 let requestedBetaRevision: string | null = null;
+let requestedMode: 'when-idle' | 'now' = 'when-idle';
 let installEpoch = 0;
 let installPoll: ReturnType<typeof setTimeout> | null = null;
 let installCheck: Promise<void> | null = null;
@@ -190,7 +208,7 @@ export function onUpdateChange(listener: () => void): () => void {
 }
 
 export function updateStatus(): UpdateStatus {
-  return { ...status };
+  return { ...status, installation: installationKind(), installCommitted: runAfterInstall };
 }
 
 function set(next: Partial<UpdateStatus>): void {
@@ -267,6 +285,7 @@ export function checkForUpdatesIfStale(now = Date.now()): Promise<void> {
  * from downloading the same installer twice.
  */
 export function checkForUpdates(): Promise<void> {
+  if (runAfterInstall) return Promise.resolve();
   if (!UPDATES_ENABLED) return Promise.resolve();
   if (pass) return pass;
   const run = runPass()
@@ -308,6 +327,13 @@ async function runPass(): Promise<void> {
   }
   logInfo(`update: ${release.version} is available; this app is ${APP_VERSION}`);
   const artifact = stagedArtifact();
+  const kind = installationKind();
+  const hotfixCapable = artifact?.kind === 'installer' || artifact?.kind === 'appimage' || kind === 'deb';
+  const manualAvailability = async (knownDigests?: Map<string, string>): Promise<void> => {
+    const name = manualDownloadName();
+    const available = !name || (knownDigests ?? await releaseDigests(release.version)).has(name);
+    set({ latest: available ? release.version : null, stage: 'idle' });
+  };
   if (artifact?.kind === 'installer') {
     const target = await installTarget();
     if (!target) {
@@ -320,8 +346,8 @@ async function runPass(): Promise<void> {
   // `latest` and what is being done about it are set in one go. Published separately, the
   // renderer would paint one frame of "a new version exists, and this install updates by
   // hand" for every install, including the ones about to download it themselves.
-  if (!artifact) {
-    set({ latest: release.version, stage: 'idle' });
+  if (!artifact && !hotfixCapable) {
+    await manualAvailability();
     return;
   }
   if (staged?.version === release.version) {
@@ -332,47 +358,64 @@ async function runPass(): Promise<void> {
   // both the manifest of what the release contains and the proof of what may be executed, so
   // neither adopting a file nor fetching one happens without it.
   const digests = await releaseDigests(release.version);
-  const hotfixName = `OneCode-Hotfix-${process.arch}.json`;
-  const hotfixDigest = artifact.kind === 'installer' ? digests.get(hotfixName) : undefined;
+  const hotfixName = process.platform === 'linux' ? `OneCode-Linux-Hotfix-${process.arch}.json` : `OneCode-Hotfix-${process.arch}.json`;
+  const hotfixDigest = hotfixCapable ? digests.get(hotfixName) : undefined;
   if (hotfixDigest) {
     const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
     const manifest = await readHotfixManifest(manifestFile, release.version);
     const compatible = await compatibleHotfix(manifestFile, release.version);
-    const needsBase = !digests.has(artifact.name) && !compatible;
-    if ((compatible && !needsBase) || (needsBase && manifest.base)) {
+    if (compatible) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
-      let baseFile: string | undefined;
-      const base = needsBase ? manifest.base : undefined;
-      const total = manifest.size + (base?.size ?? 0);
-      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
-      if (base) {
-        if (!isNewer(release.version, base.version)) throw Error('A hotfix-only release requires an earlier complete base');
-        const baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
-        if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
-        const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
-        const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
-        for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
-        baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
-        if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
-      }
-      const progress = (bytes: number) => report((base?.size ?? 0) + bytes);
-      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, progress);
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => {
+        const percent = Math.min(99, Math.floor(bytes / manifest.size * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent });
+      });
       const hotfix = await stageHotfix(file, manifest);
-      staged = base && baseFile ? { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 }
-        : { version: release.version, file, kind: 'hotfix', target: artifact.target, digest: manifest.sha256, hotfix };
+      staged = process.platform === 'linux'
+        ? { version: release.version, file, kind: 'linux-hotfix', target: '', digest: manifest.sha256, hotfix,
+          appImageIdentity: kind === 'appimage' ? appImageEvidence({ kind, target: currentAppImageIdentity()?.target ?? '' }) : undefined }
+        : { version: release.version, file, kind: 'hotfix', target: artifact?.target ?? '', digest: manifest.sha256, hotfix };
       set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
       logInfo(`update: ${release.version} application hotfix is verified and ready; native runtime retained`);
       return;
     }
+    const needsBase = process.platform === 'win32' && artifact?.kind === 'installer' && !digests.has(artifact.name);
+    if (needsBase && manifest.base) {
+      if (manifest.base.platform !== 'win32') throw Error('The Windows hotfix names a non-Windows base');
+      if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
+      if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
+      set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+      const base = manifest.base, baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
+      if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
+      const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
+      const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
+      for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
+      const total = manifest.size + base.size;
+      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
+      const baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
+      if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
+      const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => report(base.size + bytes));
+      const hotfix = await stageHotfix(file, manifest);
+      staged = { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 };
+      set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
+      logInfo(`update: ${release.version} composite Windows update is verified and ready`);
+      return;
+    }
     logInfo('update: hotfix runtime differs; checking for a full installer');
-    if (!digests.has(artifact.name)) { set({ latest: release.version, stage: 'idle' }); return; }
+    if (!artifact) { await manualAvailability(digests); return; }
+    if (!digests.has(artifact.name)) { set({ latest: null, stage: 'idle' }); return; }
   }
+  if (!artifact) { await manualAvailability(digests); return; }
   const expected = digests.get(artifact.name);
-  if (!expected) throw new Error(`release ${release.version} publishes no ${artifact.name}`);
+  if (!expected) {
+    logInfo('update: ' + release.version + ' publishes no ' + artifact.name + '; release does not apply to this installation');
+    set({ latest: null, stage: 'idle' });
+    return;
+  }
   const carried = await adopt(release.version, artifact.name, expected);
   if (carried) {
-    staged = { version: release.version, file: carried, kind: artifact.kind, target: artifact.target, digest: expected };
+    staged = { version: release.version, file: carried, kind: artifact.kind, target: artifact.target, digest: expected,
+      appImageIdentity: appImageEvidence(artifact) };
     set({ latest: release.version, stage: 'ready' });
     logInfo(`update: ${release.version} was already downloaded and is ready to install`);
     return;
@@ -382,6 +425,7 @@ async function runPass(): Promise<void> {
     ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }))
     : await download(release.version, artifact.name, expected);
   if ((await fileDigest(file)) !== expected) throw new Error('The downloaded update does not match the OneCode release checksum');
+  const imageIdentity = appImageEvidence(artifact);
   if (artifact.kind === 'installer') {
     // Keep our own versioned, verified stage. Never remove the engine's old-installer cache.
     await mkdir(stagingDir(release.version), { recursive: true });
@@ -394,7 +438,7 @@ async function runPass(): Promise<void> {
     await rename(`${destination}.part`, destination);
     staged = { version: release.version, file: destination, kind: artifact.kind, target: artifact.target, digest: expected };
   } else {
-    staged = { version: release.version, file, kind: artifact.kind, target: artifact.target, digest: expected };
+    staged = { version: release.version, file, kind: artifact.kind, target: artifact.target, digest: expected, appImageIdentity: imageIdentity };
   }
   set({ stage: 'ready', downloadPercent: 100 });
   logInfo(`update: ${release.version} is downloaded and ready to install`);
@@ -595,6 +639,11 @@ export function markInstallOnQuit(expectedVersion?: string): boolean {
   if (!UPDATES_ENABLED) return false;
   if (!staged || requestedVersion !== staged.version || (expectedVersion !== undefined && staged.version !== expectedVersion)) return false;
   runAfterInstall = true;
+  if (recheck) clearInterval(recheck);
+  if (retry) clearTimeout(retry);
+  if (installPoll) clearTimeout(installPoll);
+  recheck = null; retry = null; installPoll = null;
+  set({ installCommitted: true });
   if (status.notInstalled) set({ notInstalled: null });
   return true;
 }
@@ -606,24 +655,28 @@ export function configureUpdateInstall(quit: () => void, prepare?: (version: str
 }
 
 export function cancelUpdateInstall(): boolean {
+  if (runAfterInstall) return false;
   const wasRequested = requestedVersion !== null || requestedBetaRevision !== null;
   requestedVersion = null;
   requestedBetaRevision = null;
+  requestedMode = 'when-idle';
   installEpoch++;
   runAfterInstall = false;
   if (installPoll) clearTimeout(installPoll);
   installPoll = null;
-  if (status.installRequested || status.busyReasons?.length) set({ installRequested: false, busyReasons: [] });
+  if (status.installRequested || status.busyReasons?.length) set({ installRequested: false, installMode: undefined, busyReasons: [] });
   return wasRequested;
 }
 
 /** Version-bound intent does not survive restart or authorize an unrelated future release. */
-export async function requestUpdateInstall(expectedVersion: string): Promise<'waiting' | 'restarting'> {
+export async function requestUpdateInstall(expectedVersion: string, mode: 'when-idle' | 'now' = 'when-idle'): Promise<'waiting' | 'restarting'> {
+  if (runAfterInstall && expectedVersion === requestedVersion) return 'restarting';
   if (!quitForUpdate || !staged || status.stage !== 'ready' || expectedVersion !== staged.version || status.latest !== expectedVersion)
     throw new Error('This downloaded update is no longer current. Check for updates again.');
   requestedVersion = expectedVersion;
+  requestedMode = mode;
   installEpoch++;
-  set({ installRequested: true, busyReasons: [] });
+  set({ installRequested: true, installMode: mode, busyReasons: [] });
   if (installCheck) await installCheck;
   await checkInstallIntent();
   return runAfterInstall ? 'restarting' : 'waiting';
@@ -645,9 +698,11 @@ export async function requestBetaUpdateInstall(expectedRevision: string): Promis
 }
 
 function checkInstallIntent(): Promise<void> {
+  if (runAfterInstall) return Promise.resolve();
   if (installCheck) return installCheck;
   const version = requestedVersion;
   const epoch = installEpoch;
+  const mode = requestedMode;
   const ready = staged;
   const current = () => installEpoch === epoch && requestedVersion === version && version !== null && staged === ready && ready?.version === status.latest && status.stage === 'ready';
   const run = (async () => {
@@ -656,13 +711,16 @@ function checkInstallIntent(): Promise<void> {
     try { reasons = await busyProjection(); }
     catch { reasons = ['unavailable']; }
     if (!current()) return;
-    if (!reasons.length) {
+    if (!reasons.length || mode === 'now') {
       try {
         if (await fileDigest(ready.file) !== ready.digest) throw new Error('The staged update changed after verification');
         if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('The staged hotfix changed after verification');
-        if (ready.kind !== 'appimage' && await installTarget() !== ready.target) throw new Error('The OneCode installation registration changed');
+        if ((ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') && await installTarget() !== ready.target)
+          throw new Error('The OneCode installation registration changed');
+        if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target))
+          throw new Error('The mounted AppImage identity changed');
         // Re-read after filesystem/registry waits. No sampled timer or model status grants idleness.
-        reasons = await busyProjection();
+        if (mode !== 'now') reasons = await busyProjection();
       } catch (error) {
         if (!current()) return;
         cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); return;
@@ -670,11 +728,14 @@ function checkInstallIntent(): Promise<void> {
     }
     if (!current()) return;
     set({ busyReasons: reasons });
-    if (reasons.length) {
+    if (reasons.length && mode !== 'now') {
       installPoll = setTimeout(() => { installPoll = null; void checkInstallIntent(); }, 2000);
       installPoll.unref(); return;
     }
-    if (markInstallOnQuit(version!)) quitForUpdate!();
+    if (markInstallOnQuit(version!)) {
+      if (mode === 'now') logInfo(`update: explicit immediate install of ${version}; stopping app-owned work through shutdown`);
+      quitForUpdate!();
+    }
   })().finally(() => { if (installCheck === run) installCheck = null; });
   installCheck = run;
   return run;
@@ -782,7 +843,16 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!ready) return;
   try {
     if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
-    if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
+    if (ready.kind === 'linux-hotfix') {
+      if (!ready.hotfix) throw new Error('the Linux application layer manifest is missing');
+      if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
+        throw new Error('The mounted AppImage identity changed');
+      await prepareUpdateHandoff?.(ready.version);
+      await activateLinuxHotfix(ready.hotfix);
+      if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
+        throw new Error('The mounted AppImage identity changed');
+      if (relaunch) app.relaunch({ execPath: ready.appImageIdentity?.target ?? process.execPath });
+    } else if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
@@ -795,9 +865,16 @@ export async function applyStagedUpdate(): Promise<void> {
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
         executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
     } else {
+      if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target))
+        throw new Error('The mounted AppImage identity changed');
       const next = `${ready.target}.new`;
-      await copyFile(ready.file, next);
+      // Never follow or overwrite a pre-existing `.new` link/path next to the application.
+      await copyFile(ready.file, next, constants.COPYFILE_EXCL);
       await chmod(next, 0o755);
+      if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target)) {
+        await rm(next, { force: true });
+        throw new Error('The mounted AppImage identity changed');
+      }
       await rename(next, ready.target);
       // No installer to hand the "start it again" to, so this process arranges its own successor.
       // Electron spawns it as this one exits, which is the app.exit() that ends the shutdown.
@@ -816,6 +893,7 @@ export async function applyStagedUpdate(): Promise<void> {
 
 /** Test seam: forgets the pass, the staged file and everything reported about them. */
 export function resetUpdateForTests(): void {
+  runAfterInstall = false;
   cancelUpdateInstall();
   busyProjection = updateBusyReasons; installTarget = currentWindowsInstallTarget; windowsDownload = downloadWindowsUpdate;
   quitForUpdate = null; prepareUpdateHandoff = null; installCheck = null;

@@ -1,3 +1,5 @@
+import { applyLinuxLoginStartup } from './linux/autostart.js';
+
 /** Minimal app-event shape kept separate so macOS activation behavior is unit-testable. */
 export interface ActivateEventSource {
   on(event: 'activate', listener: () => void): unknown;
@@ -144,16 +146,34 @@ export function isBackgroundLaunch(argv: readonly string[]): boolean {
   return argv.includes('--background');
 }
 
+function startupInstallation(): { kind?: string; appImage?: { target: string } } | undefined {
+  return (globalThis as typeof globalThis & { __onecodeInstallation?: { kind?: string; appImage?: { target: string } } }).__onecodeInstallation;
+}
+
+/** Isolated acceptance/QA profiles never mutate the installed product's global login entry. */
+function isolatedStartupProfile(): boolean {
+  return !!(process.env.ONECODE_USER_DATA?.trim() || process.env.GEMINI_CODE_USER_DATA?.trim()) ||
+    process.argv.some(argument => argument === '--user-data-dir' || argument.startsWith('--user-data-dir=')) ||
+    startupInstallation()?.kind === 'linux-unpacked';
+}
+
 export function supportsLoginStartup(platform: NodeJS.Platform, packaged: boolean): boolean {
-  return platform === 'win32' && packaged;
+  return packaged && !isolatedStartupProfile() && (platform === 'win32' || platform === 'linux');
 }
 
 export function applyLoginStartup(
   app: { isPackaged: boolean; setLoginItemSettings(settings: { openAtLogin: boolean; path: string; args: string[] }): void },
   enabled: boolean,
   platform: NodeJS.Platform = process.platform,
-  executable = process.execPath
+  executable = process.execPath,
+  linuxApply: typeof applyLinuxLoginStartup = applyLinuxLoginStartup
 ): void {
   if (!supportsLoginStartup(platform, app.isPackaged)) return;
+  if (platform === 'linux') {
+    const installation = startupInstallation();
+    linuxApply(enabled, { executable, appImage: installation?.kind === 'appimage' ? installation.appImage?.target ?? ''
+      : installation?.kind === 'deb' ? '' : process.env.APPIMAGE });
+    return;
+  }
   app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--background'] });
 }

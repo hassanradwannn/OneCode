@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 31;
+  const VERSION = 32;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2123,6 +2123,45 @@
     }
     return [];
   }
+  /**
+   * Public transcript rows from the shell's mounted live mapping, fenced to this exact turn.
+   *
+   * The typed `entry.turn.items` projection is the preferred source, but ChatGPT can publish a
+   * shell commit where it retains the exact user id/messageIds while omitting the public user or
+   * final-assistant payload from those typed items. The live mapping is already tied to the same
+   * mounted `entry.turn` object and exact user id by `shellLiveMapping()`, and
+   * `shellCurrentPath()` proves one current branch from that user to `current_node`. That makes it
+   * a safe recovery source for public transcript bytes without consulting DOM text, cache order,
+   * timing, another branch or a remembered conversation.
+   *
+   * Keep this privacy boundary deliberately narrow: one exact user message, or public assistant
+   * text routed to `all`/no recipient. Tool requests/results, thoughts, hidden rows and analysis
+   * never cross worlds through this recovery path.
+   */
+  function shellLivePublicMessages(snapshot, entry) {
+    const ids = shellCurrentPath(snapshot, entry);
+    if (!ids.length) return [];
+    const mapping = snapshot.renderedConversation.mapping;
+    const user = entry.turn.items.find(item => item?.type === 'user-message');
+    const userId = str(user?.messageId) || str(user?.serverMessageId);
+    if (!userId || ids[0] !== userId) return [];
+    const out = [];
+    for (const id of ids) {
+      const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
+      if (node?.id !== id || message?.id !== id) return [];
+      const role = message.author?.role;
+      if (role === 'user') {
+        if (id !== userId) return [];
+        out.push(message);
+        continue;
+      }
+      if (role !== 'assistant' || requestOf(message) || resultOf(message) || thoughtMessage(message) ||
+          hiddenMessage(message) || analysisMessage(message) || (message.recipient && message.recipient !== 'all') ||
+          message.content?.content_type !== 'text') continue;
+      out.push(message);
+    }
+    return out;
+  }
   /** #318 identified the history cache. Both sources project only explicitly named
    * messages. Typed public items own presentation; cache text cannot supply a final. */
   function shellRequestMetadata(fiber, queries, shell, conversation, sightings = []) {
@@ -2489,6 +2528,29 @@
         }
       }
     }
+    // A mounted live mapping can be ahead of (or richer than) the typed shell-item projection.
+    // Recover only exact current-branch public rows. Never replace a populated typed row: that
+    // row owns lifecycle fields such as phase/completed/status which the live mapping may omit
+    // during a shell transition. For the same id, only fill missing public text and preserve the
+    // typed envelope; append the mapping row only when the typed projection omitted it entirely.
+    try {
+      const live = shellLiveMapping(fiber, entry);
+      if (live && live !== false) for (const message of shellLivePublicMessages(live, entry)) {
+        const id = str(message.id), at = messages.findIndex(row => str(row?.id) === id);
+        if (at < 0) {
+          messages.push(message);
+          continue;
+        }
+        const typed = messages[at];
+        const recovered = authoredText(message);
+        if (typed?.author?.role === message.author?.role && !authoredText(typed) && recovered) {
+          messages[at] = { ...typed, content: message.content };
+        }
+      }
+    } catch {
+      // The typed shell projection remains authoritative when the optional live mapping is absent
+      // or unreadable; never weaken the turn fence merely to recover presentation.
+    }
     // Media may share a provider message with other media, never an authored row
     // or local call. Keep malformed cross-kind identities out of the whole scan.
     if ([...images.keys()].some(item => seen.has(item.chatGptMessageId))) return null;
@@ -2626,6 +2688,11 @@
         const providerArtifacts = providerArtifactsOf(messages);
         const activities = nativeActivities.events;
         const endMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
+        const nativeTurn = shell?.entry.turn || viewTurn;
+        const terminalState = nativeTurn && ['complete', 'cancelled', 'canceled', 'stopped'].includes(nativeTurn.status)
+          ? nativeTurn.status === 'complete' ? 'complete' : 'interrupted'
+          : !shell && messages?.some(message => message?.author?.role === 'assistant' &&
+              message.end_turn === true && message.status === 'finished_partial') ? 'interrupted' : null;
         const trace = shell ? shellTurnTrace(shell) : [];
         // The shell supplies the completed final item's own exact message id,
         // without the classic thought-parent/timestamp tuple. Preserve that
@@ -2639,7 +2706,7 @@
           requests.length === 0 &&
           renderedMessages.length === 0 &&
           activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && generatedVideos.length === 0 && providerArtifacts.length === 0 && !endMessageId && trace.length === 0 &&
-          !shell?.entry.turn.items.some(item => item?.type === 'generated-image')
+          !shell?.entry.turn.items.some(item => item?.type === 'generated-image') && !terminalState
         ) continue;
         const index = out.length;
         entry = {
@@ -2649,6 +2716,7 @@
           conversationConflict: conversation.conflict,
           ...(shell && !conversation.conversationId ? { requestOwnerRequired: true } : {}),
           endMessageId,
+          ...(terminalState ? { terminalState } : {}),
           calls,
           codeModeCalls,
           requests,
@@ -2661,7 +2729,8 @@
           videos: generatedVideos,
           artifacts: providerArtifacts,
           ...(trace.length ? { trace } : {}),
-          ...(shellQuestion(shell) ? { question: shellQuestion(shell) } : {})
+          ...((shellQuestion(shell) || (!shell && messages?.findLast(message => message?.author?.role === 'user')?.id)) ?
+            { question: shellQuestion(shell) || str(messages.findLast(message => message?.author?.role === 'user').id) } : {})
         };
         // The isolated-world renderer needs to know which visible section this exact Fiber
         // turn descriptor came from. Remember the desired ephemeral scan index now and apply

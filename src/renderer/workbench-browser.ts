@@ -32,6 +32,14 @@ export function createWorkbenchBrowserPanel(options: { onEscape?: () => void }) 
   async function present(): Promise<void> {
     const id = sessionId, tab = current(), token = generation;
     if (!id || !tab || !visible() || !viewport.isConnected) { if (id) void window.api.workbenchBrowserHide(id); return; }
+    // A WebContentsView is a native child, not part of the renderer's CSS animation tree. While
+    // the right dock is sliding, its DOM viewport moves every frame even when its size is fixed,
+    // so ResizeObserver alone cannot keep native bounds aligned. Keep the child hidden during the
+    // short drawer motion and present it at the settled geometry instead of letting it float over
+    // the chat at the dock's old x coordinate.
+    if (pane.closest('.work-dock-right')?.classList.contains('is-moving')) {
+      void window.api.workbenchBrowserHide(id); schedulePresentation(); return;
+    }
     const rect = viewport.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) { void window.api.workbenchBrowserHide(id); return; }
     await window.api.workbenchBrowserPresent(id, tab.id, { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, true).catch(() => undefined);

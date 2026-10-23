@@ -77,6 +77,12 @@ for (const [relative, entry] of Object.entries(lock.packages).sort(([a], [b]) =>
   count++;
 }
 if (missing.length) throw new Error(`Missing license texts for production packages: ${missing.join(', ')}`);
+notices.push('='.repeat(80), 'Linux offline dictation — PocketSphinx / SphinxBase / English model',
+  'Ubuntu 22.04 binary packages are checksum-pinned and staged into Linux packages by scripts/fetch-linux-dictation-runtime.mjs.',
+  'The recognizer runs locally; OneCode does not upload or retain microphone audio.', '');
+for (const file of ['pocketsphinx.copyright', 'sphinxbase.copyright']) {
+  notices.push(`--- ${file} ---`, await fs.readFile(path.join(root, 'docs/licenses/linux-dictation', file), 'utf8'), '');
+}
 notices.push('='.repeat(80), 'Native image-library license supplements', 'The following texts accompany the LGPL/MPL components listed in the platform-specific sharp/libvips notices. They do not replace component copyright notices or corresponding-source obligations.', '');
 for (const file of ['README.md', 'COMPONENT-NOTICES.txt', 'LGPL-3.0.txt', 'GPL-3.0.txt', 'MPL-2.0.txt']) {
   notices.push(`--- ${file} ---`, await fs.readFile(path.join(root, 'docs/licenses/native', file), 'utf8'), '');

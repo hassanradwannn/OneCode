@@ -6,8 +6,7 @@
 import type { Capabilities } from '../../shared/types.js';
 import { desktopAutomationSupported } from '../platform.js';
 import { getConfig } from '../config.js';
-import { CONNECTOR_BRAND, connectorName } from '../../shared/connector-names.js';
-import { learnedConnectorName } from '../connector-identity.js';
+import { CONNECTOR_BRAND, connectorName, connectorSuffixForPlatform } from '../../shared/connector-names.js';
 import { WINDOWS_COMPUTER_METHODS, WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_INPUT_METHODS } from '../../shared/windows-computer.js';
 import { BROWSER_TOOLS, BROWSER_READ_TOOLS, BROWSER_WRITE_TOOLS } from '../../shared/browser-control.js';
 
@@ -129,9 +128,8 @@ export const SURFACES: Record<SurfaceId, SurfaceDefinition> = { core: CORE, desk
 export const SURFACE_LIST: readonly SurfaceDefinition[] = [CORE, DESKTOP, PLUGINS];
 
 /**
- * A surface as this install presents it to the model. The connector name is the live one (a
- * rename in Gemini is followed once a served call proves it), else the configured name with this
- * computer's suffix
+ * A surface as this install presents it to the model. The connector name is always the configured
+ * OneCode name with this computer's suffix; provider-side renames are never adopted as identity
  * (Settings › Setup), read at every call so a saved change reaches the Setup cards, the server
  * instructions and plugin refresh without a restart. `SURFACES` keeps the plain names.
  */
@@ -140,16 +138,14 @@ export function surfaceDefinition(id: SurfaceId): SurfaceDefinition {
 }
 
 /** The name this install tells the user to give the connector, and serves as its resource name. */
-export function configuredConnectorName(id: SurfaceId): string {
-  return connectorName(id, getConfig().connectorSuffix);
+export function configuredConnectorName(id: SurfaceId, platform: NodeJS.Platform = process.platform): string {
+  return connectorName(id, connectorSuffixForPlatform(getConfig().connectorSuffix, platform));
 }
 
-/**
- * What Gemini currently calls this surface's connector: the name proven by a served call
- * (connector-identity.ts; it follows a rename), else the configured one. Model-facing text uses this.
- */
+/** The configured OneCode name is the only connector-name authority. Provider-side aliases,
+ * remembered names and previously learned renames never replace what this app currently says. */
 export function liveConnectorName(id: SurfaceId): string {
-  return learnedConnectorName(id) ?? configuredConnectorName(id);
+  return configuredConnectorName(id);
 }
 
 /** Platform/capability projection used by setup; each registrar enforces the same split. */

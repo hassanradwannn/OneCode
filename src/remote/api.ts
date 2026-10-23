@@ -44,13 +44,17 @@ async function reconnect(): Promise<void> {
 export async function connectRemote(): Promise<void> {
   if (hasRemoteToken()) {
     try { await request('bootstrap'); setRemoteToken(token); return; }
-    catch (error) { if (!(error instanceof RemoteRequestError) || error.status !== 401 || !linkKey) throw error; }
+    catch (error) {
+      if (!(error instanceof RemoteRequestError) || error.status !== 401 || !linkKey) throw error;
+      throw new RemoteRequestError('This browser was disconnected. Select Reconnect to request access again.', 401);
+    }
   }
   await reconnect();
 }
+/** Re-enrollment is available only after an explicit user action. */
+export async function reconnectRemote(): Promise<void> { await reconnect(); }
 export async function request<T>(route: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  // Opening/reloading the bookmark renews admission through connectRemote.
-  // Requests within an open workspace, including revoked sessions, never replay.
+  // Workspace requests never re-enroll a browser after a revoked session or replay an action.
   const { response, result } = await send(route, body, signal);
   if (!response.ok) throw new RemoteRequestError(response.status === 401 ? 'Open your remote link again to reconnect.' : result.error ?? 'Remote request failed', response.status);
   return result as T;

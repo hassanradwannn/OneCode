@@ -35,6 +35,11 @@ import { withMcpProvider } from './provider-context.js';
 import { authenticateChatgptExec, type LocalBindingEvidence } from '../session/local-binding.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+// Public tool calls can cross several HTTP/TLS hops before they reach ChatGPT. Keep the
+// response body active well inside the shortest disconnect we have observed in production
+// (~1.8s), otherwise a tool may keep executing locally after its caller reports Connection
+// failed. The frame is an SSE comment, so this does not change MCP result semantics.
+const TOOL_STREAM_KEEP_ALIVE_MS = 1_000;
 
 export interface McpEndpoint {
   /** Reuses the endpoint's actual exposure projection; no tool handlers are executed. */
@@ -340,7 +345,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // Modern auto mode waits for the final JSON result without sending bytes.
     // Stream tool exchanges so long reads/polls keep public proxies alive too;
     // discovery and admission failures retain their existing response contract.
-    toolHandler: toNodeHandler(createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: 10_000 }), options)
+    toolHandler: toNodeHandler(createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: TOOL_STREAM_KEEP_ALIVE_MS }), options)
   }; });
   const checkHost = localhostHostValidation();
   const checkOrigin = localhostOriginValidation();
@@ -485,7 +490,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
           } catch {
             if (res.destroyed || res.headersSent) return;
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. Send a fresh message from this exact OneCode chat to refresh its local session authorization.' }] } });
+              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.' }] } });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
             res.end(body);
           }

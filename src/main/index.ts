@@ -1,5 +1,8 @@
 import { chatScheduler } from './chat-schedules.js';
 import { initGeminiBindings } from './gemini/bindings.js';
+import { initLocalBindings } from './session/local-binding.js';
+import { initializeExecSpool } from './codex/ownership.js';
+import { startRuntimeHealth, runtimeSuspended, runtimeResumed } from './runtime-health.js';
 import { stopInputStartup } from './session/start-input.js';
 import { registerArtifactPreviewScheme, installArtifactPreviewProtocol } from './artifacts/preview-protocol.js';
 registerArtifactPreviewScheme();
@@ -108,7 +111,8 @@ import {
 import { runShutdownSequence } from './shutdown.js';
 import { startAgentRuntimeGc, stopAgentRuntimeGc } from './runtime-gc.js';
 import { restoreManagedWorktrees } from './worktrees/index.js';
-import { applyStagedUpdate, UPDATE_HANDOFF_MS, startUpdateChecks } from './update.js';
+import { applyStagedUpdate, UPDATE_HANDOFF_MS, startUpdateChecks, updateStatus } from './update.js';
+import { requestProviderStopsForUpdate } from './update-stop.js';
 import { resumeUpdateRefresh } from './update-all.js';
 import { UI_BASE_ZOOM, windowLayoutForDisplays, windowPlacementWasMaximized, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { openInPreferredBrowser } from './browser.js';
@@ -129,7 +133,8 @@ import { editContextMenuTemplate } from './edit-context-menu.js';
 import { observeWindowPresentation } from './window-presentation.js';
 import { showConnectionLossNotice } from './connection-loss-notice.js';
 import { repairWindowsShortcuts } from './windows-shortcuts.js';
-import { APP_ID, PRODUCT_NAME, appDataDirectory, windowsAppId } from './app-identity.js';
+import { APP_ID, PRODUCT_NAME } from './app-identity.js';
+import { confirmActiveApplicationLayer } from './application-resources.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -146,12 +151,8 @@ let shutdownStarted = false;
 let shutdownComplete = false;
 const usageWarmup = new AbortController();
 
-// One instance only: two copies would fight over the tunnel and the config file.
-// Isolate storage, secrets and the single-instance namespace before startup work.
-app.setName(PRODUCT_NAME);
-app.setAppUserModelId(windowsAppId(app.isPackaged));
-app.commandLine.appendSwitch('force-renderer-accessibility');
-app.setPath('userData', appDataDirectory(app.getPath('appData')));
+// The immutable bootstrap establishes product identity/userData before selecting a Linux
+// application layer. One instance only: two copies would fight over the tunnel and config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   // `app.quit()` does not make the rest of this module stop executing. Mark this process as a
@@ -231,6 +232,7 @@ function createWindow(): void {
         savedWindowBounds = placement;
         writeDurableSoon(WINDOW_BOUNDS_STATE, placement);
       });
+      void confirmActiveApplicationLayer().catch(error => logWarn(`linux application layer confirmation: ${error instanceof Error ? error.message : String(error)}`));
     }
   });
 
@@ -431,6 +433,9 @@ void app.whenReady().then(async () => {
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
   powerMonitor.on('suspend', suspendConnectionLossNotices);
   powerMonitor.on('resume', resumeConnectionLossNotices);
+  powerMonitor.on('suspend', runtimeSuspended);
+  powerMonitor.on('resume', runtimeResumed);
+  startRuntimeHealth();
   const userData = app.getPath('userData');
   initLogFile(path.join(userData, 'app.log'));
   if (process.platform === 'win32' && app.isPackaged) {
@@ -456,7 +461,12 @@ void app.whenReady().then(async () => {
   try { await initSkillsPath(userData); }
   catch (error) { logWarn(`Skills library unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   initDurableStore(userData);
-  await initGeminiBindings(userData);
+  try { await initializeExecSpool(userData); }
+  catch (error) { logWarn(`Terminal output storage unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+  try { await initLocalBindings(); }
+  catch (error) { logWarn(`ChatGPT task authorization unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+  try { await initGeminiBindings(userData); }
+  catch (error) { logWarn(`Gemini task authorization unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   savedWindowBounds = await readDurable<unknown>(WINDOW_BOUNDS_STATE);
   restoreMainTextTranslations(await readDurable<unknown>(MAIN_TEXTS_STATE));
   await loadConnectorIdentity();
@@ -527,7 +537,7 @@ void app.whenReady().then(async () => {
   setInterval(() => void refreshAppProxy(), 2 * 60_000).unref();
   if (windowActivation.isDisabled()) return;
   try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }
-  catch (error) { logWarn(`Windows login startup: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) { logWarn(`login startup: ${error instanceof Error ? error.message : String(error)}`); }
   // The renderer has its own explicit light/dark palette, so native chrome must follow the same
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.
@@ -765,6 +775,9 @@ app.on('will-quit', (event) => {
 
   void runShutdownSequence(
     [
+      ...(updateStatus().installCommitted && updateStatus().installMode === 'now'
+        ? [{ name: 'provider Stop requests', budgetMs: 10_000, run: () => [requestProviderStopsForUpdate()] }]
+        : []),
       // Phase 1: stop the listeners from admitting work and let accepted requests drain.
       // The budget has to clear the drains it contains, or it would silently defeat them:
       // the bridge force-closes wedged localhost sockets at 15s and the MCP endpoint forces
@@ -792,7 +805,7 @@ app.on('will-quit', (event) => {
       // release's published SHA-256, and applying it cannot fail loudly - see update.ts.
       // An install folder that needs an administrator waits here for Windows' permission prompt
       // (#1492); exiting earlier would end that prompt with the app. Other handoffs take moments.
-      { name: 'update handoff', budgetMs: UPDATE_HANDOFF_MS, run: () => [applyStagedUpdate()] }
+      { name: 'update handoff', budgetMs: UPDATE_HANDOFF_MS, requiresSuccessfulPrevious: true, run: () => [applyStagedUpdate()] }
     ],
     {
       info: logInfo,

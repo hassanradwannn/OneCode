@@ -111,6 +111,25 @@ export function normalizeInputAttachments(attachments: InputAttachment[]) {
   staging = next.catch(() => undefined);
   return next;
 }
+
+/** Renderer-safe preview of one already staged image. The renderer receives image bytes only,
+ * never the staging path. Re-read and validate the durable metadata so a guessed/stale id cannot
+ * turn this into an arbitrary file read. */
+export async function previewInputAttachment(id: string): Promise<string | null> {
+  const file = fileFor(id);
+  let attachment: InputAttachment;
+  try { attachment = attachmentSchema.parse(JSON.parse(await fs.readFile(file + '.json', 'utf8'))); }
+  catch { return null; }
+  if (attachment.id !== id || !attachment.mimeType.startsWith('image/') || attachment.size > 12 * 1024 * 1024) return null;
+  try {
+    const bytes = await readImageBytes(attachment);
+    const preview = await sharp(bytes, { limitInputPixels: 30_000_000, animated: false }).rotate()
+      .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 86 }).toBuffer();
+    if (preview.length > 4 * 1024 * 1024) return null;
+    return `data:image/webp;base64,${preview.toString('base64')}`;
+  } catch { return null; }
+}
 async function readImageBytes(attachment: InputAttachment): Promise<Buffer> {
   if (attachment.size > 12 * 1024 * 1024) throw new Error('Images for injection must be 12 MB or smaller');
   const handle = await fs.open(fileFor(attachment.id), 'r');

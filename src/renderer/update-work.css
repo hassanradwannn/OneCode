@@ -1,0 +1,14 @@
+.update-work-dialog { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+.update-work-dialog::backdrop { background: #0008; }
+.update-work-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.update-work-dialog h2 { margin: 0; font-size: 18px; }
+.update-work-dialog p { line-height: 1.5; }
+.update-work-list { list-style: none; margin: 0; padding: 0; }
+.update-work-process { display: flex; align-items: flex-start; gap: 16px; padding: 16px 0; border-top: 1px solid var(--line); }
+.update-work-process-body { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.update-work-process code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.update-work-process small { opacity: .7; }
+.update-work-other { white-space: pre-wrap; opacity: .8; }
+.update-work-retained { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); }
+.update-work-retained code { flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-work-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; padding: 16px; background: var(--sunk); border-radius: 8px; font-size: 12px; }

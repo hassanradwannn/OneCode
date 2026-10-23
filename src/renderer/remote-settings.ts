@@ -42,7 +42,7 @@ export function initRemoteSettings(): void {
       if (view && enable.isConnected) paint(view);
     } finally { busy = false; enable.disabled = false; button.disabled = false; }
   };
-  document.getElementById('remoteSetupAction')!.onclick = () => { const action = state?.setup && TAILSCALE_SETUP_ACTIONS[state.setup.step]; if (action) void run(window.api.openLink(action.url, { external: true })); };
+  document.getElementById('remoteSetupAction')!.onclick = () => { const step = state?.setup?.step; if (step) void run(window.api.runTailscaleSetup(step)); };
   document.getElementById('remoteRefreshLink')!.onclick = async () => {
     if (busy || !state?.canRefreshLink) return;
     busy = true; generation++; enable.disabled = true;

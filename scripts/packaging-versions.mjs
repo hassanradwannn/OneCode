@@ -6,8 +6,40 @@ export { SUPPORTED_ARCHES, SUPPORTED_PLATFORMS };
 export const NODE_RUNTIME = Object.freeze({
   version: 'v24.22.0',
   targets: Object.freeze({
-    x64: Object.freeze({ sha256: 'f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3' }),
-    arm64: Object.freeze({ sha256: '3a5c209a5bc59e65b3bc0fa13ed5e166a26bd3d55332847f498b76b037408d61' })
+    win32: Object.freeze({
+      x64: Object.freeze({ sha256: 'f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3' }),
+      arm64: Object.freeze({ sha256: '3a5c209a5bc59e65b3bc0fa13ed5e166a26bd3d55332847f498b76b037408d61' })
+    }),
+    linux: Object.freeze({
+      x64: Object.freeze({ sha256: 'cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008' }),
+      arm64: Object.freeze({ sha256: 'fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143' })
+    })
+  })
+});
+
+/** Ubuntu 22.04 PocketSphinx payload used by the offline Linux dictation helper. */
+export const LINUX_DICTATION_RUNTIME = Object.freeze({
+  id: 'ubuntu-22.04-pocketsphinx',
+  pythonAbi: 'cp310',
+  packages: Object.freeze({
+    model: Object.freeze({
+      version: '0.8.0+real5prealpha+1-14ubuntu1',
+      file: 'pocketsphinx-en-us_0.8.0+real5prealpha+1-14ubuntu1_all.deb',
+      path: 'pool/universe/p/pocketsphinx/pocketsphinx-en-us_0.8.0+real5prealpha+1-14ubuntu1_all.deb',
+      sha256: '4fa57d7cd71fd8dd3a00f0de03f32071f84de75f78d093bd67b7cfc71350731d'
+    }),
+    x64: Object.freeze([
+      Object.freeze({ name: 'python3-pocketsphinx', version: '0.1.15-2build5', file: 'python3-pocketsphinx_0.1.15-2build5_amd64.deb', path: 'pool/universe/p/pocketsphinx-python/python3-pocketsphinx_0.1.15-2build5_amd64.deb', sha256: '45b8f5fd151f8892294559d8477a99ee21ce7b016e1b4c494fdb74c801c847e2' }),
+      Object.freeze({ name: 'python3-sphinxbase', version: '0.8+5prealpha+1-13build1', file: 'python3-sphinxbase_0.8+5prealpha+1-13build1_amd64.deb', path: 'pool/universe/s/sphinxbase/python3-sphinxbase_0.8+5prealpha+1-13build1_amd64.deb', sha256: '0f09b76aa3b0d7d7ee346904d441da8a8195a10d7bf8616859f956cbf30039bb' }),
+      Object.freeze({ name: 'libpocketsphinx3', version: '0.8.0+real5prealpha+1-14ubuntu1', file: 'libpocketsphinx3_0.8.0+real5prealpha+1-14ubuntu1_amd64.deb', path: 'pool/universe/p/pocketsphinx/libpocketsphinx3_0.8.0+real5prealpha+1-14ubuntu1_amd64.deb', sha256: '3e19eb33065660f6a604d262867ff2217f48befaadb623486ec71d2ae65f38c3' }),
+      Object.freeze({ name: 'libsphinxbase3', version: '0.8+5prealpha+1-13build1', file: 'libsphinxbase3_0.8+5prealpha+1-13build1_amd64.deb', path: 'pool/universe/s/sphinxbase/libsphinxbase3_0.8+5prealpha+1-13build1_amd64.deb', sha256: 'af2649a25313f10300ebbd750f81660b69126be0bdc2090f712c9543b495fbba' })
+    ]),
+    arm64: Object.freeze([
+      Object.freeze({ name: 'python3-pocketsphinx', version: '0.1.15-2build5', file: 'python3-pocketsphinx_0.1.15-2build5_arm64.deb', path: 'pool/universe/p/pocketsphinx-python/python3-pocketsphinx_0.1.15-2build5_arm64.deb', sha256: 'b3c7f3acaf6ffb4a383d31a972444b6989d3d2929bcfdd47095f2d4412072377' }),
+      Object.freeze({ name: 'python3-sphinxbase', version: '0.8+5prealpha+1-13build1', file: 'python3-sphinxbase_0.8+5prealpha+1-13build1_arm64.deb', path: 'pool/universe/s/sphinxbase/python3-sphinxbase_0.8+5prealpha+1-13build1_arm64.deb', sha256: '33f20507b2a0e572866337c01d3aabe2109161c4c86459b9b989ce769a227125' }),
+      Object.freeze({ name: 'libpocketsphinx3', version: '0.8.0+real5prealpha+1-14ubuntu1', file: 'libpocketsphinx3_0.8.0+real5prealpha+1-14ubuntu1_arm64.deb', path: 'pool/universe/p/pocketsphinx/libpocketsphinx3_0.8.0+real5prealpha+1-14ubuntu1_arm64.deb', sha256: 'b3172e916cf3fad57fbc9da3bd09826d0f11ba970c601272dc950bf33d731dcd' }),
+      Object.freeze({ name: 'libsphinxbase3', version: '0.8+5prealpha+1-13build1', file: 'libsphinxbase3_0.8+5prealpha+1-13build1_arm64.deb', path: 'pool/universe/s/sphinxbase/libsphinxbase3_0.8+5prealpha+1-13build1_arm64.deb', sha256: '1ee60f7ad33ee8d07974a88be6c31f53c9403d268eb7d2fadf7c86f99fc9637a' })
+    ])
   })
 });
 

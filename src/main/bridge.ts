@@ -9,7 +9,7 @@ import { cosSignInTransfer, SignInTransferError } from './cos-browser/sign-in-tr
 import { forgetCosBrowserSignIn, noteCosBrowserPresence, noteCosBrowserLogin, cosBrowserSignInLease } from './cos-browser/sign-in.js';
 import { externalBrowserProof, noteExternalInstalled, noteExternalSignedIn, resetBrowserProofForTests } from './browser-proof.js';
 import { notePluginInstalled, notePluginMissing } from './connector-proof.js';
-import { connectorNames } from '../shared/connector-names.js';
+import { configuredConnectorName } from './mcp/surfaces.js';
 import { connectorApps, conversationCreatedAt, noteAppSightings, type AppSighting } from './connector-identity.js';
 import { messageReaction } from '../shared/message-reaction.js';
 import { browserControl } from './browser-control.js';
@@ -41,7 +41,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -446,7 +446,7 @@ type CommandSpec =
    * brief got newer — not two fresh chats, which is what keying on the handoff produced.
    */
   | { type: 'resume'; sessionId: string; token: string }
-  | { type: 'stop'; sessionId: string; conversationId: string; turnId: string; userMessageId?: string };
+  | { type: 'stop'; sessionId: string; conversationId: string; turnId: string; userMessageId?: string; continuationInputId?: string };
 
 interface Command {
   id: string;
@@ -542,6 +542,7 @@ interface DurableCommandSnapshot {
   version: 4;
   commands: DurableCommandRecord[];
   receipts: CommandReceipt[];
+  custody?: Record<string, CommandCustody>;
 }
 
 /** The wire form the extension receives. */
@@ -554,6 +555,7 @@ export interface BridgeCommand {
   kind: 'open-chat' | 'stop-turn';
   turnId?: string;
   userMessageId?: string;
+  continuationInputId?: string;
   /**
    * Why this chat is being opened.
    *
@@ -597,14 +599,18 @@ let browserPresenceTimer: NodeJS.Timeout | null = null;
 let commands: Command[] = [];
 let commandReceipts: CommandReceipt[] = [];
 /** The paired worker supplies Chrome document proof; the existing lease owns the command. */
-const geminiCommandCustody = new Map<string, {
+type CommandCustody = {
   browser: string; owner: string; lease: string; tab?: number; document?: string; conversation?: string; sessionId?: string;
   worker?: { runId: string; agent: string };
   resume?: { sessionId: string; token: string };
-}>();
+};
+const geminiCommandCustody = new Map<string, CommandCustody>();
+let commandAuthorityLoaded = false;
+let commandRestoreFlight: Promise<void> | null = null;
 
 /** A worker grant remains dormant until this exact leased command's Send ACK commits. */
 export async function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> {
+  if (!commandAuthorityLoaded) await restoreCommands();
   const custody = geminiCommandCustody.get(proof.id);
   if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease ||
       (!custody.resume && (!custody.worker || !swarmRunning(custody.worker.runId)))) return { state: 'invalid' };
@@ -650,6 +656,7 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
 /** Reads canonical command/receipt owners; a warmup never completes their transaction. */
 export async function geminiCommandBindingStatus(proof: GeminiBindingCommand, conversation: string,
   sessionId: string): Promise<'pending' | 'committed' | 'invalid'> {
+  if (!commandAuthorityLoaded) await restoreCommands();
   const custody = geminiCommandCustody.get(proof.id);
   if (custody?.owner !== proof.owner || custody.lease !== proof.lease ||
       custody.conversation !== conversation || custody.sessionId !== sessionId) return 'invalid';
@@ -728,6 +735,7 @@ async function bindingForGeminiCommand(conversation: string, proof: Record<strin
     return true;
   });
   if (!binding) throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
+  await writeDurableNow(COMMANDS_STATE, commandSnapshot());
   return binding;
 }
 
@@ -930,6 +938,72 @@ export function followChatInBackground(conversationId: string): void {
       !browserWakeConnected() || !revealCapable()) return;
   pendingFollow = { conversationId, at: Date.now() };
   wakeBrowserWork();
+}
+
+export type SelectedChatReadiness = { phase: 'ready' | 'loading' | 'history-wait' | 'reconnecting' | 'refused'; retryAt?: number; reason?: string };
+const selectedChatReadiness = new Map<string, { conversationId: string; token: string; browser?: string;
+  state: SelectedChatReadiness; dismissedAt?: number }>();
+const selectedChatFlights = new Map<string, Promise<SelectedChatReadiness>>();
+export function selectedChatReadinessFor(sessionId: string, currentConversationId?: string | null): SelectedChatReadiness | null {
+  const request = selectedChatReadiness.get(sessionId);
+  if (request && currentConversationId !== undefined && request.conversationId !== currentConversationId)
+    return { phase: 'refused', reason: 'The chat attachment changed.' };
+  const state = request?.state;
+  return state ? { ...state } : null;
+}
+/** Explicit chat selection owns opening/readiness; history/status reads cannot open tabs. */
+export function ensureSelectedChatReady(sessionId: string): Promise<SelectedChatReadiness> {
+  const existingFlight = selectedChatFlights.get(sessionId);
+  if (existingFlight) return existingFlight;
+  const flight = (async (): Promise<SelectedChatReadiness> => {
+    const session = await getSession(sessionId);
+    const conversation = session?.conversationId;
+    if (!conversation || isChatBlocked(conversation) || await conversationWasSuperseded(conversation))
+      return { phase: 'refused', reason: 'This chat has no current browser attachment.' };
+    followChatInBackground(conversation);
+    let request = selectedChatReadiness.get(sessionId);
+    // A new explicit click probes even an earlier ready result: its tab may have
+    // been closed since then. Concurrent clicks still share this same request.
+    if (!request || request.conversationId !== conversation || request.dismissedAt !== session.browserRecoveryDismissedAt ||
+        request.state.phase === 'ready' || request.state.phase === 'refused') {
+      request = { conversationId: conversation, token: randomBytes(9).toString('base64url'), state: { phase: 'loading' },
+        dismissedAt: session.browserRecoveryDismissedAt };
+      selectedChatReadiness.set(sessionId, request);
+    }
+    const until = providerHistoryBackoff(conversation, Date.now());
+    if (until) request.state = { phase: 'history-wait', retryAt: until };
+    wakeBrowserWork();
+    if (!browserWakeConnected()) {
+      request.state = { phase: 'reconnecting', reason: 'Waiting for the browser Companion.' };
+      const current = request;
+      const { wakeBrowserUrl } = await import('./browser-startup.js');
+      await wakeBrowserUrl(chatUrl(conversation), false, true, { authoredInput: true,
+        current: async () => selectedChatReadiness.get(sessionId) === current &&
+          (await getSession(sessionId))?.conversationId === conversation });
+    }
+    return request.state;
+  })();
+  selectedChatFlights.set(sessionId, flight);
+  void flight.finally(() => { if (selectedChatFlights.get(sessionId) === flight) selectedChatFlights.delete(sessionId); }).catch(() => undefined);
+  return flight;
+}
+
+async function takeSelectedChatReadiness(browser: string | null): Promise<Array<{ conversationId: string; token: string }>> {
+  if (!browser) return [];
+  const result: Array<{ conversationId: string; token: string }> = [];
+  for (const [sessionId, request] of selectedChatReadiness) {
+    if (request.state.phase === 'ready' || request.state.phase === 'refused' ||
+        (request.browser && request.browser !== browser) || chatHeldElsewhere(request.conversationId, browser)) continue;
+    const session = await getSession(sessionId);
+    if (session?.conversationId !== request.conversationId) { selectedChatReadiness.delete(sessionId); continue; }
+    if (session.browserRecoveryDismissedAt !== request.dismissedAt) {
+      request.state = { phase: 'refused', reason: 'The browser tab was closed. Select this chat to reopen it.' };
+      continue;
+    }
+    request.browser = browser;
+    result.push({ conversationId: request.conversationId, token: request.token });
+  }
+  return result;
 }
 
 function takeFollow(browser: string | null): string | null {
@@ -2287,7 +2361,7 @@ async function stopUserAnchor(sessionId: string, turnId: string): Promise<string
   return undefined;
 }
 /** Stop is a request against one exact live turn, never a predicted final boundary. */
-export async function stopSessionTurn(sessionId: string, expectedTurnId: string): Promise<SessionControlsView> {
+export async function stopSessionTurn(sessionId: string, expectedTurnId: string, continuationInputId?: string): Promise<SessionControlsView> {
   const id = await controlledConversation(sessionId);
   const assertCurrent = async () => {
     const latest = await getSession(sessionId);
@@ -2298,13 +2372,18 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string)
   // deadline cannot revoke Stop while the provider still runs; native redemption and
   // the exact question/turn guards below remain the authority for the actual click.
   await assertCurrent();
-  await setSessionAutomation(sessionId, 'off');
+  if (continuationInputId) {
+    const input = (await listInputs()).find(row => row.id === continuationInputId && row.sessionId === sessionId &&
+      row.state === 'queued' && row.steerTurnId === expectedTurnId && row.sendAuthorizedAt === undefined && !row.cancelledByUser);
+    if (!input) throw new Error('continuation_input_changed');
+  } else await setSessionAutomation(sessionId, 'off');
   await assertCurrent();
   if (continuationForSession(sessionId)) { await cancelResumeNow(sessionId); await assertCurrent(); }
   const userMessageId = await stopUserAnchor(sessionId, expectedTurnId);
   await assertCurrent();
   const alreadyQueued = commands.some(entry => entry.spec.type === 'stop' && entry.spec.sessionId === sessionId && entry.spec.turnId === expectedTurnId);
-  const command = queue({ type: 'stop', sessionId, conversationId: id, turnId: expectedTurnId, ...(userMessageId ? { userMessageId } : {}) });
+  const command = queue({ type: 'stop', sessionId, conversationId: id, turnId: expectedTurnId,
+    ...(continuationInputId ? { continuationInputId } : {}), ...(userMessageId ? { userMessageId } : {}) });
   try {
     // Reuse the command lease barrier: status must not hand out an unsaved request.
     const pendingLease = commandWrites.get(command.id);
@@ -2327,6 +2406,7 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string)
     // The shared startup owner launches only on positive process absence. An
     // existing browser remains the extension election's responsibility.
     await wakeBrowserUrl(chatUrl(id), false, getConfig().ui.backgroundChats === true, {
+      ...(continuationInputId ? { authoredInput: true as const } : {}),
       current: () => bridgeLifecycleEpoch === lifecycle && !bridgeShutdownRequested && commands.includes(command) &&
         Date.now() < command.createdAt + STOP_COMMAND_TIMEOUT_MS &&
         liveConversations().some(row => row.sessionId === sessionId && row.conversationId === id && row.activeTurnId === expectedTurnId)
@@ -2336,6 +2416,9 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string)
 }
 async function stopCommandCurrent(spec: Extract<CommandSpec, { type: 'stop' }>): Promise<boolean> {
   const session = await getSession(spec.sessionId);
+  if (spec.continuationInputId && !(await listInputs()).some(row => row.id === spec.continuationInputId &&
+      row.sessionId === spec.sessionId && row.state === 'queued' && row.steerTurnId === spec.turnId &&
+      row.sendAuthorizedAt === undefined && !row.cancelledByUser)) return false;
   return Boolean(session?.conversationId === spec.conversationId && session.activeTurnId === spec.turnId &&
     !await conversationWasSuperseded(spec.conversationId));
 }
@@ -2777,7 +2860,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // This endpoint's caller is Gemini regardless of the new-chat selector. Its
         // approval policy must come from that same server, never the selected UI preview.
         .map(surface => ({ ...surface, tools: connection.liveSurfaceToolNames(surface.id, 'gemini') }));
-      const names = connectorNames(getConfig().connectorSuffix);
+      const names = { core: configuredConnectorName('core'), desktop: configuredConnectorName('desktop'), plugins: configuredConnectorName('plugins') };
       const tools = surfaces.flatMap(surface => surface.tools);
       const titles: Record<string, string> = { plugins: 'External MCP plugins', read: 'Read files and folders', find: 'Find files or text', exec: 'Run JavaScript', agents: 'Multi-agent run', usage: 'Usage and limits' };
       const toolLabels = (list: string[]) => [...new Set(list.flatMap(tool => [tool, tool.replaceAll('_', ' '),
@@ -3005,7 +3088,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const action = repairAction === 'reloaded' || repairAction === 'reopened' || repairAction === 'resumed' ||
       repairAction === 'preserved' || repairAction === 'present' ? repairAction : null;
     if (repaired) {
-      await confirmRepair(repaired.slice(0, 64), action);
+      await confirmRepair(repaired.slice(0, 64), action, browserOf(req));
     } else if (repairFailed) {
       await failRepairAttempt(repairFailed.slice(0, 64), action, url.searchParams.get('why'), url.searchParams.get('detail')?.slice(0, 80) ?? null);
     }
@@ -3033,7 +3116,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         stopTurns: await pendingStopCommands(),
         modelCatalogRequest: pendingChatModelRequest(),
         // This install's connector names, so the extension recognizes exactly its own traffic.
-        connectorNames: connectorNames(getConfig().connectorSuffix),
+        connectorNames: { core: configuredConnectorName('core'), desktop: configuredConnectorName('desktop'), plugins: configuredConnectorName('plugins') },
         // Apps proven to be this install's connectors, so a renamed connector is still recognized.
         connectorApps: Object.fromEntries(Object.entries(connectorApps()).map(([surface, apps]) =>
           [surface, apps.map(({ appId, linkId, name }) => ({ appId, linkId, name }))])),
@@ -3066,6 +3149,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         placement: pendingBrowserPlacement(null, browser),
         ...(canReveal ? { reveals: takeReveals(browser) } : {}),
         ...(follow ? { follow } : {}),
+        selectedChats: await takeSelectedChatReadiness(browser),
         ...(req.method === 'POST' && imageExportRequested ? { imageExports: pendingImageExports() } : {}),
         ...(req.method === 'POST' && videoExportRequested ? { videoExports: pendingVideoExports() } : {}),
         // A failure report closes this request. Reissuing the repair in the same response would
@@ -3088,6 +3172,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // Gemini's own plugin list names the Core plugin: it is created in this account. The id is only
   // checked for shape; what it proves is existence, which Setup reads instead of a test message.
   // A generated image's original, fetched by the page that shows it, for one pending export (#889).
+  if (route === '/selected-chat/readiness' && req.method === 'POST') {
+    const body = await readBody(req) as { token?: unknown; phase?: unknown; retryAt?: unknown };
+    const entry = [...selectedChatReadiness].find(([, request]) => request.token === body.token && request.browser === browserOf(req));
+    if (!entry || !['ready', 'loading', 'history-wait', 'reconnecting', 'refused'].includes(String(body.phase)))
+      return json(res, 200, { ok: false }, origin);
+    const [sessionId, request] = entry;
+    if ((await getSession(sessionId))?.conversationId !== request.conversationId) return json(res, 200, { ok: false }, origin);
+    request.state = { phase: body.phase as SelectedChatReadiness['phase'],
+      ...(body.phase === 'history-wait' && typeof body.retryAt === 'number' && body.retryAt > Date.now() ? { retryAt: body.retryAt } : {}) };
+    changed();
+    return json(res, 200, { ok: true }, origin);
+  }
   if (route === '/image-export' && req.method === 'POST') {
     let body: unknown;
     try { body = await readBody(req, IMAGE_EXPORT_BODY_BYTES); }
@@ -3213,7 +3309,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const target = body.conversationId === null ? null : conversationId(body.conversationId);
     if (body.conversationId !== null && !target) return json(res, 400, { error: 'bad_conversation_id' }, origin);
-    if (body.recoveryAction === 'stop' || body.recoveryAction === 'stopped' || body.recoveryAction === 'reloaded') {
+    if (typeof body.steeringCloseCommand === 'string') {
+      const command = commands.find(entry => entry.id === body.steeringCloseCommand);
+      const spec = command?.spec;
+      const ok = !!command && spec?.type === 'stop' && spec.continuationInputId === body.id &&
+        command.owner === body.stopClient && spec.conversationId === target && await stopCommandCurrent(spec) &&
+        await permitSteeringClose(body.id, spec.sessionId, spec.turnId);
+      if (ok) { retire(command!, 'the exact hung continuation page was closed for recovery'); changed(); }
+      return json(res, 200, { ok }, origin);
+    }
+    if (body.refreshAction === 'dispatch' || body.refreshAction === 'ready') {
+      const ok = !!target && await advanceInputRefresh(body.id, body.owner, target, body.refreshAction);
+      if (ok) changed();
+      return json(res, 200, { ok }, origin);
+    }
+    if (body.recoveryAction === 'stop' || body.recoveryAction === 'stopped' || body.recoveryAction === 'settled' || body.recoveryAction === 'close' || body.recoveryAction === 'reloaded') {
       const ok = !!target && recoveryInputAllowed((await findSessionByConversation(target))?.id ?? '', target) &&
         await advanceRecoveryInput(body.id, body.owner, target, body.recoveryAction);
       if (ok) changed();
@@ -3270,13 +3380,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       compactionRepairCurrent(conversationId, repair);
     // An observation still publishing can revoke this handout. Refuse this
     // claim transiently; the same unclaimed token remains eligible to be checked.
-    const allowed = current && observationWritesInFlight === 0 && repairsInFlight.get(conversationId) === repair && repair.state === 'handed' && !repair.claimed;
+    let allowed = current && observationWritesInFlight === 0 && repairsInFlight.get(conversationId) === repair && repair.state === 'handed' && !repair.claimed &&
+      !repair.reconcileOnly && (!repair.browser || repair.browser === browserOf(req));
     if (allowed) {
       repair.claimed = true;
       if (repair.reason === 'assistant-error' && repair.assistantSource)
         turnRepairSpent.set(conversationId, { sessionId: repair.sessionId, turnKey: repair.assistantSource.key, token, at: Date.now() });
       if (repair.attribution && repair.attribution.incident.firstAttemptAt === null)
         repair.attribution.incident.firstAttemptAt = Date.now();
+      try { await persistBrowserRepairsNow(); } catch { allowed = false; }
     }
     return json(res, 200, { allowed }, origin);
   }
@@ -5149,7 +5261,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (command.spec.type === 'resume') {
         custody.resume = { sessionId: command.spec.sessionId, token: command.spec.token };
         if (liveResume && chatProviderForConversation(liveResume.from) === 'chatgpt') {
-          described.text += '\n\n' + chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+          described.text += '\n\n' + await chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
           if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
         }
       }
@@ -5157,13 +5269,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         custody.worker = { runId: command.spec.runId, agent: command.spec.agent };
         const source = primeConversation(command.spec.runId);
         if (source && chatProviderForConversation(source) === 'chatgpt') {
-          described.text += '\n\n' + chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+          described.text += '\n\n' + await chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
           if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
         }
       }
       for (const key of geminiCommandCustody.keys()) {
         if (!commands.some(entry => entry.id === key) && !receiptFor(key)) geminiCommandCustody.delete(key);
       }
+      // The exact lease must survive a normal app restart before the browser
+      // receives its grant-bearing prompt. A new random lease cannot renew it.
+      await writeDurableNow(COMMANDS_STATE, commandSnapshot());
     }
     return json(res, 200, { command: described }, origin);
   }
@@ -6068,6 +6183,7 @@ async function startBridgeOnce(epoch: number, prepared?: PreparedBridge): Promis
   // the restored command for the same worker rather than opening a second tab.
   try {
     await restoreCommands();
+    await restoreBrowserRepairs();
   } catch (err) {
     // Recovery is part of opening the bridge, not best-effort work after it. In particular,
     // an expired revival cannot be pruned until its broker half is durably stopped. Leaving
@@ -6160,6 +6276,8 @@ function retryUnclaimedBrowserInputs(): Promise<void> {
   if (unclaimedInputSweep) return unclaimedInputSweep;
   const pass = (async () => {
     const inputs = await listInputs();
+    if (inputs.some(row => row.state === 'queued' && row.steerTurnId && !row.steerReady && row.sendAuthorizedAt === undefined))
+      void import('./session/start-input.js').then(owner => owner.resumePendingSteeringInputs()).catch(() => undefined);
     for (const row of inputs) {
       if (row.state !== 'failed' || row.error !== 'Not sent: the browser did not pick up this message within 60 seconds.' ||
           !row.sessionId || !row.conversationId || !recoveryInputAllowed(row.sessionId, row.conversationId)) continue;
@@ -6262,6 +6380,8 @@ export async function stopBridge(): Promise<void> {
     if (silenceTimer) clearTimeout(silenceTimer);
     silenceTimer = null;
     setCallAttributionListener(null);
+    try { await persistBrowserRepairsNow(); }
+    catch (error) { logWarn(`bridge: could not persist repair custody while stopping: ${String(error)}`); }
     clearUnattributedIncident();
     await Promise.all([drainBridgeListener(instance), ...bridgeDrains]);
     logInfo('bridge stopped');
@@ -6305,17 +6425,23 @@ function durableCommand(command: Command): DurableCommandRecord {
 }
 
 function pruneReceipts(now = Date.now()): void {
-  commandReceipts = commandReceipts
-    .filter((receipt) => now - receipt.completedAt <= COMMAND_TTL_MS)
-    .slice(-MAX_COMMAND_RECEIPTS);
+  commandReceipts = retainedCommandReceipts(commandReceipts, now);
+}
+function retainedCommandReceipts(receipts: readonly CommandReceipt[], now = Date.now(), custody = geminiCommandCustody): CommandReceipt[] {
+  const protectedReceipt = (receipt: CommandReceipt) => receipt.committed && receipt.outcome === 'committed' &&
+    custody.get(receipt.id)?.owner === receipt.client;
+  const ordinary = receipts.filter(receipt => !protectedReceipt(receipt) && now - receipt.completedAt <= COMMAND_TTL_MS).slice(-MAX_COMMAND_RECEIPTS);
+  return receipts.filter(receipt => protectedReceipt(receipt) || ordinary.includes(receipt));
 }
 
 function commandSnapshot(options: {
   commandOverride?: { command: Command; record: DurableCommandRecord };
   removeCommandId?: string;
   addReceipt?: CommandReceipt;
+  custody?: Map<string, CommandCustody>;
 } = {}): DurableCommandSnapshot {
   const { commandOverride, removeCommandId, addReceipt } = options;
+  const custody = options.custody ?? geminiCommandCustody;
   const snapshotCommands = [
     ...commands,
     ...[...commandRetirementsAwaitingBroker.values()].filter(
@@ -6327,12 +6453,12 @@ function commandSnapshot(options: {
     .map((command) =>
       commandOverride?.command === command ? commandOverride.record : durableCommand(command)
     );
-  let receipts = commandReceipts.filter((receipt) => Date.now() - receipt.completedAt <= COMMAND_TTL_MS);
+  let receipts = retainedCommandReceipts(commandReceipts, Date.now(), custody);
   if (addReceipt) {
     receipts = [...receipts.filter((receipt) => receipt.id !== addReceipt.id), addReceipt];
   }
-  receipts = receipts.slice(-MAX_COMMAND_RECEIPTS);
-  return { version: 4, commands: records, receipts };
+  receipts = retainedCommandReceipts(receipts, Date.now(), custody);
+  return { version: 4, commands: records, receipts, custody: Object.fromEntries(custody) };
 }
 
 function persistCommands(): void {
@@ -6510,10 +6636,20 @@ function receiptReply(receipt: CommandReceipt): Record<string, unknown> {
 async function finalizeCommand(command: Command, receipt: CommandReceipt): Promise<boolean> {
   return writeCommandTransition(command, async () => {
     if (!commands.includes(command)) return receiptFor(receipt.id) !== null;
+    const custody = new Map(geminiCommandCustody);
+    if (!receipt.committed) custody.delete(command.id);
+    else {
+      const current = custody.get(command.id);
+      for (const [id, prior] of custody) {
+        if (id === command.id) continue;
+        if ((current?.worker && prior.worker?.runId === current.worker.runId && prior.worker.agent === current.worker.agent) ||
+            (current?.resume && prior.resume?.sessionId === current.resume.sessionId)) custody.delete(id);
+      }
+    }
     try {
       // The receipt and command retirement are one durable state transition. Publishing either
       // side in memory first recreates the lost-response ambiguity this tombstone exists to end.
-      await writeDurableNow(COMMANDS_STATE, commandSnapshot({ removeCommandId: command.id, addReceipt: receipt }));
+      await writeDurableNow(COMMANDS_STATE, commandSnapshot({ removeCommandId: command.id, addReceipt: receipt, custody }));
     } catch (err) {
       persistCommands();
       logWarn(`bridge: could not persist the final receipt for ${specKey(command.spec)} — ${err instanceof Error ? err.message : String(err)}`);
@@ -6521,8 +6657,10 @@ async function finalizeCommand(command: Command, receipt: CommandReceipt): Promi
     }
     if (command.timer) clearTimeout(command.timer);
     command.timer = null;
+    geminiCommandCustody.clear();
+    for (const [id, entry] of custody) geminiCommandCustody.set(id, entry);
     commands = commands.filter((entry) => entry !== command);
-    commandReceipts = [...commandReceipts.filter((entry) => entry.id !== receipt.id), receipt].slice(-MAX_COMMAND_RECEIPTS);
+    commandReceipts = retainedCommandReceipts([...commandReceipts.filter((entry) => entry.id !== receipt.id), receipt]);
     changed();
     return true;
   });
@@ -6735,6 +6873,7 @@ export function cancelResume(sessionId: string): boolean {
   }
   if (queued) {
     commands = commands.filter((command) => command !== queued);
+    geminiCommandCustody.delete(queued.id);
     if (queued.timer) clearTimeout(queued.timer);
     queued.timer = null;
     persistCommands();
@@ -6767,6 +6906,7 @@ export async function cancelResumeNow(sessionId: string): Promise<boolean> {
   if (queued) {
     if (queued.timer) clearTimeout(queued.timer);
     queued.timer = null;
+    geminiCommandCustody.delete(queued.id);
     try {
       await writeDurableNow(COMMANDS_STATE, commandSnapshot({ removeCommandId: queued.id }));
     } catch (err) {
@@ -8074,6 +8214,9 @@ const UNATTRIBUTED_REQUEST_MEMORY = 500;
 
 /** One existing browser-action owner per chat: queued, issued, or acknowledged. */
 interface Repair {
+  /** Restart recovers receipt reconciliation only, never a second browser action. */
+  reconcileOnly?: true;
+  browser?: string;
   /** Reference to the existing work owner, invalidated when genuine activity replaces it. */
   silenceGrant?: ActivityGrant;
   /** The authored question owns transport recovery across document-local generation changes. */
@@ -8132,6 +8275,97 @@ interface Repair {
 const TURN_SCOPED_REPAIRS: ReadonlySet<Repair['reason']> = new Set(['unattributed', 'assistant-error']);
 
 const repairsInFlight = new Map<string, Repair>();
+const BROWSER_REPAIRS_STATE = 'browser-repairs';
+function browserRepairSnapshot() {
+  return { version: 1, cooldowns: [...lastBrowserRecoveryAt], history: [...providerHistoryBackoffUntil],
+    spent: [...turnRepairSpent], cancelled: [...assistantRecoveryCancelled],
+    repairs: [...repairsInFlight].filter(([, repair]) => repair.reason === 'assistant-error').map(([conversationId, repair]) => ({
+    conversationId, sessionId: repair.sessionId, endedTurns: repair.endedTurns, state: repair.state,
+    episode: repair.episode, reason: repair.reason, notBefore: repair.notBefore, token: repair.token,
+    progressId: repair.progressId, assistantSource: repair.assistantSource, progress: repair.progress,
+    claimed: repair.claimed === true, reconcileOnly: repair.reconcileOnly, browser: repair.browser,
+    offers: repair.offers, awaitingStream: repair.awaitingStream,
+    spent: turnRepairSpent.get(conversationId), cooldown: lastBrowserRecoveryAt.get(conversationId),
+    historyUntil: providerHistoryBackoffUntil.get(conversationId)
+  })) };
+}
+let browserRepairWriteTail = Promise.resolve();
+let durableBrowserRepairText: string | null = null;
+function persistBrowserRepairsSoon(): void { void persistBrowserRepairsNow().catch(error => logWarn(`bridge: browser repair custody write failed: ${String(error)}`)); }
+function persistBrowserRepairsNow(): Promise<void> {
+  const snapshot = browserRepairSnapshot(), serialized = JSON.stringify(snapshot);
+  const write = browserRepairWriteTail.then(async () => {
+    if (durableBrowserRepairText === serialized) return;
+    await writeDurableNow(BROWSER_REPAIRS_STATE, snapshot);
+    durableBrowserRepairText = serialized;
+  });
+  browserRepairWriteTail = write.catch(() => undefined);
+  return write;
+}
+
+/** Restore spent identity, not browser execution. Canonical history still owns readiness. */
+async function restoreBrowserRepairs(): Promise<void> {
+  durableBrowserRepairText = null;
+  const saved = await readDurable<{ version?: number; repairs?: unknown; cooldowns?: unknown; history?: unknown;
+    spent?: unknown; cancelled?: unknown }>(BROWSER_REPAIRS_STATE);
+  if (saved?.version !== 1 || !Array.isArray(saved.repairs)) return;
+  for (const [records, target] of [[saved.cooldowns, lastBrowserRecoveryAt], [saved.history, providerHistoryBackoffUntil]] as const) {
+    if (!Array.isArray(records)) continue;
+    for (const row of records) {
+      if (!Array.isArray(row) || row.length !== 2 || !conversationId(row[0]) || !Number.isFinite(row[1])) continue;
+      if (target === providerHistoryBackoffUntil && (row[1] <= Date.now() || row[1] > Date.now() + 24 * 60 * 60_000)) continue;
+      target.set(row[0], row[1]);
+    }
+  }
+  for (const [records, spent] of [[saved.spent, true], [saved.cancelled, false]] as const) {
+    if (!Array.isArray(records)) continue;
+    for (const row of records) {
+      if (!Array.isArray(row) || row.length !== 2) continue;
+      const id = conversationId(row[0]), source = row[1];
+      if (!id || !source || typeof source.sessionId !== 'string' || typeof source.turnKey !== 'string' ||
+          (spent && (typeof source.token !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(source.token) || !Number.isFinite(source.at)))) continue;
+      const session = await getSession(source.sessionId);
+      if (session?.conversationId !== id || (await assistantRepairSource(source.sessionId)).key !== source.turnKey) continue;
+      if (spent) turnRepairSpent.set(id, { sessionId: source.sessionId, turnKey: source.turnKey, token: source.token, at: source.at });
+      else assistantRecoveryCancelled.set(id, { sessionId: source.sessionId, turnKey: source.turnKey });
+    }
+  }
+  for (const value of saved.repairs) {
+    if (!value || typeof value !== 'object') continue;
+    const row = value as Record<string, any>, id = conversationId(row.conversationId);
+    if (!id || repairsInFlight.has(id) || row.reason !== 'assistant-error' || typeof row.sessionId !== 'string' ||
+        !/^[a-z0-9-]{8,64}$/i.test(row.sessionId) || !['queued', 'handed', 'done'].includes(row.state) ||
+        typeof row.episode !== 'string' || !row.episode || row.episode.length > 2048 ||
+        typeof row.token !== 'string' || !/^[A-Za-z0-9_-]{0,64}$/.test(row.token) ||
+        typeof row.progressId !== 'string' || !row.progressId.startsWith(`browser-repair:${id}:`) || row.progressId.length > 256 ||
+        !Number.isSafeInteger(row.endedTurns) || row.endedTurns < 0 || !Number.isFinite(row.notBefore) ||
+        (row.browser !== undefined && (typeof row.browser !== 'string' || !/^[a-z0-9]{16,64}$/.test(row.browser)))) continue;
+    const source = row.assistantSource;
+    if (!source || typeof source.key !== 'string' || !/^(?:user|turn):.{1,256}$/.test(source.key) ||
+        (source.turnId !== null && (typeof source.turnId !== 'string' || !source.turnId || source.turnId.length > 256)) ||
+        typeof source.completed !== 'boolean') continue;
+    const repair: Repair = { sessionId: row.sessionId, endedTurns: row.endedTurns,
+      state: row.state === 'done' ? 'done' : 'handed', episode: row.episode, reason: 'assistant-error',
+      notBefore: row.notBefore, token: row.token, progressId: row.progressId,
+      assistantSource: { key: source.key, turnId: source.turnId, completed: source.completed },
+      reconcileOnly: true, claimed: true, ...(row.browser ? { browser: row.browser } : {}) };
+    const session = await getSession(repair.sessionId);
+    if (session?.conversationId !== id || isChatBlocked(id) || await conversationWasSuperseded(id) ||
+        !departureAllowsRepairFor(session, repair.reason, repair.episode) || stopRequestedFor(id) ||
+        !await assistantRepairCurrent(id, repair)) continue;
+    if (row.progress && row.progress.sessionId === repair.sessionId && Number.isSafeInteger(row.progress.seq) &&
+        Number.isFinite(row.progress.time) && typeof row.progress.text === 'string' && row.progress.text.length <= 8192 &&
+        (row.progress.turnId === null || typeof row.progress.turnId === 'string')) repair.progress = { ...row.progress };
+    if (Number.isFinite(row.cooldown)) lastBrowserRecoveryAt.set(id, row.cooldown);
+    if (Number.isFinite(row.historyUntil) && row.historyUntil > Date.now()) providerHistoryBackoffUntil.set(id, row.historyUntil);
+    if (row.spent?.sessionId === repair.sessionId && row.spent.turnKey === source.key && row.spent.token === repair.token &&
+        Number.isFinite(row.spent.at)) turnRepairSpent.set(id, { ...row.spent });
+    repairsInFlight.set(id, repair);
+    if (repair.state !== 'done') await updateRepairProgress(id, repair,
+      'Waiting for the original chat refresh readiness receipt after restart. The refresh will not be repeated; open the provider tab to check it.');
+  }
+  await persistBrowserRepairsNow();
+}
 /** Exact provider Retry-After deadline for conversation-history reads. It delays browser recovery; it never creates one. */
 const providerHistoryBackoffUntil = new Map<string, number>();
 type ProviderDeferredColdStart = {
@@ -8535,6 +8769,9 @@ function queueBrowserRecovery(
   }
   const held = repairsInFlight.get(conversationId);
   if (held?.episode === episode) return false;
+  // A missing readiness ACK cannot become a new silence/no-tab action after a
+  // main restart. Only canonical source retirement or the original receipt ends it.
+  if (held?.reconcileOnly && held.state !== 'done') return false;
   // Silence may take an entry away from a turn-scoped repair, and it has to be able to. Those
   // are retired by a *later* turn ending, so a chat whose page died on the broken turn keeps
   // one forever — and a permanent entry here used to mean permanent silence, because this
@@ -8583,6 +8820,7 @@ function queueBrowserRecovery(
     progressId: `browser-repair:${conversationId}:${randomBytes(9).toString('base64url')}`
   };
   repairsInFlight.set(conversationId, repair);
+  persistBrowserRepairsSoon();
   // Queue publication owns the pickup notification, just as the input outbox does.
   // Without it an already-due repair waits for the extension's 30-second alarm.
   // The socket carries no action authority: /status still rechecks eligibility.
@@ -10273,7 +10511,7 @@ async function takePendingRepairs(
     // Another browser holds this chat. Offered here, a reload finds no tab and opens a copy.
     if (chatHeldElsewhere(conversationId, browser)) continue;
     const unclaimed = repair.reason !== 'unattributed' && repairNeedsClaim(repair) && repair.state === 'handed' && !repair.claimed;
-    if (repair.state !== 'queued' && !unclaimed) continue;
+    if (repair.reconcileOnly || (repair.state !== 'queued' && !unclaimed)) continue;
     if (now < repair.notBefore) continue;
     if (unclaimed) {
       repair.offers = (repair.offers ?? 1) + 1;
@@ -10309,6 +10547,7 @@ async function takePendingRepairs(
     } else {
       repair.state = 'handed';
       repair.token = randomBytes(9).toString('base64url');
+      if (browser) repair.browser = browser;
       if (!repair.awaitingStream) await updateRepairProgress(conversationId, repair, `Trying to reload chat to ${repairPurpose(repair).to}…`);
     }
     // A missed pre-action claim may retry the same offer. Once claimed, ambiguous
@@ -10334,6 +10573,8 @@ async function takePendingRepairs(
   }
   if (ready.length) logInfo(`bridge: handing the browser ${ready.length} repair(s): ` +
     ready.map(row => `${row.conversationId.slice(0, 8)}:${row.reason}`).join(', '));
+  // Persist the exact offer before any browser can claim or act on it.
+  await persistBrowserRepairsNow();
   return ready;
 }
 
@@ -10373,9 +10614,20 @@ function attributionRepairCurrent(repair: Repair, session: SessionSummary | null
  * this app is no longer waiting on - an older turn's, or one already re-queued - matches
  * nothing and closes nothing, which is the only safe reading of it.
  */
-async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | 'resumed' | 'preserved' | 'present' | null): Promise<void> {
+async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | 'resumed' | 'preserved' | 'present' | null, browser: string | null = null): Promise<void> {
+  try { await confirmRepairReceipt(token, action, browser); }
+  finally { await persistBrowserRepairsNow(); }
+}
+async function confirmRepairReceipt(token: string, action: 'reloaded' | 'reopened' | 'resumed' | 'preserved' | 'present' | null, browser: string | null): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state === 'handed' && repair.token === token) {
+      if (repair.browser && repair.browser !== browser) return;
+      if (repair.reason === 'assistant-error') {
+        const session = await getSession(repair.sessionId);
+        if (session?.conversationId !== conversationId || isChatBlocked(conversationId) || stopRequestedFor(conversationId) ||
+            !departureAllowsRepairFor(session, repair.reason, repair.episode) || await conversationWasSuperseded(conversationId) ||
+            !await assistantRepairCurrent(conversationId, repair)) { repairsInFlight.delete(conversationId); return; }
+      }
       if (!compactionRepairCurrent(conversationId, repair)) { repairsInFlight.delete(conversationId); return; }
       if (action === 'present') {
         // The chat had a tab again by the time the browser acted, usually the one a worker wake
@@ -10480,6 +10732,9 @@ function noteRepairHeld(token: string, why: string | null): void {
   const reason = why && Object.hasOwn(REPAIR_HOLD_REASONS, why) ? why : 'unknown';
   const held = [...repairsInFlight].find(([, repair]) => repair.token === token);
   if (!held) return;
+  // A positive refusal proves this listener is alive. Only unanswered offers
+  // count toward the missing-page ceiling; a busy page can safely hold for hours.
+  held[1].offers = 0;
   const key = `${token}:${reason}`;
   if (repairHoldsLogged.has(key)) return;
   repairHoldsLogged.add(key);
@@ -10540,9 +10795,14 @@ async function failRepairAttempt(
   why: string | null = null,
   changeDetail: string | null = null
 ): Promise<void> {
+  try { await failRepairReceipt(token, action, why, changeDetail); }
+  finally { await persistBrowserRepairsNow(); }
+}
+async function failRepairReceipt(token: string, action: 'reloaded' | 'reopened' | 'resumed' | 'preserved' | 'present' | null,
+  why: string | null, changeDetail: string | null): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state !== 'handed' || repair.token !== token) continue;
-    if (why === 'unready') {
+    if (why === 'unready' || repair.reconcileOnly) {
       // Chrome accepted the reload. Its replacement has not proved readiness, so
       // retain the spent claim and never replay that browser mutation on a timer.
       await updateRepairProgress(conversationId, repair,
@@ -11090,7 +11350,8 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
   const spec = command.spec;
   const selection = spec.type === 'resume' ? continuationByToken(spec.token)?.requestedModel : null;
   const expiresAt = Date.now() + Math.max(1, commandDeadlineDelay(command));
-  if (spec.type === 'stop') return { id: command.id, expiresAt, kind: 'stop-turn', type: 'stop', text: '', agent: null, model: null, reasoningEffort: null, conversationId: spec.conversationId, turnId: spec.turnId, ...(spec.userMessageId ? { userMessageId: spec.userMessageId } : {}) };
+  if (spec.type === 'stop') return { id: command.id, expiresAt, kind: 'stop-turn', type: 'stop', text: '', agent: null, model: null, reasoningEffort: null, conversationId: spec.conversationId, turnId: spec.turnId,
+    ...(spec.continuationInputId ? { continuationInputId: spec.continuationInputId } : {}), ...(spec.userMessageId ? { userMessageId: spec.userMessageId } : {}) };
   // A resume's claim is persisted by /commands/redeem before this renderer is called. A
   // command shown to app/UI code without a browser document still carries no brief at all.
   const text = spec.type === 'resume'
@@ -11336,7 +11597,14 @@ export function cancelWorkerCommands(reason: string, agent?: string, runId?: str
       (agent === undefined || command.spec.agent === agent) &&
       (runId === undefined || command.spec.runId === runId)
   );
-  if (doomed.length === 0) return 0;
+  let retiredProof = false;
+  for (const [id, custody] of geminiCommandCustody) {
+    if (custody.worker && (agent === undefined || custody.worker.agent === agent) &&
+        (runId === undefined || custody.worker.runId === runId)) {
+      geminiCommandCustody.delete(id); retiredProof = true;
+    }
+  }
+  if (doomed.length === 0) { if (retiredProof) persistCommands(); return 0; }
   const dead = new Set(doomed.map((command) => command.id));
   commands = commands.filter((command) => !dead.has(command.id));
   const what = agent === undefined ? 'worker chat(s)' : `worker chat(s) for ${agent}`;
@@ -11367,6 +11635,7 @@ interface CommandRestorePlan {
   commands: Command[];
   /** Complete post-recovery receipt set, already TTL-pruned and de-duplicated. */
   receipts: CommandReceipt[];
+  custody: Map<string, CommandCustody>;
   /** Expired durable wake halves whose separately durable broker reservation must be settled first. */
   expiredRevivals: Array<{
     id: string;
@@ -11379,7 +11648,7 @@ interface CommandRestorePlan {
 }
 
 /** One durable receipt that is still useful, rebuilt field-by-field. */
-function restoredReceipt(raw: Partial<CommandReceipt>, now: number): CommandReceipt | null {
+function restoredReceipt(raw: Partial<CommandReceipt>, now: number, custody?: CommandCustody): CommandReceipt | null {
   if (
     typeof raw.id !== 'string' || raw.id.length === 0 || raw.id.length > 64 ||
     (raw.client !== null && raw.client !== undefined && (typeof raw.client !== 'string' || raw.client.length > 64)) ||
@@ -11387,7 +11656,7 @@ function restoredReceipt(raw: Partial<CommandReceipt>, now: number): CommandRece
     (raw.outcome !== 'committed' && raw.outcome !== 'terminal-failure') ||
     typeof raw.committed !== 'boolean' ||
     !Number.isFinite(raw.completedAt) ||
-    now - Number(raw.completedAt) > COMMAND_TTL_MS ||
+    (now - Number(raw.completedAt) > COMMAND_TTL_MS && !(raw.committed && raw.client === custody?.owner)) ||
     (raw.outcome === 'committed') !== raw.committed
   ) {
     return null;
@@ -11416,7 +11685,9 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
         typeof stop.conversationId !== 'string' || !conversationId(stop.conversationId) ||
         typeof stop.turnId !== 'string' || !stop.turnId || stop.turnId.length > 256) return null;
     if (stop.userMessageId !== undefined && (typeof stop.userMessageId !== 'string' || !stop.userMessageId || stop.userMessageId.length > 256)) return null;
-    return { type: 'stop', sessionId: stop.sessionId, conversationId: stop.conversationId, turnId: stop.turnId, ...(stop.userMessageId ? { userMessageId: stop.userMessageId } : {}) };
+    if (stop.continuationInputId !== undefined && (typeof stop.continuationInputId !== 'string' || !/^[a-f0-9-]{36}$/i.test(stop.continuationInputId))) return null;
+    return { type: 'stop', sessionId: stop.sessionId, conversationId: stop.conversationId, turnId: stop.turnId,
+      ...(stop.continuationInputId ? { continuationInputId: stop.continuationInputId } : {}), ...(stop.userMessageId ? { userMessageId: stop.userMessageId } : {}) };
   }
   if (
     version >= 3 &&
@@ -11487,15 +11758,48 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
 function restoredCommandSnapshot(
   plannedCommands: readonly Command[],
   plannedReceipts: readonly CommandReceipt[],
-  now: number
+  now: number,
+  custody = geminiCommandCustody
 ): DurableCommandSnapshot {
   return {
     version: 4,
     commands: plannedCommands.map(durableCommand),
-    receipts: plannedReceipts
-      .filter((receipt) => now - receipt.completedAt <= COMMAND_TTL_MS)
-      .slice(-MAX_COMMAND_RECEIPTS)
+    receipts: retainedCommandReceipts(plannedReceipts, now, custody),
+    custody: Object.fromEntries(custody)
   };
+}
+
+function restoredCommandCustody(value: unknown): Map<string, CommandCustody> {
+  const out = new Map<string, CommandCustody>();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [id, raw] of Object.entries(value)) {
+    if (!id || id.length > 64 || !raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const row = raw as Partial<CommandCustody>;
+    if (typeof row.browser !== 'string' || !/^[a-z0-9]{16,64}$/.test(row.browser) ||
+        typeof row.owner !== 'string' || !row.owner || row.owner.length > 64 ||
+        typeof row.lease !== 'string' || !/^[a-f0-9]{16}$/.test(row.lease)) continue;
+    // Invalid optional fences must reject the whole grant, never disappear and
+    // turn a document-bound lease into a less constrained credential.
+    if ((row.tab !== undefined && (!Number.isSafeInteger(row.tab) || row.tab < 0)) ||
+        (row.document !== undefined && (typeof row.document !== 'string' || !row.document || row.document.length > 256)) ||
+        (row.conversation !== undefined && (typeof row.conversation !== 'string' || !conversationId(row.conversation))) ||
+        (row.sessionId !== undefined && (typeof row.sessionId !== 'string' || !/^[a-z0-9-]{8,64}$/i.test(row.sessionId)))) continue;
+    const item: CommandCustody = { browser: row.browser, owner: row.owner, lease: row.lease };
+    if (Number.isSafeInteger(row.tab) && row.tab! >= 0) item.tab = row.tab;
+    if (typeof row.document === 'string' && row.document.length > 0 && row.document.length <= 256) item.document = row.document;
+    if (typeof row.conversation === 'string' && conversationId(row.conversation)) item.conversation = row.conversation;
+    if (typeof row.sessionId === 'string' && /^[a-z0-9-]{8,64}$/i.test(row.sessionId)) item.sessionId = row.sessionId;
+    if (row.worker && typeof row.worker.runId === 'string' && row.worker.runId.length > 0 && row.worker.runId.length <= 128 &&
+        typeof row.worker.agent === 'string' && row.worker.agent.length > 0 && row.worker.agent.length <= 128)
+      item.worker = { runId: row.worker.runId, agent: row.worker.agent };
+    if (row.resume && typeof row.resume.sessionId === 'string' && /^[a-z0-9-]{8,64}$/i.test(row.resume.sessionId) &&
+        typeof row.resume.token === 'string' && /^[a-f0-9]{32}$/.test(row.resume.token))
+      item.resume = { sessionId: row.resume.sessionId, token: row.resume.token };
+    if ((row.worker !== undefined && !item.worker) || (row.resume !== undefined && !item.resume)) continue;
+    if (!item.worker && !item.resume) continue;
+    out.set(id, item);
+  }
+  return out;
 }
 
 /**
@@ -11507,26 +11811,22 @@ function restoredCommandSnapshot(
  * awaits can still fail.
  */
 function planCommandRestore(
-  saved: { version?: number; commands?: unknown; receipts?: unknown },
+  saved: { version?: number; commands?: unknown; receipts?: unknown; custody?: unknown },
   now: number
 ): CommandRestorePlan | null {
   const version = saved.version;
   if (version !== 1 && version !== 2 && version !== 3 && version !== 4 || !Array.isArray(saved.commands)) return null;
 
   const plannedCommands = [...commands];
-  const plannedReceipts = commandReceipts
-    .filter((receipt) => now - receipt.completedAt <= COMMAND_TTL_MS)
-    .slice(-MAX_COMMAND_RECEIPTS);
+  const plannedCustody = new Map([...restoredCommandCustody(saved.custody), ...geminiCommandCustody]);
+  const plannedReceipts = retainedCommandReceipts(commandReceipts, now, plannedCustody);
   const receiptIds = new Set(plannedReceipts.map((receipt) => receipt.id));
   if (version !== 1 && Array.isArray(saved.receipts)) {
     for (const raw of saved.receipts as Array<Partial<CommandReceipt>>) {
-      const receipt = restoredReceipt(raw, now);
+      const receipt = restoredReceipt(raw, now, typeof raw.id === 'string' ? plannedCustody.get(raw.id) : undefined);
       if (!receipt || receiptIds.has(receipt.id)) continue;
       receiptIds.add(receipt.id);
       plannedReceipts.push(receipt);
-    }
-    if (plannedReceipts.length > MAX_COMMAND_RECEIPTS) {
-      plannedReceipts.splice(0, plannedReceipts.length - MAX_COMMAND_RECEIPTS);
     }
   }
 
@@ -11619,7 +11919,16 @@ function planCommandRestore(
 
   return {
     commands: commandsAfterExpiredRevival,
-    receipts: plannedReceipts.slice(-MAX_COMMAND_RECEIPTS),
+    receipts: retainedCommandReceipts(plannedReceipts, now, plannedCustody),
+    custody: new Map([...plannedCustody].filter(([id, custody]) => {
+      const command = commandsAfterExpiredRevival.find(entry => entry.id === id);
+      const receipt = plannedReceipts.find(entry => entry.id === id);
+      if (receipt?.committed && receipt.client === custody.owner && (!custody.conversation || custody.conversation === receipt.conversationId)) return true;
+      if (!command || command.owner !== custody.owner || command.claimedAt === null) return false;
+      const spec = command.spec;
+      return spec.type === 'resume' ? custody.resume?.sessionId === spec.sessionId && custody.resume.token === spec.token :
+        (spec.type === 'worker' || spec.type === 'revive') && custody.worker?.runId === spec.runId && custody.worker.agent === spec.agent;
+    })),
     expiredRevivals,
     resumeTokens,
     restored
@@ -11636,10 +11945,18 @@ function planCommandRestore(
  * 1 is migrated conservatively, including resume commands whose continuation WAL survived.
  */
 export async function restoreCommands(): Promise<void> {
+  if (commandRestoreFlight) return commandRestoreFlight;
+  const work = restoreCommandAuthority();
+  commandRestoreFlight = work;
+  try { await work; commandAuthorityLoaded = true; }
+  finally { if (commandRestoreFlight === work) commandRestoreFlight = null; }
+}
+async function restoreCommandAuthority(): Promise<void> {
   const saved = await readDurable<{
     version?: number;
     commands?: unknown;
     receipts?: unknown;
+    custody?: unknown;
   }>(COMMANDS_STATE);
   if (!saved) return;
   const now = Date.now();
@@ -11691,7 +12008,7 @@ export async function restoreCommands(): Promise<void> {
   // plan in memory is safe because admission is still fenced by bridgeRecovering.
   let rewriteDurable = true;
   try {
-    await writeDurableNow(COMMANDS_STATE, restoredCommandSnapshot(plan.commands, plan.receipts, now));
+    await writeDurableNow(COMMANDS_STATE, restoredCommandSnapshot(plan.commands, plan.receipts, now, plan.custody));
     rewriteDurable = false;
   } catch (err) {
     logWarn(`bridge: could not persist reconstructed command state — ${err instanceof Error ? err.message : String(err)}`);
@@ -11701,6 +12018,8 @@ export async function restoreCommands(): Promise<void> {
   // everything below may again use ordinary live command helpers and timers.
   commands = plan.commands;
   commandReceipts = plan.receipts;
+  geminiCommandCustody.clear();
+  for (const [id, custody] of plan.custody) geminiCommandCustody.set(id, custody);
   for (const token of plan.resumeTokens) rememberToken(token.sessionId, token.token);
   rearmRetainedCommandDeadlines();
   if (plan.restored > 0) {
@@ -11729,6 +12048,7 @@ export function workerBriefForTests(agent: string, task: string): string {
 }
 
 export function resetBridgeForTests(): void {
+  commandAuthorityLoaded = false;
   resetApprovalWaits();
   clearCompanionDiagnostics();
   for (const command of commands) if (command.timer) clearTimeout(command.timer);
@@ -11745,6 +12065,8 @@ export function resetBridgeForTests(): void {
   bridgeError = null;
   clearUnattributedIncident();
   providerHistoryBackoffUntil.clear();
+  selectedChatReadiness.clear();
+  selectedChatFlights.clear();
   providerDeferredColdStarts.clear();
   activeUntil.clear();
   lastRecoverySweepTickAt = 0;

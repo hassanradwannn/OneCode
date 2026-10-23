@@ -1326,7 +1326,7 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
 export function upsertMessageEvent(
   sessionId: string,
   event: NewMessageEvent,
-  options: { preferTime?: boolean; work?: boolean } = {}
+  options: { preferTime?: boolean; work?: boolean; activeContent?: boolean } = {}
 ): Promise<{ event: MessageEvent; changed: boolean; contentChanged: boolean }> {
   const directKey = messageKey(event as MessageEvent);
   if (!directKey) throw new Error('Canonical message update requires provider messageId');
@@ -1346,7 +1346,7 @@ export function upsertMessageEvent(
       const previous = candidate?.kind === 'user_message' || candidate?.kind === 'assistant_message' ? candidate : undefined;
       // A changed provider timestamp caused this alias; it is not a correction of
       // the original anchor. Same-key DOM-to-Fiber timestamp promotion still applies.
-      const preferTime = options.preferTime === true && key === directKey;
+      let preferTime = options.preferTime === true && key === directKey;
       if (previous && key !== directKey) event = { ...event, messageId: previous.messageId };
       // Final is terminal for one canonical Gemini message. The page can briefly re-report
       // an older streaming DOM snapshot after settling/remounting; accepting that snapshot
@@ -1359,6 +1359,26 @@ export function upsertMessageEvent(
         event.state !== 'final'
       ) {
         return { event: previous, changed: false, contentChanged: false };
+      }
+
+      // A resident historical snapshot may arrive after the active page has already
+      // published this same message's current body. Its observation order is later, but
+      // it has no newer content revision evidence. Keep the active body when lifecycle
+      // state agrees; a later active observation can still make an authoritative edit,
+      // including a genuine shortening. A first transition to final remains admissible
+      // because it carries stronger terminal evidence than the earlier streaming sample.
+      const activeBodyIsNewer = previous?.kind === 'assistant_message' &&
+        event.kind === 'assistant_message' && previous.activeContentRevision === true &&
+        options.activeContent !== true && (!storedTextEqual(previous.message, event.message) ||
+          !storedTextEqual(previous.renderedHtml, event.renderedHtml)) &&
+        (previous.final === true || previous.state === 'final') ===
+          (event.final === true || event.state === 'final');
+      if (activeBodyIsNewer && previous?.kind === 'assistant_message' && event.kind === 'assistant_message') {
+        event = { ...event, message: previous.message, renderedHtml: previous.renderedHtml,
+          state: previous.state, final: previous.final };
+        // The historical timestamp belongs to the stale snapshot too; it cannot rewrite
+        // chronology when its body was refused for lack of newer content evidence.
+        preferTime = false;
       }
 
       // Message bodies can be hundreds of kilobytes. The old path JSON.stringify-compared the
@@ -1454,6 +1474,7 @@ export function upsertMessageEvent(
             previous.providerMessageId === nextEvent.providerMessageId &&
             previous.resolvedModel === nextEvent.resolvedModel &&
             JSON.stringify(previous.references) === JSON.stringify(nextEvent.references))) &&
+        (options.activeContent !== true || previous.kind !== 'assistant_message' || previous.activeContentRevision === true) &&
         (nextEvent.kind !== 'user_message' || previous.kind !== 'user_message' ||
           (nextEvent.reaction === previous.reaction && nextEvent.inputId === previous.inputId && nextEvent.authoredText === previous.authoredText && nextEvent.wireTokenEstimate === previous.wireTokenEstimate && nextEvent.inputDelivery === previous.inputDelivery && JSON.stringify(nextEvent.assets) === JSON.stringify(previous.assets) && JSON.stringify(nextEvent.retiredImageAssetIds) === JSON.stringify(previous.retiredImageAssetIds) && JSON.stringify(nextEvent.attachments) === JSON.stringify(previous.attachments))) &&
         (previous.turnId ?? undefined) === settledTurnId &&
@@ -1464,6 +1485,15 @@ export function upsertMessageEvent(
       }
       const full = {
         ...nextEvent,
+        presentationSeq: !previous || !sameMessage ||
+          (nextEvent.kind === 'assistant_message' && previous.kind === 'assistant_message' &&
+            (!storedTextEqual(previous.renderedHtml, nextEvent.renderedHtml) ||
+              JSON.stringify(previous.references) !== JSON.stringify(nextEvent.references))) ||
+          (nextEvent.kind === 'user_message' && previous.kind === 'user_message' &&
+            (JSON.stringify(previous.attachments) !== JSON.stringify(nextEvent.attachments) ||
+              JSON.stringify(previous.assets) !== JSON.stringify(nextEvent.assets) ||
+              JSON.stringify(previous.retiredImageAssetIds) !== JSON.stringify(nextEvent.retiredImageAssetIds)))
+          ? entry.nextSeq : previous.presentationSeq ?? previous.contentSeq ?? previous.origin ?? previous.seq,
         // Cursor revisions publish richer markup/identity without manufacturing work.
         // A reload may reserialize an existing user bubble. Its updated text belongs
         // in history, but only a just-authored observation may revoke its recovery.
@@ -1491,6 +1521,8 @@ export function upsertMessageEvent(
         // original first-seen time forever.
         time: preferTime ? nextEvent.time : previous?.time ?? nextEvent.time,
         ...(settledTurnId === undefined ? {} : { turnId: settledTurnId }),
+        ...(options.activeContent === true || previous?.kind === 'assistant_message' && previous.activeContentRevision === true
+          ? { activeContentRevision: true as const } : {}),
         ...(previous?.agent && !nextEvent.agent ? { agent: previous.agent } : {}),
         ...(nextEvent.kind === 'assistant_message' || nextEvent.kind === 'user_message'
           ? { origin: previous?.kind === nextEvent.kind ? previous.origin ?? previous.seq : entry.nextSeq }

@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import { RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
@@ -46,6 +48,25 @@ let lifecycle = Promise.resolve();
 let setup: TailscaleSetupAction | undefined, setupRetry: NodeJS.Timeout | undefined;
 let routeRetry = false;
 const assetRoot = path.resolve(__dirname, '../remote');
+const gzipAsync = promisify(gzip);
+const compressedAssets = new Map<string, Promise<Buffer>>();
+const COMPRESSIBLE_REMOTE_ASSET = /\.(?:css|js)$/i;
+function acceptsGzip(value: string | string[] | undefined): boolean {
+  return typeof value === 'string' && value.split(',').some(token => /^\s*gzip(?:\s*;\s*q=(?!0(?:\.0*)?\b)[0-9.]+)?\s*$/i.test(token));
+}
+export function remoteStaticCacheControl(pathname: string): string {
+  return pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-store';
+}
+async function remoteStaticBody(file: string, bytes: Buffer, acceptEncoding: string | string[] | undefined): Promise<{ body: Buffer; gzip: boolean }> {
+  if (!COMPRESSIBLE_REMOTE_ASSET.test(file) || bytes.length < 1024 || !acceptsGzip(acceptEncoding)) return { body: bytes, gzip: false };
+  let encoded = compressedAssets.get(file);
+  if (!encoded) {
+    encoded = gzipAsync(bytes, { level: 6 });
+    compressedAssets.set(file, encoded);
+    encoded.catch(() => compressedAssets.delete(file));
+  }
+  return { body: await encoded, gzip: true };
+}
 function json(res: http.ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 async function checkRoute(): Promise<void> {
   if (!serve || !listener || !enabled || (!ready && !routeRetry)) throw new Error('Remote access is unavailable.');
@@ -58,9 +79,7 @@ async function checkRoute(): Promise<void> {
     if (serve === owner && listener && enabled && !terminal) {
       ready = false; error = (cause as Error).message;
       routeRetry = cause instanceof TailscaleNotReady;
-      // A transient read failure suspends admission, not device identity. Existing
-      // revocation/expiry still apply, and only exact route verification restores access.
-      if (!routeRetry) auth.clear();
+      // Route errors suspend admission. They do not revoke the user's saved browser grants.
       canRefreshLink = cause instanceof RemoteRouteConflict;
     }
     throw cause;
@@ -91,7 +110,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     await checkRoute();
     if (route.pathname === '/api/connect' && req.method === 'POST') {
       const connection = z.object({ key: z.string().min(1).max(128), name: z.string().trim().min(1).max(80) }).strict().parse(await body(req));
-      await checkRoute(); json(res, 200, auth.connect(connection.key, connection.name)); return;
+      await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name)); return;
     }
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const device = auth.authenticate(token); if (!device) throw new RequestError(401, 'connection_required');
@@ -172,7 +191,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
       json(res, 200, await operations.run(request.id, device.id, request, () => remoteAction(request))); return;
     }
-    if (req.method === 'POST' && route.pathname === '/api/disconnect') { await body(req); auth.revoke(device.id); await retirePlaybacks(device.id); json(res, 200, { disconnected: true }); return; }
+    if (req.method === 'POST' && route.pathname === '/api/disconnect') { await body(req); await auth.revoke(device.id); await retirePlaybacks(device.id); json(res, 200, { disconnected: true }); return; }
     if (req.method === 'GET' && (/^\/api\/sessions(?:\/[0-9a-z-]{8,64}(?:\/events)?)?$/.test(route.pathname) || route.pathname === '/api/inputs')) {
       const view = await remoteRead(route.pathname.replace('/api/', '/v1/'), route.searchParams); json(res, 200, view); return;
     }
@@ -181,7 +200,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (req.method !== 'GET' || route.search || !/^\/(?:index\.html|assets\/[a-zA-Z0-9_.-]+)?$/.test(route.pathname)) throw new RequestError(404, 'not_found');
   const file = path.join(assetRoot, route.pathname === '/' ? 'index.html' : route.pathname.slice(1));
   const bytes = await fs.readFile(file).catch(() => { throw new RequestError(404, 'not_found'); }); const ext = path.extname(file);
-  res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' } as Record<string, string>)[ext] ?? 'application/octet-stream' }); res.end(bytes);
+  const encoded = await remoteStaticBody(file, bytes, req.headers['accept-encoding']);
+  res.setHeader('Cache-Control', remoteStaticCacheControl(route.pathname));
+  if (encoded.gzip) { res.setHeader('Content-Encoding', 'gzip'); res.setHeader('Vary', 'Accept-Encoding'); }
+  res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' } as Record<string, string>)[ext] ?? 'application/octet-stream' }); res.end(encoded.body);
 }
 async function start(refreshLink = false): Promise<void> {
   if (terminal || listener) return;
@@ -189,7 +211,7 @@ async function start(refreshLink = false): Promise<void> {
   await fs.access(path.join(assetRoot, 'index.html'));
   accessKey = await getSecret('remoteAccessKey');
   if (!accessKey) { accessKey = randomBytes(32).toString('base64url'); await setSecret('remoteAccessKey', accessKey); }
-  auth.activate(accessKey);
+  await auth.activate(accessKey);
   const server = http.createServer((req, res) => {
     void handle(req, res).catch(cause => {
       if (res.headersSent) { res.destroy(); return; }
@@ -210,14 +232,14 @@ async function start(refreshLink = false): Promise<void> {
 }
 async function closeListener(): Promise<void> {
   await retirePlaybacks();
-  ready = false; routeRetry = false; auth.clear(); previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
+  ready = false; routeRetry = false; previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
   const server = listener; listener = null;
   if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   url = null;
 }
 /** The remote-only link is deliberately exposed only through trusted desktop IPC. */
 export function remoteStatus(): RemoteStatus { return { enabled, ready, url: ready && url && accessKey ? `${url}/#${accessKey}` : null, error, devices: auth.list(), ...(enabled && !ready && canRefreshLink ? { canRefreshLink: true } : {}), ...(setup ? { setup } : {}) }; }
-export function revokeRemoteDevice(id: string): void { auth.revoke(z.string().uuid().parse(id)); void retirePlaybacks(id); }
+export async function revokeRemoteDevice(id: string): Promise<void> { const owner = z.string().uuid().parse(id); await auth.revoke(owner); await retirePlaybacks(owner); }
 export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
   const operation = lifecycle.then(async () => {
     clearTimeout(setupRetry); setupRetry = undefined; setup = undefined;
@@ -233,7 +255,7 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
         }
       }
     }
-    else { await closeListener(); canRefreshLink = false; try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
+    else { await closeListener(); await auth.clear(); canRefreshLink = false; try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
     return remoteStatus();
   });
   lifecycle = operation.then(() => undefined, () => undefined); return operation;
@@ -243,7 +265,7 @@ export function refreshRemoteLink(): Promise<RemoteStatus> {
   const operation = lifecycle.then(async () => {
     if (terminal || !enabled || ready || !canRefreshLink) return remoteStatus();
     clearTimeout(setupRetry); setupRetry = undefined; setup = undefined;
-    await closeListener();
+    await closeListener(); await auth.clear();
     try { await start(true); }
     catch (cause) { error = (cause as Error).message; canRefreshLink = cause instanceof RemoteRouteConflict; }
     return remoteStatus();

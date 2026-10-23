@@ -1,6 +1,7 @@
 import type { ChatSchedule } from '../shared/chat-schedules.js';
 import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/workspace-terminal.js';
 import type { RemoteStatus } from '../shared/remote.js';
+import type { TailscaleSetupStep } from '../shared/tailscale-setup.js';
 import type { ApprovalCardView } from '../shared/approval-wait.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
@@ -106,9 +107,9 @@ export interface SessionDetail {
 }
 
 const api = {
-  /** System.Speech is available only through Windows PowerShell. */
-  dictationSupported: process.platform === 'win32',
-  /** Start microphone access only on explicit user action; audio stays in Windows recognizer. */
+  /** Windows uses native speech recognition; Linux uses the local packaged PocketSphinx bridge. */
+  dictationSupported: process.platform === 'win32' || process.platform === 'linux',
+  /** Start microphone access only on explicit user action; raw audio never crosses OneCode IPC. */
   startDictation: () => call<{ status: 'starting' }>('dictation:start'),
   stopDictation: () => call<void>('dictation:stop'),
   onDictationEvent: (listener: (event: DictationEvent) => void): (() => void) => {
@@ -221,6 +222,7 @@ const api = {
     } catch { return { ok: false, error: 'Could not read the attachment' }; }
   },
   attachText: (text: string) => call<InputAttachment>('sessions:attachText', { text }),
+  previewInputAttachment: (id: string) => call<string | null>('sessions:attachmentPreview', { id }),
   getUsage: () => call<UsageOverview>('usage:get'),
   /** Codex's and Claude Code's usage from their logs here; `fresh` skips the 30-second cache. */
   getProviderUsage: (fresh = false) => call<ProviderUsage>('usage:providers', { fresh }),
@@ -247,6 +249,7 @@ const api = {
   connect: () => call<AppState>('connection:connect'),
   disconnect: () => call<AppState>('connection:disconnect'),
   repairTailscale: () => call<AppState>('connection:repairTailscale'),
+  runTailscaleSetup: (step: TailscaleSetupStep) => call<boolean>('connection:tailscaleSetup', step),
   runDiagnostics: () => call<Diagnosis>('diagnostics:run'),
   saveDiagnosticsReport: () => call<{ saved: false } | { saved: true; name: string }>('diagnostics:saveReport'),
   requestDesktopAccessibility: () => call<AppState>('desktop:requestAccessibility'),
@@ -271,7 +274,12 @@ const api = {
   // Applies the update this app has already downloaded and verified: the app quits, the
   // installer runs, and the app comes back as the new version. The displayed version fences
   // stale clicks; only the main process selects verified bytes and the installed target.
-  installUpdate: (version: string) => call<'waiting' | 'restarting'>('update:install', { version }),
+  installUpdate: (version: string, mode: 'when-idle' | 'now' = 'when-idle') => call<'waiting' | 'restarting'>('update:install', { version, mode }),
+  updateWork: (offset = 0) => call<import('../shared/update-work.js').UpdateWorkSnapshot>('update:work', { offset }),
+  stopUpdateProcess: (processId: number, incarnation: number) => call<boolean>('update:stop-process', { processId, incarnation }),
+  inspectTerminalOutput: (processId: number, incarnation: number) => call<{ text: string; retainedBytes: number; previewBytes: number } | null>('update:inspect-output', { processId, incarnation }),
+  exportTerminalOutput: (processId: number, incarnation: number) => call<boolean>('update:export-output', { processId, incarnation }),
+  discardTerminalOutput: (processId: number, incarnation: number) => call<boolean>('update:discard-output', { processId, incarnation }),
   cancelUpdateInstall: () => call<boolean>('update:cancel-install'),
   /** Check/stage/apply supported updates and request one connector refresh round. May restart. */
   updateAll: () => call<import('../shared/types.js').UpdateAllResult>('update:all'),
@@ -426,7 +434,8 @@ const api = {
   /** The person's answer to that exact card; the page presses it only if the card still stands. */
   answerApproval: (id: string, cardId: string, choice: 'allow' | 'deny') =>
     call<{ ok: true } | { ok: false; error: string }>('sessions:answerApproval', { id, cardId, choice }),
-  followSessionTab: (id: string) => call<boolean>('sessions:followTab', { id }),
+  followSessionTab: (id: string) => call<import('../shared/chat-readiness.js').SelectedChatReadiness>('sessions:followTab', { id }),
+  sessionTabReadiness: (id: string) => call<import('../shared/chat-readiness.js').SelectedChatReadiness | null>('sessions:tabReadiness', { id }),
   // Stops a chat this app cannot stop in the page: every tool call it has already been proved
   // to own is refused until it is released. Returns the whole blocked set, so one press
   // repaints without a second read.

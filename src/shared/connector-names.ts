@@ -31,6 +31,15 @@ export function connectorName(surface: ConnectorSurface, suffix: unknown = ''): 
   return tag ? `${plain} ${tag}` : plain;
 }
 
+/**
+ * Linux is an additional physical OneCode device for most existing installs. Give a fresh or
+ * previously-blank Linux connector a distinct provider-visible identity instead of colliding with
+ * the historical unsuffixed Windows connector. An explicit user suffix always wins.
+ */
+export function connectorSuffixForPlatform(value: unknown, platform: NodeJS.Platform): string {
+  return normalizeConnectorSuffix(value) || (platform === 'linux' ? 'Linux' : '');
+}
+
 export function connectorNames(suffix: unknown = ''): Record<ConnectorSurface, string> {
   return { core: connectorName('core', suffix), desktop: connectorName('desktop', suffix), plugins: connectorName('plugins', suffix) };
 }

@@ -5,7 +5,7 @@ import type { RemoteBootstrap, RemotePreferences, RemoteSession, RemoteSessionDe
 import type { ControlApiEvents, ControlApiInput, ControlApiInputs } from '../shared/control-api.js';
 import type { ChatProvider } from '../shared/chat-provider.js';
 import type { ReasoningEffort } from '../shared/session.js';
-import { request, action, setRemoteToken, hasRemoteToken, hasRemoteLink, connectRemote, forgetRemoteLink, RemoteRequestError, RemoteActionError } from './api.js';
+import { request, action, setRemoteToken, hasRemoteToken, hasRemoteLink, connectRemote, reconnectRemote, forgetRemoteLink, RemoteRequestError, RemoteActionError } from './api.js';
 import '../renderer/chat-content.css';
 import './remote.css';
 import './presentations.css';
@@ -17,6 +17,7 @@ import '../renderer/icons.css';
 import type { InputAttachment } from '../shared/input.js';
 import { historyRoute, mergeHistory } from './history.js';
 import { pendingMessages, retireSubmittedDraft, type OptimisticMessage } from './pending-messages.js';
+import { settleRemotePoll } from './poll.js';
 
 type RemoteAppearance = { theme: 'system' | 'dark' | 'light'; textSize: 'default' | 'large' | 'extra' };
 function loadAppearance(): RemoteAppearance {
@@ -72,7 +73,7 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
       <label className="setting"><span>Default model<small>Choices observed on the host provider page.</small></span><select value={draft.defaultChatModel ?? ''} onChange={event => { update('defaultChatModel', event.target.value); update('defaultChatReasoning', undefined); }}><option value="">Automatic</option>{provider.models.models.filter(model => !model.id.endsWith('-current')).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
       {!!defaultModel?.efforts.length && <label className="setting"><span>Thinking effort</span><select value={draft.defaultChatReasoning ?? ''} onChange={event => update('defaultChatReasoning', event.target.value as ReasoningEffort)}><option value="">Provider default</option>{defaultModel.efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label>}
       <label className="setting"><span>Messages during a running task</span><select value={draft.followUp ?? 'steer'} onChange={event => update('followUp', event.target.value as 'steer' | 'queue')}><option value="steer">Send new direction immediately</option><option value="queue">Queue after this turn</option></select></label>{bool('Enter to send', 'enterSends', 'Shift+Enter adds a new line.')}</>}
-    {tab === 'Automation' && <><ScheduledChecks />{bool('Automatic continuation', 'autoContinue', 'Continue eligible interrupted responses.')}{bool('Automatic skill selection', 'autoSelectSkills', 'Choose relevant installed skills for new messages.')}<label className="setting"><span>Rotate long turns after (minutes)<small>0 disables scheduled rotation.</small></span><input type="number" min={0} max={120} value={draft.rotateTurnMinutes ?? 30} onChange={event => update('rotateTurnMinutes', Number(event.target.value))} /></label></>}
+    {tab === 'Automation' && <><ScheduledChecks />{bool('Automatic continuation', 'autoContinue', 'Continue eligible interrupted responses.')}{bool('Automatic skill selection', 'autoSelectSkills', 'Choose relevant installed skills for new messages.')}<label className="setting"><span>Rotate long turns after (minutes)<small>0 disables scheduled rotation.</small></span><input type="number" min={0} max={120} value={draft.rotateTurnMinutes ?? 0} onChange={event => update('rotateTurnMinutes', Number(event.target.value))} /></label></>}
     {tab === 'Workspace' && <>{bool('Background chats', 'backgroundChats', 'Open app-created provider chats in the background.')}<label className="setting"><span>Background placement</span><select value={draft.backgroundPlacement ?? 'window'} onChange={event => update('backgroundPlacement', event.target.value as 'window' | 'group')}><option value="window">Separate window</option><option value="group">Browser tab group</option></select></label><label className="setting"><span>Provider tabs to retain</span><input type="number" min={1} max={50} value={draft.tabsToKeepOpen ?? 8} onChange={event => update('tabsToKeepOpen', Number(event.target.value))} /></label></>}
     {tab === 'Appearance' && <><label className="setting"><span>Remote theme<small>This browser</small></span><select value={browser.theme} onChange={event => { setBrowser(value => ({ ...value, theme: event.target.value as RemoteAppearance['theme'] })); setMessage('Unsaved changes'); }}><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="setting"><span>Text size<small>This browser</small></span><select value={browser.textSize} onChange={event => { setBrowser(value => ({ ...value, textSize: event.target.value as RemoteAppearance['textSize'] })); setMessage('Unsaved changes'); }}><option value="default">Default</option><option value="large">Large</option><option value="extra">Extra large</option></select></label><label className="setting"><span>Host theme</span><select value={draft.theme ?? 'dark'} onChange={event => update('theme', event.target.value as 'dark' | 'light')}><option value="dark">Dark</option><option value="light">Light</option></select></label>{bool('Follow new output', 'followOutput', 'Stop following when you scroll up.')}</>}
     {tab === 'Notifications' && bool('Task completion notifications', 'turnNotifications', 'Completion notifications on the host PC.')}
@@ -111,17 +112,28 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
     const seenPresentations = new Set<string>(); let historyInitialized = false, historyFrom: number | undefined;
     const poll = async () => {
-      try {
+      const fresh = () => !controller.signal.aborted && selectedRef.current === selected;
+      const tasks: Array<() => Promise<void>> = [];
+      tasks.push(async () => {
         // Keep each browser below the host's bounded journal reader limit.
         const list = await request<RemoteSessionList>('sessions?limit=50', undefined, controller.signal);
-        const queued = await request<ControlApiInputs>('inputs?limit=200', undefined, controller.signal);
-        const snapshot = selected ? await request<RemoteSessionDetail>(`sessions/${selected}?live=1`, undefined, controller.signal) : null;
-        const history = selected ? await request<ControlApiEvents>(historyRoute(selected, historyFrom), undefined, controller.signal) : null;
-        const bootstrap = await request<RemoteBootstrap>('bootstrap', undefined, controller.signal);
-        if (controller.signal.aborted || selectedRef.current !== selected) return;
+        if (!fresh()) return;
         setSessions(previous => [...list.sessions.filter(row => row.conversationId || row.origin?.kind === 'desktop'), ...previous.filter(row => !list.sessions.some(current => current.id === row.id))]);
         if (!listLoaded.current) { listLoaded.current = true; setNextCursor(list.nextCursor); }
-        setBootstrap(bootstrap); setInputs(queued.inputs); setDetail(snapshot); setConnected(true); setError('');
+      });
+      tasks.push(async () => {
+        const queued = await request<ControlApiInputs>('inputs?limit=200', undefined, controller.signal);
+        if (!fresh()) return;
+        setInputs(queued.inputs);
+        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); retireSubmittedDraft(drafts.current, attachmentDrafts.current, pendingTarget.current, pendingDraft.current); if (composerKeyRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) { setDraft(''); setAttachments([]); } if (input.deliveredSessionId ?? input.sessionId) setSelected(input.deliveredSessionId ?? input.sessionId); } setNotice(''); } }
+      });
+      if (selected) tasks.push(async () => {
+        const snapshot = await request<RemoteSessionDetail>(`sessions/${selected}?live=1`, undefined, controller.signal);
+        if (fresh()) setDetail(snapshot);
+      });
+      if (selected) tasks.push(async () => {
+        const history = await request<ControlApiEvents>(historyRoute(selected, historyFrom), undefined, controller.signal);
+        if (!fresh()) return;
         if (history) {
           for (const event of history.events) if (event.presentation?.openId) {
             const id = event.presentation.openId;
@@ -132,15 +144,22 @@ function Workspace({ disconnect }: { disconnect(): void }) {
           historyInitialized = true; historyFrom = history.nextFrom;
           setEvents(previous => mergeHistory(previous, history.events));
         }
-        if (pendingRef.current) { const input = queued.inputs.find(row => row.id === pendingRef.current); if (input) { setOptimistic(rows => rows.map(row => row.id === input.id ? { ...row, sessionId: input.deliveredSessionId ?? input.sessionId, receipt: input } : row)); setPending(null); setSending(false); retireSubmittedDraft(drafts.current, attachmentDrafts.current, pendingTarget.current, pendingDraft.current); if (composerKeyRef.current === pendingTarget.current) { if (draftRef.current === pendingDraft.current) { setDraft(''); setAttachments([]); } if (input.deliveredSessionId ?? input.sessionId) setSelected(input.deliveredSessionId ?? input.sessionId); } setNotice(''); } }
-      } catch (error) { if (!controller.signal.aborted) {
-        const failed = error as Error;
-        if (failed instanceof RemoteRequestError && failed.status === 503 && failed.message === 'busy') return;
+      });
+      tasks.push(async () => {
+        const value = await request<RemoteBootstrap>('bootstrap', undefined, controller.signal);
+        if (fresh()) setBootstrap(value);
+      });
+      const failures = await settleRemotePoll(tasks);
+      if (!fresh()) return;
+      const relevant = failures.filter(error => !(error instanceof RemoteRequestError && error.status === 503 && error.message === 'busy'));
+      if (relevant.length) {
+        const failed = (relevant.find(error => !(error instanceof RemoteRequestError) || error.status === 401 || error.status >= 500) ?? relevant[0]) as Error;
         // A rejected history query is an application error, not a lost transport.
         if (!(failed instanceof RemoteRequestError) || failed.status === 401 || failed.status >= 500) setConnected(false);
+        else setConnected(true);
         setError(failed.message === 'invalid_query' ? 'Chat history could not load. Reload this page to use the updated client.' : failed.message);
-      } }
-      finally { if (!controller.signal.aborted) timer = setTimeout(() => { void poll(); }, 2500); }
+      } else if (!failures.length) { setConnected(true); setError(''); }
+      if (!controller.signal.aborted) timer = setTimeout(() => { void poll(); }, 2500);
     };
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [selected]);
@@ -152,6 +171,8 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     attachmentDrafts.current.set(composerKey, attachments); setAttachments(attachmentDrafts.current.get(nextKey) ?? []); setMode('off'); setModeChanged(false);
     drafts.current.set(composerKey, draft); setSelected(id); setDetail(null); setEvents([]); setNextBefore(null); setLoadingEarlier(false); setNotice(''); setPlan(plans.current.get(nextKey) ?? null); setDraft(drafts.current.get(nextKey) ?? ''); setView('chat'); setModel(''); setEffort(''); setModelEdited(false); setEditing(false); following.current = true;
     if (id === null) setProvider(bootstrap?.preferences.chatProvider ?? null);
+    else void action<import('../shared/chat-readiness.js').SelectedChatReadiness>({ action: 'selectChat', id: crypto.randomUUID(), sessionId: id })
+      .catch(error => { if (selectedRef.current === id) setError((error as Error).message); });
   }
   const currentDetail = detail?.session.id === selected ? detail : null;
   const summary = currentDetail?.session ?? sessions.find(row => row.id === selected), activeTurn = currentDetail?.live?.activeTurnId ?? null;
@@ -274,6 +295,11 @@ function Workspace({ disconnect }: { disconnect(): void }) {
         </div>
       </div><div className="composer-area"><div className="status" role="status">{pending ? 'Checking delivery…' : sending || delivering ? 'Sending…' : activeTurn ? 'Working' : 'Ready'}{notice ? ` · ${notice}` : ''}</div>{inputs.filter(input => input.sessionId === selected && !input.automatic && input.state === 'queued' && input.delivery === 'pending' && ['after-turn', 'finish'].includes(input.mode)).map(input => <div className="queued" key={input.id}><span>Queued after this turn</span><button onClick={() => { void mutate({ action: 'cancel', inputId: input.id }); }}>Cancel</button></div>)}
         <CurrentPlan sessionId={selected} plan={currentDetail?.plan} />
+        {currentDetail?.providerReadiness && currentDetail.providerReadiness.phase !== 'ready' && <p className="status" role="status">{
+          currentDetail.providerReadiness.phase === 'history-wait' ? `Waiting for provider history until ${new Date(currentDetail.providerReadiness.retryAt ?? Date.now()).toLocaleTimeString()}…`
+            : currentDetail.providerReadiness.phase === 'refused' ? currentDetail.providerReadiness.reason ?? 'Provider tab is unavailable.'
+              : currentDetail.providerReadiness.phase === 'reconnecting' ? 'Reconnecting provider tab…' : 'Loading provider tab…'
+        }</p>}
         {activePlan && <section className="prepared-plan" aria-label="Prepared task plan"><header><Icon name="plan" /><strong>{activePlan.busy ? 'Creating plan…' : activePlan.stages ? 'Plan ready' : 'Plan mode'}</strong><button type="button" aria-label="Cancel plan" onClick={togglePlan}>×</button></header>
           {activePlan.error && <p role="alert">{activePlan.error}</p>}
           {activePlan.unconfirmed && <button type="button" onClick={async () => {
@@ -320,6 +346,12 @@ function App() {
   }, []);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(hasRemoteLink() || hasRemoteToken()), [error, setError] = useState('');
+  const reconnect = async () => {
+    setConnecting(true); setError('');
+    try { await reconnectRemote(); setConnected(true); }
+    catch (cause) { setError((cause as Error).message); }
+    finally { setConnecting(false); }
+  };
   useEffect(() => {
     if (!hasRemoteLink() && !hasRemoteToken()) return;
     void connectRemote().then(() => setConnected(true))
@@ -327,6 +359,6 @@ function App() {
   }, []);
   return connected ? <Workspace disconnect={() => { forgetRemoteLink(); setConnected(false); }} />
     : <main className="pair"><div className="brand">◈ OneCode <small>Remote</small></div><h1>{connecting ? 'Connecting…' : 'Open your remote link'}</h1>
-      {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>{error && (hasRemoteLink() || hasRemoteToken()) && <button onClick={() => location.reload()}>Reconnect</button>}</>}</main>;
+      {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>{error && hasRemoteLink() && <button onClick={() => void reconnect()}>Reconnect</button>}</>}</main>;
 }
 createRoot(document.getElementById('root')!).render(<App />);

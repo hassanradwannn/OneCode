@@ -12,12 +12,11 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { mcpProvider } from '../mcp/provider-context.js';
 import { INPUT_RECEIPT_WAIT_MS } from '../../shared/input.js';
+import { authorityInstallationId } from '../secrets.js';
 
 const CONVERSATION = /^[a-f0-9]{16}$/;
 const KEY = /^sk-gemini-session-[A-Za-z0-9_-]{43}$/;
 const HASH = /^[a-f0-9]{64}$/;
-const LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
-const RENEW_WITHIN_MS = 60 * 60 * 1000;
 const MAX_BINDINGS = 20_000;
 const MAX_LEDGER_BYTES = 8 * 1024 * 1024;
 /** The actual task's browser receipt normally precedes its first native tool call. */
@@ -36,7 +35,8 @@ interface BindingRow {
   sessionId: string;
   keyHash: string;
   issuedAt: number;
-  expiresAt: number;
+  /** Read only when migrating v1; time is never an authorization fence. */
+  expiresAt?: number;
   revoked: boolean;
   /** Dormant until the existing bridge command publishes its real Send receipt. */
   pendingCommand?: GeminiBindingCommand;
@@ -46,7 +46,7 @@ interface BindingRow {
   handoff?: GeminiBindingHandoff;
   inputTurn?: GeminiInputTurn;
 }
-interface BindingLedger { version: 1; bindings: BindingRow[] }
+interface BindingLedger { version: 1 | 3; installationId?: string; bindings: BindingRow[] }
 export interface GeminiBindingCredential {
   conversation_id: string;
   session_key: string;
@@ -69,9 +69,14 @@ export class GeminiBindingError extends Error {
 }
 let ledgerPath = '';
 let ready = false;
+let installationId = '';
 let rows = new Map<string, BindingRow>();
 const issuedKeys = new Map<string, string>();
 let tail: Promise<unknown> = Promise.resolve();
+const INIT_RETRY_INTERVAL_MS = 1_000;
+let initializationDirectory = '';
+let initInFlight: Promise<void> | null = null;
+let lastInitAttemptAt = 0;
 function fail(code: string): never { throw new GeminiBindingError(code); }
 const hash = (key: string): Buffer => createHash('sha256').update(key).digest();
 
@@ -80,7 +85,7 @@ function serialized<T>(body: () => Promise<T>): Promise<T> {
   tail = work.then(() => undefined, () => undefined);
   return work;
 }
-function validRow(value: unknown): value is BindingRow {
+function validRow(value: unknown, legacy = false): value is BindingRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as BindingRow;
   return typeof row.id === 'string' && /^[a-f0-9-]{36}$/.test(row.id) &&
@@ -88,8 +93,8 @@ function validRow(value: unknown): value is BindingRow {
     typeof row.sessionId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(row.sessionId) &&
     typeof row.keyHash === 'string' && HASH.test(row.keyHash) &&
     Number.isSafeInteger(row.issuedAt) && row.issuedAt > 0 &&
-    Number.isSafeInteger(row.expiresAt) && row.expiresAt > row.issuedAt &&
-    row.expiresAt - row.issuedAt <= LIFETIME_MS && typeof row.revoked === 'boolean' &&
+    (legacy ? Number.isSafeInteger(row.expiresAt) && row.expiresAt! > row.issuedAt && row.expiresAt! - row.issuedAt <= 7 * 24 * 60 * 60 * 1000
+      : row.expiresAt === undefined) && typeof row.revoked === 'boolean' &&
     (row.pendingCommand === undefined || (typeof row.pendingCommand === 'object' && row.pendingCommand !== null &&
       typeof row.pendingCommand.id === 'string' && /^[a-f0-9]{16}$/.test(row.pendingCommand.id) &&
       typeof row.pendingCommand.owner === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(row.pendingCommand.owner) &&
@@ -114,34 +119,109 @@ function validRow(value: unknown): value is BindingRow {
       typeof row.inputTurn.turnId === 'string' && row.inputTurn.turnId.length > 0 && row.inputTurn.turnId.length <= 256));
 }
 
-/** Await after initSessionStore. Corruption fails closed; it never becomes a fresh grant. */
-export async function initGeminiBindings(userDataDir: string): Promise<void> {
-  await serialized(async () => {
+/** Await after initSessionStore. Corruption fails closed; retry only repeats validation/read. */
+export function initGeminiBindings(userDataDir: string): Promise<void> {
+  initializationDirectory = userDataDir;
+  ledgerPath = path.join(userDataDir, 'state', 'gemini-bindings.json');
+  if (initInFlight) return initInFlight;
+  if (!ready && Date.now() - lastInitAttemptAt < INIT_RETRY_INTERVAL_MS)
+    return Promise.reject(new GeminiBindingError('GEMINI_BINDING_STATE_UNAVAILABLE'));
+  lastInitAttemptAt = Date.now();
+  const initializing = serialized(async () => {
     ready = false;
     issuedKeys.clear();
     rows = new Map();
-    ledgerPath = path.join(userDataDir, 'state', 'gemini-bindings.json');
+    installationId = await authorityInstallationId();
     let raw: string;
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      const stat = await fs.stat(ledgerPath);
-      if (!stat.isFile() || stat.size > MAX_LEDGER_BYTES) fail('GEMINI_BINDING_STATE_INVALID');
-      raw = await fs.readFile(ledgerPath, 'utf8');
-      if (Buffer.byteLength(raw) > MAX_LEDGER_BYTES) fail('GEMINI_BINDING_STATE_INVALID');
+      stat = await fs.stat(ledgerPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') { ready = true; return; }
       fail('GEMINI_BINDING_STATE_UNAVAILABLE');
     }
+    if (!stat!.isFile() || stat!.size > MAX_LEDGER_BYTES) fail('GEMINI_BINDING_STATE_INVALID');
+    try {
+      raw = await fs.readFile(ledgerPath, 'utf8');
+      if (Buffer.byteLength(raw) > MAX_LEDGER_BYTES) fail('GEMINI_BINDING_STATE_INVALID');
+    } catch (error) {
+      if (error instanceof GeminiBindingError) throw error;
+      // The ledger existed at stat time; a failed read is uncertain state, never a fresh install.
+      fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+    }
     let data: BindingLedger;
     try { data = JSON.parse(raw!) as BindingLedger; } catch { fail('GEMINI_BINDING_STATE_INVALID'); }
-    if (!data! || data!.version !== 1 || !Array.isArray(data!.bindings) || data!.bindings.length > MAX_BINDINGS ||
-        !data!.bindings.every(validRow)) fail('GEMINI_BINDING_STATE_INVALID');
-    const restored = new Map(data!.bindings.map(row => [row.conversationId, row]));
-    if (restored.size !== data!.bindings.length || new Set(data!.bindings.map(row => row.id)).size !== restored.size) {
+    if (!data! || ![1, 3].includes(data!.version) || !Array.isArray(data!.bindings) || data!.bindings.length > MAX_BINDINGS ||
+        !data!.bindings.every(row => validRow(row, data!.version === 1))) fail('GEMINI_BINDING_STATE_INVALID');
+    if (data!.version === 3 && data!.installationId !== installationId) fail('GEMINI_BINDING_STATE_INVALID');
+    const restoredRows: BindingRow[] = [];
+    for (const row of data!.bindings) {
+      if (data!.version === 1) {
+        const { expiresAt: _legacyExpiry, ...permanent } = row;
+        if (await legacyProofIsCurrent(permanent)) restoredRows.push(permanent);
+      } else restoredRows.push(row);
+    }
+    const restored = new Map(restoredRows.map(row => [row.conversationId, row]));
+    if (restored.size !== restoredRows.length || new Set(data!.bindings.map(row => row.id)).size !== data!.bindings.length) {
       fail('GEMINI_BINDING_STATE_INVALID');
     }
-    rows = restored;
-    ready = true;
+    if (data!.version === 1) {
+      ready = true;
+      try { await persist(restored); } catch (error) { ready = false; throw error; }
+    } else { rows = restored; ready = true; }
   });
+  initInFlight = initializing;
+  void initializing.finally(() => { if (initInFlight === initializing) initInFlight = null; }).catch(() => undefined);
+  return initializing;
+}
+
+/**
+ * A v1 hash alone is not enough to recover authority. Migrate only task-scoped grants whose
+ * original accepted receipt still belongs to this exact attached conversation and session.
+ * This also prevents a stale grant from attaching itself to a successor task after an update.
+ */
+async function legacyProofIsCurrent(row: BindingRow): Promise<boolean> {
+  if (row.revoked) return false;
+  try {
+    await sessionFor(row.conversationId, row.sessionId);
+    if (row.input) {
+      if (!row.inputTurn) return false;
+      const status = await (await import('../session/input.js')).geminiInputBindingStatus(row.input, row.conversationId, row.sessionId);
+      if (status.state === 'pending') fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+      return status.state === 'ready' && sameInputTurn(status.turn, row.inputTurn);
+    }
+    if (row.goal) {
+      if (!row.inputTurn) return false;
+      const status = await (await import('../goal.js')).geminiGoalBindingStatus(row.goal, row.conversationId, row.sessionId);
+      if (status.state === 'pending') fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+      return status.state === 'ready' && sameInputTurn(status.turn, row.inputTurn);
+    }
+    if (row.handoff) {
+      const status = await (await import('../session/continuation.js')).geminiHandoffBindingStatus(row.handoff, row.conversationId, row.sessionId);
+      if (status === 'pending') fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+      return status === 'ready';
+    }
+    if (row.pendingCommand) {
+      const status = await (await import('../bridge.js')).geminiCommandBindingStatus(row.pendingCommand, row.conversationId, row.sessionId);
+      if (status === 'pending') fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+      return status === 'committed';
+    }
+  } catch (error) {
+    // A stale attachment or an explicitly invalidated task is safe to omit during
+    // migration. Storage/owner read failures are uncertain: keep the original v1
+    // ledger untouched and retry migration after its proof source is available.
+    if (error instanceof GeminiBindingError && ['GEMINI_SESSION_NOT_ATTACHED', 'GEMINI_SESSION_NOT_AUTHORIZED',
+      'GEMINI_INPUT_NOT_OWNED', 'GEMINI_GOAL_NOT_OWNED', 'GEMINI_HANDOFF_NOT_OWNED', 'GEMINI_COMMAND_NOT_OWNED'].includes(error.code)) return false;
+    throw new GeminiBindingError('GEMINI_BINDING_STATE_UNAVAILABLE');
+  }
+  return false;
+}
+
+async function ensureGeminiBindingsReady(): Promise<void> {
+  if (ready) return;
+  if (!initializationDirectory) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+  await initGeminiBindings(initializationDirectory);
+  if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
 }
 
 /** True also while a failed initialization is quarantined: callers must not fall back. */
@@ -149,7 +229,7 @@ export function geminiBindingsEnabled(): boolean { return ledgerPath !== '' && m
 
 async function persist(next: Map<string, BindingRow>): Promise<void> {
   if (!ready || !ledgerPath) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
-  const body = JSON.stringify({ version: 1, bindings: [...next.values()] } satisfies BindingLedger);
+  const body = JSON.stringify({ version: 3, installationId, bindings: [...next.values()] } satisfies BindingLedger);
   if (Buffer.byteLength(body) > MAX_LEDGER_BYTES) fail('GEMINI_BINDING_LIMIT');
   const temp = `${ledgerPath}.${randomUUID()}.tmp`;
   try {
@@ -181,6 +261,7 @@ async function sessionFor(conversationId: string, requested?: string): Promise<s
 
 async function issue(conversationId: string, requested: string | undefined, rotate: boolean,
   pendingCommand?: GeminiBindingCommand, input?: GeminiBindingInput, goal?: GeminiBindingGoal, handoff?: GeminiBindingHandoff): Promise<GeminiBindingCredential> {
+  await ensureGeminiBindingsReady();
   return serialized(async () => {
     if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
     let sessionId: string;
@@ -199,7 +280,7 @@ async function issue(conversationId: string, requested: string | undefined, rota
         fail('GEMINI_COMMAND_NOT_OWNED');
       if (previous.handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(previous.handoff, conversationId, sessionId) === 'invalid')
         fail('GEMINI_HANDOFF_NOT_OWNED');
-      if (previous.revoked || previous.sessionId !== sessionId || !cached || previous.expiresAt <= Date.now()) fail(previous.pendingCommand ? 'GEMINI_COMMAND_BINDING_REQUIRED' : previous.handoff ? 'GEMINI_HANDOFF_BINDING_REQUIRED' : previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
+      if (previous.revoked || previous.sessionId !== sessionId || !cached) fail(previous.pendingCommand ? 'GEMINI_COMMAND_BINDING_REQUIRED' : previous.handoff ? 'GEMINI_HANDOFF_BINDING_REQUIRED' : previous.goal ? 'GEMINI_GOAL_BINDING_REQUIRED' : 'GEMINI_INPUT_BINDING_REQUIRED');
       return { conversation_id: conversationId, session_key: cached, session_id: sessionId };
     }
     if (input) {
@@ -215,15 +296,14 @@ async function issue(conversationId: string, requested: string | undefined, rota
         previous.input?.browser === input?.browser && previous.input?.offeredAt === input?.offeredAt &&
         previous.goal?.id === goal?.id && previous.goal?.token === goal?.token && previous.goal?.client === goal?.client &&
         previous.goal?.browser === goal?.browser && previous.goal?.tabId === goal?.tabId && previous.goal?.documentId === goal?.documentId &&
-        JSON.stringify(previous.handoff) === JSON.stringify(handoff) &&
-        previous.expiresAt > Date.now() + RENEW_WITHIN_MS) {
+        JSON.stringify(previous.handoff) === JSON.stringify(handoff)) {
       return { conversation_id: conversationId, session_key: cached, session_id: sessionId };
     }
     if (!previous && rows.size >= MAX_BINDINGS) fail('GEMINI_BINDING_LIMIT');
     const key = `sk-gemini-session-${randomBytes(32).toString('base64url')}`;
     const now = Date.now();
     const row: BindingRow = { id: randomUUID(), conversationId, sessionId, keyHash: hash(key).toString('hex'),
-      issuedAt: now, expiresAt: now + LIFETIME_MS, revoked: false, ...(pendingCommand ? { pendingCommand } : {}), ...(input ? { input } : {}), ...(goal ? { goal } : {}), ...(handoff ? { handoff } : {}) };
+      issuedAt: now, revoked: false, ...(pendingCommand ? { pendingCommand } : {}), ...(input ? { input } : {}), ...(goal ? { goal } : {}), ...(handoff ? { handoff } : {}) };
     const next = new Map(rows); next.set(conversationId, row);
     await persist(next);
     issuedKeys.set(conversationId, key);
@@ -256,6 +336,7 @@ export function prepareGeminiHandoffBinding(conversationId: string, sessionId: s
   return issue(conversationId, sessionId, false, undefined, undefined, undefined, handoff);
 }
 export async function revokeGeminiBinding(conversationId: string): Promise<void> {
+  await ensureGeminiBindingsReady();
   await serialized(async () => {
     if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
     const row = rows.get(conversationId);
@@ -271,7 +352,7 @@ function currentRow(evidence: GeminiBindingEvidence): BindingRow | null {
   return row && row.id === evidence.bindingId && row.sessionId === evidence.sessionId &&
     !row.pendingCommand && (!(row.input || row.goal) || !!row.inputTurn) && sameInputTurn(row.inputTurn, evidence.inputTurn) &&
     JSON.stringify(row.handoff) === JSON.stringify(evidence.handoff) &&
-    !row.revoked && row.expiresAt > Date.now() ? row : null;
+    !row.revoked ? row : null;
 }
 const sameInputTurn = (left?: GeminiInputTurn, right?: GeminiInputTurn) =>
   left?.inputId === right?.inputId && left?.messageId === right?.messageId && left?.historySeq === right?.historySeq && left?.turnId === right?.turnId;
@@ -284,14 +365,14 @@ async function activateInputBinding(row: BindingRow): Promise<void> {
   const deadline = performance.now() + GEMINI_INPUT_TURN_WAIT_MS;
   for (;;) {
     const current = rows.get(row.conversationId);
-    if (current?.id !== row.id || current.revoked || current.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+    if (current?.id !== row.id || current.revoked) fail('GEMINI_SESSION_NOT_AUTHORIZED');
     if (current.inputTurn) return;
     const status = await statusFor();
     if (status.state === 'invalid') fail(row.goal ? 'GEMINI_GOAL_NOT_OWNED' : 'GEMINI_INPUT_NOT_OWNED');
     if (status.state === 'ready') {
       await serialized(async () => {
         const live = rows.get(row.conversationId);
-        if (live?.id !== row.id || live.revoked || live.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+        if (live?.id !== row.id || live.revoked) fail('GEMINI_SESSION_NOT_AUTHORIZED');
         const exact = await statusFor();
         if (exact.state !== 'ready' || !sameInputTurn(exact.turn, status.turn)) fail(row.goal ? 'GEMINI_GOAL_NOT_OWNED' : 'GEMINI_INPUT_NOT_OWNED');
         await sessionFor(live.conversationId, live.sessionId);
@@ -311,14 +392,14 @@ async function activateCommandBinding(row: BindingRow): Promise<void> {
   const deadline = performance.now() + GEMINI_COMMAND_ACK_WAIT_MS;
   for (;;) {
     const current = rows.get(row.conversationId);
-    if (current?.id !== row.id || current.revoked || current.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+    if (current?.id !== row.id || current.revoked) fail('GEMINI_SESSION_NOT_AUTHORIZED');
     if (!current.pendingCommand) return;
     const status = await geminiCommandBindingStatus(current.pendingCommand, row.conversationId, row.sessionId);
     if (status === 'invalid') fail('GEMINI_COMMAND_NOT_OWNED');
     if (status === 'committed') {
       await serialized(async () => {
         const live = rows.get(row.conversationId);
-        if (live?.id !== row.id || live.revoked || live.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+        if (live?.id !== row.id || live.revoked) fail('GEMINI_SESSION_NOT_AUTHORIZED');
         if (!live.pendingCommand) return;
         if (await geminiCommandBindingStatus(live.pendingCommand, live.conversationId, live.sessionId) !== 'committed') fail('GEMINI_COMMAND_NOT_OWNED');
         await sessionFor(live.conversationId, live.sessionId);
@@ -337,13 +418,15 @@ export function geminiBindingIsCurrent(evidence: GeminiBindingEvidence): boolean
 
 /** Receipt settlement only: an ended admitted turn cannot authorize another handler. */
 export async function validateGeminiBindingReceiptEvidence(evidence: GeminiBindingEvidence): Promise<void> {
-  if (!currentRow(evidence)) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+  await ensureGeminiBindingsReady();
+  if (!currentRow(evidence)) fail('GEMINI_SESSION_NOT_AUTHORIZED');
   await sessionFor(evidence.conversationId, evidence.sessionId);
-  if (!currentRow(evidence)) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+  if (!currentRow(evidence)) fail('GEMINI_SESSION_NOT_AUTHORIZED');
 }
 
 export async function validateGeminiBindingEvidence(evidence: GeminiBindingEvidence): Promise<void> {
-  if (!currentRow(evidence)) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+  await ensureGeminiBindingsReady();
+  if (!currentRow(evidence)) fail('GEMINI_SESSION_NOT_AUTHORIZED');
   const { getSession, findSessionByConversation, conversationAttachment } = await import('../session/store.js');
   const session = await getSession(evidence.sessionId);
   if (!session || session.conversationId !== evidence.conversationId ||
@@ -363,12 +446,12 @@ export async function validateGeminiBindingEvidence(evidence: GeminiBindingEvide
   }
   if (scoped?.handoff && await (await import('../session/continuation.js')).geminiHandoffBindingStatus(scoped.handoff, scoped.conversationId, scoped.sessionId) !== 'ready')
     fail('GEMINI_HANDOFF_NOT_OWNED');
-  if (!currentRow(evidence)) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+  if (!currentRow(evidence)) fail('GEMINI_SESSION_NOT_AUTHORIZED');
 }
 
 /** Outer HTTP calls only; neither RPC id nor transport headers are conversation proof. */
 export async function authenticateGeminiBinding(args: unknown): Promise<GeminiBindingEvidence> {
-  if (!ready) fail('GEMINI_BINDING_STATE_UNAVAILABLE');
+  await ensureGeminiBindingsReady();
   if (!args || typeof args !== 'object' || Array.isArray(args)) fail('GEMINI_SESSION_BINDING_REQUIRED');
   const input = args as Record<string, unknown>;
   if (typeof input.conversation_id !== 'string' || !CONVERSATION.test(input.conversation_id) ||
@@ -385,7 +468,7 @@ export async function authenticateGeminiBinding(args: unknown): Promise<GeminiBi
     const deadline = performance.now() + GEMINI_INPUT_TURN_WAIT_MS;
     for (;;) {
       const current = rows.get(conversationId);
-      if (current?.id !== row.id || current.revoked || current.expiresAt <= Date.now()) fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED');
+      if (current?.id !== row.id || current.revoked) fail('GEMINI_SESSION_NOT_AUTHORIZED');
       const status = await (await import('../session/continuation.js')).geminiHandoffBindingStatus(row.handoff, row.conversationId, row.sessionId);
       if (status === 'ready') break;
       if (status === 'invalid') fail('GEMINI_HANDOFF_NOT_OWNED');
@@ -423,5 +506,5 @@ export async function consumeInheritedGeminiRouting(args: unknown, evidence: Gem
 /** Test lifetime only. Production revocation always uses its durable owner above. */
 export async function resetGeminiBindingsForTests(): Promise<void> {
   await tail;
-  ready = false; ledgerPath = ''; rows = new Map(); issuedKeys.clear();
+  ready = false; ledgerPath = ''; initializationDirectory = ''; initInFlight = null; lastInitAttemptAt = 0; rows = new Map(); issuedKeys.clear();
 }

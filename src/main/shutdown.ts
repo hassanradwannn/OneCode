@@ -34,6 +34,8 @@ export interface ShutdownPhase {
   readonly budgetMs: number;
   /** Starts the phase's work. Called once, only when the phase is reached. */
   readonly run: () => Array<Promise<unknown>>;
+  /** Irreversible handoffs require every preceding phase to have completed successfully. */
+  readonly requiresSuccessfulPrevious?: boolean;
 }
 
 export interface ShutdownHooks {
@@ -99,7 +101,12 @@ export async function runShutdownSequence(
 }
 
 async function runPhases(phases: readonly ShutdownPhase[], hooks: ShutdownHooks): Promise<void> {
+  const failed: string[] = [];
   for (const phase of phases) {
+    if (phase.requiresSuccessfulPrevious && failed.length) {
+      hooks.error(`shutdown ${phase.name} skipped because prerequisites failed: ${failed.join(', ')}`);
+      continue;
+    }
     hooks.info(`shutdown ${phase.name} starting`);
     let tasks: Array<Promise<unknown>>;
     try {
@@ -107,14 +114,18 @@ async function runPhases(phases: readonly ShutdownPhase[], hooks: ShutdownHooks)
     } catch (error) {
       // A phase that throws while merely starting its work has produced nothing to wait for.
       hooks.error(`shutdown ${phase.name} failed: ${describe(error)}`);
+      failed.push(phase.name);
       continue;
     }
     const settled = Promise.allSettled(tasks);
     if (await raceDeadline(settled, phase.budgetMs)) {
       hooks.warn(`shutdown ${phase.name} did not finish within ${phase.budgetMs}ms; continuing to quit`);
+      failed.push(phase.name);
       continue;
     }
-    for (const result of await settled) {
+    const results = await settled;
+    if (results.some(result => result.status === 'rejected')) failed.push(phase.name);
+    for (const result of results) {
       if (result.status === 'rejected') hooks.error(`shutdown ${phase.name} failed: ${describe(result.reason)}`);
     }
     hooks.info(`shutdown ${phase.name} done`);

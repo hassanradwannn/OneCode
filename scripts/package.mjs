@@ -42,6 +42,7 @@ for (const arch of arches) {
   run(node, ['scripts/fetch-tunnel-client.mjs', ...targetArgs]);
   run(node, ['scripts/fetch-ripgrep.mjs', ...targetArgs]);
   run(node, ['scripts/fetch-node-runtime.mjs', ...targetArgs]);
+  if (platform === 'linux') run(node, ['scripts/fetch-linux-dictation-runtime.mjs', ...targetArgs]);
   run(node, ['scripts/prepare-packaging-native.mjs', ...targetArgs]);
   run(node, ['scripts/prepare-macos-desktop-helper.mjs', ...targetArgs]);
 

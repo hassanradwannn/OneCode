@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 import type { TailscaleStatus } from '../../shared/types.js';
@@ -28,6 +29,8 @@ export interface FunnelCustody { version: 1; nodeId: string; dnsName: string; po
 interface Dependencies {
   run(binary: string, args: string[]): Promise<string>;
   locate(hint: string): string | null;
+  platform: NodeJS.Platform;
+  username(): string;
   stateDir: string;
   relay(origin: string, publicHost: string, publicMount: string): Promise<TailscaleRelay>;
   probe(url: string, signal: AbortSignal): Promise<FunnelPublicResult>;
@@ -208,6 +211,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
   const startedAt = performance.now();
   const startupTiming = (stage: string) => logInfo(`OneCode Funnel startup stage=${stage} elapsedMs=${Math.round(performance.now() - startedAt)}`);
   const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
+    platform: process.platform, username: () => os.userInfo().username,
     probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, repair: restartWindowsTailscale, ...overrides };
   let repairing: Promise<void> | null = null, transportEpoch = 0;
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
@@ -267,6 +271,19 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
     if (!version || Number(version[1]) < 1 || (Number(version[1]) === 1 && Number(version[2]) < 52)) throw new FunnelSetupError('Install Tailscale 1.52 or newer before using OneCode Funnel.');
     check.version = version[0];
     startupTiming('cli-ready');
+    if (deps.platform === 'linux') {
+      const username = deps.username().trim();
+      if (!/^[A-Za-z0-9._-]{1,64}$/.test(username)) throw new FunnelSetupError('The current Linux user name cannot be authorized as a Tailscale operator.');
+      const operator = (await readTailscaleDaemon(() => deps.run(binary, ['get', 'operator']))).trim();
+      if (operator !== username) {
+        const problem = new TailscaleSetupRequired('operator', operator
+          ? `Tailscale currently authorizes “${operator}” for route changes. Approve this Linux user before OneCode publishes its Funnel path.`
+          : 'Tailscale needs to authorize this Linux user before OneCode can publish its Funnel path. Approve the system authorization prompt.');
+        check.setup = problem.setup; check.account = 'ready'; check.funnel = 'permission-required';
+        report('connecting-tunnel', problem.message);
+        throw problem;
+      }
+    }
     const [node, before] = await readNative();
     startupTiming('native-ready');
     let previous: FunnelCustody | undefined;
@@ -370,14 +387,16 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       try {
         if (!initial) await verifyNative();
         if (stopped) return;
+        const probeStartedAt = performance.now();
         const result = await deps.probe(publicUrl, publicProbe.signal);
+        const probeElapsedMs = Math.round(performance.now() - probeStartedAt);
         if (stopped || epoch !== transportEpoch) return;
         // A slow public result cannot publish a route whose custody changed meanwhile.
         await verifyNative();
         if (stopped || epoch !== transportEpoch) return;
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
         if (result.state !== previousPublicState) {
-          logInfo(`OneCode Funnel public check state=${result.state} elapsedMs=${Math.round(performance.now() - startedAt)}`);
+          logInfo(`OneCode Funnel public check state=${result.state} probeElapsedMs=${probeElapsedMs} connectionAgeMs=${Math.round(performance.now() - startedAt)}`);
           previousPublicState = result.state;
         }
         if (result.state === 'ready') {
@@ -390,10 +409,21 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
             report('tunnel-unavailable', `${details[result.state]} OneCode will keep checking automatically; the saved route and URL were retained.`, publicUrl);
             delay = deps.watchMs;
           } else {
-            // A transient verification failure is not a fresh connection attempt.
-            // Retain the route during the bounded retry window, without advertising
-            // a failed public connection as Connected. A retry never replays a Send.
-            report('connecting-tunnel', `${details[result.state]} OneCode will recheck without changing the configured routes.`, publicUrl);
+            // Before the first successful public handshake, Setup is still honestly
+            // connecting. After one successful handshake, however, a single DNS/TLS
+            // miss is only a health-check miss: the native route still has exact custody
+            // and may be serving provider traffic at this very moment. Demoting the whole
+            // connection to `connecting-tunnel` here used to withdraw Core publication,
+            // clear the provider route and stall browser delivery even while live MCP
+            // requests continued returning HTTP 200. Keep an established connector live
+            // throughout the bounded retry window; `publicIngress` still carries the
+            // degraded probe state for diagnostics. Only a sustained failure below, or a
+            // failed native-custody verification, is authority to withdraw it.
+            const transientState = firstPublicReady ? 'connected' : 'connecting-tunnel';
+            const transientDetail = firstPublicReady
+              ? `${details[result.state]} The established connector remains published while OneCode rechecks it.`
+              : `${details[result.state]} OneCode will recheck without changing the configured routes.`;
+            report(transientState, transientDetail, publicUrl);
             delay = Math.max(1, Math.round(Math.min(deps.watchMs, deps.watchMs / 3 * 2 ** Math.min(failures - 1, 2))));
           }
         }

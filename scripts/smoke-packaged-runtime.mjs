@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import yaml from 'js-yaml';
-import { NODE_RUNTIME, RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
+import { LINUX_DICTATION_RUNTIME, NODE_RUNTIME, RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
 import { assertWindowsPackageIsolation } from './verify-windows-package.mjs';
 import { normalizeArch, normalizePlatform, PLATFORM_INFO } from './packaging-targets.mjs';
 
@@ -156,7 +156,7 @@ if (targetPlatform === 'win32') {
   }
   const node = JSON.parse(readFileSync(path.join(resourcesDir, 'node/runtime.json'), 'utf8'));
   if (node.version !== NODE_RUNTIME.version || node.arch !== targetArch || node.platform !== 'win32' ||
-      node.sha256 !== NODE_RUNTIME.targets[targetArch].sha256) throw new Error('Packaged Node runtime does not match its official target pin');
+      node.sha256 !== NODE_RUNTIME.targets.win32[targetArch].sha256) throw new Error('Packaged Node runtime does not match its official target pin');
   const binary = readFileSync(path.join(resourcesDir, 'node/node.exe'));
   const pe = binary.readUInt32LE(0x3c);
   if (binary.toString('ascii', 0, 2) !== 'MZ' || binary.toString('ascii', pe, pe + 4) !== 'PE\0\0' ||
@@ -176,6 +176,32 @@ if (targetPlatform === 'win32') {
   required(`app.asar.unpacked/node_modules/@img/sharp-libvips-${targetPlatform}-${targetArch}/versions.json`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/pty.node`);
   if (targetPlatform === 'darwin') required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/spawn-helper`);
+  if (targetPlatform === 'linux') {
+    for (const file of ['bin/node', 'LICENSE', 'SHASUMS256.txt', 'runtime.json', 'lib/node_modules/npm/LICENSE',
+      'lib/node_modules/npm/package.json', 'lib/node_modules/npm/bin/npm-cli.js', 'lib/node_modules/npm/bin/npx-cli.js']) required(`node/${file}`);
+    required('linux/dictation.py');
+    for (const file of [
+      'runtime.json',
+      'lib/libpocketsphinx.so.3',
+      'lib/libsphinxbase.so.3',
+      'model/en-us/cmudict-en-us.dict',
+      'model/en-us/en-us.lm.bin',
+      'model/en-us/en-us/mdef',
+      'licenses/pocketsphinx.copyright',
+      'licenses/sphinxbase.copyright'
+    ]) required(`linux/runtime/${file}`);
+    const dictation = JSON.parse(readFileSync(path.join(resourcesDir, 'linux/runtime/runtime.json'), 'utf8'));
+    if (dictation.id !== LINUX_DICTATION_RUNTIME.id || dictation.arch !== targetArch ||
+        dictation.pythonAbi !== LINUX_DICTATION_RUNTIME.pythonAbi) throw new Error('Packaged Linux dictation runtime does not match its pinned target');
+    const expectedPackages = [...LINUX_DICTATION_RUNTIME.packages[targetArch], LINUX_DICTATION_RUNTIME.packages.model];
+    if (dictation.packages.length !== expectedPackages.length || expectedPackages.some(expected =>
+      !dictation.packages.some(actual => actual.file === expected.file && actual.sha256 === expected.sha256))) {
+      throw new Error('Packaged Linux dictation package inventory does not match its verified pins');
+    }
+    const node = JSON.parse(readFileSync(path.join(resourcesDir, 'node/runtime.json'), 'utf8'));
+    if (node.version !== NODE_RUNTIME.version || node.arch !== targetArch || node.platform !== 'linux' ||
+        node.sha256 !== NODE_RUNTIME.targets.linux[targetArch].sha256) throw new Error('Packaged Linux Node runtime does not match its official target pin');
+  }
   if (targetPlatform === 'darwin') {
     required('desktop/macos-desktop-addon.node');
     required('desktop/libcos-desktop.dylib');
@@ -245,6 +271,20 @@ if (targetPlatform === 'win32') {
   runExecutable(node, ['-p', 'JSON.stringify({version:process.version,arch:process.arch})'], NODE_RUNTIME.version);
   const metadata = JSON.parse(readFileSync(path.join(resourcesDir, 'node/runtime.json'), 'utf8'));
   runExecutable(node, [path.join(resourcesDir, 'node/node_modules/npm/bin/npm-cli.js'), '--version'], metadata.npm);
+} else if (targetPlatform === 'linux') {
+  const node = path.join(resourcesDir, 'node/bin/node');
+  runExecutable(node, ['-p', 'JSON.stringify({version:process.version,arch:process.arch})'], NODE_RUNTIME.version);
+  const metadata = JSON.parse(readFileSync(path.join(resourcesDir, 'node/runtime.json'), 'utf8'));
+  runExecutable(node, [path.join(resourcesDir, 'node/lib/node_modules/npm/bin/npm-cli.js'), '--version'], metadata.npm);
+  const dictation = spawnSync('/usr/bin/python3', ['-S', path.join(resourcesDir, 'linux/dictation.py'),
+    '--runtime-root', path.join(resourcesDir, 'linux/runtime'), '--check'], {
+    cwd: packageRoot, encoding: 'utf8', timeout: 20_000
+  });
+  if (dictation.error) throw dictation.error;
+  if (dictation.status !== 0) throw new Error(`Packaged Linux dictation check failed: ${dictation.stderr || dictation.stdout}`);
+  const check = JSON.parse(dictation.stdout.trim().split(/\r?\n/).at(-1));
+  if (check.ok !== true || check.engine !== 'pocketsphinx' || check.runtime !== 'bundled')
+    throw new Error(`Packaged Linux dictation did not use its bundled recognizer: ${dictation.stdout}`);
 }
 runExecutable(path.join(resourcesDir, 'tunnel', `tunnel-client${suffix}`), ['--version'], TUNNEL_CLIENT.version.replace(/^v/, ''));
 runExecutable(path.join(resourcesDir, 'tunnel', `cloudflared${suffix}`), ['--version']);

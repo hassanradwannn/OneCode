@@ -228,9 +228,7 @@
       const pluginList = url.searchParams.get('mode') === 'plugins';
       if ((!byName.size && !pluginList) || byName.size > 16) return;
       const candidates = [...byName].map(([name, ids]) => ({ name, path: ids.size === 1 ? `app://${[...ids][0]}` : null }));
-      const plain = candidates.find(candidate => candidate.name === CORE_APP_NAME);
-      // `path`/`name` keep describing the plain Core for a content script from before suffixes.
-      coreMention = { type: 'cos-core-mention', path: plain?.path ?? null, name: plain?.path ? CORE_APP_NAME : null, candidates, pluginList };
+      coreMention = { type: 'cos-core-mention', candidates, pluginList };
       post(coreMention, location.origin);
     } catch { /* An unreadable list proves nothing; prompts keep going without a mention. */ }
     finally { clearTimeout(timer); readers.delete(reader); void reader.cancel().catch(() => {}); }

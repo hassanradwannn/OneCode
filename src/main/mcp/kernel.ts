@@ -1023,7 +1023,7 @@ async function dispatchTracked(
   markTiming('identity');
   const invokeHandler = (): Promise<ToolResult> => {
     if (context.caller.geminiBinding && !localBindingIsCurrent(context.caller.geminiBinding)) {
-      return Promise.resolve(fail('GEMINI_SESSION_AUTHORIZATION_EXPIRED: no local tool ran.'));
+      return Promise.resolve(fail('GEMINI_SESSION_NOT_AUTHORIZED: no local tool ran.'));
     }
     handlerRan = true;
     return run();

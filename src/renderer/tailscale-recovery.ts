@@ -31,7 +31,7 @@ export function paintTailscaleRecovery(host: HTMLElement, step: string | undefin
     }
     if (instruction.command) {
       const code = document.createElement('pre'); code.textContent = instruction.command; item.append(code);
-      const copy = el('button', 'btn', () => t('Copy PowerShell command')) as HTMLButtonElement;
+      const copy = el('button', 'btn', () => t('Copy command')) as HTMLButtonElement;
       copy.type = 'button'; copy.onclick = async () => { if (await run(window.api.writeClipboard(instruction.command!))) toast(t('Copied')); }; item.append(copy);
     }
     list.append(item);

@@ -10,10 +10,11 @@ import { logWarn } from '../logger.js';
 import { mainText } from '../main-texts.js';
 import { liveConversations, onSessionChange } from '../session/recorder.js';
 import { CosBrowser } from './host.js';
+import { packagedApplicationAppPath } from '../application-resources.js';
 
 // From the app root, not this file: loaded on demand, this module is a chunk in out/main/chunks,
 // where `../preload` would name a folder that does not exist.
-const out = path.join(app.getAppPath(), 'out');
+const out = path.join(app.isPackaged ? packagedApplicationAppPath() : app.getAppPath(), 'out');
 
 export const cosBrowser = new CosBrowser({
   preloadDir: path.join(out, 'preload'),

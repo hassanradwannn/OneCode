@@ -502,6 +502,8 @@ async function loadOnce() {
     'commandAckOutbox',
     'recoveryMonitoring',
     'discardProtectedTabs',
+    'pendingRepairReadiness',
+    'selectedChatOpenings',
     'delivery'
   ]);
   settled = Array.isArray(live.settled) ? live.settled : [];
@@ -536,6 +538,14 @@ async function loadOnce() {
       ? live.commandAckOutbox.slice(-200)
       : [];
   recoveryMonitoring = live.recoveryMonitoring === true;
+  selectedChatOpenings = live.selectedChatOpenings && typeof live.selectedChatOpenings === 'object'
+    ? Object.fromEntries(Object.entries(live.selectedChatOpenings).filter(([key, row]) =>
+      /^[A-Za-z0-9_-]{1,64}$/.test(key) && row && cleanConversationId(row.conversationId)).slice(-1000)) : {};
+  for (const [receiptToken, receipt] of Object.entries(live.pendingRepairReadiness || {})) {
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(receiptToken) && receipt && Number.isInteger(receipt.tabId) &&
+        cleanConversationId(receipt.conversationId) && (receipt.documentId === null || typeof receipt.documentId === 'string'))
+      pendingRepairReadiness.set(receiptToken, { ...receipt, checking: false });
+  }
   const savedDiscardProtection =
     live.discardProtectedTabs && typeof live.discardProtectedTabs === 'object' && !Array.isArray(live.discardProtectedTabs)
       ? live.discardProtectedTabs
@@ -573,6 +583,9 @@ function persistLive() {
         commandAckOutbox: commandAckOutbox.slice(-200),
         recoveryMonitoring,
         discardProtectedTabs,
+        pendingRepairReadiness: Object.fromEntries([...pendingRepairReadiness].map(([key, receipt]) =>
+          [key, { ...receipt, checking: false }])),
+        selectedChatOpenings,
         delivery
       }),
       // Only small command-control metadata crosses browser restarts. No transcript and no
@@ -3363,6 +3376,48 @@ async function followChat(raw) {
   if (tab && !tab.active) await chrome.tabs.update(tab.id, { active: true });
 }
 
+const selectedChatFlights = new Map();
+let selectedChatOpenings = {};
+function ensureSelectedChat(request) {
+  const conversationId = cleanConversationId(request?.conversationId), selectionToken = request?.token;
+  if (!conversationId || typeof selectionToken !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(selectionToken)) return;
+  if (selectedChatFlights.has(conversationId)) return;
+  const flight = (async () => {
+    const report = (phase, retryAt) => call('/selected-chat/readiness', { method: 'POST',
+      body: JSON.stringify({ token: selectionToken, phase, ...(retryAt ? { retryAt } : {}) }) });
+    const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    const candidates = tabs.filter(tab => conversationForTab(tab) === conversationId).sort((a, b) => a.id - b.id);
+    let tab = candidates.find(tab => tabConversations[String(tab.id)] === conversationId) || candidates[0];
+    if (!tab) {
+      // One explicit selection can open once. Closing it (or an ambiguous
+      // creation during worker shutdown) needs a new selection/Send intent.
+      if (selectedChatOpenings[selectionToken]) { await report('refused'); return; }
+      selectedChatOpenings[selectionToken] = { conversationId, opening: true };
+      await persistLive();
+      try { tab = await createChatTab(providerConversationUrl(conversationId), true, false, conversationId); }
+      catch { await report('refused'); return; }
+    }
+    if (Number.isInteger(tab?.id)) {
+      selectedChatOpenings[selectionToken] = { conversationId, tabId: tab.id };
+      await persistLive();
+    }
+    if (!Number.isInteger(tab?.id)) { await report('loading'); return; }
+    const latest = await chrome.tabs.get(tab.id).catch(() => null);
+    if (!latest || conversationForTab(latest) !== conversationId) { await report('loading'); return; }
+    if (latest.pendingUrl || latest.status === 'loading' || latest.discarded || latest.frozen) { await report('loading'); return; }
+    const documentId = tabDocuments[String(tab.id)];
+    if (!documentId) { await restoreChatgptTab(tab.id); await report('reconnecting'); return; }
+    const current = () => tabDocuments[String(tab.id)] === documentId && tabConversations[String(tab.id)] === conversationId;
+    if (!await restoreChatgptTab(tab.id, current, documentId) || !current()) { await report('reconnecting'); return; }
+    const ready = await tabReply(tab.id, { type: 'clf-selection-ready', conversationId }, { documentId });
+    if (!current()) { await report('reconnecting'); return; }
+    await report(ready?.ok === true && ready.recorderVersion === PAGE_RECORDER_VERSION ? 'ready'
+      : ready?.retryAt > Date.now() ? 'history-wait' : 'loading', ready?.retryAt);
+  })().finally(() => { if (selectedChatFlights.get(conversationId) === flight) selectedChatFlights.delete(conversationId); });
+  selectedChatFlights.set(conversationId, flight);
+  void flight.catch(() => undefined);
+}
+
 let extensionReloadPending = false;
 /**
  * Why an offered extension update has not happened yet, reported with the next `/status` so the
@@ -3470,6 +3525,7 @@ async function maintainOnce() {
   void followApp(reply.data).catch(() => undefined);
   void revealChats(reply.data.reveals).catch(() => undefined);
   void followChat(reply.data.follow).catch(() => undefined);
+  for (const request of Array.isArray(reply.data.selectedChats) ? reply.data.selectedChats : []) ensureSelectedChat(request);
   void runImageExports(reply.data.imageExports).catch(() => undefined);
   void runVideoExports(reply.data.videoExports).catch(() => undefined);
   const renderingWanted = tab => {
@@ -3666,7 +3722,11 @@ function repairChangeDetail(latest) {
 
 // A tabs.reload promise acknowledges the request, not the replacement document.
 // Confirm the new recorder and flush its history before main snapshots Continue.
-async function confirmReloadedPage(tabId, conversationId, oldDocument, oldRun, waitMs = 45_000) {
+async function confirmReloadedPage(tabId, conversationId, oldDocument, oldRun, waitMs = 45_000, expectedQuestion = null) {
+  // Keep an unresolved spent receipt across worker restarts even if the old
+  // recorder was unreachable. Without an old document/run fence we cannot
+  // prove replacement, and must neither confirm nor navigate again.
+  if (!oldDocument && !oldRun) return false;
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -3674,7 +3734,8 @@ async function confirmReloadedPage(tabId, conversationId, oldDocument, oldRun, w
     const documentId = tabDocuments[String(tabId)];
     if (!tab.pendingUrl && tab.status !== 'loading' && documentId && documentId !== oldDocument) {
       const ready = await tabReply(tabId, { type: 'clf-repair-ready', conversationId }, { documentId });
-      if (ready?.ok === true && ready.conversationId === conversationId && ready.runId && ready.runId !== oldRun) return true;
+      if (ready?.ok === true && ready.conversationId === conversationId && ready.runId && ready.runId !== oldRun &&
+          (!expectedQuestion || ready.questionId === expectedQuestion)) return true;
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
@@ -3682,19 +3743,70 @@ async function confirmReloadedPage(tabId, conversationId, oldDocument, oldRun, w
 }
 
 const pendingRepairReadiness = new Map();
+// Small control metadata lives outside navigated documents. One elected
+// document may reserve a native history retry; another tab/reload inherits its
+// deadline and cannot reset the escalation by replacing its content script.
+let historyLedgerQueue = Promise.resolve();
+function historyLedger(message, source) {
+  const run = historyLedgerQueue.then(async () => {
+    await load();
+    const conversationId = cleanConversationId(message.conversationId);
+    if (!conversationId || !ownsDocument(source) || tabConversations[String(source.tab)] !== conversationId)
+      return { ok: false };
+    const key = `historyRetry:${conversationId}`;
+    const stored = (await chrome.storage.local.get([key]))[key];
+    const now = Date.now();
+    let row = stored && stored.version === 1 && stored.conversationId === conversationId &&
+      Number.isSafeInteger(stored.attempts) && stored.attempts >= 0 && Number.isFinite(stored.nextAt)
+      ? { ...stored } : { version: 1, conversationId, attempts: 0, limited: false, nextAt: 0 };
+    if (!ownsDocument(source)) return { ok: false };
+    let allowed = false;
+    if (message.action === 'limited') {
+      const retryAt = Number(message.retryAt), observedAt = Number(message.observedAt);
+      if (!Number.isFinite(retryAt) || !Number.isFinite(observedAt) || retryAt <= observedAt ||
+          retryAt - observedAt > 24 * 60 * 60_000 || retryAt <= now) return { ok: false };
+      row = { ...row, limited: true, observedAt, providerRetryAt: Math.max(row.providerRetryAt || 0, retryAt),
+        nextAt: Math.max(row.nextAt, retryAt + 5_000) };
+    } else if (message.action === 'success') {
+      // Only the current exact document may report a rendered native history.
+      row = { version: 1, conversationId, attempts: 0, limited: false, nextAt: 0, succeededAt: now };
+    } else if (message.action === 'acquire') {
+      if (now >= row.nextAt) {
+        allowed = true;
+        const backoff = row.limited ? [120_000, 240_000, 480_000, 900_000] : [15_000, 30_000, 60_000];
+        row = { ...row, attempts: row.attempts + 1, attemptedAt: now,
+          documentId: source.documentId, nextAt: now + 5_000 + backoff[Math.min(row.attempts, backoff.length - 1)] };
+      }
+    } else if (message.action !== 'read') return { ok: false };
+    // Persist a reservation before the native click. A lost reply may postpone
+    // a read; it never authorizes another request inside the reserved interval.
+    if (message.action !== 'read') await chrome.storage.local.set({ [key]: row });
+    return ownsDocument(source) ? { ok: true, data: { ledger: row, allowed } } : { ok: false };
+  });
+  historyLedgerQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
 function watchReloadedRepair(token, receipt) {
   if (receipt.checking) return;
   receipt.checking = true;
   // Readiness must not hold the shared status poll: other chats, Stop and the
   // queued Continue keep using their ordinary transport while this page hydrates.
-  void confirmReloadedPage(receipt.tabId, receipt.conversationId, receipt.documentId, receipt.runId).then(async ready => {
+  void confirmReloadedPage(receipt.tabId, receipt.conversationId, receipt.documentId, receipt.runId, 45_000, receipt.questionId).then(async ready => {
     if (pendingRepairReadiness.get(token) !== receipt) return;
     if (ready) {
-      pendingRepairReadiness.delete(token);
-      await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=reloaded`);
+      const ack = receipt.input ? await call('/input/claim', { method: 'POST', body: JSON.stringify({
+        id: receipt.input.id, owner: receipt.input.owner, conversationId: receipt.conversationId, refreshAction: 'ready' }) })
+        : await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=reloaded`);
+      // An unavailable bridge cannot consume the browser's only spent-action
+      // receipt. Retry confirmation, never navigation, after reconnect.
+      if (ack.ok && (!receipt.input || ack.data?.ok === true)) { pendingRepairReadiness.delete(token); await persistLive(); }
+      else receipt.checking = false;
     } else {
       receipt.checking = false;
-      if (!receipt.reported) { receipt.reported = true; await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=reloaded&why=unready`); }
+      if (!receipt.reported && !receipt.input) {
+        const ack = await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=reloaded&why=unready`);
+        if (ack.ok) { receipt.reported = true; await persistLive(); }
+      }
     }
   }).catch(() => { receipt.checking = false; });
 }
@@ -3702,7 +3814,6 @@ async function performBrowserRepairs(repairs, policy) {
   // A slow replacement may become ready after the initial wait. Keep only the
   // original spent receipt; this path never dispatches another reload or Send.
   for (const [token, receipt] of pendingRepairReadiness) {
-    if (receipt.expiresAt <= Date.now()) { pendingRepairReadiness.delete(token); continue; }
     watchReloadedRepair(token, receipt);
   }
   for (const { conversationId, token, reason, focus, requiresClaim, continueFollows, suspended } of repairs) {
@@ -3862,14 +3973,20 @@ async function performBrowserRepairs(repairs, policy) {
       if (target) {
         const before = reason === 'assistant-error'
           ? await tabReply(target.id, { type: 'clf-page-status' }, documentId ? { documentId } : undefined) : null;
-        reloadDispatched = true;
-        await chrome.tabs.reload(target.id);
+        // Persist custody before requesting navigation. If the worker stops at
+        // that boundary, its successor reconciles the replacement, never reloads.
         if (reason === 'assistant-error') {
-          const receipt = { tabId: target.id, conversationId, documentId, runId: before?.runId, expiresAt: Date.now() + 180_000 };
-          pendingRepairReadiness.set(token, receipt); watchReloadedRepair(token, receipt);
+          const receipt = { tabId: target.id, conversationId, documentId, runId: before?.runId, dispatchedAt: Date.now() };
+          pendingRepairReadiness.set(token, receipt);
+          await persistLive();
+          reloadDispatched = true;
+          await chrome.tabs.reload(target.id);
+          watchReloadedRepair(token, receipt);
           // A later exact replacement acknowledgement, not tabs.reload, owns confirmation.
           continue;
         }
+        reloadDispatched = true;
+        await chrome.tabs.reload(target.id);
       }
       else {
         await createChatTab(providerConversationUrl(conversationId), policy.background === true, focus);
@@ -4407,6 +4524,9 @@ const HANDLERS = {
     void persistLive().catch(() => undefined);
     return { ok: true };
   },
+  async history_retry(message, _sender, source) {
+    return historyLedger(message, source);
+  },
   async core_plugin(message, _sender, source) {
     if (!ownsDocument(source)) return { ok: false };
     // The complete plugins list without this install's Core: the app takes its proof back.
@@ -4460,8 +4580,48 @@ const HANDLERS = {
       return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
     }
     if (message.recoveryAction && message.owner !== owner) return { ok: false };
+    if (message.recoveryAction === 'close') {
+      if (!conversationId || tab.pinned || tab.pendingUrl || !ownsDocument(source)) return { ok: false };
+      const proof = await tabReply(source.tab, { type: 'clf-recovery-close-check', conversationId, id }, { documentId: source.documentId });
+      if (!ownsDocument(source) || proof?.safe !== true) return { ok: false };
+      const permit = await call('/input/claim', { method: 'POST', body: JSON.stringify({ id, owner, conversationId, recoveryAction: 'close' }) });
+      if (!permit.ok || permit.data?.ok !== true || !ownsDocument(source)) return { ok: false };
+      const latest = await chrome.tabs.get(source.tab);
+      if (latest.pinned || latest.pendingUrl || conversationForTab(latest) !== conversationId || !ownsDocument(source)) return { ok: false };
+      await chrome.tabs.remove(source.tab);
+      // onRemoved is serialized behind this owned document handler, so this
+      // successful removal can be recorded before it publishes the departure.
+      tabRemovals[String(source.tab)] = { ...source, conversationId };
+      await persistLive();
+      return permit;
+    }
+    if (message.refreshAction === 'dispatch') {
+      if (message.owner !== owner || !conversationId || typeof message.questionId !== 'string' || message.questionId.length > 256)
+        return { ok: false };
+      const readiness = await tabReply(source.tab, { type: 'clf-repair-ready', conversationId }, { documentId: source.documentId });
+      if (!ownsDocument(source) || tab.pendingUrl || readiness?.ok !== true || readiness.questionId !== message.questionId)
+        return { ok: false, error: 'source_not_settled' };
+      const receiptToken = `input-${id}`;
+      if (pendingRepairReadiness.has(receiptToken)) return { ok: true, data: { ok: true } };
+      const receipt = { tabId: source.tab, conversationId, documentId: source.documentId, runId: readiness.runId,
+        questionId: message.questionId, input: { id, owner }, dispatchedAt: Date.now() };
+      // Reserve browser custody before consuming the canonical stage. Neither a
+      // worker restart nor a lost reply can mint a second navigation.
+      pendingRepairReadiness.set(receiptToken, receipt);
+      await persistLive();
+      const permit = await call('/input/claim', { method: 'POST', body: JSON.stringify({ id, owner, conversationId, refreshAction: 'dispatch' }) });
+      if (!permit.ok || permit.data?.ok !== true) {
+        pendingRepairReadiness.delete(receiptToken); await persistLive(); return { ok: false };
+      }
+      const latest = await chrome.tabs.get(source.tab);
+      if (ownsDocument(source) && !latest.pendingUrl && conversationForTab(latest) === conversationId) {
+        await chrome.tabs.reload(source.tab);
+        watchReloadedRepair(receiptToken, receipt);
+      }
+      return permit;
+    }
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
-      method: 'POST', body: JSON.stringify({ id, owner, conversationId, recoveryAction: ['stop', 'stopped'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
+      method: 'POST', body: JSON.stringify({ id, owner, conversationId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
     });
     const claimed = result.ok && result.data?.input;
     if (!completed && message.authorize !== true && message.requiresAuthorization === true && claimed?.id === id &&
@@ -5165,6 +5325,24 @@ const HANDLERS = {
     return ackCommand(String(message.id || ''), message.status === 'sent' ? 'sent' : 'failed', message.error,
       message.conversationId, null, message.client, source, message.turnId);
   },
+  async stop_close(message, _sender, source) {
+    if (!ownsDocument(source) || !/^[a-f0-9-]{36}$/i.test(String(message.inputId || ''))) return { ok: false };
+    const tab = await chrome.tabs.get(source.tab);
+    const conversationId = conversationForTab(tab);
+    if (!conversationId || conversationId !== message.conversationId || tab.pinned || tab.pendingUrl) return { ok: false };
+    const proof = await tabReply(source.tab, { type: 'clf-recovery-close-check', conversationId, id: message.inputId }, { documentId: source.documentId });
+    if (proof?.safe !== true || !ownsDocument(source)) return { ok: false };
+    const permit = await call('/input/claim', { method: 'POST', body: JSON.stringify({
+      id: message.inputId, owner: `${source.tab}:${source.documentId}:${source.navigationEpoch}`, conversationId,
+      steeringCloseCommand: message.id, stopClient: message.client }) });
+    if (!permit.ok || permit.data?.ok !== true || !ownsDocument(source)) return { ok: false };
+    const latest = await chrome.tabs.get(source.tab);
+    if (latest.pinned || latest.pendingUrl || conversationForTab(latest) !== conversationId || !ownsDocument(source)) return { ok: false };
+    await chrome.tabs.remove(source.tab);
+    tabRemovals[String(source.tab)] = { ...source, conversationId };
+    await persistLive();
+    return permit;
+  },
   /**
    * How far a redeemed command's page got: a step name only, never its text. The app keeps the
    * last one so a command that runs out of time can say where it stopped. Best effort.
@@ -5296,12 +5474,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'gemini_binding',
     'stop_redeem',
     'stop_ack',
+    'stop_close',
     'desktop_input',
     'model_catalog',
     'plugin_refresh',
     'project_create',
     'core_plugin',
     'load_failure',
+    'history_retry',
     'conversation_deleted',
     'usage_observation',
     'video_export_chunk', 'native_canvas_snapshot', 'native_video_export',
@@ -5541,7 +5721,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 68;
+const PAGE_RECORDER_VERSION = 69;
 
 let deferredRecoveryWork = null;
 

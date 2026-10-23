@@ -202,6 +202,19 @@ linux:
       to: node_modules
       filter: ['**/*']
   extraResources:
+    - from: resources/packaging/node/linux/${arch}
+      to: node
+      filter: ['**/*']
+    # electron-builder excludes node_modules nested inside a FileSet root. Preserve npm's
+    # complete dependency/license tree explicitly, as on Windows.
+    - from: resources/packaging/node/linux/${arch}/lib/node_modules
+      to: node/lib/node_modules
+      filter: ['**/*']
+    - from: linux/dictation.py
+      to: linux/dictation.py
+    - from: resources/packaging/dictation/linux/${arch}
+      to: linux/runtime
+      filter: ['**/*']
     - from: resources/packaging/native/linux/${arch}/node_modules/@img/sharp-libvips-linux-${arch}/README.md
       to: THIRD-PARTY-NOTICES-sharp-libvips-linux-${arch}.md
     - from: resources/packaging/tunnel/linux/${arch}
@@ -224,3 +237,10 @@ deb:
     - libatspi2.0-0 | libatspi2.0-0t64
     - libuuid1
     - libsecret-1-0
+    - pulseaudio-utils
+    # The AppImage/DEB carries the PocketSphinx bindings, native libraries and English model.
+    # Keep only the Ubuntu 22.04 ABI/audio/math prerequisites system-owned.
+    - python3 (>= 3.10)
+    - python3 (<< 3.11)
+    - libblas3
+    - liblapack3

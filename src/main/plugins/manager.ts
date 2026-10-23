@@ -746,6 +746,14 @@ export class PluginManager {
           if (manifest.server.type === 'binary') launch.command = await packagedPath(launch.command);
         }
         const env = pluginEnvironment();
+        if (row.source.kind === 'npm' && path.isAbsolute(launch.command)) {
+          // The packaged Linux runtime is materialized beside the durable plugin records so an
+          // AppImage restart never leaves a /tmp/.mount_* command behind. Keep that exact Node
+          // first on PATH as well, because an npm server may spawn `node` for one of its helpers.
+          const runtimeDir = path.dirname(launch.command);
+          const currentPath = env.PATH ?? env.Path ?? '';
+          setEnvValue(env, 'PATH', currentPath ? `${runtimeDir}${path.delimiter}${currentPath}` : runtimeDir);
+        }
         // Use the upstream response policy, not markdown surgery after execution. Apply at
         // launch so existing official installations also stop echoing submitted/generated code.
         // Explicit user configuration/CLI options retain their normal precedence.

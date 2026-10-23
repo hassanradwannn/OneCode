@@ -5,7 +5,7 @@ import { REASONING_EFFORTS } from '../../shared/session.js';
 import { getSession, renameSession } from '../session/store.js';
 import { sendDesktopInput, cancelDesktopInput } from '../session/start-input.js';
 import { listInputs } from '../session/input.js';
-import { sessionControlsFor, stopSessionTurn } from '../bridge.js';
+import { ensureSelectedChatReady, sessionControlsFor, stopSessionTurn } from '../bridge.js';
 import { getChatModels, startChatModelDiscovery } from '../chat-models.js';
 import { resolveChatModel } from '../../shared/chat-models.js';
 import { projectInput } from '../control-reads.js';
@@ -23,6 +23,7 @@ const send = z.object({ action: z.literal('send'), id: z.string().uuid(), sessio
   projectId: z.string().uuid().nullable().optional(),
   plan: z.array(z.string().trim().min(1).max(16000)).min(1).max(12).refine(stages => JSON.stringify(stages).length <= 12000).optional() }).strict();
 export const remoteActionSchema = z.discriminatedUnion('action', [send,
+  z.object({ action: z.literal('selectChat'), id: z.string().uuid(), sessionId }).strict(),
   z.object({ action: z.literal('cancelSchedule'), id: z.string().uuid(), scheduleId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('draftPlan'), id: z.string().uuid(), text: z.string().trim().min(1).max(16000) }).strict(),
   z.object({ action: z.literal('cancelPlan'), id: z.string().uuid(), requestId: z.string().uuid() }).strict(),
@@ -44,6 +45,7 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   if (body.action === 'cancel') return { cancelled: await cancelDesktopInput(body.inputId) };
   const session = body.sessionId ? await getSession(body.sessionId) : null;
   if (body.sessionId && !session?.conversationId) throw new Error('This task has no attached provider chat.');
+  if (body.action === 'selectChat') return ensureSelectedChatReady(body.sessionId);
   if (body.action === 'rename') { await renameSession(body.sessionId, body.title, 'manual', undefined, body.expectedTitle); return { title: body.title }; }
   if (body.action === 'stop') return stopSessionTurn(body.sessionId, body.expectedTurnId);
   const existing = (await listInputs()).find(row => row.id === body.id);

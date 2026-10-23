@@ -79,15 +79,23 @@ async function startAcceptedInput(entry: InputEntry, controller: AbortController
     if (entry.steerTurnId && !entry.steerReady && entry.sessionId) {
       const { stopSessionTurn, STOP_COMMAND_TIMEOUT_MS } = await import('../bridge.js');
       const source = await getSession(entry.sessionId);
-      if (source?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId);
+      if (source?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId, entry.id);
       else if (source?.activeTurnId) throw new Error('The turn selected for steering changed');
-      const deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
+      let deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
+      let closed = entry.steerClosedOnce === true;
       while (!await releaseSteeringInput(entry.id)) {
         controller.signal.throwIfAborted();
         const session = await getSession(entry.sessionId);
         if (session?.conversationId !== entry.conversationId || (session.activeTurnId && session.activeTurnId !== entry.steerTurnId))
           throw new Error('The turn selected for steering changed');
-        if (Date.now() >= deadline) throw new Error('Native Stop was not confirmed. Your steering message has not been sent.');
+        const pending = (await listInputs()).find(row => row.id === entry.id);
+        if (!pending || pending.state !== 'queued' || pending.cancelledByUser || pending.sendAuthorizedAt !== undefined) return;
+        if (Date.now() >= deadline || (!closed && pending.steerClosedOnce)) {
+          closed = pending.steerClosedOnce === true;
+          await noteInputStartupError(entry.id, 'Message queued. Waiting for the exact native Stop to settle.');
+          if (session?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId, entry.id);
+          deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
+        }
         await new Promise<void>(resolve => { const timer = setTimeout(resolve, 200); timer.unref?.(); });
       }
     }
@@ -100,6 +108,16 @@ async function startAcceptedInput(entry: InputEntry, controller: AbortController
     if (!controller.signal.aborted) await noteInputStartupError(entry.id, startupError(error));
   } finally {
     if (starting.get(entry.id) === controller) starting.delete(entry.id);
+  }
+}
+/** Restore only pending never-Sent steering intents; delivered/uncertain rows stay inert. */
+export async function resumePendingSteeringInputs(): Promise<void> {
+  if (stopped) return;
+  for (const row of await listInputs()) {
+    if (!row.steerTurnId || row.steerReady || row.state !== 'queued' || row.owner || row.sendAuthorizedAt !== undefined ||
+        row.cancelledByUser || starting.has(row.id)) continue;
+    const controller = new AbortController(); starting.set(row.id, controller);
+    void startAcceptedInput(row, controller).catch(() => undefined);
   }
 }
 /** Explicit queue steering uses the same startup and exact native Stop barrier as a fresh send. */

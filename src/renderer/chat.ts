@@ -453,7 +453,7 @@ function paintDictation(): void {
   button.setAttribute('aria-pressed', String(active));
   button.setAttribute('aria-label', t(label));
   button.title = t(label);
-  // Native Windows errors remain verbatim; known UI labels/statuses use the
+  // Native recognizer errors remain verbatim; known UI labels/statuses use the
   // existing locale catalog with English fallback until translations are merged.
   status.textContent = dictationNotice ? t(dictationNotice) : '';
   status.hidden = !dictationNotice;
@@ -557,7 +557,8 @@ function onDictationEvent(event: DictationEvent): void {
       dictationPhase = ['starting', 'initializing', 'requesting'].includes(status) ? 'starting' : 'listening';
       dictationNotice = dictationPhase === 'starting' ? 'Preparing microphone…'
         : event.engine === 'legacy' ? 'Listening with basic accuracy. For punctuation and better results, turn on online speech recognition in Windows settings.'
-          : 'Listening…';
+          : event.engine === 'pocketsphinx' ? 'Listening locally with PocketSphinx (English).'
+            : 'Listening…';
       paintDictation();
     }
   }
@@ -669,11 +670,33 @@ function paintComposerImages(): void {
   images.forEach((image, index) => {
     const tile = 'dataUrl' in image ? el('div', 'composer-image') : attachmentCard(image, true);
     if ('dataUrl' in image) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; tile.append(preview); }
+    if ('dataUrl' in image || image.mimeType.startsWith('image/')) {
+      tile.classList.add('is-previewable'); tile.setAttribute('role', 'button'); tile.tabIndex = 0;
+      ui(tile, 'aria-label', () => t('Preview {0}', [image.name]));
+      const open = (): void => { void openComposerImagePreview(image); };
+      tile.addEventListener('click', open);
+      tile.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+    }
     const remove = el('button', 'image-remove', '×'); remove.setAttribute('type', 'button'); ui(remove, 'aria-label', () => t("Remove {0}", [image.name]));
-    remove.addEventListener('click', () => { imageDrafts.set(key, images.filter((_entry, at) => at !== index)); paintComposerImages(); });
+    remove.addEventListener('click', event => { event.stopPropagation(); imageDrafts.set(key, images.filter((_entry, at) => at !== index)); paintComposerImages(); });
     tile.append(remove); box.append(tile);
   });
   paintDeliveryControls();
+}
+
+async function openComposerImagePreview(image: InputImage | InputAttachment): Promise<void> {
+  const source = 'dataUrl' in image ? image.dataUrl : await run(api.previewInputAttachment(image.id));
+  if (!source) { toast(t('Image preview unavailable')); return; }
+  const dialog = document.createElement('dialog'); dialog.className = 'composer-image-preview-dialog';
+  const close = el('button', 'composer-image-preview-close', '×') as HTMLButtonElement; close.type = 'button';
+  ui(close, 'aria-label', () => t('Close preview'));
+  const full = document.createElement('img'); full.src = source; full.alt = image.name;
+  const caption = el('div', 'composer-image-preview-name', image.name);
+  dialog.append(close, full, caption);
+  close.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal(); close.focus();
 }
 function attachmentCard(file: InputAttachment, inComposer = false): HTMLElement {
   if (file.preview) {
@@ -6832,6 +6855,48 @@ function showView(name: string): void {
   paintJumpLatest();
 }
 
+let selectedProviderTimer: number | null = null;
+let selectedProviderEpoch = 0;
+function clearSelectedProviderReadiness(): void {
+  selectedProviderEpoch++;
+  if (selectedProviderTimer !== null) window.clearTimeout(selectedProviderTimer);
+  selectedProviderTimer = null;
+  const status = document.getElementById('selectedProviderStatus');
+  if (status) { status.hidden = true; status.textContent = ''; }
+}
+async function ensureSelectedProvider(id: string, selection: number, poll = false): Promise<void> {
+  if (id !== selectedId || selection !== selectionGeneration || !api.followSessionTab) return;
+  if (poll && (document.hidden || !timelineShown() || $('chatView').hidden)) {
+    selectedProviderTimer = window.setTimeout(() => {
+      selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
+    }, 2000);
+    return;
+  }
+  const epoch = selectedProviderEpoch;
+  const status = document.getElementById('selectedProviderStatus');
+  if (!status) return;
+  status.hidden = false;
+  if (!poll) ui(status, 'textContent', () => t('Loading provider tab…'));
+  let next: import('../shared/chat-readiness.js').SelectedChatReadiness;
+  try {
+    const reply = poll ? await api.sessionTabReadiness(id) : await api.followSessionTab(id);
+    if (id !== selectedId || selection !== selectionGeneration || epoch !== selectedProviderEpoch) return;
+    if (!reply.ok) throw new Error(reply.error);
+    next = reply.data ?? { phase: 'refused', reason: t('Select this chat again to load its provider tab.') };
+  } catch (error) {
+    next = { phase: 'reconnecting', reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (id !== selectedId || selection !== selectionGeneration || epoch !== selectedProviderEpoch) return;
+  if (!next || next.phase === 'ready' || typeof next !== 'object') { clearSelectedProviderReadiness(); return; }
+  ui(status, 'textContent', () => next.phase === 'history-wait'
+    ? t('Waiting for provider history until {0}…', [new Date(next.retryAt ?? Date.now()).toLocaleTimeString()])
+    : next.phase === 'reconnecting' ? t('Reconnecting provider tab…')
+      : next.phase === 'refused' ? next.reason ?? t('Provider tab is unavailable.') : t('Loading provider tab…'));
+  if (next.phase !== 'refused') selectedProviderTimer = window.setTimeout(() => {
+    selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
+  }, next.phase === 'history-wait' ? Math.max(2000, Math.min(15000, (next.retryAt ?? 0) - Date.now())) : 2000);
+}
+
 function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 'reasoningEffort'>): void {
   const ownerChanged = id !== selectedId;
   rememberDraft();
@@ -6840,6 +6905,8 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
   newChatSelected = false;
   selectedId = id;
+  clearSelectedProviderReadiness();
+  void ensureSelectedProvider(id, selectionGeneration);
   workbenchBrowserPanel?.sync(id);
   mediaPanel?.sync(id);
   void artifactPanel?.sync(id);
@@ -6874,14 +6941,13 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   if (ownerChanged) {
     paintDetail(false);
     paintHandoff();
-    // With Background chats on, the chat's tab becomes the selected one in that window (#1249).
-    void api.followSessionTab?.(id)?.catch(() => undefined);
   }
   void loadDetail();
   void refreshInputQueue();
 }
 
 function selectNewChat(projectId: string | null = null): void {
+  clearSelectedProviderReadiness();
   rememberDraft(); selectionGeneration++; chatFind?.selectionChanged(); replaceComposerDraft(); pendingNewInput = null;
   inputQueueGeneration++;
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
@@ -7422,6 +7488,7 @@ export function initChat(next: Deps): void {
   chatSearch = initChatSearch({
     select: (id, match) => {
       if (id !== selectedId) { pendingNewInput = null; selectSession(id); }
+      else { clearSelectedProviderReadiness(); void ensureSelectedProvider(id, selectionGeneration); }
       if (match) void revealSearchMatch(id, match);
     },
     selectedId: () => selectedId,
@@ -7433,7 +7500,10 @@ export function initChat(next: Deps): void {
   });
   $('sessionList').addEventListener('click', (event) => {
     const row = (event.target as HTMLElement).closest<HTMLElement>('[data-id]');
-    if (!row?.dataset.id || row.dataset.id === selectedId) return;
+    if (!row?.dataset.id) return;
+    if (row.dataset.id === selectedId) {
+      clearSelectedProviderReadiness(); void ensureSelectedProvider(row.dataset.id, selectionGeneration); return;
+    }
     pendingNewInput = null;
     selectSession(row.dataset.id);
   });
@@ -7444,7 +7514,9 @@ export function initChat(next: Deps): void {
     const row = control?.closest<HTMLElement>('[data-id]');
     if (!control || target !== control || !row?.dataset.id) return;
     event.preventDefault();
-    if (row.dataset.id === selectedId) return;
+    if (row.dataset.id === selectedId) {
+      clearSelectedProviderReadiness(); void ensureSelectedProvider(row.dataset.id, selectionGeneration); return;
+    }
     pendingNewInput = null;
     selectSession(row.dataset.id);
   });

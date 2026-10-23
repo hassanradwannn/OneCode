@@ -617,16 +617,9 @@ var CLF_DOM = (() => {
       } };
   }
   let ownNames = [], ownApps = [];
-  const connectorAliases = new Map();
-  const connectorDisplayKey = value => compact(value).toLowerCase().replace(/-+/g, ' ').replace(/\s+/g, ' ');
-  const nativeConnectorName = name => {
-    const alias = connectorAliases.get(name);
-    return alias?.route === location.href ? alias.name : name;
-  };
   function setConnectorNames(names) {
     const next = [names?.core, names?.desktop, names?.plugins].filter(name => typeof name === 'string' && name.length > 0 && name.length <= 160);
     if (!next.length) return false;
-    if (JSON.stringify(ownNames) !== JSON.stringify([...new Set(next)])) connectorAliases.clear();
     ownNames = [...new Set(next)]; return true;
   }
   const connectorNames = () => [...ownNames];
@@ -693,13 +686,12 @@ var CLF_DOM = (() => {
   }
   function confirmedMention(name, box = composer()) {
     if (!box) return false;
-    if (provenMention(box)?.name === nativeConnectorName(name)) return true;
-    return all(MENTION, box).some(node => compact(text(node)).replace(/^@/, '') === compact(name) || node.getAttribute('data-mention-name') === name);
+    if (provenMention(box)?.name === name) return true;
+    return all(MENTION, box).some(node => text(node).trim().replace(/^@/, '') === name || node.getAttribute('data-mention-name') === name);
   }
   async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null) {
     const requestedName = name;
-    const sameName = candidate => candidate === requestedName || ownNames.includes(requestedName) &&
-      connectorDisplayKey(candidate) === connectorDisplayKey(requestedName);
+    const sameName = candidate => candidate === requestedName;
     const refused = reason => { explain?.(reason); return false; };
     if (!name || !current()) return refused('connector-preparation-revoked');
     const box = composer();
@@ -829,7 +821,6 @@ var CLF_DOM = (() => {
     if (!taskReady) return refused(restoreCurrent() ? 'connector-task-restore-unconfirmed' : revokedReason());
     snapshot();
     if (!current() || !confirmedMention(name, box) || compact(composerAuthoredText()) !== compact(restoredText)) return false;
-    if (ownNames.includes(requestedName)) connectorAliases.set(requestedName, { name, route });
     return onReady ? await onReady(box, selectionCurrent, () => { handedOff = true; }) : true;
     } finally {
       // Never overwrite a foreign edit. This also removes a raw app-owned '@'
@@ -1170,7 +1161,7 @@ var CLF_DOM = (() => {
       if (!card.allow || approvalClicks.has(card.node) || !card.node.isConnected || conversationId() !== id) continue;
       const binding = await bindingFor(id, () => conversationId() === id && card.node.isConnected);
       const ownedNames = Array.isArray(binding?.connector_names) ? binding.connector_names : [binding?.connector_name];
-      const matches = ownedNames.filter(name => nativeConnectorName(name) === card.connector);
+      const matches = ownedNames.filter(name => name === card.connector);
       const configuredName = matches.length === 1 ? matches[0] : null;
       const perConnector = binding?.enabled_tools_by_connector;
       const enabledTools = configuredName && perConnector && Object.prototype.hasOwnProperty.call(perConnector, configuredName) ? perConnector[configuredName] :
@@ -1200,6 +1191,12 @@ var CLF_DOM = (() => {
         all('model-response [aria-busy="true"]').some(shown) || (!allowStaleStop && generating()) ||
         errors().some(error => error.blocking)) return null;
     return { provider: 'gemini', conversationId: conversationId(), questionId: question.id, messageId: answer.id, text: answer.text };
+  }
+  function recoveryTerminalReceipt(questionId) {
+    const receipt = completedResponseReceipt();
+    // The exact response's native complete footer is terminal evidence. Stop
+    // disappearance by itself cannot manufacture this receipt.
+    return receipt && receipt.questionId === questionId ? { ...receipt, outcome: 'complete' } : null;
   }
   const generating = () => stopButton() !== null || approvalWaiting() || all('model-response [aria-busy="true"]').some(shown);
   const stopGeneration = current => { const stop = stopButton(); if (!current() || !enabled(stop)) return false; stop.click(); return true; };
@@ -1422,7 +1419,7 @@ var CLF_DOM = (() => {
   const toolBlocks = turn => all('tool-call,[data-tool-call-id]', turn?.node || document);
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
-    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt,
+    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt, recoveryTerminalReceipt,
     nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 68;
+  const RECORDER_VERSION = 69;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -668,6 +668,7 @@
   // Intent only. Later exact MCP work can prove that this request did not stop the turn.
   let stopRequestedAt = 0;
   let recoveryStopping = false;
+  let recoveryCloseCandidate = null;
   /**
    * Final public ChatGPT message that already terminalised the local turn while the page's
    * Stop control was still mounted. A stale Stop must not reopen the same finished turn on
@@ -961,15 +962,13 @@
   // computer's suffix, if any) when it inserts the mention, whenever the app's names arrived.
   let coreCandidates = [];
   // This install's Core as another tab of this browser last saw it listed (background `status`).
-  let knownOwnCore = null;
   window.addEventListener('message', (event) => {
     if (!alive || event.source !== window || event.origin !== location.origin || event.data?.type !== 'cos-core-mention') return;
     const valid = (path) => typeof path === 'string' && /^app:\/\/asdk_app_[A-Za-z0-9_-]{1,160}$/.test(path) ? path : null;
     coreCandidates = Array.isArray(event.data.candidates)
       ? event.data.candidates.slice(0, 16).filter(entry => typeof entry?.name === 'string' && entry.name.length <= 80)
         .map(entry => ({ name: entry.name, path: valid(entry.path) }))
-      // An observer from before suffixes names only the plain Core.
-      : event.data.name === 'OneCode Core' ? [{ name: event.data.name, path: valid(event.data.path) }] : [];
+      : [];
     corePluginList = event.data.pluginList === true;
     reportCorePlugin();
   });
@@ -990,25 +989,17 @@
     const message = report === 'missing' ? { type: 'core_plugin', missing: true } : { type: 'core_plugin', appId: report.slice('app://'.length) };
     void ask(message).catch(() => { reportedCorePlugin = null; });
   }
-  /** This install's proven Core apps (`app://asdk_app_…`), from the app's status; may be empty. */
-  function provenCorePaths() {
-    return CLF_DOM.connectorApps().filter(app => app.surface === 'core').map(app => `app://${app.appId}`);
-  }
   /**
-   * This install's Core in the page's app list: a proven app id first (it survives a rename in
-   * ChatGPT), else the configured name. Once a Core app is proven, a same-named app with another
-   * id is somebody else's. Until the app has said its names, the plain name stands in only as a
-   * default: on a computer with a suffix it is the other computer's Core, so nothing matches by
-   * name before then.
+   * This install's Core in the page's app list. The exact current name supplied by OneCode is the
+   * only identity authority. No remembered app id, provider rename, legacy alias or plain-name
+   * default may substitute for it. Two entries with the same configured name are ambiguous.
    */
   function ownCoreCandidate() {
-    const proven = provenCorePaths();
-    const byId = coreCandidates.find(entry => entry.path && proven.includes(entry.path));
-    if (byId) return byId;
     if (!ownNamesKnown) return null;
     const own = CLF_DOM.connectorNames()[0];
-    const byName = coreCandidates.find(entry => entry.name === own);
-    return byName && (!proven.length || (byName.path && proven.includes(byName.path))) ? byName : null;
+    if (!own) return null;
+    const named = coreCandidates.filter(entry => entry.name === own && entry.path);
+    return named.length === 1 ? named[0] : null;
   }
   /** This install's Core app as this page itself lists it, or null when missing or ambiguous. */
   function pageCoreMention() {
@@ -1016,15 +1007,7 @@
     return match?.path ? { path: match.path, name: match.name } : null;
   }
   function currentCoreMention() {
-    if (ownCoreCandidate()) return pageCoreMention();
-    // A fresh tab can send before its own plugin list arrives; then this browser's last sighting of
-    // this install's Core stands in. Never once this page's complete list says the Core is missing,
-    // and never against a proven Core id: a sighting is only as good as the names it was taken under.
-    const own = CLF_DOM.connectorNames()[0];
-    const proven = provenCorePaths();
-    if (corePluginList || !knownOwnCore ||
-        (proven.length ? !proven.includes(knownOwnCore.path) : !ownNamesKnown || knownOwnCore.name !== own)) return null;
-    return { path: knownOwnCore.path, name: knownOwnCore.name };
+    return pageCoreMention();
   }
   /**
    * Whether the user's own prompts carry the Core mention (the app's ui.mentionCore, on unless off).
@@ -2207,6 +2190,25 @@
     if (!reply?.ok || command?.type !== 'stop' || command.turnId !== expected || command.conversationId !== target) return false;
     const canStop = () => current() && generating && (!unwitnessedGeneration || stopQuestionMatches(command.userMessageId)) && latestNative()?.role === 'assistant' &&
       latestNative()?.id === nativeId && pageTurnIds.get(expected) === nativeId;
+    if (command.continuationInputId) {
+      // This Stop belongs to the user's pending continuation. Keep user Stop
+      // flags clear; only native terminal evidence may release that same input.
+      const alreadyClicked = stoppedAppCommands.has(commandId);
+      if (!alreadyClicked) stoppedAppCommands.add(commandId);
+      const settled = await stopAutomationGeneration(canStop, !alreadyClicked);
+      if (settled && canStop()) {
+        finishGeneration(currentAssistantTurn(), { outcome: 'interrupted',
+          detail: 'The native response was stopped to deliver the pending continuation.' }, false);
+        await flush();
+      } else if (canStop() && command.userMessageId && stopQuestionMatches(command.userMessageId)) {
+        recoveryCloseCandidate = { id: command.continuationInputId, conversationId: target, questionId: command.userMessageId, current: canStop };
+        try { await ask({ type: 'stop_close', id: commandId, inputId: command.continuationInputId, client: RUN_ID, conversationId: target }); }
+        finally { recoveryCloseCandidate = null; }
+      }
+      await ask({ type: 'stop_ack', id: commandId, client: RUN_ID, conversationId: target, turnId: expected,
+        status: settled ? 'sent' : 'failed', error: settled ? undefined : 'native_end_not_confirmed' });
+      return settled;
+    }
     // Concurrent redemptions may finish after the first click, before ChatGPT removes Stop.
     const stopped = stoppedAppCommands.has(commandId) || requestNativeStop(canStop);
     if (stopped) {
@@ -2736,11 +2738,15 @@
         if (!seenMessages.has(key)) {
           markSeen(key);
           emit({ kind: 'user_message', text: shown, messageId: accepted.messageId, authoredNow: true });
+          try { console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'accepted-question-published',
+            sameQuestion: accepted.messageId === receipt.accepted?.messageId,
+            sameRoute: accepted.conversationId === CLF_DOM.conversationId(), sameEpoch: accepted.epoch === epoch })); }
+          catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
           reportedUserMessages.set(accepted.messageId, { text: shown, createTime: null,
             conversationId: accepted.conversationId, model: null });
         }
         userSendReceipt = null;
-        newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline };
+        newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline, acceptedReceipt: true };
       }
     }
     return newUserMessage;
@@ -3148,6 +3154,11 @@
       // state the resume exists to keep, since recorder.ts empties `progress`, `pageTools`
       // and the pending sightings on every turn_start.
       emit({ kind: 'turn_start', turnId });
+      if (submission?.acceptedReceipt === true) {
+        try { console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'accepted-turn-published',
+          sameQuestion: openedUserMessageId === submission.messageId, turnOpened: generating === true })); }
+        catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
+      }
       // A witnessed Send's baseline is exact. A claimed turn keeps its own final (#1226);
       // any other turn without a baseline files every final already on the page as history.
       const finalsAtSend = submission ? submission.baseline?.finals : claimedHistoryFinals(newUserMessage);
@@ -3814,7 +3825,7 @@
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
-  const FIBER_VERSION = 31;
+  const FIBER_VERSION = 32;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4255,7 +4266,8 @@
     }
     const trace = turnTraceOf(raw.trace);
     if (codeModeCalls.length === 0 && kept.length === 0 && requests.length === 0 && keptMessages.length === 0 && keptActivities.length === 0 &&
-        keptThoughtNotifications.length === 0 && keptImages.length === 0 && keptVideos.length === 0 && keptArtifacts.length === 0 && !endMessageId && !trace && sightings.length === 0 && raw.imageGeneration !== true) {
+        keptThoughtNotifications.length === 0 && keptImages.length === 0 && keptVideos.length === 0 && keptArtifacts.length === 0 && !endMessageId && !trace && sightings.length === 0 && raw.imageGeneration !== true &&
+        !['complete', 'interrupted'].includes(raw.terminalState)) {
       return null;
     }
     return {
@@ -4265,6 +4277,7 @@
       conversationConflict: raw.conversationConflict === true,
       requestOwnerRequired: raw.requestOwnerRequired === true,
       endMessageId,
+      ...(['complete', 'interrupted'].includes(raw.terminalState) ? { terminalState: raw.terminalState } : {}),
       calls: kept,
       codeModeCalls,
       requests,
@@ -7099,15 +7112,12 @@
    * Exact names, never a prefix: `OneCode Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    */
-  const LEGACY_CONNECTORS = ['TobisComputer'];
-
   function ourConnectorApp(name) {
-    return typeof name === 'string' && (CLF_DOM.connectorNames().includes(name) || LEGACY_CONNECTORS.includes(name));
+    return typeof name === 'string' && CLF_DOM.connectorNames().includes(name);
   }
 
   function ourConnectorSeen(seen) {
     if (!seen) return false;
-    if (typeof seen.own === 'boolean') return seen.own;
     if (ourConnectorApp(seen.app)) return true;
     if (typeof seen.path !== 'string' || !seen.path.startsWith('/')) return false;
     const end = seen.path.indexOf('/', 1);
@@ -12126,9 +12136,6 @@
 
   /** This install's names, proven apps and remembered Core, from `status` or a redeemed command. */
   function applyCoreIdentity(reply) {
-    const known = reply?.ownCoreApp;
-    knownOwnCore = known && typeof known.appId === 'string' && /^asdk_app_[A-Za-z0-9_-]{1,160}$/.test(known.appId) &&
-      typeof known.name === 'string' ? { path: `app://${known.appId}`, name: known.name } : null;
     if (reply?.connectorNames && CLF_DOM.setConnectorNames(reply.connectorNames)) { ownNamesKnown = true; reportCorePlugin(); }
     if (reply?.connectorApps && CLF_DOM.setConnectorApps(reply.connectorApps)) reportCorePlugin();
   }
@@ -13195,6 +13202,10 @@
   let loadFailureLimited = false;
   let loadFailureRoute = null;
   let loadFailureToldAt = 0;
+  let historyLedgerReady = TEST_MODE;
+  let historyRetryPending = false;
+  let historyLedgerNextAt = 0;
+  let historySuccessReported = false;
   function recoverConversationLoad(now = Date.now()) {
     const route = CLF_DOM.conversationId();
     if (route !== loadFailureRoute) {
@@ -13203,21 +13214,49 @@
       loadFailureSince = 0;
       loadFailureRetries = 0;
       loadFailureLimited = false;
+      historyLedgerReady = TEST_MODE;
+      historyLedgerNextAt = 0;
+      historySuccessReported = false;
+    }
+    if (!historyLedgerReady) {
+      if (!historyRetryPending && route) {
+        historyRetryPending = true;
+        void ask({ type: 'history_retry', action: 'read', conversationId: route }).then(reply => {
+          if (loadFailureRoute !== route || CLF_DOM.conversationId() !== route || reply?.ok !== true) return;
+          const ledger = reply.data?.ledger;
+          if (!ledger) return;
+          historyLedgerNextAt = ledger.nextAt || 0;
+          loadFailureRetries = ledger.attempts || 0;
+          loadFailureLimited = ledger.limited === true;
+          historyLedgerReady = true;
+        }).catch(() => undefined).finally(() => { historyRetryPending = false; });
+      }
+      return false;
     }
     // The provider has already told this exact history read when it may be tried again.
     // Do not spend the page's own Retry button inside that window: each click is another
     // history request and can extend the throttle. Once Retry-After expires, the
     // established settle/backoff logic below resumes unchanged.
+    const retry = CLF_DOM.conversationLoadFailure ? CLF_DOM.conversationLoadFailure() : null;
+    if (!retry) {
+      loadFailureSince = 0;
+      if (CLF_DOM.turns().length) {
+        loadFailureRetries = 0; loadFailureLimited = false;
+        pendingHistoryRateLimit = null; historyLedgerNextAt = 0;
+        if (!TEST_MODE && route && !historySuccessReported) {
+          historySuccessReported = true;
+          void ask({ type: 'history_retry', action: 'success', conversationId: route }).then(reply => {
+            if (reply?.ok !== true) historySuccessReported = false;
+          }).catch(() => { historySuccessReported = false; });
+        }
+      }
+      return false;
+    }
+    if (historyLedgerNextAt > now) return false;
     if (pendingHistoryRateLimit?.conversationId === route) {
       loadFailureLimited = true;
       if (pendingHistoryRateLimit.retryAt > now) return false;
       pendingHistoryRateLimit = null;
-    }
-    const retry = CLF_DOM.conversationLoadFailure ? CLF_DOM.conversationLoadFailure() : null;
-    if (!retry) {
-      loadFailureSince = 0;
-      if (CLF_DOM.turns().length) { loadFailureRetries = 0; loadFailureLimited = false; }
-      return false;
     }
     // Whoever presses Retry here, the tab may leave this chat for ChatGPT's home page. Say so first,
     // so that departure is not taken for the user closing the chat (#1086). At most every 30 s.
@@ -13229,6 +13268,19 @@
     const schedule = loadFailureLimited ? LOAD_FAILURE_LIMITED_BACKOFF_MS : LOAD_FAILURE_BACKOFF_MS;
     const wait = LOAD_FAILURE_SETTLE_MS + schedule[Math.min(loadFailureRetries, schedule.length - 1)];
     if (now - loadFailureSince < wait) return false;
+    if (!TEST_MODE) {
+      if (historyRetryPending) return false;
+      historyRetryPending = true;
+      const forEpoch = epoch;
+      void ask({ type: 'history_retry', action: 'acquire', conversationId: route }).then(reply => {
+        if (!alive || epoch !== forEpoch || loadFailureRoute !== route || CLF_DOM.conversationId() !== route || reply?.ok !== true) return;
+        historyLedgerNextAt = reply.data?.ledger?.nextAt || 0;
+        if (reply.data?.allowed !== true || CLF_DOM.conversationLoadFailure?.() !== retry) return;
+        loadFailureRetries++; loadFailureSince = Date.now(); historySuccessReported = false;
+        retry.click();
+      }).catch(() => undefined).finally(() => { historyRetryPending = false; });
+      return false;
+    }
     loadFailureRetries++;
     loadFailureSince = now;
     retry.click();
@@ -13452,6 +13504,9 @@
         retryAt > pendingHistoryRateLimit.retryAt) {
       pendingHistoryRateLimit = { conversationId: claimed, retryAt, observedAt, published: 0 };
     }
+    if (!TEST_MODE) void ask({ type: 'history_retry', action: 'limited', conversationId: claimed, retryAt, observedAt })
+      .then(reply => { if (CLF_DOM.conversationId() === claimed && reply?.ok === true)
+        historyLedgerNextAt = Math.max(historyLedgerNextAt, reply.data?.ledger?.nextAt || 0); }).catch(() => undefined);
     publishHistoryRateLimit();
   });
   function flushStreamRequestOrigins() {
@@ -13709,12 +13764,34 @@
   }
 
   /** Both final-driven Goal/Loop and unfinished Continue settle the same native control. */
-  async function stopAutomationGeneration(safe) {
+  async function recoveryTerminalEvidence(questionId, safe) {
+    if (!safe() || !questionId || !stopQuestionMatches(questionId) || CLF_DOM.generating()) return false;
+    if (CLF_DOM.provider === 'gemini') return !!CLF_DOM.recoveryTerminalReceipt?.(questionId);
+    const source = currentAssistantTurn();
+    if (!source || !await refreshFiber({ pageTurnId: source.id, pageTurn: source.node || source.nodes?.[0] }) || !safe()) return false;
+    const native = fiberTurnFor(currentAssistantTurn());
+    return !!native && !native.conversationConflict && native.conversationId === conversationId &&
+      (native.question === questionId || !!native.endMessageId) &&
+      (!!native.endMessageId || ['complete', 'interrupted'].includes(native.terminalState)) &&
+      stopQuestionMatches(questionId) && !CLF_DOM.generating();
+  }
+  async function stopAutomationGeneration(safe, click = true) {
     if (!safe()) return false;
+    const questionId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
     recoveryStopping = true;
     try {
-      if (CLF_DOM.generating() && !CLF_DOM.stopGeneration(safe)) return false;
-      return Boolean(await waitPageView(() => !CLF_DOM.generating(), safe, INTERRUPT_WAIT_MS) && safe());
+      if (click && CLF_DOM.generating() && !CLF_DOM.stopGeneration(safe)) return false;
+      // Fiber refresh stamps its observed nodes. Running it inside a MutationObserver
+      // predicate makes its own stamps schedule another refresh forever. Yield
+      // between bounded probes so rendering, Stop and other chats keep progressing.
+      const until = Date.now() + INTERRUPT_WAIT_MS;
+      let settled = false;
+      for (let waited = 0; safe() && waited < INTERRUPT_WAIT_MS && Date.now() <= until; waited += 250) {
+        if (await recoveryTerminalEvidence(questionId, safe)) { settled = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      return Boolean(settled &&
+        await waitStableComposer(() => CLF_DOM.composerVisible() && CLF_DOM.composerWritable() && CLF_DOM.composer(), safe, INTERRUPT_WAIT_MS) && safe());
     } finally { recoveryStopping = false; }
   }
 
@@ -13754,6 +13831,8 @@
         native = current?.role === 'assistant' ? fiberTurnFor(current) : null;
         if (!native) return unreadable();
       }
+      if (native.conversationConflict || native.conversationId !== conversationId ||
+          (native.question && native.question !== latestQuestionId())) return unreadable();
       // A known native final vetoes Continue even while delivery to the app is pending.
       if (native?.endMessageId) { note('page-final'); await flush(); return false; }
     }
@@ -13848,9 +13927,9 @@
         return false;
       }
     }
-    if (silencePickup && CLF_DOM.generating() && !await confirmedProviderTerminal()) {
+    if (silencePickup && (CLF_DOM.generating() || message.recovery?.phase === 'stopping') && !await confirmedProviderTerminal()) {
       if (!onTarget()) return false;
-      if (message.recovery?.stop === true) {
+      if (message.recovery?.stop === true || message.recovery?.phase === 'stopping') {
         desktopInputBusy = true;
         let input = null;
         try {
@@ -13867,9 +13946,19 @@
           const claim = await ask({ type: 'desktop_input', id: message.id, conversationId: target, requiresAuthorization: true });
           input = claim?.data?.input;
           if (!input?.recovery || !safe()) return false;
-          const permit = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, recoveryAction: 'stop' });
-          if (permit?.data?.ok !== true || !safe() || !await recoveryPageUnfinished(safe) || !safe()) return false;
-          if (!await stopAutomationGeneration(safe)) return false;
+          const stopAlreadyRequested = input.recovery.phase === 'stopping' && input.recovery.stopOwner === input.owner;
+          if (!stopAlreadyRequested) {
+            const permit = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, recoveryAction: 'stop' });
+            if (permit?.data?.ok !== true || !safe() || !await recoveryPageUnfinished(safe) || !safe()) return false;
+          }
+          if (!await stopAutomationGeneration(safe, !stopAlreadyRequested)) {
+            if (safe() && !input.recovery.closedOnce) {
+              recoveryCloseCandidate = { id: input.id, conversationId: target, questionId: input.recovery.questionId, current: safe };
+              try { await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, recoveryAction: 'close' }); }
+              finally { recoveryCloseCandidate = null; }
+            }
+            return false;
+          }
           if (generating) finishGeneration(currentAssistantTurn(), {
             outcome: 'interrupted',
             detail: t('content_turn_auto_continue_stopped', 'Automatic Continue stopped an unchanged silent turn.')
@@ -13878,6 +13967,9 @@
           if (!safe()) return false;
           const stopped = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, recoveryAction: 'stopped' });
           if (stopped?.data?.ok !== true || !safe()) return false;
+          await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target,
+            refreshAction: 'dispatch', questionId: input.recovery.questionId });
+          return false; // The replacement document owns preparation of this same input.
         } finally {
           recoveryStopping = false;
           desktopInputBusy = false;
@@ -13943,6 +14035,27 @@
       const input = reply?.data?.input;
       if (input?.silenceBoundary || input?.completedTurnId) { claimedSilence = input; sourceQuiet = true; }
       if (!input) return false;
+      if (input.recovery && ['ready', 'resumed'].includes(input.recovery.phase) && !input.nativeRecovery) {
+        // The source was already idle. Native terminal evidence still owns the
+        // checkpoint; an absent Stop icon cannot authorize the refresh.
+        if (!await recoveryTerminalEvidence(input.recovery.questionId, onTarget)) return false;
+        if (generating) finishGeneration(currentAssistantTurn(), { outcome: 'interrupted',
+          detail: 'The exact native response settled before continuation recovery.' }, false);
+        await flush();
+        if (!onTarget()) return false;
+        const settled = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, recoveryAction: 'settled' });
+        if (settled?.data?.ok !== true) return false;
+        claimedSilence = null;
+        await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target,
+          refreshAction: 'dispatch', questionId: input.recovery.questionId });
+        return false;
+      }
+      if (input.nativeRecovery?.phase === 'ready-to-refresh') {
+        claimedSilence = null; // The refresh checkpoint retains this claim.
+        await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target,
+          refreshAction: 'dispatch', questionId: input.nativeRecovery.questionId });
+        return false;
+      }
       if (!onTarget()) { noteWithdraw(offTarget()); return false; }
       if (CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setInputClaim?.({ id: input.id, owner: input.owner });
       if (!target && CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setOpeningClaim?.({ id: input.id, owner: input.owner });
@@ -14018,7 +14131,7 @@
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
           'Requested model or reasoning could not be confirmed'
-        ), modelFailure || undefined
+        ), !onTarget() ? offTarget() : modelFailure || undefined
       );
       // Native picker closure can precede re-enabling the same editor. Wait before
       // its one insertion; a disabled editing host is not a rejected helper prompt.
@@ -14028,7 +14141,7 @@
         return fail(t(
           'content_delivery_editor_not_writable',
           "The provider editor did not become writable before sending."
-        ), changed === 'turn-progressed' && turnProgressSource ? `${changed}-${turnProgressSource}` : changed || undefined);
+        ), changed === 'turn-progressed' && turnProgressSource ? `${changed}-${turnProgressSource}` : changed || 'editor-unavailable');
       }
       // Same allowance as the draft check above, for the same reason: text this delivery itself left
       // behind is not a composer that "changed". Re-read rather than reusing `ownResidue`, because
@@ -14871,15 +14984,33 @@
         return false;
       }
       // Popup diagnostics. Ids and counters only — no prose, no transcript, no page text.
-      if (message.type === 'clf-repair-ready') {
+      if (message.type === 'clf-recovery-close-check') {
+        const candidate = recoveryCloseCandidate;
+        sendResponse({ safe: !!candidate && candidate.id === message.id && candidate.conversationId === message.conversationId &&
+          candidate.current() && stopQuestionMatches(candidate.questionId) && pendingTools === 0 &&
+          !(CLF_DOM.composer()?.textContent || '').trim() && !CLF_DOM.hasComposerAttachments() });
+        return false;
+      }
+      if (message.type === 'clf-repair-ready' || message.type === 'clf-selection-ready') {
         const target = conversationId, forEpoch = epoch;
         void (async () => {
           const current = () => alive && target === message.conversationId && epoch === forEpoch &&
             conversationId === target && CLF_DOM.conversationId() === target;
-          if (!current() || !CLF_DOM.composerVisible()) return sendResponse({ ok: false });
+          if (message.type === 'clf-selection-ready') {
+            if (!current()) return sendResponse({ ok: false });
+            await observe();
+            const flushed = current() && await flush();
+            return sendResponse({ ok: !!flushed && current() && !!CLF_DOM.composer(),
+              recorderVersion: RECORDER_VERSION, conversationId: target, runId: RUN_ID,
+              ...(historyLedgerNextAt > Date.now() ? { retryAt: historyLedgerNextAt } : {}) });
+          }
+          if (!current() || !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() ||
+            CLF_DOM.generating() || CLF_DOM.approvalWaiting() || CLF_DOM.errors().some(error => error.blocking === true))
+          return sendResponse({ ok: false });
           await observe();
           const flushed = current() && await flush();
-          sendResponse({ ok: !!flushed && current(), conversationId: target, runId: RUN_ID });
+          sendResponse({ ok: !!flushed && current(), conversationId: target, runId: RUN_ID,
+            questionId: CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? null });
         })().catch(() => sendResponse({ ok: false }));
         return true;
       }

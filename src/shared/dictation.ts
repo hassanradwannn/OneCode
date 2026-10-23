@@ -1,9 +1,9 @@
 /**
- * Speech-to-text events from the opt-in Windows recognizer. Raw audio never crosses IPC.
+ * Speech-to-text events from the opt-in native/local recognizer. Raw audio never crosses IPC.
  * `engine` on listening says which Windows recognizer runs: `modern` is Windows' online
  * dictation (punctuation, current accuracy), `legacy` the offline System.Speech fallback.
  */
-export type DictationEngine = 'modern' | 'legacy';
+export type DictationEngine = 'modern' | 'legacy' | 'pocketsphinx';
 export type DictationEvent =
   | { type: 'status'; status: 'starting' | 'listening' | 'stopped'; engine?: DictationEngine }
   | { type: 'partial' | 'final'; text: string }
@@ -18,7 +18,7 @@ export function parseDictationEvent(line: string): DictationEvent | null {
   const event = value as Record<string, unknown>;
   if (event.type === 'status' && ['starting', 'listening', 'stopped'].includes(String(event.status))) {
     const status = event.status as 'starting' | 'listening' | 'stopped';
-    return status === 'listening' && (event.engine === 'modern' || event.engine === 'legacy')
+    return status === 'listening' && (event.engine === 'modern' || event.engine === 'legacy' || event.engine === 'pocketsphinx')
       ? { type: 'status', status, engine: event.engine } : { type: 'status', status };
   }
   if ((event.type === 'partial' || event.type === 'final') && typeof event.text === 'string') {

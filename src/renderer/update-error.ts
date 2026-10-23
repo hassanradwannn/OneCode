@@ -6,6 +6,7 @@ export function updateErrorText(source: string): string {
     case 'GitHub could not be reached':
       return t('GitHub could not be reached. Check your connection');
     case 'There is no downloaded update to install yet':
+    case 'the Linux application layer manifest is missing':
     case 'This downloaded update is no longer current. Check for updates again.':
     case 'The OneCode update metadata does not match this release and architecture':
     case 'OneCode did not download one complete installer':
@@ -24,6 +25,7 @@ export function updateErrorText(source: string): string {
     case 'it is not the published file':
     case 'the staged artifact changed after verification':
     case 'The staged update changed after verification':
+    case 'The staged hotfix changed after verification':
     case 'The downloaded update does not match the OneCode release checksum':
       return t('The downloaded update did not match the published checksum.');
   }
