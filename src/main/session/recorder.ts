@@ -2203,7 +2203,7 @@ async function recordSupersededMessages(
           ...(item.references ? { references: item.references } : {}),
           final: state === 'final'
         },
-        { preferTime: item.authoredTime === true }
+        { preferTime: item.authoredTime === true, activeContent: item.activeNow === true }
       );
     } else if (item.kind === 'native_image') {
       stored += await recordNativeImage(sessionId, item, base);
@@ -2387,7 +2387,7 @@ async function recordChatObservationsNow(
           ...(item.resolvedModel ? { resolvedModel: item.resolvedModel } : {}),
           ...(item.references ? { references: item.references } : {}),
           ...(goalEligible && state === 'final' ? { goalEligible: true } : {})
-        }, { preferTime: item.authoredTime === true, work: item.activeNow === true });
+        }, { preferTime: item.authoredTime === true, work: item.activeNow === true, activeContent: item.activeNow === true });
         const canonicalTurn = written.event.turnId;
         // A stopped partial answer stays streaming in history. Re-observing its
         // DOM after restart cannot renew work, nor can an old message borrow a

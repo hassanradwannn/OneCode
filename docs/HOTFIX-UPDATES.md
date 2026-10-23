@@ -2,7 +2,9 @@
 
 Windows has supported verified application capsules since the 0.4.x line. OneCode 0.5.0 adds the corresponding application-layer foundation for Linux AppImage installations. A hotfix is never a shortcut around an incompatible native runtime: every capsule is bound to an exact complete base/runtime fingerprint, and native/runtime changes require a full platform artifact.
 
-DEB installations remain package-manager-owned. OneCode may discover and offer the exact DEB for a newer release, but it does not rewrite root-owned package state during ordinary shutdown and does not activate a user-space capsule behind the package manager's back.
+In the unreleased reliability repair, verified DEB installations can explicitly activate a compatible application capsule in the same user-space layer used by AppImage. The full DEB and native runtime remain package-manager-owned: incompatible updates offer the exact DEB and require normal package installation. OneCode never rewrites root-owned package files during shutdown.
+
+Packaged Linux directory builds have an explicit QA installation kind, an isolated default profile and no production updater. A missing `APPIMAGE` environment variable alone does not prove DEB ownership. Changes to immutable bootstrap classification/profile rules require a new complete Linux base; they cannot be delivered to an older base as an application capsule.
 
 ## Publish a compatible Windows hotfix
 
@@ -45,7 +47,7 @@ Failures before a successor runs restore the verified previous application snaps
 
 The installed full-base version is recorded by the after-pack hook in resources/updater/runtime.json. It is independent of the application version: applying an app capsule cannot advance this base receipt. A matching native hash alone does not satisfy a newer required base; a missing legacy base receipt also requires the verified full base. The detached helper checks the same receipt after installation.
 
-## Linux AppImage hotfixes
+## Linux application hotfixes
 
 0.5.0 is the first Linux complete base that contains the immutable hotfix bootstrap. An older Linux AppImage cannot bootstrap the feature through a capsule; install the full 0.5.0 AppImage first.
 

@@ -146,7 +146,9 @@
         <span id="updateText"></span>
         <button class="btn btn-quiet" id="updateGet" type="button" hidden>Get it</button>
         <button class="btn btn-quiet" id="updateInstall" type="button" hidden>Install when done</button>
+        <button class="btn btn-quiet" id="updateNow" type="button" title="Stops active tools and commands, installs the verified update and restarts OneCode." hidden>Update now</button>
         <button class="btn btn-quiet" id="cancelUpdateInstallNotice" type="button" hidden>Cancel restart</button>
+        <button class="btn btn-quiet" id="updateShowWork" type="button" hidden>Show background work</button>
         <button class="btn btn-quiet" id="updateShowTerminals" type="button" hidden>Show open terminals</button>
         <button class="btn btn-quiet" id="updateExtension" type="button" hidden>Update extension</button>
       </div>
@@ -193,7 +195,8 @@
               <div class="settings-surface pane appearance-settings-card">
                 <div class="setting"><span class="setting-text"><b>OneCode updates</b><em id="settingsUpdateStatus" role="status" aria-live="polite"></em></span><button class="btn" id="checkForUpdates" type="button">Check for updates</button></div>
                 <div class="setting" id="settingsWhatsNewRow" hidden><span class="setting-text"><b>What's new</b><em>Review the changes in this version.</em></span><button class="btn" id="showWhatsNew" type="button">View changes</button></div>
-                <div class="setting" id="settingsInstallUpdateRow" hidden><span class="setting-text"><b>Update ready</b><em>Install the verified download and restart when active work finishes.</em></span><button class="btn btn-solid" id="settingsInstallUpdate" type="button">Install when done</button></div>
+                <div class="setting" id="settingsInstallUpdateRow" hidden><span class="setting-text"><b>Update ready</b><em>Install when work finishes, or choose Update now to stop active tools and commands and restart.</em></span><button class="btn btn-quiet" id="settingsUpdateWork" type="button">Show background work</button><button class="btn btn-quiet" id="settingsUpdateNow" type="button" title="Stops active tools and commands, installs the verified update and restarts OneCode.">Update now</button><button class="btn btn-solid" id="settingsInstallUpdate" type="button">Install when done</button></div>
+                <div class="setting"><span class="setting-text"><b>Background processes</b><em>Inspect and stop running commands from every chat, including stopped chats.</em></span><button class="btn" id="settingsBackgroundWork" type="button">View and stop</button></div>
               </div>
             </section>
             <section class="appearance-section">
@@ -1091,7 +1094,7 @@
                     <input id="autoContinue" type="checkbox" />
                   </label>
                   <details class="setting-timing"><summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Recovery timing details</summary><p>Recover unfinished answers, including in Goal and Loop. Reload after 2 minutes without progress (Pro: 10). If still generating, wait 1 more minute (Pro: 5), then stop and send. A final answer selects Goal or Loop instead of Continue. Undelivered steps get at most three page reloads (after 2, 5, and 10 minutes); recovery then stops visibly while the original pending work remains saved.</p></details>
-                  <div class="setting"><span class="setting-text"><b id="rotateTurnMinutesTitle">Start a fresh turn after</b><em>Long work continues in a new turn with an automatic Continue, right after a tool result. Shorter turns break less often. Not used with Pro models, Goal, Loop or sub-agents.</em></span><select id="rotateTurnMinutes" aria-labelledby="rotateTurnMinutesTitle"><option value="0">Off</option><option value="20">20 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></div>
+                  <div class="setting"><span class="setting-text"><b id="rotateTurnMinutesTitle">Start a fresh turn after</b><em>Optional: continue long work in a new turn after a tool result. Off by default. Not used with Pro models, Goal, Loop or sub-agents.</em></span><select id="rotateTurnMinutes" aria-labelledby="rotateTurnMinutesTitle"><option value="0">Off</option><option value="20">20 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></div>
                   <div class="setting"><span class="setting-text"><b id="goalBackendTitle">Goal response source</b><em>API is the most reliable. Offline uses completion markers and 200 prepared messages.</em></span><select id="goalBackend" aria-labelledby="goalBackendTitle"><option value="chatgpt">Separate Gemini chat</option><option value="api">API key · Most reliable</option><option value="templates">Offline · No API cost</option></select></div>
                   <div class="setting"><span class="setting-text"><b id="loopBackendTitle">Loop response source</b><em>Loop keeps going until you switch it off.</em></span><select id="loopBackend" aria-labelledby="loopBackendTitle"><option value="api">API key · Most reliable</option><option value="chatgpt">Separate Gemini chat</option></select></div>
                   <div class="setting"><span class="setting-text"><b>Goal, Loop and Plan model</b><em>Model for Gemini-generated messages and plans.</em></span><select id="helperModel" aria-label="Goal, Loop and Plan model"></select></div>
@@ -1418,6 +1421,7 @@
             </div>
             <div class="composer-dock" id="composerDock"><div class="composer-dock-body"><div class="background-exec-status" id="backgroundExecStatus" role="status" hidden><i class="ico ph ph-terminal-window" aria-hidden="true"></i><span class="queue-label"></span><span class="background-exec-time"></span><svg class="disclosure-chevron background-exec-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false" hidden><path d="M6 3.5 10.5 8 6 12.5"></path></svg><button class="background-exec-stop" type="button"><i class="ico ph ph-power" aria-hidden="true"></i><span></span></button></div><div class="sr-only" id="backgroundExecLiveStatus" role="status" aria-live="polite" hidden></div><div class="background-exec-list" id="backgroundExecList" role="list" hidden></div><section class="agent-plan" id="agentPlan" aria-label="Agent task plan" hidden></section><div id="recoveryStatus" role="status" hidden></div><div id="taskPlanPreview" aria-label="Plan stages" hidden></div><div id="finishQueue" aria-label="Queued tasks" hidden></div><div id="activeGoalRow" hidden></div></div></div>
             <form class="composer" id="composer">
+              <p id="selectedProviderStatus" class="muted" role="status" aria-live="polite" hidden></p>
               <div id="skillPicker" class="skill-autocomplete" aria-label="Skills" hidden></div>
               <div id="composerSelectedSkills" class="composer-selected-skills" aria-label="Selected skills" hidden></div>
               <label class="sr-only" id="composerProviderLabel" for="chatInput">Message Gemini</label>

@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 31;
+  const VERSION = 32;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2688,6 +2688,11 @@
         const providerArtifacts = providerArtifactsOf(messages);
         const activities = nativeActivities.events;
         const endMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
+        const nativeTurn = shell?.entry.turn || viewTurn;
+        const terminalState = nativeTurn && ['complete', 'cancelled', 'canceled', 'stopped'].includes(nativeTurn.status)
+          ? nativeTurn.status === 'complete' ? 'complete' : 'interrupted'
+          : !shell && messages?.some(message => message?.author?.role === 'assistant' &&
+              message.end_turn === true && message.status === 'finished_partial') ? 'interrupted' : null;
         const trace = shell ? shellTurnTrace(shell) : [];
         // The shell supplies the completed final item's own exact message id,
         // without the classic thought-parent/timestamp tuple. Preserve that
@@ -2701,7 +2706,7 @@
           requests.length === 0 &&
           renderedMessages.length === 0 &&
           activities.length === 0 && nativeActivities.notifications.length === 0 && generatedImages.length === 0 && generatedVideos.length === 0 && providerArtifacts.length === 0 && !endMessageId && trace.length === 0 &&
-          !shell?.entry.turn.items.some(item => item?.type === 'generated-image')
+          !shell?.entry.turn.items.some(item => item?.type === 'generated-image') && !terminalState
         ) continue;
         const index = out.length;
         entry = {
@@ -2711,6 +2716,7 @@
           conversationConflict: conversation.conflict,
           ...(shell && !conversation.conversationId ? { requestOwnerRequired: true } : {}),
           endMessageId,
+          ...(terminalState ? { terminalState } : {}),
           calls,
           codeModeCalls,
           requests,
@@ -2723,7 +2729,8 @@
           videos: generatedVideos,
           artifacts: providerArtifacts,
           ...(trace.length ? { trace } : {}),
-          ...(shellQuestion(shell) ? { question: shellQuestion(shell) } : {})
+          ...((shellQuestion(shell) || (!shell && messages?.findLast(message => message?.author?.role === 'user')?.id)) ?
+            { question: shellQuestion(shell) || str(messages.findLast(message => message?.author?.role === 'user').id) } : {})
         };
         // The isolated-world renderer needs to know which visible section this exact Fiber
         // turn descriptor came from. Remember the desired ephemeral scan index now and apply

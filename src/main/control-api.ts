@@ -22,6 +22,8 @@ import { inFlightMcpRequests, inFlightToolCalls, runningToolCalls, settlingToolC
 import { pluginManager } from './plugins/manager.js';
 import { updateStatus } from './update.js';
 import { APP_VERSION } from './version.js';
+import { runtimeHealthSnapshot } from './runtime-health.js';
+import { terminalExecInventory } from './codex/ownership.js';
 import { closeEventStreams, eventStreamSession, serveEventStream } from './control-stream.js';
 import { serveWorkerRead } from './control-workers.js';
 
@@ -422,7 +424,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, token
       pid: process.pid,
       appVersion: APP_VERSION,
       startedAt: new Date(Date.now() - uptime * 1000).toISOString(),
-      uptimeSeconds: Math.round(uptime)
+      uptimeSeconds: Math.round(uptime),
+      runtime: { ...runtimeHealthSnapshot(), terminals: terminalExecInventory() }
     };
     return reply(res, 200, body);
   }

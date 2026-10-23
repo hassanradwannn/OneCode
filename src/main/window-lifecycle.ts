@@ -146,8 +146,19 @@ export function isBackgroundLaunch(argv: readonly string[]): boolean {
   return argv.includes('--background');
 }
 
+function startupInstallation(): { kind?: string; appImage?: { target: string } } | undefined {
+  return (globalThis as typeof globalThis & { __onecodeInstallation?: { kind?: string; appImage?: { target: string } } }).__onecodeInstallation;
+}
+
+/** Isolated acceptance/QA profiles never mutate the installed product's global login entry. */
+function isolatedStartupProfile(): boolean {
+  return !!(process.env.ONECODE_USER_DATA?.trim() || process.env.GEMINI_CODE_USER_DATA?.trim()) ||
+    process.argv.some(argument => argument === '--user-data-dir' || argument.startsWith('--user-data-dir=')) ||
+    startupInstallation()?.kind === 'linux-unpacked';
+}
+
 export function supportsLoginStartup(platform: NodeJS.Platform, packaged: boolean): boolean {
-  return packaged && (platform === 'win32' || platform === 'linux');
+  return packaged && !isolatedStartupProfile() && (platform === 'win32' || platform === 'linux');
 }
 
 export function applyLoginStartup(
@@ -159,7 +170,9 @@ export function applyLoginStartup(
 ): void {
   if (!supportsLoginStartup(platform, app.isPackaged)) return;
   if (platform === 'linux') {
-    linuxApply(enabled, { executable, appImage: process.env.APPIMAGE });
+    const installation = startupInstallation();
+    linuxApply(enabled, { executable, appImage: installation?.kind === 'appimage' ? installation.appImage?.target ?? ''
+      : installation?.kind === 'deb' ? '' : process.env.APPIMAGE });
     return;
   }
   app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--background'] });

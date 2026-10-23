@@ -7,7 +7,8 @@
  * the Linux runtime receipt, so changing bootstrap semantics deliberately requires a new full base.
  */
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { app } from 'electron';
@@ -20,11 +21,82 @@ const LAYER_DIR = /^[A-Za-z0-9._-]{1,120}$/;
 type LinuxRuntime = { schema: 2; platform: 'linux'; arch: string; id: string; baseVersion: string };
 type LayerFile = { path: string; size: number; sha256: string };
 type ActiveLayer = { schema: 2; version: string; runtime: string; baseVersion: string; directory: string; files: LayerFile[] };
+type AppImageIdentity = { target: string; appDir: string; executable: string; resources: string; dev: number; ino: number; size: number; mtimeMs: number };
+
+/** APPIMAGE is only a claim; prove it matches the mounted runtime before granting update authority. */
+function mountedAppImageIdentity(): AppImageIdentity | null {
+  try {
+    const claimed = process.env.APPIMAGE?.trim(), mounted = process.env.APPDIR?.trim();
+    if (!claimed || !mounted || !path.isAbsolute(claimed) || !path.isAbsolute(mounted)) return null;
+    const target = realpathSync(claimed), appDir = realpathSync(mounted);
+    const executable = realpathSync(process.execPath), resources = realpathSync(process.resourcesPath);
+    const inside = (root: string, file: string) => {
+      const relative = path.relative(root, file);
+      return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    };
+    const escapedMount = appDir.replace(/\\/g, '\\134').replace(/ /g, '\\040').replace(/\t/g, '\\011').replace(/\n/g, '\\012');
+    const mount = readFileSync('/proc/self/mountinfo', 'utf8').split(/\r?\n/).some(line => {
+      const fields = line.split(' '), separator = fields.indexOf('-');
+      return fields[4] === escapedMount && separator >= 0 && /^fuse(?:\.|$)/.test(fields[separator + 1] ?? '');
+    });
+    if (!mount || !inside(appDir, executable) || resources !== path.join(appDir, 'resources')) return null;
+    const targetStat = lstatSync(target);
+    if (!targetStat.isFile() || targetStat.isSymbolicLink()) return null;
+    const stat = statSync(target);
+    return { target, appDir, executable, resources, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch { return null; }
+}
+
+/** No valid mounted AppImage means only that this is not one. Prove package ownership for DEB. */
+function packagedLinuxKind(): { kind: 'appimage' | 'deb' | 'linux-unpacked'; appImage?: AppImageIdentity } {
+  const appImage = mountedAppImageIdentity();
+  if (appImage) return { kind: 'appimage', appImage };
+  try {
+    const executable = realpathSync(process.execPath);
+    try {
+      if (readFileSync('/var/lib/dpkg/info/onecode.list', 'utf8').split(/\r?\n/).includes(executable)) return { kind: 'deb' };
+    } catch { /* Query the package database when the direct package inventory is absent. */ }
+    const ownership = execFileSync('/usr/bin/dpkg-query', ['--search', executable], {
+      encoding: 'utf8', timeout: 2_000, maxBuffer: 64 * 1024, stdio: ['ignore', 'pipe', 'ignore']
+    });
+    if (ownership.split(/\r?\n/).some(line => {
+      const match = /^onecode(?::[a-z0-9-]+)?: (.+)$/.exec(line);
+      return !!match && match[1] === executable;
+    })) return { kind: 'deb' };
+  } catch { /* An unowned directory build cannot use the production profile or updater. */ }
+  return { kind: 'linux-unpacked' };
+}
+const linuxInstallation = app.isPackaged && process.platform === 'linux' ? packagedLinuxKind() : null;
+const linuxKind = linuxInstallation?.kind ?? null;
+Object.defineProperty(globalThis, '__onecodeInstallation', {
+  value: Object.freeze({ platform: process.platform, kind: linuxKind, ...(linuxInstallation?.appImage ? { appImage: Object.freeze(linuxInstallation.appImage) } : {}) }), configurable: false, writable: false
+});
 
 const appDataDirectory = (): string => {
   const override = process.env.ONECODE_USER_DATA?.trim() || process.env.GEMINI_CODE_USER_DATA?.trim();
   if (override) return path.resolve(override);
-  const appData = app.getPath('appData'), current = path.join(appData, PRODUCT_NAME), legacy = path.join(appData, 'GeminiCode');
+  let commandLineProfile: string | null = null;
+  for (let index = 0; index < process.argv.length; index++) {
+    const argument = process.argv[index]!;
+    if (argument.startsWith('--user-data-dir=')) commandLineProfile = argument.slice('--user-data-dir='.length);
+    else if (argument === '--user-data-dir') {
+      const value = process.argv[index + 1];
+      if (value === undefined || value.startsWith('--')) throw new Error('The --user-data-dir argument requires an absolute path');
+      commandLineProfile = value;
+      index++;
+    }
+  }
+  if (commandLineProfile !== null) {
+    if (!commandLineProfile.trim() || !path.isAbsolute(commandLineProfile))
+      throw new Error('The --user-data-dir argument requires an absolute path');
+    return path.resolve(commandLineProfile);
+  }
+  const appData = app.getPath('appData');
+  if (linuxKind === 'linux-unpacked') {
+    const incarnation = createHash('sha256').update(path.resolve(process.execPath)).digest('hex').slice(0, 16);
+    return path.join(appData, 'OneCode-QA', incarnation);
+  }
+  const current = path.join(appData, PRODUCT_NAME), legacy = path.join(appData, 'GeminiCode');
   return !existsSync(current) && existsSync(legacy) ? legacy : current;
 };
 

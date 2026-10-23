@@ -5,6 +5,7 @@ import { listInputs } from '../session/input.js';
 import { serveRead } from '../control-reads.js';
 import { getSession, readSessionPlan } from '../session/store.js';
 import { redactSecretText } from '../redaction.js';
+import { selectedChatReadinessFor } from '../bridge.js';
 
 /** Opening chats project the outbox's frozen provider, never the mutable default. */
 export async function remoteRead(route: string, params: URLSearchParams): Promise<unknown> {
@@ -18,6 +19,7 @@ export async function remoteRead(route: string, params: URLSearchParams): Promis
   const [stored, plan] = await Promise.all([getSession(detail.session.id), readSessionPlan(detail.session.id)]);
   const selection = stored?.selectedModel;
   return { ...detail, session: session(detail.session),
+    providerReadiness: selectedChatReadinessFor(detail.session.id, stored?.conversationId ?? null),
     selection: selection?.conversationId === detail.session.conversationId
       ? { model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) } : null,
     plan: plan ? { updatedAt: plan.updatedAt, ...(plan.explanation ? { explanation: redactSecretText(plan.explanation) } : {}),

@@ -402,6 +402,8 @@ export type SessionEvent =
       origin?: number;
       /** Store-owned authored-content revision; metadata and rehydration preserve it. */
       contentSeq?: number;
+      /** Latest body or attachment presentation revision; never new work by itself. */
+      presentationSeq?: number;
     })
   | (BaseEvent & {
       kind: 'assistant_message';
@@ -441,6 +443,10 @@ export type SessionEvent =
       origin?: number;
       /** Store-owned text/state revision, including interim progress before the final. */
       contentSeq?: number;
+      /** Latest body or rendered representation revision; never new work by itself. */
+      presentationSeq?: number;
+      /** The latest body was observed from the page's exact active generation. */
+      activeContentRevision?: true;
     })
   | (BaseEvent & {
       /** Provider-native generated media, independent of assistant prose and local MCP calls. */

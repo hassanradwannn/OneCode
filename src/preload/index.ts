@@ -274,7 +274,12 @@ const api = {
   // Applies the update this app has already downloaded and verified: the app quits, the
   // installer runs, and the app comes back as the new version. The displayed version fences
   // stale clicks; only the main process selects verified bytes and the installed target.
-  installUpdate: (version: string) => call<'waiting' | 'restarting'>('update:install', { version }),
+  installUpdate: (version: string, mode: 'when-idle' | 'now' = 'when-idle') => call<'waiting' | 'restarting'>('update:install', { version, mode }),
+  updateWork: (offset = 0) => call<import('../shared/update-work.js').UpdateWorkSnapshot>('update:work', { offset }),
+  stopUpdateProcess: (processId: number, incarnation: number) => call<boolean>('update:stop-process', { processId, incarnation }),
+  inspectTerminalOutput: (processId: number, incarnation: number) => call<{ text: string; retainedBytes: number; previewBytes: number } | null>('update:inspect-output', { processId, incarnation }),
+  exportTerminalOutput: (processId: number, incarnation: number) => call<boolean>('update:export-output', { processId, incarnation }),
+  discardTerminalOutput: (processId: number, incarnation: number) => call<boolean>('update:discard-output', { processId, incarnation }),
   cancelUpdateInstall: () => call<boolean>('update:cancel-install'),
   /** Check/stage/apply supported updates and request one connector refresh round. May restart. */
   updateAll: () => call<import('../shared/types.js').UpdateAllResult>('update:all'),
@@ -429,7 +434,8 @@ const api = {
   /** The person's answer to that exact card; the page presses it only if the card still stands. */
   answerApproval: (id: string, cardId: string, choice: 'allow' | 'deny') =>
     call<{ ok: true } | { ok: false; error: string }>('sessions:answerApproval', { id, cardId, choice }),
-  followSessionTab: (id: string) => call<boolean>('sessions:followTab', { id }),
+  followSessionTab: (id: string) => call<import('../shared/chat-readiness.js').SelectedChatReadiness>('sessions:followTab', { id }),
+  sessionTabReadiness: (id: string) => call<import('../shared/chat-readiness.js').SelectedChatReadiness | null>('sessions:tabReadiness', { id }),
   // Stops a chat this app cannot stop in the page: every tool call it has already been proved
   // to own is refused until it is released. Returns the whole blocked set, so one press
   // repaints without a second read.

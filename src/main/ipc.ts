@@ -67,6 +67,7 @@ import { confirmedPluginSchemas, pluginRefreshPublications, pluginRefreshStatuse
  */
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron';
+import path from 'node:path';
 import { z } from 'zod';
 import {
   CAPABILITIES,
@@ -130,7 +131,8 @@ import {
   stopBridge,
   sweepStaleSwarm,
   unpair,
-  followChatInBackground
+  ensureSelectedChatReady,
+  selectedChatReadinessFor
 } from './bridge.js';
 import { extensionDir } from './extension-path.js';
 import { APP_VERSION } from './version.js';
@@ -636,9 +638,15 @@ async function buildState(): Promise<AppState> {
 }
 
 /** Wraps a handler so a thrown error becomes a message the UI can show. */
-function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>): void {
-  ipcMain.handle(channel, async (_event, payload: unknown) => {
+function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>, desktop?: () => BrowserWindow | null): void {
+  ipcMain.handle(channel, async (event, payload: unknown) => {
     try {
+      if (desktop) {
+        const window = desktop();
+        if (!window || window.isDestroyed() || !event || !window.webContents.mainFrame ||
+            event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame)
+          throw new Error('This action requires the trusted OneCode desktop window.');
+      }
       return { ok: true as const, data: await fn(payload) };
     } catch (err) {
       const message =
@@ -676,7 +684,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('remote:status', async () => remoteStatus());
   handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)));
   handle('remote:refresh-link', async () => refreshRemoteLink());
-  handle('remote:revoke', async payload => { revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
+  handle('remote:revoke', async payload => { await revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');
     await requestPluginRefreshes(version, ['core']);
@@ -1492,10 +1500,52 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return response === 1 && getWindow() === window && !window.isDestroyed();
   }));
   handle('update:install', async payload => {
-    const { version } = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/) }).parse(payload);
-    return requestUpdateInstall(version);
-  });
-  handle('update:cancel-install', async () => cancelUpdateInstall());
+    const { version, mode } = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/), mode: z.enum(['when-idle', 'now']).default('when-idle') }).strict().parse(payload);
+    return requestUpdateInstall(version, mode);
+  }, getWindow);
+  handle('update:work', async payload => {
+    const { offset } = z.object({ offset: z.number().int().min(0).max(100_000).default(0) }).strict().parse(payload ?? {});
+    const { updateWorkDetails } = await import('./update-install.js');
+    return updateWorkDetails(offset);
+  }, getWindow);
+  handle('update:stop-process', async payload => {
+    const { processId, incarnation } = z.object({ processId: z.number().int().min(1000).max(Number.MAX_SAFE_INTEGER),
+      incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().parse(payload);
+    const { unifiedExecManager } = await import('./codex/manager.js');
+    return unifiedExecManager.terminateProcess(processId, incarnation);
+  }, getWindow);
+  handle('update:cancel-install', async () => cancelUpdateInstall(), getWindow);
+  const retainedTerminal = z.object({ processId: z.number().int().min(1000).max(Number.MAX_SAFE_INTEGER), incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
+  handle('update:inspect-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const { readQuarantinedExecResult } = await import('./codex/ownership.js');
+    const result = readQuarantinedExecResult(processId, incarnation);
+    if (!result) return null;
+    const bytes = result.displayOutput ?? result.rawOutput, preview = bytes.subarray(0, 64 * 1024);
+    return { text: preview.toString('utf8'), retainedBytes: bytes.length, previewBytes: preview.length };
+  }, getWindow);
+  handle('update:export-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const window = getWindow(); if (!window || window.isDestroyed()) return false;
+    const owner = await import('./codex/ownership.js');
+    const result = owner.exportQuarantinedExecResult(processId, incarnation); if (!result) return false;
+    const chosen = await dialog.showSaveDialog(window, { title: 'Export terminal output',
+      defaultPath: path.join(app.getPath('downloads'), result.suggestedFilename), filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (chosen.canceled || !chosen.filePath || getWindow() !== window || window.isDestroyed()) return false;
+    const current = owner.exportQuarantinedExecResult(processId, incarnation); if (!current) return false;
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(chosen.filePath, current.content, { mode: 0o600 }); return true;
+  }, getWindow);
+  handle('update:discard-output', async payload => {
+    const { processId, incarnation } = retainedTerminal.parse(payload);
+    const window = getWindow(); if (!window || window.isDestroyed()) return false;
+    const { discardQuarantinedExecResult } = await import('./codex/ownership.js');
+    const choice = await dialog.showMessageBox(window, { type: 'warning', title: 'OneCode', message: 'Discard retained command output?',
+      detail: `Session ${processId}. This removes the retained output without running the command again.`,
+      buttons: ['Keep output', 'Discard output'], defaultId: 0, cancelId: 0, noLink: true });
+    if (choice.response !== 1 || getWindow() !== window || window.isDestroyed()) return false;
+    return discardQuarantinedExecResult(processId, incarnation);
+  }, getWindow);
 
   // "Get update" for an installation that cannot update itself: the exact published file for
   // this machine and the announced version, opened in the user's browser. The renderer names
@@ -1731,7 +1781,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('sessions:stopProcess', async (payload) => {
     const { sessionId, processId, incarnation } = z.object({
       sessionId: z.string().min(8).max(64).regex(/^[0-9a-z-]+$/i),
-      processId: z.number().int().min(1_000).max(99_999),
+      processId: z.number().int().min(1_000).max(Number.MAX_SAFE_INTEGER),
       incarnation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
     }).parse(payload);
     return stopExecProcess(sessionId, processId, incarnation);
@@ -1817,9 +1867,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { id } = sessionIdArg.parse(payload);
     const selection = ++followSelection;
     const conversationId = (await getSession(id))?.conversationId;
-    if (selection !== followSelection) return true;
-    if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) followChatInBackground(conversationId);
-    return true;
+    if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
+    if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) return ensureSelectedChatReady(id);
+    return { phase: 'refused' as const, reason: 'This chat has no current provider conversation.' };
+  });
+  handle('sessions:tabReadiness', async payload => {
+    const { id } = sessionIdArg.parse(payload);
+    return selectedChatReadinessFor(id, (await getSession(id))?.conversationId ?? null);
   });
 
   /**

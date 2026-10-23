@@ -6855,6 +6855,48 @@ function showView(name: string): void {
   paintJumpLatest();
 }
 
+let selectedProviderTimer: number | null = null;
+let selectedProviderEpoch = 0;
+function clearSelectedProviderReadiness(): void {
+  selectedProviderEpoch++;
+  if (selectedProviderTimer !== null) window.clearTimeout(selectedProviderTimer);
+  selectedProviderTimer = null;
+  const status = document.getElementById('selectedProviderStatus');
+  if (status) { status.hidden = true; status.textContent = ''; }
+}
+async function ensureSelectedProvider(id: string, selection: number, poll = false): Promise<void> {
+  if (id !== selectedId || selection !== selectionGeneration || !api.followSessionTab) return;
+  if (poll && (document.hidden || !timelineShown() || $('chatView').hidden)) {
+    selectedProviderTimer = window.setTimeout(() => {
+      selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
+    }, 2000);
+    return;
+  }
+  const epoch = selectedProviderEpoch;
+  const status = document.getElementById('selectedProviderStatus');
+  if (!status) return;
+  status.hidden = false;
+  if (!poll) ui(status, 'textContent', () => t('Loading provider tab…'));
+  let next: import('../shared/chat-readiness.js').SelectedChatReadiness;
+  try {
+    const reply = poll ? await api.sessionTabReadiness(id) : await api.followSessionTab(id);
+    if (id !== selectedId || selection !== selectionGeneration || epoch !== selectedProviderEpoch) return;
+    if (!reply.ok) throw new Error(reply.error);
+    next = reply.data ?? { phase: 'refused', reason: t('Select this chat again to load its provider tab.') };
+  } catch (error) {
+    next = { phase: 'reconnecting', reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (id !== selectedId || selection !== selectionGeneration || epoch !== selectedProviderEpoch) return;
+  if (!next || next.phase === 'ready' || typeof next !== 'object') { clearSelectedProviderReadiness(); return; }
+  ui(status, 'textContent', () => next.phase === 'history-wait'
+    ? t('Waiting for provider history until {0}…', [new Date(next.retryAt ?? Date.now()).toLocaleTimeString()])
+    : next.phase === 'reconnecting' ? t('Reconnecting provider tab…')
+      : next.phase === 'refused' ? next.reason ?? t('Provider tab is unavailable.') : t('Loading provider tab…'));
+  if (next.phase !== 'refused') selectedProviderTimer = window.setTimeout(() => {
+    selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
+  }, next.phase === 'history-wait' ? Math.max(2000, Math.min(15000, (next.retryAt ?? 0) - Date.now())) : 2000);
+}
+
 function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 'reasoningEffort'>): void {
   const ownerChanged = id !== selectedId;
   rememberDraft();
@@ -6863,6 +6905,8 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
   newChatSelected = false;
   selectedId = id;
+  clearSelectedProviderReadiness();
+  void ensureSelectedProvider(id, selectionGeneration);
   workbenchBrowserPanel?.sync(id);
   mediaPanel?.sync(id);
   void artifactPanel?.sync(id);
@@ -6897,14 +6941,13 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   if (ownerChanged) {
     paintDetail(false);
     paintHandoff();
-    // With Background chats on, the chat's tab becomes the selected one in that window (#1249).
-    void api.followSessionTab?.(id)?.catch(() => undefined);
   }
   void loadDetail();
   void refreshInputQueue();
 }
 
 function selectNewChat(projectId: string | null = null): void {
+  clearSelectedProviderReadiness();
   rememberDraft(); selectionGeneration++; chatFind?.selectionChanged(); replaceComposerDraft(); pendingNewInput = null;
   inputQueueGeneration++;
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
@@ -7445,6 +7488,7 @@ export function initChat(next: Deps): void {
   chatSearch = initChatSearch({
     select: (id, match) => {
       if (id !== selectedId) { pendingNewInput = null; selectSession(id); }
+      else { clearSelectedProviderReadiness(); void ensureSelectedProvider(id, selectionGeneration); }
       if (match) void revealSearchMatch(id, match);
     },
     selectedId: () => selectedId,
@@ -7456,7 +7500,10 @@ export function initChat(next: Deps): void {
   });
   $('sessionList').addEventListener('click', (event) => {
     const row = (event.target as HTMLElement).closest<HTMLElement>('[data-id]');
-    if (!row?.dataset.id || row.dataset.id === selectedId) return;
+    if (!row?.dataset.id) return;
+    if (row.dataset.id === selectedId) {
+      clearSelectedProviderReadiness(); void ensureSelectedProvider(row.dataset.id, selectionGeneration); return;
+    }
     pendingNewInput = null;
     selectSession(row.dataset.id);
   });
@@ -7467,7 +7514,9 @@ export function initChat(next: Deps): void {
     const row = control?.closest<HTMLElement>('[data-id]');
     if (!control || target !== control || !row?.dataset.id) return;
     event.preventDefault();
-    if (row.dataset.id === selectedId) return;
+    if (row.dataset.id === selectedId) {
+      clearSelectedProviderReadiness(); void ensureSelectedProvider(row.dataset.id, selectionGeneration); return;
+    }
     pendingNewInput = null;
     selectSession(row.dataset.id);
   });

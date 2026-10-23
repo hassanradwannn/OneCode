@@ -11,6 +11,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { safeStorage } from 'electron';
+import { randomUUID } from 'node:crypto';
 import type { SecureStorageInfo } from '../shared/types.js';
 import { logError, logWarn } from './logger.js';
 import { afterKeychainRead, beforeKeychainRead } from './keychain-notice.js';
@@ -77,7 +78,7 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
  * drafts, one per active provider), so they live under the same OS-backed encrypted blob
  * as the rest and never leave the main process.
  */
-export type SecretKey = 'openaiApiKey' | 'bridgeToken' | 'remoteAccessKey' | 'openRouterApiKey' | 'customProviderApiKey' | `plugin:${string}` | `setup:${string}` | `mcp:path:${string}`;
+export type SecretKey = 'openaiApiKey' | 'bridgeToken' | 'remoteAccessKey' | 'authorityInstallationId' | 'openRouterApiKey' | 'customProviderApiKey' | `plugin:${string}` | `setup:${string}` | `mcp:path:${string}`;
 
 export function initSecretsPath(userDataDir: string): void {
   secretsPath = path.join(userDataDir, FILE_NAME);
@@ -324,6 +325,37 @@ export async function hasSecret(key: SecretKey): Promise<boolean> {
   return (await getSecret(key)) !== null;
 }
 
+let authorityInstallationIdInFlight: Promise<string> | null = null;
+let authorityInstallationIdTestOverride: string | null = null;
+/** Stable across routine restarts and protected by the host OS encryption boundary. */
+export function authorityInstallationId(): Promise<string> {
+  if (authorityInstallationIdTestOverride) return Promise.resolve(authorityInstallationIdTestOverride);
+  if (authorityInstallationIdInFlight) return authorityInstallationIdInFlight;
+  const load = (async () => {
+    const saved = await getSecret('authorityInstallationId');
+    if (saved) {
+      if (!/^[a-f0-9-]{36}$/i.test(saved)) throw new Error('The authority installation identity is invalid');
+      return saved;
+    }
+    if (storedSecretsUnreadable() || !(await isEncryptionAvailable()))
+      throw new Error('The protected installation identity is unavailable');
+    const created = randomUUID();
+    await setSecret('authorityInstallationId', created);
+    const verified = await getSecret('authorityInstallationId');
+    if (verified !== created) throw new Error('The protected installation identity could not be verified');
+    return created;
+  })();
+  authorityInstallationIdInFlight = load;
+  void load.finally(() => { if (authorityInstallationIdInFlight === load) authorityInstallationIdInFlight = null; }).catch(() => undefined);
+  return load;
+}
+
+/** Test-only identity seam; production callers must use the protected secret above. */
+export function setAuthorityInstallationIdForTests(value: string | null): void {
+  authorityInstallationIdTestOverride = value;
+  authorityInstallationIdInFlight = null;
+}
+
 export function setSecret(key: SecretKey, value: string): Promise<void> {
   return enqueue(async () => {
     if (!(await isEncryptionAvailable())) {
@@ -401,4 +433,6 @@ export function resetSecretsCacheForTests(): void {
   cache = null;
   rotationPending = false;
   loadInFlight = null;
+  authorityInstallationIdInFlight = null;
+  authorityInstallationIdTestOverride = null;
 }

@@ -19,6 +19,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { HeadTailBuffer } from './head-tail-buffer.js';
 import { CommandBatchDisplay } from './command-batch.js';
 import {
@@ -46,11 +47,15 @@ import {
 } from './unified-exec-constants.js';
 import { terminateProcessTree } from '../exec.js';
 import { prefixPowershellScriptWithUtf8, type ShellType } from './shell.js';
+import { FileExecSpool, MemoryExecSpool, type CompletedExecSpoolRecord, type ExecSpool, type LiveExecSpoolRecord } from './unified-exec-spool.js';
+import type { ChatProvider } from '../../shared/chat-provider.js';
 
 // --------------------------------------------------------------------------- errors
 
 export type UnifiedExecErrorKind =
   | 'create_process'
+  | 'terminal_capacity'
+  | 'terminal_storage_unavailable'
   | 'process_failed'
   | 'unknown_process_id'
   | 'write_to_stdin'
@@ -79,6 +84,16 @@ export class UnifiedExecError extends Error {
 
   static createProcess(message: string): UnifiedExecError {
     return new UnifiedExecError('create_process', `Failed to create unified exec process: ${message}`, message, null);
+  }
+
+  static terminalCapacity(message: string): UnifiedExecError {
+    return new UnifiedExecError('terminal_capacity', `TERMINAL_CAPACITY: ${message}`, message, null);
+  }
+
+  static terminalStorageUnavailable(): UnifiedExecError {
+    return new UnifiedExecError('terminal_storage_unavailable',
+      'TERMINAL_STORAGE_UNAVAILABLE: durable terminal result storage is not ready; no command was started.',
+      'durable terminal result storage is not ready; no command was started', null);
   }
 
   static processFailed(message: string): UnifiedExecError {
@@ -111,6 +126,10 @@ export class UnifiedExecError extends Error {
     switch (this.kind) {
       case 'create_process':
         return `CreateProcess { message: ${JSON.stringify(this.detail ?? '')} }`;
+      case 'terminal_capacity':
+        return `TERMINAL_CAPACITY { message: ${JSON.stringify(this.detail ?? '')} }`;
+      case 'terminal_storage_unavailable':
+        return `TERMINAL_STORAGE_UNAVAILABLE { message: ${JSON.stringify(this.detail ?? '')} }`;
       case 'process_failed':
         return `ProcessFailed { message: ${JSON.stringify(this.detail ?? '')} }`;
       case 'unknown_process_id':
@@ -229,6 +248,7 @@ export interface SpawnParams {
   cwd: string;
   env: NodeJS.ProcessEnv;
   tty: boolean;
+  onOutputCheckpoint?: () => void;
 }
 
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
@@ -270,6 +290,7 @@ class UnifiedExecProcess {
   readonly completion = new Promise<ProcessCompletion>(resolve => { this.resolveCompletion = resolve; });
   private buffer = new HeadTailBuffer();
   private readonly history = new HeadTailBuffer(COMPLETED_EXEC_OUTPUT_BYTES);
+  private readonly displayHistory = new HeadTailBuffer(COMPLETED_EXEC_OUTPUT_BYTES);
   private displayBuffer: HeadTailBuffer | undefined;
   private readonly batchDisplay: CommandBatchDisplay | undefined;
   readonly outputNotify = new Notify();
@@ -277,7 +298,9 @@ class UnifiedExecProcess {
   readonly cancelNotify = new Notify();
   readonly interactionLock = new Mutex();
   outputClosed = false;
+  outputInterrupted = false;
   cancelled = false;
+  private outputSealed = false;
   private exited = false;
   private exit: number | null = null;
   private failure: string | null = null;
@@ -286,10 +309,12 @@ class UnifiedExecProcess {
   private pty: PtyProcess | null = null;
   readonly tty: boolean;
   private readonly spawnPid: number;
+  private readonly onOutputCheckpoint?: () => void;
 
-  private constructor(tty: boolean, pid: number, batchMarker?: string) {
+  private constructor(tty: boolean, pid: number, batchMarker?: string, onOutputCheckpoint?: () => void) {
     this.tty = tty;
     this.spawnPid = pid;
+    this.onOutputCheckpoint = onOutputCheckpoint;
     if (batchMarker) {
       this.batchDisplay = new CommandBatchDisplay(batchMarker);
       this.displayBuffer = new HeadTailBuffer();
@@ -344,7 +369,7 @@ class UnifiedExecProcess {
       } catch (error) {
         throw UnifiedExecError.createProcess(error instanceof Error ? error.message : String(error));
       }
-      const managed = new UnifiedExecProcess(true, handle.pid, params.batchMarker);
+      const managed = new UnifiedExecProcess(true, handle.pid, params.batchMarker, params.onOutputCheckpoint);
       managed.pty = handle;
       handle.onData((data) => managed.pushChunk(Buffer.from(data, 'utf8')));
       handle.onExit((event) => {
@@ -376,7 +401,7 @@ class UnifiedExecProcess {
       throw UnifiedExecError.createProcess(error instanceof Error ? error.message : String(error));
     }
 
-    const managed = new UnifiedExecProcess(false, child.pid ?? -1, params.batchMarker);
+    const managed = new UnifiedExecProcess(false, child.pid ?? -1, params.batchMarker, params.onOutputCheckpoint);
     managed.child = child;
     // stdout and stderr are combined into one stream, exactly as `combine_output_receivers`
     // does on the local Codex path, so interleaving is preserved in arrival order.
@@ -427,11 +452,14 @@ class UnifiedExecProcess {
   }
 
   private pushChunk(chunk: Buffer): void {
-    if (chunk.length === 0) return;
+    if (chunk.length === 0 || this.outputSealed) return;
     this.history.pushChunk(chunk);
     this.buffer.pushChunk(chunk);
-    if (this.batchDisplay) this.displayBuffer!.pushChunk(this.batchDisplay.push(chunk));
+    const displayChunk = this.batchDisplay ? this.batchDisplay.push(chunk) : chunk;
+    this.displayHistory.pushChunk(displayChunk);
+    if (this.batchDisplay) this.displayBuffer!.pushChunk(displayChunk);
     this.outputNotify.notifyWaiters();
+    this.onOutputCheckpoint?.();
   }
 
   private streamEnded(): void {
@@ -440,10 +468,42 @@ class UnifiedExecProcess {
   }
 
   private closeOutput(): void {
-    if (this.outputClosed) return;
-    if (this.batchDisplay) this.displayBuffer!.pushChunk(this.batchDisplay.push(Buffer.alloc(0), true));
+    if (this.outputClosed || this.outputInterrupted) return;
+    if (this.batchDisplay) {
+      const finalChunk = this.batchDisplay.push(Buffer.alloc(0), true);
+      this.displayHistory.pushChunk(finalChunk);
+      this.displayBuffer!.pushChunk(finalChunk);
+    }
+    this.outputSealed = true;
     this.outputClosed = true;
     this.outputClosedNotify.notifyWaiters();
+  }
+
+  private sealInterruptedOutput(): void {
+    if (this.outputClosed || this.outputInterrupted) return;
+    if (this.batchDisplay) {
+      const finalChunk = this.batchDisplay.push(Buffer.alloc(0), true);
+      this.displayHistory.pushChunk(finalChunk);
+      this.displayBuffer!.pushChunk(finalChunk);
+    }
+    this.outputSealed = true;
+    this.outputInterrupted = true;
+    this.outputNotify.notifyWaiters();
+    this.outputClosedNotify.notifyWaiters();
+  }
+
+  async waitForOutputClosed(timeoutMs = Number.POSITIVE_INFINITY): Promise<boolean> {
+    const deadline = Number.isFinite(timeoutMs) ? Date.now() + Math.max(0, timeoutMs) : Number.POSITIVE_INFINITY;
+    while (!this.outputClosed && !this.outputInterrupted) {
+      const closed = this.outputClosedNotify.notified();
+      if (this.outputClosed || this.outputInterrupted) { closed.dispose(); break; }
+      try {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        if (await raceWithTimeout([closed], remaining)) return false;
+      } finally { closed.dispose(); }
+    }
+    return this.outputClosed;
   }
 
   private signalExit(exitCode: number | null): void {
@@ -469,14 +529,21 @@ class UnifiedExecProcess {
 
   /** Completed output is immutable once both exit and stream closure are observed. */
   completedOutput(): Buffer | null {
-    return this.hasExited() && this.outputClosed
-      ? (this.displayBuffer ?? this.buffer).toBytesWithOmissionMarker() : null;
+    return this.hasExited() && (this.outputClosed || this.outputInterrupted)
+      ? (this.batchDisplay ? this.displayHistory : this.history).toBytesWithOmissionMarker() : null;
   }
 
   /** Independent of the unread cursor: explicit rereads include earlier delivered chunks. */
   retainedOutput(): Buffer {
     return this.history.toBytesWithOmissionMarker();
   }
+
+  retainedDisplayOutput(): Buffer {
+    return (this.batchDisplay ? this.displayHistory : this.history).toBytesWithOmissionMarker();
+  }
+
+  rawOmittedBytes(): number { return this.history.omittedBytes(); }
+  displayOmittedBytes(): number { return (this.batchDisplay ? this.displayHistory : this.history).omittedBytes(); }
 
   benignExit(classify: ExecCommandRequest['classifyExit']): boolean {
     // An omitted diagnostic or still-open stream cannot prove a non-zero result benign.
@@ -551,7 +618,11 @@ class UnifiedExecProcess {
       await terminateProcessTree(this.child.pid, true);
     }
     this.signalExit(this.exit);
-    this.closeOutput();
+    if (!this.outputClosed && !(await this.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS))) {
+      // The leader may be gone while a descendant keeps inherited streams open. Freeze only
+      // bytes already received and report that the captured output ended under the close cap.
+      this.sealInterruptedOutput();
+    }
   }
 }
 
@@ -566,6 +637,7 @@ function sleep(ms: number): Promise<void> {
 
 export interface ProcessCompletion {
   benignExit?: boolean;
+  outputInterrupted?: boolean;
   exitCode: number | null;
   completedAt: number;
   durationMs: number;
@@ -574,6 +646,9 @@ export interface ProcessCompletion {
 export interface ExecCommandToolOutput {
   completedSessionId?: number;
   replayed?: boolean;
+  terminalStoragePending?: boolean;
+  terminalOutputInterrupted?: boolean;
+  terminalOutputCheckpointed?: boolean;
   benignExit?: boolean;
   /** Exact process lifetime for recording; never serialized into the MCP response. */
   completion?: Promise<ProcessCompletion>;
@@ -624,6 +699,9 @@ export function execCommandResponseText(output: ExecCommandToolOutput): string {
   if (output.processId !== null) sections.push(`Process running with session ID ${output.processId}`);
   if (output.completedSessionId !== undefined) sections.push(`Completed session ID: ${output.completedSessionId}`);
   if (output.replayed) sections.push('Retained output (already completed; command was not run again):');
+  if (output.terminalStoragePending) sections.push('Warning: completed terminal output is still held in memory because durable storage failed. No command was rerun; retry this session read after storage is available.');
+  if (output.terminalOutputInterrupted) sections.push('Warning: output streams stayed open past the close-wait limit. Captured bytes are retained, but the output is incomplete.');
+  if (output.terminalOutputCheckpointed) sections.push('Warning: OneCode restarted while this command was live. Only the last durable output checkpoint is retained; later output is unknown, and the command was not restarted.');
   if (output.benignExit) sections.push('This non-zero exit is an expected command result, not a failure.');
   if (output.originalTokenCount !== null) sections.push(`Original token count: ${output.originalTokenCount}`);
   sections.push('Output:');
@@ -642,6 +720,9 @@ export function execCommandStructuredOutput(output: ExecCommandToolOutput): Reco
     // Named for what it says (#1417): "benign" read to Gemini's reviewer as a verdict on risk.
     ...(output.benignExit ? { expected_exit: true } : {}),
     ...(output.replayed ? { output_replayed: true } : {}),
+    ...(output.terminalStoragePending ? { terminal_storage_pending: true } : {}),
+    ...(output.terminalOutputInterrupted ? { terminal_output_interrupted: true } : {}),
+    ...(output.terminalOutputCheckpointed ? { terminal_output_checkpointed: true } : {}),
     ...(output.originalTokenCount === null ? {} : { original_token_count: output.originalTokenCount }),
     // This adapter emits structuredContent beside the text result, so both representations
     // must obey the same policy/default budget. Returning the retained raw buffer here made
@@ -667,6 +748,13 @@ export interface ExecCommandRequest {
   displayCwd: string;
   env: NodeJS.ProcessEnv;
   tty: boolean;
+  /** Exact owner captured at admission; null remains quarantined anonymous custody. */
+  ownerPrincipal?: string | null;
+  provider?: ChatProvider;
+  requestId?: string | null;
+  sessionId?: string | null;
+  conversationId?: string | null;
+  setupProfileId?: string | null;
 }
 
 export interface WriteStdinRequest {
@@ -698,7 +786,14 @@ interface ProcessEntry {
   hookCommand: string;
   tty: boolean;
   startedAt: number;
+  ownerPrincipal: string | null;
+  provider?: ChatProvider;
+  requestId?: string | null;
+  sessionId?: string | null;
+  conversationId?: string | null;
+  setupProfileId?: string | null;
   initialExecCommandActive: boolean;
+  initialOutputOffset?: number;
   /** Cursor into this process's own completed buffer; offers never consume bytes. */
   delivery?: { offset: number; offer?: { end: number; publication: OutputPublication } };
 }
@@ -717,6 +812,8 @@ export interface CompletedOutputPage {
   start: number;
   end: number;
   total: number;
+  outputInterrupted: boolean;
+  outputCaptureIncomplete: boolean;
 }
 
 export interface BackgroundExecState {
@@ -728,13 +825,31 @@ export class UnifiedExecProcessManager {
   private readonly processes = new Map<number, ProcessEntry>();
   private readonly completed = new Map<number, Pick<ExecCommandToolOutput, 'rawOutput' | 'displayOutput' | 'exitCode' | 'benignExit'> & { identity: object }>();
   private releaseListener?: (processId: number) => void;
+  private spoolRestoreListener?: (records: CompletedExecSpoolRecord[]) => void;
   private processChangeListener?: () => void;
   private readonly reservedProcessIds = new Set<number>();
-  private nextProcessIncarnation = 1;
+  private spool: ExecSpool = new MemoryExecSpool();
+  private readonly spooled = new Map<number, CompletedExecSpoolRecord>();
+  private readonly spoolOffers = new Map<number, { end: number; publication: OutputPublication }>();
+  private readonly spoolFailures = new Set<number>();
+  private spoolInitialized = false;
+  private spoolInitializationError: string | null = null;
+  private spoolUserDataDir: string | null = null;
+  private spoolInitFlight: Promise<CompletedExecSpoolRecord[]> | null = null;
+  private lastSpoolInitAttemptAt = 0;
+  private lazyInitRetryUsed = false;
+  private readonly allocations = new Map<number, number>();
+  private nextLocalProcessId = 1_000;
+  private nextLocalIncarnation = 1;
+  private readonly liveOperations = new Map<number, LiveExecSpoolRecord>();
+  private readonly checkpointTimers = new Map<number, NodeJS.Timeout>();
+  private readonly checkpointFlights = new Map<number, Promise<void>>();
   private readonly maxWriteStdinYieldTimeMs: number;
+  private readonly requireDurableSpool: boolean;
 
-  constructor(maxWriteStdinYieldTimeMs: number) {
+  constructor(maxWriteStdinYieldTimeMs: number, requireDurableSpool = false) {
     this.maxWriteStdinYieldTimeMs = Math.max(maxWriteStdinYieldTimeMs, MIN_EMPTY_YIELD_TIME_MS);
+    this.requireDurableSpool = requireDurableSpool;
   }
 
   /** The custody registry drops ownership only when this manager really discards an id. */
@@ -742,56 +857,310 @@ export class UnifiedExecProcessManager {
     this.releaseListener = listener;
   }
 
+  /** Rehydrate the durable owner projection for startup and lazy spool recovery alike. */
+  setSpoolRestoreListener(listener: (records: CompletedExecSpoolRecord[]) => void): void {
+    this.spoolRestoreListener = listener;
+  }
+
   /** Presentation observers may reread the manager after a process starts, exits or is discarded. */
   setProcessChangeListener(listener: () => void): void {
     this.processChangeListener = listener;
+  }
+
+  /** Called once during startup, before tools are exposed. Unread results survive app restarts. */
+  async initializeSpool(userDataDir: string): Promise<CompletedExecSpoolRecord[]> {
+    this.spoolUserDataDir = userDataDir;
+    if (this.spoolInitFlight) return this.spoolInitFlight;
+    const run = (async () => {
+      this.lastSpoolInitAttemptAt = Date.now();
+      const durable = new FileExecSpool(userDataDir);
+      try {
+        const records = await durable.initialize();
+        this.spool = durable;
+        for (const record of records) {
+          this.spooled.set(record.processId, record);
+        }
+        this.spoolInitialized = true;
+        this.spoolInitializationError = null;
+        this.lazyInitRetryUsed = false;
+        this.spoolRestoreListener?.(records);
+        this.notifyProcessChange();
+        return records;
+      } catch (error) {
+        this.spoolInitialized = false;
+        this.spoolInitializationError = error instanceof Error ? error.message : 'Durable terminal result storage could not be opened or validated.';
+        this.notifyProcessChange();
+        throw new Error(this.spoolInitializationError);
+      }
+    })();
+    this.spoolInitFlight = run;
+    try { return await run; }
+    finally { if (this.spoolInitFlight === run) this.spoolInitFlight = null; }
+  }
+
+  private async ensureSpoolReady(): Promise<void> {
+    if (!this.requireDurableSpool || this.spoolInitialized) return;
+    if (!this.spoolUserDataDir) throw UnifiedExecError.terminalStorageUnavailable();
+    if (this.spoolInitFlight) {
+      try { await this.spoolInitFlight; return; }
+      catch { throw UnifiedExecError.terminalStorageUnavailable(); }
+    }
+    const firstLazyRetry = !this.lazyInitRetryUsed;
+    if (!firstLazyRetry && Date.now() - this.lastSpoolInitAttemptAt < 1_000)
+      throw UnifiedExecError.terminalStorageUnavailable();
+    this.lazyInitRetryUsed = true;
+    try { await this.initializeSpool(this.spoolUserDataDir); }
+    catch { throw UnifiedExecError.terminalStorageUnavailable(); }
+  }
+
+  /** Durable monotonic id and incarnation allocation; the ledger commit precedes returning it. */
+  async allocateProcessIdDurably(): Promise<{ processId: number; incarnation: number }> {
+    try {
+      await this.ensureSpoolReady();
+      const allocation = await this.spool.allocate();
+      this.reservedProcessIds.add(allocation.processId);
+      this.allocations.set(allocation.processId, allocation.incarnation);
+      return allocation;
+    } catch (error) {
+      if (error instanceof UnifiedExecError) throw error;
+      if ((error as Error).message.includes('exhausted')) throw UnifiedExecError.terminalCapacity('terminal process id range is exhausted; new_command_started=false');
+      throw UnifiedExecError.terminalStorageUnavailable();
+    }
+  }
+
+  /** Read-only trusted-local access. Model callers must use owner-scoped read paths instead. */
+  retainedResultRecords(): CompletedExecSpoolRecord[] {
+    return [...this.spooled.values()].map(record => ({ ...record }));
+  }
+
+  retainedResultRecord(processId: number): CompletedExecSpoolRecord | null {
+    const record = this.spooled.get(processId);
+    return record ? { ...record } : null;
+  }
+
+  /** Discard only the exact durable result row shown to a trusted local operator. */
+  async discardRetainedResult(processId: number, incarnation: number, principal: string | null): Promise<boolean> {
+    const record = this.spooled.get(processId);
+    if (!record || record.incarnation !== incarnation || record.principal !== principal) return false;
+    if (!await this.spool.removeIf(processId, incarnation, principal)) return false;
+    if (this.spooled.get(processId)?.incarnation !== incarnation) return false;
+    this.spooled.delete(processId);
+    this.spoolOffers.delete(processId);
+    this.releaseProcessId(processId);
+    this.notifyProcessChange();
+    return true;
+  }
+
+  async promotePrincipal(processId: number, requestPrincipal: string, sessionId: string, conversationId?: string): Promise<void> {
+    const entry = this.processes.get(processId);
+    if (entry?.ownerPrincipal === requestPrincipal) {
+      entry.ownerPrincipal = sessionId;
+      entry.sessionId = sessionId;
+      if (conversationId) entry.conversationId = conversationId;
+    }
+    const record = this.spooled.get(processId);
+    if (!record || record.principal !== requestPrincipal) return;
+    const promoted: CompletedExecSpoolRecord = { ...record, principal: sessionId, sessionId,
+      ...(conversationId ? { conversationId } : {}), ownerKind: 'session' };
+    await this.spool.update(promoted);
+    this.spooled.set(processId, promoted);
+    this.notifyProcessChange();
   }
 
   private notifyProcessChange(): void {
     this.processChangeListener?.();
   }
 
-  /** `rand::rng().random_range(1_000..100_000)`, retried against the reservations. */
+  /** Test/in-memory allocator. The production caller uses the durable monotonic allocator below. */
   allocateProcessId(): number {
-    for (;;) {
-      const processId = 1_000 + Math.floor(Math.random() * (100_000 - 1_000));
-      if (this.reservedProcessIds.has(processId) || this.completed.has(processId)) continue;
-      this.reservedProcessIds.add(processId);
-      return processId;
-    }
+    if (this.requireDurableSpool) throw UnifiedExecError.terminalStorageUnavailable();
+    while (this.nextLocalProcessId <= Number.MAX_SAFE_INTEGER &&
+      (this.reservedProcessIds.has(this.nextLocalProcessId) || this.completed.has(this.nextLocalProcessId) || this.spooled.has(this.nextLocalProcessId)))
+      this.nextLocalProcessId++;
+    if (this.nextLocalProcessId > Number.MAX_SAFE_INTEGER) throw UnifiedExecError.terminalCapacity('terminal process id range is exhausted; new_command_started=false');
+    const processId = this.nextLocalProcessId++;
+    this.reservedProcessIds.add(processId);
+    this.allocations.set(processId, this.nextLocalIncarnation++);
+    return processId;
   }
 
   releaseProcessId(processId: number): void {
+    const timer = this.checkpointTimers.get(processId);
+    if (timer) clearTimeout(timer);
+    this.checkpointTimers.delete(processId);
+    this.liveOperations.delete(processId);
+    this.allocations.delete(processId);
     this.reservedProcessIds.delete(processId);
     this.processes.delete(processId);
     this.completed.delete(processId);
-    this.releaseListener?.(processId);
+    if (!this.spooled.has(processId)) this.releaseListener?.(processId);
     this.notifyProcessChange();
   }
 
-  private retainCompleted(entry: ProcessEntry): void {
-    const rawOutput = Buffer.from(entry.process.retainedOutput());
-    const exitCode = entry.process.exitCode();
+  private makeSpoolRecord(entry: ProcessEntry, pendingOverride?: Buffer): CompletedExecSpoolRecord {
+    const raw = entry.process.retainedOutput();
+    const display = entry.process.retainedDisplayOutput();
+    const pending = pendingOverride ?? entry.process.completedOutput() ?? Buffer.alloc(0);
+    return {
+      version: 1,
+      processId: entry.processId,
+      incarnation: entry.incarnation,
+      ownerKind: entry.ownerPrincipal === null ? 'anonymous' : entry.ownerPrincipal.startsWith('request:') ? 'request' : 'session',
+      principal: entry.ownerPrincipal,
+      ...(entry.requestId ? { requestId: entry.requestId } : {}),
+      ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+      ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
+      ...(entry.setupProfileId ? { setupProfileId: entry.setupProfileId } : {}),
+      command: entry.hookCommand,
+      cwd: entry.cwd,
+      startedAt: entry.startedAt,
+      completedAt: Date.now(),
+      exitCode: entry.process.exitCode(),
+      benignExit: entry.process.benignExit(entry.classifyExit),
+      outputClosed: entry.process.outputClosed,
+      outputInterrupted: entry.process.outputInterrupted,
+      outputCaptureIncomplete: false,
+      ...(entry.provider ? { provider: entry.provider } : {}),
+      rawOutput: raw.toString('base64'),
+      ...(display.equals(raw) ? {} : { displayOutput: display.toString('base64') }),
+      pendingOutput: pending.toString('base64'),
+      ...(entry.initialOutputOffset === undefined ? {} : { initialOutputOffset: entry.initialOutputOffset }),
+      outputSha256: createHash('sha256').update(raw).digest('hex'),
+      rawOmittedBytes: entry.process.rawOmittedBytes(),
+      displayOmittedBytes: entry.process.displayOmittedBytes(),
+      acknowledgedOffset: 0
+    };
+  }
+
+  private cacheAcknowledged(record: CompletedExecSpoolRecord, identity: object): void {
+    this.completed.set(record.processId, { identity, rawOutput: Buffer.from(record.rawOutput, 'base64'),
+      ...(record.displayOutput === undefined ? {} : { displayOutput: Buffer.from(record.displayOutput, 'base64') }),
+      exitCode: record.exitCode, benignExit: record.benignExit });
+    while (this.completed.size > MAX_COMPLETED_EXEC_RESULTS) this.releaseProcessId(this.completed.keys().next().value!);
+  }
+
+  private async persistExitedEntry(entry: ProcessEntry, pendingOverride?: Buffer): Promise<void> {
+    if (this.processes.get(entry.processId) !== entry || !entry.process.hasExited() ||
+        (!entry.process.outputClosed && !entry.process.outputInterrupted)) return;
+    const timer = this.checkpointTimers.get(entry.processId);
+    if (timer) clearTimeout(timer);
+    this.checkpointTimers.delete(entry.processId);
+    await this.checkpointFlights.get(entry.processId);
+    let record = this.makeSpoolRecord(entry, pendingOverride);
+    const existing = this.spool.get(entry.processId);
+    if (existing) {
+      if (existing.incarnation !== record.incarnation || existing.principal !== record.principal ||
+          existing.ownerKind !== record.ownerKind || existing.outputSha256 !== record.outputSha256 ||
+          existing.pendingOutput !== record.pendingOutput)
+        throw new Error('Terminal completion conflicts with an already committed custody record.');
+      // A prior attempt may have committed the immutable result and failed during live-row
+      // cleanup. Preserve its delivery cursor and retry only the unfinished cleanup.
+      record = existing;
+    } else {
+      await this.spool.put(record);
+      record = this.spool.get(entry.processId) ?? record;
+    }
+    await this.spool.removeLive(entry.processId, entry.incarnation);
+    this.spooled.set(entry.processId, record);
+    this.liveOperations.delete(entry.processId);
+    this.allocations.delete(entry.processId);
+    this.checkpointFlights.delete(entry.processId);
     this.processes.delete(entry.processId);
     this.reservedProcessIds.delete(entry.processId);
-    this.completed.set(entry.processId, {
-      identity: entry.process.identity,
-      rawOutput, exitCode,
-      ...(entry.batchMarker ? { displayOutput: new CommandBatchDisplay(entry.batchMarker).push(rawOutput, true) } : {}),
-      benignExit: entry.process.benignExit(entry.classifyExit)
-    });
+    this.spoolFailures.delete(entry.processId);
     this.notifyProcessChange();
-    while (this.completed.size > MAX_COMPLETED_EXEC_RESULTS) this.releaseProcessId(this.completed.keys().next().value!);
+  }
+
+  private liveSpoolRecord(request: ExecCommandRequest, incarnation: number, startedAt: number): LiveExecSpoolRecord {
+    const principal = request.ownerPrincipal ?? null;
+    return { version: 1, processId: request.processId, incarnation,
+      ownerKind: principal === null ? 'anonymous' : principal.startsWith('request:') ? 'request' : 'session', principal,
+      ...(request.provider ? { provider: request.provider } : {}),
+      ...(request.requestId ? { requestId: request.requestId } : {}), ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+      ...(request.conversationId ? { conversationId: request.conversationId } : {}), ...(request.setupProfileId ? { setupProfileId: request.setupProfileId } : {}),
+      command: request.hookCommand, cwd: request.displayCwd, startedAt, rawOutput: '', rawOmittedBytes: 0, displayOmittedBytes: 0 };
+  }
+
+  private scheduleLiveCheckpoint(process: UnifiedExecProcess, processId: number, incarnation: number): void {
+    if (this.checkpointTimers.has(processId)) return;
+    const timer = setTimeout(() => {
+      this.checkpointTimers.delete(processId);
+      const operation = this.liveOperations.get(processId);
+      if (!operation || operation.incarnation !== incarnation || this.processes.get(processId)?.process !== process) return;
+      const raw = process.retainedOutput(), display = process.retainedDisplayOutput();
+      const checkpoint: LiveExecSpoolRecord = { ...operation, rawOutput: raw.toString('base64'),
+        ...(display.equals(raw) ? {} : { displayOutput: display.toString('base64') }),
+        rawOmittedBytes: process.rawOmittedBytes(), displayOmittedBytes: process.displayOmittedBytes() };
+      const flight = this.spool.updateLive(checkpoint).then(() => {
+        if (this.liveOperations.get(processId)?.incarnation === incarnation) this.liveOperations.set(processId, checkpoint);
+      }).catch(() => { this.spoolFailures.add(processId); this.notifyProcessChange(); });
+      this.checkpointFlights.set(processId, flight);
+      void flight.finally(() => { if (this.checkpointFlights.get(processId) === flight) this.checkpointFlights.delete(processId); });
+    }, 500);
+    timer.unref?.();
+    this.checkpointTimers.set(processId, timer);
+  }
+
+  private async captureExitedEntry(entry: ProcessEntry): Promise<void> {
+    // This callback is also issued after a live exec response is returned. A live process
+    // necessarily has open stdout/stderr pipes, so the post-exit close grace must never be
+    // used as a lifetime cap for the process itself.
+    if (entry.initialExecCommandActive || !entry.process.hasExited()) return;
+    if (!entry.process.outputClosed && !entry.process.outputInterrupted &&
+        !await entry.process.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS)) await entry.process.terminate();
+    const release = await entry.process.interactionLock.lock();
+    try {
+      await this.persistExitedEntry(entry);
+    } catch {
+      this.spoolFailures.add(entry.processId);
+      this.notifyProcessChange();
+    } finally { release(); }
+  }
+
+  /** Commit received output before a deliberately terminated session releases its reservation. */
+  private async sealExitedEntry(entry: ProcessEntry, allowInitialExec: boolean): Promise<void> {
+    if (!entry.process.outputClosed && !entry.process.outputInterrupted &&
+        !await entry.process.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS)) await entry.process.terminate();
+    const release = await entry.process.interactionLock.lock();
+    try {
+      if (this.processes.get(entry.processId) !== entry) return;
+      if (entry.initialExecCommandActive && !allowInitialExec) return;
+      await this.persistExitedEntry(entry);
+    } catch (error) {
+      this.spoolFailures.add(entry.processId);
+      this.notifyProcessChange();
+      throw error;
+    } finally { release(); }
   }
 
   async execCommand(request: ExecCommandRequest): Promise<ExecCommandToolOutput> {
     let process: UnifiedExecProcess;
     try {
+      await this.ensureSpoolReady();
       this.ensureProcessCapacity(request.processId);
+      void this.retryFailedCaptures();
     } catch (error) {
       this.releaseProcessId(request.processId);
       throw error;
     }
+    const incarnation = this.allocations.get(request.processId);
+    if (incarnation === undefined) {
+      this.releaseProcessId(request.processId);
+      throw UnifiedExecError.createProcess('terminal session allocation is missing; no command was started');
+    }
+    const start = Date.now();
+    const liveOperation = this.liveSpoolRecord(request, incarnation, start);
+    try {
+      // This durable operation record precedes OS process creation. A restart turns it into an
+      // interrupted unread result; it can never be interpreted as permission to respawn.
+      await this.spool.putLive(liveOperation);
+      this.liveOperations.set(request.processId, liveOperation);
+    } catch {
+      this.releaseProcessId(request.processId);
+      throw UnifiedExecError.terminalStorageUnavailable();
+    }
+    let spawnedProcess: UnifiedExecProcess | null = null;
+    let checkpointBeforeSpawnReturned = false;
     try {
       // `UnifiedExecRuntime::run` prefixes every PowerShell script before it reaches the
       // process launcher so pipe-mode output is UTF-8 just like PTY output.
@@ -803,22 +1172,28 @@ export class UnifiedExecProcessManager {
         shellType: request.shellType,
         cwd: request.cwd,
         env: request.env,
-        tty: request.tty
+        tty: request.tty,
+        onOutputCheckpoint: () => {
+          if (spawnedProcess) this.scheduleLiveCheckpoint(spawnedProcess, request.processId, incarnation);
+          else checkpointBeforeSpawnReturned = true;
+        }
       });
+      spawnedProcess = process;
+      if (checkpointBeforeSpawnReturned) this.scheduleLiveCheckpoint(process, request.processId, incarnation);
     } catch (error) {
+      await this.spool.removeLive(request.processId, incarnation).catch(() => undefined);
+      this.liveOperations.delete(request.processId);
       this.releaseProcessId(request.processId);
       throw error instanceof UnifiedExecError
         ? error
         : UnifiedExecError.createProcess(error instanceof Error ? error.message : String(error));
     }
 
-    const start = Date.now();
-    const incarnation = this.nextProcessIncarnation++;
     const wallStart = performance.now();
     // Stored before the yield wait, so interrupting the call cannot drop the session.
     const processStartedAlive = !process.hasExited() && process.exitCode() === null;
     if (processStartedAlive) {
-      this.processes.set(request.processId, {
+      const entry: ProcessEntry = {
         process,
         processId: request.processId,
         incarnation,
@@ -826,12 +1201,19 @@ export class UnifiedExecProcessManager {
         hookCommand: request.hookCommand,
         tty: request.tty,
         startedAt: start,
+        ownerPrincipal: request.ownerPrincipal ?? null,
+        provider: request.provider,
+        requestId: request.requestId,
+        sessionId: request.sessionId,
+        conversationId: request.conversationId,
+        setupProfileId: request.setupProfileId,
         initialExecCommandActive: true,
         classifyExit: request.classifyExit, batchMarker: request.batchMarker
-      });
+      };
+      this.processes.set(request.processId, entry);
       void process.completion.then(
-        () => this.notifyProcessChange(),
-        () => this.notifyProcessChange()
+        () => { this.notifyProcessChange(); void this.captureExitedEntry(entry); },
+        () => { this.notifyProcessChange(); void this.captureExitedEntry(entry); }
       );
     }
 
@@ -840,9 +1222,16 @@ export class UnifiedExecProcessManager {
     const wallTimeMs = Math.max(0, performance.now() - wallStart);
 
     const visible = collected.display ?? collected.raw;
+    const rawOutput = collected.raw.toBytesWithOmissionMarker();
+    if (processStartedAlive) {
+      const entry = this.processes.get(request.processId);
+      if (entry?.process === process) {
+        entry.initialOutputOffset = rawOutput.length;
+        entry.delivery = { offset: entry.initialOutputOffset };
+      }
+    }
     const originalTokenCount = approxTokensFromByteCount(visible.totalBytes());
     const outputOmittedBytes = visible.omittedBytes() === 0 ? null : visible.omittedBytes();
-    const rawOutput = collected.raw.toBytesWithOmissionMarker();
     const chunkId = generateChunkId();
 
     const failure = process.failureMessage();
@@ -861,28 +1250,48 @@ export class UnifiedExecProcessManager {
       } else if (status.kind === 'exited') {
         responseProcessId = null;
         exitCode = status.exitCode;
+      } else if (this.spooled.has(request.processId) && process.hasExited()) {
+        // Shutdown may have durably sealed a process while its initial exec response was
+        // still collecting. The response still owns this completion and can finish normally.
+        responseProcessId = null;
+        exitCode = process.exitCode();
       } else {
         throw UnifiedExecError.unknownProcessId(request.processId);
       }
     } else {
-      this.retainCompleted({ process, processId: request.processId, cwd: request.displayCwd,
-        hookCommand: request.hookCommand, tty: request.tty, startedAt: start, incarnation, initialExecCommandActive: false,
-        classifyExit: request.classifyExit, batchMarker: request.batchMarker });
+      const entry: ProcessEntry = { process, processId: request.processId, cwd: request.displayCwd,
+        hookCommand: request.hookCommand, tty: request.tty, startedAt: start, ownerPrincipal: request.ownerPrincipal ?? null,
+        provider: request.provider, requestId: request.requestId, sessionId: request.sessionId,
+        conversationId: request.conversationId, setupProfileId: request.setupProfileId,
+        incarnation, initialExecCommandActive: false, classifyExit: request.classifyExit, batchMarker: request.batchMarker };
+      this.processes.set(request.processId, entry);
+      if (!process.outputClosed && !process.outputInterrupted &&
+          !await process.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS)) await process.terminate();
+      // The completed display buffer includes bytes emitted after the leader exited but before
+      // inherited stdout/stderr handles closed. The initial yield buffer can be only a prefix.
+      try { await this.persistExitedEntry(entry); }
+      catch { this.spoolFailures.add(request.processId); }
+      if (!this.spooled.has(request.processId)) {
+        // Return the exact completed id so a later read can retry capture without respawning.
+        this.processes.set(request.processId, entry);
+        this.reservedProcessIds.add(request.processId);
+      }
       responseProcessId = null;
       exitCode = process.exitCode();
     }
 
-    const response = {
+    const response: ExecCommandToolOutput = {
       ...(responseProcessId === null ? { completedSessionId: request.processId } : {
         completion: process.completion.then(async completion => {
-          if (!process.outputClosed) {
+          if (!process.outputClosed && !process.outputInterrupted) {
             const closed = process.outputClosedNotify.notified();
             try { await raceWithTimeout([closed], POST_EXIT_CLOSE_WAIT_CAP_MS); } finally { closed.dispose(); }
           }
-          return { ...completion, benignExit: process.benignExit(request.classifyExit) };
+          return { ...completion, benignExit: process.benignExit(request.classifyExit), outputInterrupted: process.outputInterrupted };
         })
       }),
       benignExit: process.benignExit(request.classifyExit),
+      ...(process.outputInterrupted ? { terminalOutputInterrupted: true } : {}),
       chunkId,
       wallTimeMs,
       rawOutput,
@@ -892,11 +1301,20 @@ export class UnifiedExecProcessManager {
       processId: responseProcessId,
       exitCode,
       originalTokenCount,
-      outputOmittedBytes
+      outputOmittedBytes,
+      ...(this.spoolFailures.has(request.processId) ? { terminalStoragePending: true } : {})
     };
-    if (responseProcessId !== null) {
+    if (processStartedAlive) {
       const entry = this.processes.get(request.processId);
-      if (entry?.process === process) entry.initialExecCommandActive = false;
+      if (entry?.process === process) {
+        entry.initialExecCommandActive = false;
+        if (process.hasExited() && (process.outputClosed || process.outputInterrupted)) {
+          await this.captureExitedEntry(entry);
+          if (this.spoolFailures.has(request.processId)) response.terminalStoragePending = true;
+        } else {
+          void this.captureExitedEntry(entry);
+        }
+      }
     }
     return response;
   }
@@ -913,13 +1331,36 @@ export class UnifiedExecProcessManager {
     };
     const saved = replay();
     if (saved) return saved;
+    const spooled = this.spooled.get(request.processId);
+    if (spooled) {
+      if (request.input !== '') throw UnifiedExecError.processFailed('Process already completed; no input was sent. Use empty chars to read its retained output.');
+      const pending = Buffer.from(spooled.pendingOutput, 'base64');
+      const source = pending.length ? pending : Buffer.from(spooled.rawOutput, 'base64');
+      const readOffset = (spooled.initialOutputOffset ?? 0) > 0 ? 0 : spooled.acknowledgedOffset;
+      const visible = source.subarray(readOffset);
+      const rawOutput = visible;
+      return { chunkId: generateChunkId(), wallTimeMs: 0, rawOutput,
+        processId: null, completedSessionId: request.processId,
+        exitCode: spooled.exitCode, originalTokenCount: approxTokenCount(rawOutput.toString('utf8')),
+        outputOmittedBytes: spooled.rawOmittedBytes || null, truncationPolicy: request.truncationPolicy,
+        maxOutputTokens: request.maxOutputTokens, benignExit: spooled.benignExit, replayed: true,
+        terminalOutputInterrupted: spooled.outputInterrupted && !spooled.outputCaptureIncomplete,
+        terminalOutputCheckpointed: spooled.outputCaptureIncomplete === true };
+    }
     const entry = this.processes.get(request.processId);
     if (!entry) throw UnifiedExecError.unknownProcessId(request.processId);
+    if (entry.process.hasExited() && (entry.process.outputClosed || entry.process.outputInterrupted) && this.spoolFailures.has(request.processId)) {
+      await this.captureExitedEntry(entry);
+      if (this.spooled.has(request.processId)) return this.writeStdin(request);
+    }
     const locked = entry.process;
 
     // Reads and writes against one session must not overlap: they share a draining buffer.
     const release = await locked.interactionLock.lock();
     try {
+      // Exit capture may have committed the spool while this poll was waiting for the
+      // per-process lock. The durable result now owns the read path.
+      if (this.spooled.has(request.processId)) return this.writeStdin(request);
       const saved = replay(locked.identity);
       if (saved) return saved;
       const current = this.processes.get(request.processId);
@@ -1010,6 +1451,8 @@ export class UnifiedExecProcessManager {
       return {
         ...(responseProcessId === null ? { completedSessionId: request.processId } : {}),
         benignExit: process.benignExit(current.classifyExit),
+        ...(process.outputInterrupted ? { terminalOutputInterrupted: true } : {}),
+        ...(this.spoolFailures.has(request.processId) ? { terminalStoragePending: true } : {}),
         chunkId,
         wallTimeMs,
         rawOutput,
@@ -1055,6 +1498,9 @@ export class UnifiedExecProcessManager {
         running.push(entry.processId);
       }
     }
+    for (const record of this.spooled.values()) {
+      if (processIds.has(record.processId)) exitedUnread.push({ processId: record.processId, exitCode: record.exitCode });
+    }
     return {
       running: running.sort((left, right) => left - right),
       exitedUnread: exitedUnread.sort((left, right) => left.processId - right.processId)
@@ -1081,12 +1527,38 @@ export class UnifiedExecProcessManager {
             startedAt <= offered.publication.completedAt) continue;
         const output = entry.process.completedOutput();
         if (output === null) continue;
-        entry.delivery = { offset: offered.end };
         if (offered.end >= output.length) {
-          this.retainCompleted(entry);
+          await this.persistExitedEntry(entry);
+          const record = this.spooled.get(id);
+          if (!record) continue;
+          const completed = { ...record, acknowledgedOffset: offered.end };
+          await this.spool.update(completed);
+          this.spooled.set(id, completed);
+          await this.spool.remove(id);
+          this.spooled.delete(id);
+          this.cacheAcknowledged(completed, entry.process.identity);
           retired.push(id);
-        }
+          this.notifyProcessChange();
+        } else entry.delivery = { offset: offered.end };
       } finally { release(); }
+    }
+    for (const id of processIds) {
+      if (id === except) continue;
+      const record = this.spooled.get(id);
+      const offered = this.spoolOffers.get(id);
+      if (!record || !offered || offered.publication.failed || offered.publication.completedAt === null ||
+          startedAt <= offered.publication.completedAt || this.spooled.get(id) !== record) continue;
+      const next = { ...record, acknowledgedOffset: offered.end };
+      await this.spool.update(next);
+      this.spooled.set(id, next);
+      this.spoolOffers.delete(id);
+      const output = Buffer.from(next.pendingOutput, 'base64');
+      if (offered.end >= output.length) {
+        await this.spool.remove(id);
+        this.spooled.delete(id);
+        this.cacheAcknowledged(next, {});
+        retired.push(id);
+      }
     }
     return retired;
   }
@@ -1101,7 +1573,22 @@ export class UnifiedExecProcessManager {
     if (publication.failed || maxBytes < 4) return null;
     for (const { processId } of this.backgroundState(processIds).exitedUnread) {
       const entry = this.processes.get(processId);
-      if (!entry) continue;
+      if (!entry) {
+        const record = this.spooled.get(processId);
+        if (!record) continue;
+        const prior = this.spoolOffers.get(processId);
+        if (prior && !prior.publication.failed) continue;
+        const output = Buffer.from(record.pendingOutput, 'base64');
+        const start = Math.max(record.acknowledgedOffset, record.initialOutputOffset ?? 0);
+        if (output.length > 0 && start >= output.length) continue;
+        let end = Math.min(output.length, start + Math.floor(maxBytes));
+        while (end > start && end < output.length && (output[end]! & 0xc0) === 0x80) end--;
+        if (end === start && output.length > start) continue;
+        this.spoolOffers.set(processId, { end, publication });
+        return { processId, command: record.command, exitCode: record.exitCode,
+          output: output.subarray(start, end).toString('utf8'), start, end, total: output.length,
+          outputInterrupted: record.outputInterrupted, outputCaptureIncomplete: record.outputCaptureIncomplete === true };
+      }
       const release = await entry.process.interactionLock.lock();
       try {
         if (this.processes.get(processId) !== entry || entry.initialExecCommandActive) continue;
@@ -1117,7 +1604,8 @@ export class UnifiedExecProcessManager {
         if (end === start && output.length > start) continue;
         delivery.offer = { end, publication };
         return { processId, command: entry.hookCommand, exitCode: entry.process.exitCode(),
-          output: output.subarray(start, end).toString('utf8'), start, end, total: output.length };
+          output: output.subarray(start, end).toString('utf8'), start, end, total: output.length,
+          outputInterrupted: entry.process.outputInterrupted, outputCaptureIncomplete: false };
       } finally { release(); }
     }
     return null;
@@ -1130,7 +1618,7 @@ export class UnifiedExecProcessManager {
     // natural exit, and refuse ABA reuse of the same numeric id without consuming retained output.
     if (expectedIncarnation !== undefined &&
         (entry.incarnation !== expectedIncarnation || entry.process.hasExited())) return false;
-    if (!entry.process.hasExited()) await entry.process.terminate();
+    if (!entry.process.hasExited() || !entry.process.outputClosed) await entry.process.terminate();
     const current = this.processes.get(processId);
     if (current && current.process === entry.process) {
       // Match Codex's InitialExecCommandGuard: the initial exec response still
@@ -1138,24 +1626,37 @@ export class UnifiedExecProcessManager {
       // Removing it here would turn a successful concurrent termination into
       // an UnknownProcessId error in that original exec_command call.
       if (current.initialExecCommandActive) return true;
-      this.releaseProcessId(processId);
+      try {
+        await this.sealExitedEntry(current, false);
+      } catch {
+        throw UnifiedExecError.processFailed(
+          'The process was terminated, but its output could not be saved. Its reservation remains held for recovery.'
+        );
+      }
     }
     return true;
   }
 
   async terminateAllProcesses(): Promise<void> {
     const entries = [...this.processes.values()];
-    for (const id of new Set([...this.reservedProcessIds, ...this.completed.keys()])) this.releaseListener?.(id);
+    // This cache contains only results whose output was already acknowledged. Keep unread
+    // durable spool records and their custody across a forced update or app shutdown.
+    for (const id of this.completed.keys()) this.releaseListener?.(id);
     this.completed.clear();
-    this.processes.clear();
-    this.reservedProcessIds.clear();
-    // App shutdown is the caller that matters, so this has to behave like `terminateProcess`
-    // does for one id: skip the sessions that are already gone rather than spending a taskkill
-    // on each. Awaiting them one after another also made a quit cost the *sum* of every
-    // termination, and let a single rejection abandon every session queued behind it.
-    await Promise.allSettled(
-      entries.filter((entry) => !entry.process.hasExited()).map((entry) => entry.process.terminate())
-    );
+    this.notifyProcessChange();
+    // Handle every process independently so one kill or disk error cannot leave the rest
+    // running. A failed commit deliberately leaves that process and its reservation visible.
+    const results = await Promise.allSettled(entries.map(async (entry) => {
+      if (this.processes.get(entry.processId) !== entry) return;
+      // An exited leader can still have descendants holding inherited output pipes open.
+      // Ask the process-tree helper to close those pipes before waiting on the spool boundary.
+      if (!entry.process.hasExited() || !entry.process.outputClosed) await entry.process.terminate();
+      await this.sealExitedEntry(entry, true);
+    }));
+    const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failed.length > 0) {
+      throw new Error(`${failed.length} terminal session(s) could not be safely sealed during shutdown; their reservations remain held.`);
+    }
   }
 
   private refreshProcessState(processId: number): ProcessStatus {
@@ -1163,19 +1664,50 @@ export class UnifiedExecProcessManager {
     if (!entry) return { kind: 'unknown' };
     const exitCode = entry.process.exitCode();
     if (entry.process.hasExited()) {
-      this.retainCompleted(entry);
+      // Exit alone does not close inherited streams; the asynchronous capture owner waits for both.
       return { kind: 'exited', exitCode };
     }
     return { kind: 'alive', exitCode, processId: entry.processId };
   }
 
+  inventory(): { reserved: number; running: number; exitedOutputOpen: number; exitedOutputClosed: number; exitedOutputInterrupted: number;
+    unreadSpooled: number; interruptedSpooled: number; checkpointedSpooled: number; completedCache: number; spoolBytes: number; storageFailures: number;
+    spoolState: 'memory' | 'ready' | 'unavailable' | 'not-initialized'; spoolError: string | null } {
+    let running = 0, exitedOutputOpen = 0, exitedOutputClosed = 0, exitedOutputInterrupted = 0;
+    for (const entry of this.processes.values()) {
+      if (!entry.process.hasExited()) running++;
+      else if (entry.process.outputInterrupted) exitedOutputInterrupted++;
+      else if (entry.process.outputClosed) exitedOutputClosed++;
+      else exitedOutputOpen++;
+    }
+    const interruptedSpooled = [...this.spooled.values()].filter(record => record.outputInterrupted).length;
+    const checkpointedSpooled = [...this.spooled.values()].filter(record => record.outputCaptureIncomplete === true).length;
+    return { reserved: this.reservedProcessIds.size, running, exitedOutputOpen, exitedOutputClosed, exitedOutputInterrupted,
+      unreadSpooled: this.spooled.size, interruptedSpooled, checkpointedSpooled, completedCache: this.completed.size, spoolBytes: this.spool.bytes(), storageFailures: this.spoolFailures.size,
+      spoolState: this.spoolInitialized ? 'ready' : this.requireDurableSpool
+        ? this.spoolInitializationError ? 'unavailable' : 'not-initialized' : 'memory',
+      spoolError: this.spoolInitializationError ?? (this.spoolFailures.size ? 'Some terminal output could not be durably stored.' : null) };
+  }
+
+  private async retryFailedCaptures(): Promise<void> {
+    for (const id of [...this.spoolFailures]) {
+      const entry = this.processes.get(id);
+      if (entry && !entry.initialExecCommandActive && (entry.process.outputClosed || entry.process.outputInterrupted)) await this.captureExitedEntry(entry);
+    }
+  }
+
   /** Capacity is admission, never garbage collection: every retained row still owes output. */
   private ensureProcessCapacity(requestProcessId: number): void {
+    if (this.requireDurableSpool && !this.spoolInitialized) throw UnifiedExecError.terminalStorageUnavailable();
     // Reservations participate in the hard cap, so concurrent exec_command calls cannot
     // each observe one free slot and collectively insert a 65th live process.
     if (this.reservedProcessIds.size > MAX_UNIFIED_EXEC_PROCESSES) {
-      throw UnifiedExecError.createProcess(
-        `too many retained terminal sessions (limit ${MAX_UNIFIED_EXEC_PROCESSES}); drain a returned session with write_stdin before starting another`
+      const inventory = this.inventory();
+      throw UnifiedExecError.terminalCapacity(
+        `limit=${MAX_UNIFIED_EXEC_PROCESSES}; reserved=${inventory.reserved}; running=${inventory.running}; ` +
+        `exited_output_open=${inventory.exitedOutputOpen}; exited_output_closed=${inventory.exitedOutputClosed}; ` +
+        `exited_output_interrupted=${inventory.exitedOutputInterrupted}; unread_spooled=${inventory.unreadSpooled}; completed_cache=${inventory.completedCache}; ` +
+        `storage_failures=${inventory.storageFailures}; new_command_started=false`
       );
     }
     if (!this.reservedProcessIds.has(requestProcessId)) {
@@ -1219,7 +1751,7 @@ async function collectOutputUntilDeadline(
 
     if (!hasDrainedOutput) {
       exitSignalReceived ||= process.cancelled;
-      if (exitSignalReceived && process.outputClosed) {
+      if (exitSignalReceived && (process.outputClosed || process.outputInterrupted)) {
         waitForOutput?.dispose();
         break;
       }

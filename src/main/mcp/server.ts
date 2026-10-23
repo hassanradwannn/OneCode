@@ -490,7 +490,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
           } catch {
             if (res.destroyed || res.headersSent) return;
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. Send a fresh message from this exact OneCode chat to refresh its local session authorization.' }] } });
+              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.' }] } });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
             res.end(body);
           }

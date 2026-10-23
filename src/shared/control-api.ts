@@ -42,6 +42,11 @@ export interface ControlApiEndpoint {
 }
 
 export interface ControlApiHealth {
+  runtime?: { suspended: boolean; resumes: number; lastSampleAt: number | null; lastDelayMs: number | null;
+    maximumDelayMs: number; eventLoopUtilization: number; rssBytes: number; heapUsedBytes: number;
+    terminals: { reserved: number; running: number; exitedOutputOpen: number; exitedOutputClosed: number;
+      exitedOutputInterrupted: number; unreadSpooled: number; interruptedSpooled: number; completedCache: number;
+      spoolBytes: number; storageFailures: number; spoolState: string; spoolError: string | null } };
   ok: true;
   protocol: number;
   routes: string[];

@@ -7,7 +7,7 @@ import type { ControlApiSession, ControlApiSessionDetail, ControlApiSessionList 
 export const REMOTE_UI_KEYS = ['chatProvider', 'defaultChatModel', 'defaultChatReasoning', 'followUp', 'enterSends', 'followOutput', 'theme',
   'turnNotifications', 'backgroundChats', 'backgroundPlacement', 'tabsToKeepOpen', 'autoContinue', 'autoSelectSkills', 'rotateTurnMinutes'] as const;
 export type RemotePreferences = Pick<Config['ui'], typeof REMOTE_UI_KEYS[number]>;
-export interface RemoteDevice { id: string; name: string; expiresAt: number; lastSeenAt: number }
+export interface RemoteDevice { id: string; name: string; lastSeenAt: number }
 export interface RemoteStatus { enabled: boolean; ready: boolean; url: string | null; error: string | null; devices: RemoteDevice[]; canRefreshLink?: boolean; setup?: import('./tailscale-setup.js').TailscaleSetupAction }
 export interface RemoteBootstrap {
   host: string;
@@ -20,6 +20,7 @@ export interface RemoteBootstrap {
 export type RemoteSession = ControlApiSession & { provider: ChatProvider | null };
 export type RemoteSessionDetail = Omit<ControlApiSessionDetail, 'session'> & {
   session: RemoteSession;
+  providerReadiness?: import('./chat-readiness.js').SelectedChatReadiness | null;
   plan?: import('./agent-plan.js').AgentPlan | null;
   selection?: { model: string; reasoningEffort?: import('./session.js').ReasoningEffort } | null;
 };

@@ -51,6 +51,8 @@ export interface Chronological {
   final?: boolean;
   /** Sequence of the latest authored content of a canonical message. See `residenceOf()`. */
   contentSeq?: number;
+  /** Latest changed presentation, without treating markup as new task work. */
+  presentationSeq?: number;
   /** On a turn end: the response went on into the next turn (#1301). */
   continued?: boolean;
   state?: string;
@@ -346,19 +348,20 @@ export function positionOf(entry: Chronological): number {
 }
 
 /**
- * Which page of history an entry lives on: its position, except for an answer that ended a turn.
+ * Which page of history a mutable entry lives on.
  *
- * Gemini can open its answer message early in a long turn and fill it only at the end. In one
- * report it was opened at 18:12 and became the final summary at 18:42, after about 200 calls.
- * The answer is drawn at the end of its turn (see `closing()`), but pages were cut by where the
- * message first appeared, so the newest page never held it and the chat seemed to stop at its
- * last work heading. A final answer therefore lives where its final text was written, beside its
- * turn's end. Display order and turn identity keep `positionOf`.
+ * A canonical message can be revised after its first appearance. Its display position stays at
+ * `origin`, but a recent-history page must still include the latest body after restart. Use the
+ * store-owned content revision as the page-membership position; chronological projection then
+ * draws the row back at its original position among intervening work. This also handles a final
+ * answer first observed before a long run and filled only after its tools complete.
  */
 export function residenceOf(entry: Chronological): number {
   const position = positionOf(entry);
-  return entry.kind === 'assistant_message' && entry.final === true && typeof entry.contentSeq === 'number' && Number.isFinite(entry.contentSeq)
-    ? Math.max(position, entry.contentSeq) : position;
+  if (entry.kind !== 'assistant_message' && entry.kind !== 'user_message') return position;
+  const content = typeof entry.contentSeq === 'number' && Number.isFinite(entry.contentSeq) ? entry.contentSeq : position;
+  const presentation = typeof entry.presentationSeq === 'number' && Number.isFinite(entry.presentationSeq) ? entry.presentationSeq : position;
+  return Math.max(position, content, presentation);
 }
 
 /**

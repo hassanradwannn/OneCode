@@ -1192,6 +1192,12 @@ var CLF_DOM = (() => {
         errors().some(error => error.blocking)) return null;
     return { provider: 'gemini', conversationId: conversationId(), questionId: question.id, messageId: answer.id, text: answer.text };
   }
+  function recoveryTerminalReceipt(questionId) {
+    const receipt = completedResponseReceipt();
+    // The exact response's native complete footer is terminal evidence. Stop
+    // disappearance by itself cannot manufacture this receipt.
+    return receipt && receipt.questionId === questionId ? { ...receipt, outcome: 'complete' } : null;
+  }
   const generating = () => stopButton() !== null || approvalWaiting() || all('model-response [aria-busy="true"]').some(shown);
   const stopGeneration = current => { const stop = stopButton(); if (!current() || !enabled(stop)) return false; stop.click(); return true; };
   const attachmentRows = () => composerBox() ? all('uploader-file-preview', composerBox()).filter(shown) : [];
@@ -1413,7 +1419,7 @@ var CLF_DOM = (() => {
   const toolBlocks = turn => all('tool-call,[data-tool-call-id]', turn?.node || document);
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
-    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt,
+    conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt, recoveryTerminalReceipt,
     nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,

@@ -17,6 +17,7 @@ import { paintCredentialsNotice } from './credentials-notice.js';
 import { paintPluginRefreshOffer } from './plugin-refresh-offer.js';
 import { initUpdateReadiness, paintUpdateReadiness } from './update-readiness.js';
 import { updateErrorText } from './update-error.js';
+import { showUpdateWork } from './update-work.js';
 import { initUsage, refreshOtherApps, refreshUsage } from './usage.js';
 import { initSidebarResize } from './sidebar-resize.js';
 import { initViewMenu } from './view-menu.js';
@@ -1249,7 +1250,11 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
           ? t("OneCode {0} is downloading ({1}%). Keep working; you can install it when it lands.", [displayReleaseVersion(update.latest), String(update.downloadPercent ?? 0)])
           : update.stage === 'failed'
             ? t("OneCode {0} could not be downloaded: {1}.", [displayReleaseVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
-            : t("OneCode {0} is out. This installation has to be updated by hand.", [displayReleaseVersion(update.latest!)])
+            : update.installation === 'linux-unpacked'
+              ? t('Unpacked Linux build — automatic updates are disabled. Launch the installed OneCode AppImage or DEB.')
+              : update.installation === 'deb'
+                ? t('OneCode {0} requires a full package upgrade. Compatible application hotfixes install internally; use your package manager for this release.', [displayReleaseVersion(update.latest!)])
+                : t("OneCode {0} is out. This installation has to be updated by hand.", [displayReleaseVersion(update.latest!)])
     );
     if (update.stage === 'failed' || update.notInstalled) tone = 'bad';
   } else if (update.stage === 'failed') {
@@ -1275,9 +1280,10 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
 function updateInstallWaitingText(update: AppState['update']): string {
+  if (update.installMode === 'now') return t('Stopping active work and installing OneCode {0}…', [displayReleaseVersion(update.latest!)]);
   const labels = {
     tools: 'running tools', generation: 'a provider response', messages: 'queued messages', workers: 'active workers',
-    automation: 'Goal or Loop', continuation: 'Compact & Resume', commands: 'background commands',
+    automation: 'Goal or Loop', continuation: 'Compact & Resume', commands: 'background commands', browser: 'pending browser actions',
     terminals: 'open terminal tabs (including hidden panels)', preparation: 'message preparation', unavailable: 'checking activity'
   };
   const reasons = (update.busyReasons ?? []).map(reason => t(labels[reason]));
@@ -1305,17 +1311,21 @@ function paintUpdate(next: AppState): void {
   }
   const { update } = next;
   $('updateShowTerminals').hidden = !update.installRequested || !update.busyReasons?.includes('terminals');
+  $('updateShowWork').hidden = !update.installRequested || !update.busyReasons?.length || update.installMode === 'now';
   ui($('updateText'), 'textContent', () => updateSummary(next)?.text ?? '');
   $('updateExtension').hidden = !summary.extensionAction;
   ui($('updateExtension'), 'textContent', () => updateSummary(next)?.extensionAction ?? t("Update extension"));
-  $<HTMLButtonElement>('updateGet').hidden = !update.latest || update.stage === 'checking' || update.stage === 'downloading' || update.stage === 'ready';
+  $<HTMLButtonElement>('updateGet').hidden = update.installation === 'linux-unpacked' || !update.latest || update.stage === 'checking' || update.stage === 'downloading' || update.stage === 'ready';
   // `ready` is the only state with a verified artifact on disk, and therefore the only one in
   // which pressing Install can do anything. Both buttons ask the same question of the same fact.
   const installable = update.stage === 'ready' && !update.installRequested;
   $<HTMLButtonElement>('updateInstall').hidden = !installable;
   $<HTMLButtonElement>('installUpdate').hidden = !installable;
-  $('cancelUpdateInstall').hidden = !update.installRequested;
-  $('cancelUpdateInstallNotice').hidden = !update.installRequested;
+  $('updateNow').hidden = update.stage !== 'ready' || update.installMode === 'now';
+  $<HTMLButtonElement>('settingsUpdateNow').disabled = update.installMode === 'now';
+  $<HTMLButtonElement>('settingsInstallUpdate').disabled = !!update.installRequested;
+  $('cancelUpdateInstall').hidden = !update.installRequested || update.installCommitted === true;
+  $('cancelUpdateInstallNotice').hidden = !update.installRequested || update.installCommitted === true;
   notice.hidden = !summary.notice;
   ui(line, 'textContent', () => updateSummary(next)?.text ?? '');
   line.className = `upline${summary.tone === 'ok' ? ' is-ok' : summary.tone === 'bad' ? ' is-bad' : ''}`;
@@ -1694,7 +1704,7 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('finishTool'), config.ui.finishTool === true, previousState?.config.ui.finishTool);
   applyValue($<HTMLSelectElement>('finishLeadMinutes'), String(config.ui.finishLeadMinutes ?? 5), String(previousState?.config.ui.finishLeadMinutes ?? 5));
   $<HTMLSelectElement>('finishLeadMinutes').disabled = config.ui.finishTool !== true;
-  applyValue($<HTMLSelectElement>('rotateTurnMinutes'), String(config.ui.rotateTurnMinutes ?? 30), previousState ? String(previousState.config.ui.rotateTurnMinutes ?? 30) : undefined);
+  applyValue($<HTMLSelectElement>('rotateTurnMinutes'), String(config.ui.rotateTurnMinutes ?? 0), previousState ? String(previousState.config.ui.rotateTurnMinutes ?? 0) : undefined);
   applyChecked($<HTMLInputElement>('backgroundChats'), config.ui.backgroundChats === true, previousState?.config.ui.backgroundChats);
   applyValue($<HTMLSelectElement>('backgroundPlacement'), config.ui.backgroundPlacement ?? 'window', previousState?.config.ui.backgroundPlacement ?? 'window');
   applyValue($<HTMLSelectElement>('followUp'), config.ui.followUp ?? 'steer', previousState?.config.ui.followUp ?? 'steer');
@@ -2700,6 +2710,12 @@ function installUpdate(): void {
 $('updateInstall').addEventListener('click', installUpdate);
 $('installUpdate').addEventListener('click', installUpdate);
 $('settingsInstallUpdate').addEventListener('click', installUpdate);
+for (const id of ['updateNow', 'settingsUpdateNow']) $(id).addEventListener('click', () => {
+  if (!state?.update.latest || state.update.stage !== 'ready') return;
+  toast(t('Stopping active tools and commands. OneCode will install the update and restart.'));
+  void run(api.installUpdate(state.update.latest, 'now'));
+});
+for (const id of ['updateShowWork', 'settingsUpdateWork', 'settingsBackgroundWork']) $(id).addEventListener('click', showUpdateWork);
 $('cancelUpdateInstall').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('cancelUpdateInstallNotice').addEventListener('click', () => void run(api.cancelUpdateInstall()));
 $('updateShowTerminals').addEventListener('click', () => { showTab('chat'); revealUpdateTerminals(); });

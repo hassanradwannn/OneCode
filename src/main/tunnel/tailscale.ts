@@ -387,14 +387,16 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       try {
         if (!initial) await verifyNative();
         if (stopped) return;
+        const probeStartedAt = performance.now();
         const result = await deps.probe(publicUrl, publicProbe.signal);
+        const probeElapsedMs = Math.round(performance.now() - probeStartedAt);
         if (stopped || epoch !== transportEpoch) return;
         // A slow public result cannot publish a route whose custody changed meanwhile.
         await verifyNative();
         if (stopped || epoch !== transportEpoch) return;
         check.publicIngress = { state: result.state, checkedAt: Date.now() };
         if (result.state !== previousPublicState) {
-          logInfo(`OneCode Funnel public check state=${result.state} elapsedMs=${Math.round(performance.now() - startedAt)}`);
+          logInfo(`OneCode Funnel public check state=${result.state} probeElapsedMs=${probeElapsedMs} connectionAgeMs=${Math.round(performance.now() - startedAt)}`);
           previousPublicState = result.state;
         }
         if (result.state === 'ready') {

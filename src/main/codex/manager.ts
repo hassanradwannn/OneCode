@@ -15,7 +15,12 @@ import {
 } from './unified-exec-constants.js';
 import { UnifiedExecProcessManager } from './unified-exec.js';
 
-export const unifiedExecManager = new UnifiedExecProcessManager(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS);
+// The desktop singleton fails closed until startup has validated its durable spool. Isolated
+// tests use fresh managers (or the test singleton) with the in-memory spool explicitly allowed.
+export const unifiedExecManager = new UnifiedExecProcessManager(
+  DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+  process.env.NODE_ENV !== 'test'
+);
 
 /**
  * The budget for output the model was given no way to ask about.

@@ -791,7 +791,11 @@ export interface UpdateStatus {
   downloadPercent?: number;
   /** Explicit, cancellable user intent for this exact staged version. Never restored at startup. */
   installRequested?: boolean;
-  busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'terminals' | 'preparation' | 'unavailable'>;
+  busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'browser' | 'terminals' | 'preparation' | 'unavailable'>;
+  /** Install provenance observed before profile selection, independent of release availability. */
+  installation?: 'windows' | 'appimage' | 'deb' | 'linux-unpacked' | 'macos' | 'development' | 'unsupported';
+  installMode?: 'when-idle' | 'now';
+  installCommitted?: boolean;
 }
 
 /** Receipt only; authoritative component state still establishes completion. */
