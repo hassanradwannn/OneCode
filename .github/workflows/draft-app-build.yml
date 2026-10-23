@@ -44,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: ${{ fromJSON(inputs.platform == 'win32' && '["win32"]' || inputs.platform == 'linux' && '["linux"]' || '["win32","linux"]') }}
-    runs-on: ${{ matrix.platform == 'win32' && 'windows-2025' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.platform == 'win32' && 'windows-2025' || 'ubuntu-22.04' }}
     timeout-minutes: 150
     permissions:
       contents: write
@@ -88,6 +88,14 @@ jobs:
       - name: Install locked dependencies
         working-directory: app-source
         run: npm ci
+
+      - name: Install declared Linux speech runtime prerequisites
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libblas3 liblapack3 pulseaudio-utils
+          /usr/bin/python3 --version
 
       - name: Package Beta full release
         if: inputs.operation == 'beta-full'
