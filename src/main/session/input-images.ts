@@ -1,4 +1,5 @@
-import sharp from 'sharp';
+import { loadNativePackage } from '../native-package.js';
+const sharp = loadNativePackage('sharp');
 import { createHash } from 'node:crypto';
 import type { InputImage } from '../../shared/input.js';
 // Outbox history retries reuse immutable normalized bytes. In particular, a full

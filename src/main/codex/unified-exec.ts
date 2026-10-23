@@ -20,6 +20,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { loadNativePackage } from '../native-package.js';
 import { HeadTailBuffer } from './head-tail-buffer.js';
 import { CommandBatchDisplay } from './command-batch.js';
 import {
@@ -233,7 +234,7 @@ interface PtyModule {
 let ptyModule: Promise<PtyModule | null> | null = null;
 
 async function loadPty(): Promise<PtyModule | null> {
-  ptyModule ??= import('node-pty')
+  ptyModule ??= Promise.resolve().then(() => loadNativePackage('node-pty'))
     .then((module) => ((module as { default?: PtyModule }).default ?? module) as PtyModule)
     .catch(() => null);
   return ptyModule;
