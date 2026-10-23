@@ -26,22 +26,6 @@ function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv)
 }
 
 /**
- * Explicit development/test browser isolation. Normal installs leave these unset and keep the
- * person's ordinary browser profile. The Beta launcher sets the isolated profile so app-authored
- * URLs cannot escape into the production Chrome profile or production Companion extension.
- */
-function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
-  const userData = env.ONECODE_BROWSER_USER_DATA?.trim();
-  if (!userData) return [];
-  const p = platform === 'win32' ? path.win32 : path.posix;
-  const requireAbsolute = (label: string, value: string): string => {
-    if (!p.isAbsolute(value)) throw new Error(`${label} must be an absolute path.`);
-    return p.normalize(value);
-  };
-  return [`--user-data-dir=${requireAbsolute('ONECODE_BROWSER_USER_DATA', userData)}`];
-}
-
-/**
  * Sign-in uses the person's normal profile, including its installed companion extension. Firefox
  * is not offered: the session handoff reads Chromium's single cookie store, and Firefox keeps a
  * store per container, so it is left out until that path is built and tested there.
