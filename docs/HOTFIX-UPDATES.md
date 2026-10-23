@@ -57,6 +57,8 @@ The AppImage's mounted SquashFS is never patched in place. A verified capsule is
 
 Startup is fail-safe. Before executing an activated layer the bootstrap writes a launch marker. The normal main window clears the marker only after reaching `ready-to-show`. If the process dies first, the next immutable bootstrap restores the previous activation receipt (or the bundled application) rather than boot-looping the failed layer. The native AppImage remains unchanged throughout.
 
+The reliability release also supports a combined AppImage update when a later hotfix requires a missing complete base. The updater verifies the hotfix's embedded base descriptor against that base release's own checksums, then downloads and verifies both the exact AppImage and cumulative application capsule before offering installation. Shutdown prepares the selected layer for that successor, atomically replaces the AppImage, and relaunches once into the final application version. It never launches the intermediate base. A failed AppImage replacement restores the prior layer receipt; the immutable successor bootstrap still verifies the actual base/runtime and every selected application file before execution. A crash between the receipt and AppImage swap may fall back to the old bundled application on the next manual launch; it cannot execute a mismatched layer or authorize an automatic retry.
+
 ### Build a complete Linux base
 
 Use a verified modern Linux Node runtime (the release pipeline currently pins Node 24.22.0/npm 11.19.1), then:

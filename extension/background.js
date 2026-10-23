@@ -4196,11 +4196,12 @@ const COMPACT_CHECKPOINT_FLAGS = [
   'sourceDispatch',
   'sourceUndelivered',
   'sourceLost',
+  'sourceDeferred',
   'destinationAttempt',
   'destinationDispatch',
   'destinationLost'
 ];
-const COMPACT_CHECKPOINT_TEXT = ['summary', 'sourceMessageId', 'destinationMessageId', 'sourceError', 'before', 'newestUserMessage'];
+const COMPACT_CHECKPOINT_TEXT = ['summary', 'sourceMessageId', 'destinationMessageId', 'sourceError', 'sourceWaitReason', 'before', 'newestUserMessage'];
 // Not a checkpoint of its own: it qualifies `sourceMessageId` by saying how far that exact
 // marked response has grown. Sent only alongside the field it describes, so a bare count can
 // never move a deadline by itself. `documentSince` likewise only qualifies the newest message a

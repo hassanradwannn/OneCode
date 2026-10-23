@@ -10270,6 +10270,19 @@
     );
   }
 
+  async function deferUnsentCompaction(forId, token, reason, current) {
+    if (!current() || !token) return false;
+    const reply = await compactionCheckpoint({ type: 'compact', conversationId: forId, token,
+      sourceDeferred: true, sourceWaitReason: reason }, current);
+    if (!current()) return false;
+    if (reply?.ok === true && reply.data?.deferred === true && reply.data.job) job = reply.data.job;
+    localError = reply?.ok === true && reply.data?.deferred === true
+      ? 'Waiting for the provider page to be ready. The original handoff will continue automatically.'
+      : 'The handoff was not submitted. Waiting for the app to confirm the original preparation state.';
+    renderControl();
+    return reply?.ok === true && reply.data?.deferred === true;
+  }
+
   async function startCompact(automatic = false) {
     const forId = conversationId;
     const forEpoch = epoch;
@@ -10394,7 +10407,8 @@
       return box?.isConnected && CLF_DOM.composerVisible() && box.getAttribute('contenteditable') !== 'false' &&
         box.getAttribute('aria-disabled') !== 'true' ? box : null;
     };
-    const expectedQuestionId = stoppedQuestionId || policyData.recordedQuestionId || null;
+    const expectedQuestionId = stoppedQuestionId || filed.data.job?.sourceSend?.preparation?.questionId ||
+      policyData.recordedQuestionId || null;
     const sourceReady = () => editableSource() && (!expectedQuestionId ||
       CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id === expectedQuestionId);
     if (!sourceReady()) {
@@ -10422,7 +10436,8 @@
             'content_compact_chat_changed_preparing',
             'The chat changed while preparing the handoff. Nothing was sent.'
           );
-        if (!automatic || !hydrationCurrent()) await retireUnsentCompaction(forId, String(filed.data.token || ''), localError, current);
+        if (!hydrationCurrent()) await retireUnsentCompaction(forId, String(filed.data.token || ''), localError, current);
+        else await deferUnsentCompaction(forId, String(filed.data.token || ''), 'source-loading', current);
         if (!current()) return;
         renderControl();
         return;
@@ -10536,9 +10551,22 @@
     if (job && job.stage === 'handoff-pending' && job.sourceSend?.state === 'dispatched-unresolved' &&
         !(await releaseUndeliveredHandoff(forId, forEpoch))) return;
     const source = job && job.stage === 'handoff-pending' ? job.sourceSend : null;
-    if (!source || nativeBusy || localError) return;
+    if (!source || nativeBusy || (localError && !source.preparationWait)) return;
     if (source.state !== 'not-attempted' && source.state !== 'attempted-unresolved') return;
     if (!alive || conversationId !== forId || epoch !== forEpoch || CLF_DOM.conversationId() !== forId) return;
+    if (source.preparationWait) {
+      if (Date.now() < source.preparationWait.retryAt || !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() ||
+          generating || CLF_DOM.generating() || CLF_DOM.hasComposerAttachments()) return;
+      const question = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? null;
+      if (source.preparation?.questionId && question !== source.preparation.questionId) return;
+      const draft = CLF_DOM.composerAuthoredText(), prompt = source.preparation?.prompt;
+      if (draft.trim() && (!prompt || sendText(draft) !== sendText(prompt))) return;
+      if (draft.trim() && CLF_DOM.provider === 'chatgpt') {
+        const button = CLF_DOM.sendButton();
+        if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+      }
+      localError = '';
+    }
     const automatic = job.automatic === true;
     // An automatic ticket is the app's decision about a chat nobody is necessarily looking at,
     // and a hidden tab is a throttled one: on 2026-09-03 the source page froze solid while the
@@ -10853,24 +10881,19 @@
       epoch === forEpoch &&
       CLF_DOM.conversationId() === forId;
     let attemptCrossed = false;
-    const automaticTicket = job && job.automatic === true;
-    const abandonBeforeSend = async (why, retireAutomatic = false) => {
+    const abandonBeforeSend = async (why, terminal = false, reason = 'editor-unavailable') => {
       if (!current()) return;
       nativeBusy = false;
       nativePhase = '';
       pressedAt = 0;
       localError = why;
-      // A transient page/DOM failure is not a verdict on an automatic ticket. Keep it on the
-      // continuation WAL so the app's next pickup reload can collect the same work. A composer
-      // already holding another draft is different: ChatGPT restores that draft across reloads,
-      // so the caller can retire this pre-Send ticket instead of scheduling the same refusal.
-      // A manual press keeps its historical immediate-abort behaviour; the user is still present
-      // and can retry it without leaving an invisible job behind.
-      if (!automaticTicket || retireAutomatic) {
+      // Both authored and automatic intents survive transient editor readiness.
+      // Only a proved source change or a protected user draft retires this ticket.
+      if (terminal) {
         // A late failure belongs to this exact pre-Send ticket, never to a newer
         // manual retry. The durable guard refuses an already-dispatched request.
         await retireUnsentCompaction(forId, token, why, current);
-      }
+      } else await deferUnsentCompaction(forId, token, reason, current);
       if (!current()) return;
       renderControl();
       void pullActivity();
@@ -10878,13 +10901,13 @@
 
     if (!current()) return;
     if (!prompt) return void (await abandonBeforeSend(
-      t('content_compact_missing_handoff_instruction', 'The app did not send the handoff instruction.')
+      t('content_compact_missing_handoff_instruction', 'The app did not send the handoff instruction.'), true
     ));
     if (!token) return void (await abandonBeforeSend(
-      t('content_compact_missing_token', 'The app did not send a compaction token, so nothing could be tracked.')
+      t('content_compact_missing_token', 'The app did not send a compaction token, so nothing could be tracked.'), true
     ));
     if (CLF_DOM.hasComposerAttachments()) return void (await abandonBeforeSend(
-      'Attachments are already in the message box. Their draft was preserved; the handoff request was not submitted.'
+      'Attachments are already in the message box. Their draft was preserved; the handoff request was not submitted.', true
     ));
 
     try {
@@ -10946,7 +10969,7 @@
           // hit this same refusal forever. Retire only this provably pre-Send ticket; the draft
           // itself stays untouched. Missing/replaced composer failures remain recoverable on the
           // existing WAL.
-          occupiedByOtherDraft
+          occupiedByOtherDraft, 'editor-rejected'
         ));
       }
       await Promise.resolve();
@@ -10964,7 +10987,7 @@
           t(
             'content_compact_message_box_changed',
             'The message box changed before the handoff instruction could be sent. Its draft was preserved; nothing was compacted.'
-          )
+          ), Boolean(composer && (authored(composer) || '').trim() && squeeze(authored(composer)) !== squeeze(prompt))
         ));
       }
       // Claiming the prompt. Nothing has been submitted under this state, and the app knows
@@ -10995,7 +11018,7 @@
             'content_compact_message_box_changed_preserved',
             'The message box changed before the handoff could be sent. Its draft was preserved.'
           ),
-          true
+          !sameSource() || Boolean(sendComposer && (authored(sendComposer) || '').trim() && squeeze(authored(sendComposer)) !== squeeze(prompt))
         ));
       }
       rememberUserSend();
@@ -11029,13 +11052,17 @@
       } : null, matchesSubmittedBootstrap);
       if (!current()) return;
       if (!sent) {
-        CLF_DOM.clearPromptExact(prompt);
+        if (!attemptCrossed && !sameSource()) {
+          CLF_DOM.clearPromptExact(prompt);
+          return void (await abandonBeforeSend('The original question changed before the handoff was submitted.', true));
+        }
         if (!attemptCrossed) return void (await abandonBeforeSend(
           t(
             'content_compact_send_not_ready',
-            'The handoff request was not submitted because the Send button or message box was not ready. Retry after the page is ready.'
-          )
+            'Waiting for the provider message box and Send control. The original handoff will continue automatically.'
+          ), false, 'send-not-ready'
         ));
+        CLF_DOM.clearPromptExact(prompt);
         nativeBusy = false;
         nativePhase = 'waiting';
         pressedAt = 0;

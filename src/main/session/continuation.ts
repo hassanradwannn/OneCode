@@ -74,11 +74,13 @@ import {
   findSessionByConversation,
   getSession,
   readLatestUserMessage,
+  conversationWasSuperseded,
   readEvents,
   readHandoff,
   refuseAutomaticCompactionNow,
   rebindSession
 } from './store.js';
+import { isChatBlocked } from './blocked-chats.js';
 import { continuationMarkerOf } from '../../shared/session.js';
 import { continuationReceipt, type ContinuationSourceReceipt } from '../../shared/continuation-receipt.js';
 
@@ -167,6 +169,9 @@ export interface ContinuationSendCheckpoint {
   custody?: { provider: 'gemini'; accountPath: string; id: string; browser: string; tabId: number; documentId: string };
   /** Provider-discriminated accepted question, separate from local grant custody. */
   receipt?: ContinuationSourceReceipt;
+  /** Frozen pre-Send instruction/source. Reprobes cannot regenerate a different prompt. */
+  preparation?: { prompt: string; questionId: string | null };
+  preparationWait?: { reason: 'source-loading' | 'editor-unavailable' | 'editor-rejected' | 'send-not-ready'; since: number; attempts: number; retryAt: number };
 }
 
 /** How long after the armed click a document may prove that Gemini never received it. */
@@ -520,7 +525,9 @@ const manualWaitingTtlMs = (state: ContinuationState, requested: RequestedModel 
  * clock until it is asked for and AUTOMATIC_HANDOVER_TTL_MS from then.
  */
 const expired = (entry: Continuation, now = Date.now()): boolean =>
-  entry.automatic
+  entry.state === 'awaiting-summary' && sendUnattempted(entry.sourceSend) && entry.sourceSend.preparationWait
+    ? false
+    : entry.automatic
     ? entry.askedAt !== null && now - entry.askedAt >= AUTOMATIC_HANDOVER_TTL_MS
     : now - entry.touchedAt >= manualWaitingTtlMs(entry.state, entry.requestedModel);
 
@@ -867,6 +874,7 @@ export async function beginContinuationSourceSendNow(
   return withCheckpointLock(token, async () => {
     const entry = byToken.get(token);
     if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary') return null;
+    if (entry.sourceSend.preparation && !await continuationPreparationCurrent(entry)) return null;
     if (entry.sourceSend.state === 'attempted-unresolved') {
       if (custody && JSON.stringify(entry.sourceSend.custody) !== JSON.stringify(custody)) {
         await transitionNow(entry, current => ({ ...current, sourceSend: { ...current.sourceSend!, custody } }));
@@ -879,9 +887,48 @@ export async function beginContinuationSourceSendNow(
     await transitionNow(entry, (current) => ({
       ...current,
       ...(project !== undefined ? { project: normalizeProjectId(project) } : {}),
-      sourceSend: { state: 'attempted-unresolved', messageId: null, ...(custody ? { custody } : {}) }
+      sourceSend: { ...current.sourceSend!, state: 'attempted-unresolved', messageId: null, ...(custody ? { custody } : {}) }
     }));
     return { allowed: true, checkpoint: { ...entry.sourceSend } };
+  });
+}
+
+async function continuationPreparationCurrent(entry: Continuation): Promise<boolean> {
+  if (isChatBlocked(entry.from) || await conversationWasSuperseded(entry.from)) return false;
+  if ((await getSession(entry.sessionId))?.conversationId !== entry.from) return false;
+  if (entry.sourceSend.preparation?.questionId &&
+      (await readLatestUserMessage(entry.sessionId))?.messageId !== entry.sourceSend.preparation.questionId) return false;
+  return (await getSession(entry.sessionId))?.conversationId === entry.from;
+}
+
+/** Freeze once through the existing WAL before exposing an instruction to a source page. */
+export async function prepareContinuationSourcePromptNow(token: string, prompt: string): Promise<string | null> {
+  return withCheckpointLock(token, async () => {
+    const entry = byToken.get(token);
+    if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary' || !sendUnattempted(entry.sourceSend)) return null;
+    if (!await continuationPreparationCurrent(entry)) return null;
+    const question = await readLatestUserMessage(entry.sessionId);
+    if (entry.sourceSend.preparation) return entry.sourceSend.preparation.questionId &&
+      entry.sourceSend.preparation.questionId !== question?.messageId ? null : entry.sourceSend.preparation.prompt;
+    if (!prompt || prompt.length > 128 * 1024) return null;
+    await transitionNow(entry, current => ({ ...current, sourceSend: { ...current.sourceSend!,
+      preparation: { prompt, questionId: question?.messageId ?? null } } }));
+    return prompt;
+  });
+}
+
+/** A positive pre-dispatch failure preserves the same transaction, never an ambiguous click. */
+export async function deferContinuationSourceNow(token: string, reason: NonNullable<ContinuationSendCheckpoint['preparationWait']>['reason']): Promise<boolean> {
+  return withCheckpointLock(token, async () => {
+    const entry = byToken.get(token);
+    if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary' || !sendUnattempted(entry.sourceSend)) return false;
+    if (!['source-loading', 'editor-unavailable', 'editor-rejected', 'send-not-ready'].includes(reason)) return false;
+    if (!await continuationPreparationCurrent(entry)) return false;
+    const prior = entry.sourceSend.preparationWait;
+    await transitionNow(entry, current => ({ ...current, sourceSend: { ...current.sourceSend!, preparationWait: {
+      reason, since: prior?.since ?? Date.now(), attempts: (prior?.attempts ?? 0) + 1, retryAt: Date.now() + 2000
+    } } }));
+    return true;
   });
 }
 
@@ -896,6 +943,7 @@ export async function dispatchContinuationSourceSendNow(token: string, before?: 
     const entry = byToken.get(token);
     if (!entry || !isOpen(entry) || entry.state !== 'awaiting-summary') return false;
     if (entry.sourceSend.state !== 'attempted-unresolved') return false;
+    if (entry.sourceSend.preparation && !await continuationPreparationCurrent(entry)) return false;
     await transitionNow(entry, (current) => ({
       ...current,
       sourceSend: {
@@ -1755,7 +1803,8 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
       !validStates.has(raw.state) ||
       !Number.isFinite(raw.openedAt) ||
       ((raw.state === 'committed' || raw.state === 'aborted') && now - lastTouchedAt >= retentionMs) ||
-      (raw.automatic !== true && now - lastTouchedAt >= retentionMs)
+      (raw.automatic !== true && now - lastTouchedAt >= retentionMs &&
+        !(raw.state === 'awaiting-summary' && raw.sourceSend?.preparationWait && sendUnattempted(raw.sourceSend)))
     ) {
       continue;
     }
@@ -1786,6 +1835,16 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
               messageId:
                 typeof raw.sourceSend.messageId === 'string' ? raw.sourceSend.messageId.slice(0, 200) : null,
               ...(continuationReceipt(raw.sourceSend.receipt) ? { receipt: continuationReceipt(raw.sourceSend.receipt)! } : {}),
+              ...(raw.sourceSend.preparation && typeof raw.sourceSend.preparation.prompt === 'string' &&
+                raw.sourceSend.preparation.prompt.length > 0 && raw.sourceSend.preparation.prompt.length <= 128 * 1024 &&
+                (raw.sourceSend.preparation.questionId === null || typeof raw.sourceSend.preparation.questionId === 'string' &&
+                  raw.sourceSend.preparation.questionId.length > 0 && raw.sourceSend.preparation.questionId.length <= 256)
+                ? { preparation: { ...raw.sourceSend.preparation } } : {}),
+              ...(raw.sourceSend.preparationWait && sendUnattempted(raw.sourceSend) &&
+                ['source-loading', 'editor-unavailable', 'editor-rejected', 'send-not-ready'].includes(raw.sourceSend.preparationWait.reason) &&
+                Number.isFinite(raw.sourceSend.preparationWait.since) && Number.isSafeInteger(raw.sourceSend.preparationWait.attempts) &&
+                raw.sourceSend.preparationWait.attempts > 0 && Number.isFinite(raw.sourceSend.preparationWait.retryAt)
+                ? { preparationWait: { ...raw.sourceSend.preparationWait } } : {}),
               ...(raw.sourceSend.custody && raw.sourceSend.custody.provider === 'gemini' &&
                 (raw.sourceSend.custody.accountPath === '' || /^\/u\/[0-9]+$/.test(raw.sourceSend.custody.accountPath)) &&
                 /^[A-Za-z0-9_-]{43}$/.test(raw.sourceSend.custody.id) &&
