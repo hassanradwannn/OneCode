@@ -15,6 +15,16 @@ export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
   chrome: 'Chrome', edge: 'Edge', brave: 'Brave', firefox: 'Firefox'
 };
 
+/** Explicit persistent QA profile; ordinary installations keep their existing browser profile. */
+function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+  const argument = process.argv.find(value => value.startsWith('--onecode-browser-user-data='));
+  const userData = env.ONECODE_BROWSER_USER_DATA?.trim() || argument?.slice('--onecode-browser-user-data='.length).trim();
+  if (userData === undefined) return [];
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (!userData || !p.isAbsolute(userData)) throw new Error('ONECODE_BROWSER_USER_DATA must be an absolute path.');
+  return [`--user-data-dir=${p.normalize(userData)}`];
+}
+
 /**
  * Explicit development/test browser isolation. Normal installs leave these unset and keep the
  * person's ordinary browser profile. The Beta launcher sets the isolated profile so app-authored
