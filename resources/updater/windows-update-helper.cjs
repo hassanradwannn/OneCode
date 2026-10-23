@@ -71,11 +71,12 @@ function readyWindow(text, since, version) {
 }
 function registration(target) {
   const beta = currentChannel === 'beta', guid = beta ? '35baded0-d4e2-5fee-872a-11b461352695' : '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
-  const uninstaller = beta ? 'Uninstall OneCode Beta.exe' : 'Uninstall OneCode.exe';
+  const uninstaller = uninstallerName(currentChannel);
   const rows = JSON.parse(ps(`$rows=@(foreach($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)){$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,$view);try{$a=$base.OpenSubKey('Software\\${guid}');$b=$base.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${guid}');if($a -or $b){@{location=$(if($a){$a.GetValue('InstallLocation')});uninstall=$(if($b){$b.GetValue('UninstallString')})}}}finally{if($a){$a.Dispose()};if($b){$b.Dispose()};$base.Dispose()}});ConvertTo-Json -InputObject $rows -Compress`));
   if (!rows.length || rows.some(row => !row.location || !same(row.location, target) || row.uninstall !== `"${path.win32.join(target, uninstaller)}" /currentuser`)) throw new Error('Installation registration changed');
 }
 let currentChannel = 'stable';
+function uninstallerName(channel) { return channel === 'beta' ? 'Uninstall onecode-beta.exe' : 'Uninstall OneCode.exe'; }
 function processes(executable) {
   const name = currentChannel === 'beta' ? 'onecode-beta.exe' : 'OneCode.exe';
   return JSON.parse(ps(`ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name='${name}'" | Where-Object {$_.ExecutablePath -eq ${quote(executable)}} | Select-Object ProcessId,ParentProcessId) -Compress`));
@@ -266,5 +267,5 @@ async function launchSuccessor(record, dependencies, listing, log, version) {
     await sleep(1000);
   }
 }
-module.exports = { validate, run, readyWindow, ownedShortcutIcon, runHotfix };
+module.exports = { validate, run, readyWindow, ownedShortcutIcon, runHotfix, uninstallerName };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });

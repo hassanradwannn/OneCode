@@ -53,6 +53,8 @@ assert.throws(() => contract.baseRelease({ ...betaBase, tag: 'v0.5.1' }), /Inval
 assert.throws(() => contract.manifest({ ...betaManifest, archive: 'OneCode-Hotfix-x64.zip' }), /Invalid hotfix manifest/);
 
 const helper = require('../resources/updater/windows-update-helper.cjs');
+assert.equal(helper.uninstallerName('beta'), 'Uninstall onecode-beta.exe');
+assert.equal(helper.uninstallerName('stable'), 'Uninstall OneCode.exe');
 const handoff = { schema: 1, channel: 'beta', version: '0.5.2', fileVersion: '0.5.2.0', digest: sum, pid: 10, at: Date.now(),
   installer: 'C:\\Users\\tester\\AppData\\Local\\OneCode Beta\\updates\\OneCode-Beta-Setup-x64.exe',
   target: 'C:\\Users\\tester\\AppData\\Local\\Programs\\OneCode Beta',

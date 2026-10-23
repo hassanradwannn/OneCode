@@ -792,6 +792,8 @@ export interface UpdateStatus {
   betaRelation?: 'current' | 'local-ahead' | 'remote-ahead';
   /** When the release API last answered, as epoch ms. Null until it has. */
   checkedAt: number | null;
+  /** A successful Beta feed check found no published Beta prerelease. */
+  betaFeedEmpty?: boolean;
   /** A version handed to its installer that this start is still older than: it did not install. */
   notInstalled?: string | null;
   downloadPercent?: number;

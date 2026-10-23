@@ -1284,6 +1284,9 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     tone = 'bad';
   } else if (update.stage === 'checking') {
     lines.push(t("Checking for a newer version…"));
+  } else if (update.betaFeedEmpty) {
+    lines.push(t('No Beta update is published yet.'));
+    tone = 'ok';
   } else if (!stale && !repairExtension && !missing && !update.notInstalled) {
     const extension = bridge.present && bridge.extensionVersion ? t(" · extension {0}", [bridge.extensionVersion]) : '';
     lines.push(t("Up to date! {0} {1}{2}", [PRODUCT_LABEL, displayBuildVersion(update.current), extension]));

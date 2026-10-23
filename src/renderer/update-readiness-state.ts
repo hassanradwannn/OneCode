@@ -18,7 +18,7 @@ interface ReadinessRow {
 /** Projects existing owners only. Unknown, old proof and a dismissed reminder cannot pass. */
 export function updateReadiness(next: AppState): ReadinessRow[] {
   const { update, bridge, status } = next;
-  const appReady = update.stage === 'idle' && !update.latest && update.checkedAt != null;
+  const appReady = update.stage === 'idle' && !update.latest && update.checkedAt != null && !update.betaFeedEmpty;
   const beta = update.channel === 'beta-branch';
   const betaCurrent = update.currentRevision?.slice(0, 12) ?? '';
   const betaLatest = update.latestRevision?.slice(0, 12) ?? '';
@@ -28,6 +28,7 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
     : update.stage === 'downloading' ? t('Downloading {0}', [displayBuildVersion(update.latest!)])
     : beta && update.stage === 'ready' && betaLatest ? t('Beta revision {0} ready to restart', [betaLatest])
     : update.latest ? (update.stage === 'ready' ? t('Ready to install {0}', [displayBuildVersion(update.latest!)]) : t('Install {0} manually', [displayBuildVersion(update.latest!)]))
+    : update.betaFeedEmpty ? t('No Beta update is published yet.')
     : appReady ? beta && update.betaRelation === 'local-ahead' ? t('Local beta branch is ahead of origin/beta') : t('Up to date') : t('Not checked yet');
   const extensionReady = bridge.running && bridge.paired && bridge.present && bridge.extensionVersion === update.current && !bridge.extensionUpdateRequired;
   const extensionOlder = bridge.extensionUpdateRequired === true || !!bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion);
