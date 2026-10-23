@@ -23,25 +23,28 @@ on:
         description: Required published base version for beta-capsule
         required: false
         type: string
+      platform:
+        description: Platform to build (select one when retrying a runner)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - win32
+          - linux
 
 permissions:
   contents: read
 
 jobs:
   build-and-upload:
-    name: ${{ matrix.name }} app release assets
+    name: ${{ matrix.platform }} x64 app release assets
     if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Windows x64
-            runner: windows-2025
-            platform: win32
-          - name: Linux x64
-            runner: ubuntu-24.04
-            platform: linux
-    runs-on: ${{ matrix.runner }}
+        platform: ${{ fromJSON(inputs.platform == 'win32' && '["win32"]' || inputs.platform == 'linux' && '["linux"]' || '["win32","linux"]') }}
+    runs-on: ${{ matrix.platform == 'win32' && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: 150
     permissions:
       contents: write
@@ -91,6 +94,10 @@ jobs:
         working-directory: app-source
         shell: bash
         run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
           GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel beta --platform "$BUILD_PLATFORM" --arch x64
           if [[ "$BUILD_PLATFORM" == win32 ]]; then
             node scripts/prepare-windows-release.mjs release-beta --full-only
@@ -103,6 +110,10 @@ jobs:
         working-directory: app-source
         shell: bash
         run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
           GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel beta --platform "$BUILD_PLATFORM" --arch x64 --dir
           if [[ "$BUILD_PLATFORM" == win32 ]]; then
             node scripts/write-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
@@ -115,6 +126,10 @@ jobs:
         working-directory: app-source
         shell: bash
         run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
           GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel stable --platform "$BUILD_PLATFORM" --arch x64
           if [[ "$BUILD_PLATFORM" == win32 ]]; then
             node scripts/prepare-windows-release.mjs release
