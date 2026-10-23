@@ -6,6 +6,7 @@ import { CancellationToken, NsisUpdater, type UpdateInfo, type ResolvedUpdateFil
 import type { DownloadUpdateOptions } from 'electron-updater/out/AppUpdater.js';
 import { repairDifferentialCache, rememberDifferentialCache } from './update-cache.js';
 import { logWarn } from './logger.js';
+import { BUILD_CHANNEL } from '../shared/build-channel.js';
 
 export class ConsistentNsisUpdater extends NsisUpdater {
   cacheNotice: (message: string) => void = () => undefined;
@@ -25,7 +26,7 @@ export class ConsistentNsisUpdater extends NsisUpdater {
 }
 
 export const UPDATE_REPOSITORY = 'hassanradwannn/OneCode';
-export const windowsUpdateChannel = (arch: string): string => `latest-${arch}`;
+export const windowsUpdateChannel = (arch: string): string => `${BUILD_CHANNEL === 'beta' ? 'beta-latest' : 'latest'}-${arch}`;
 
 export function configureWindowsDownloadEngine(updater: NsisUpdater): void {
   updater.autoDownload = false;
@@ -36,8 +37,8 @@ export function configureWindowsDownloadEngine(updater: NsisUpdater): void {
   updater.disableWebInstaller = true;
 }
 
-export function validateWindowsUpdate(info: UpdateInfo, version: string, name: string): void {
-  const expected = `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${version}/${name}`;
+export function validateWindowsUpdate(info: UpdateInfo, version: string, name: string, tag = BUILD_CHANNEL === 'beta' ? `beta-v${version}` : `v${version}`): void {
+  const expected = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${name}`;
   if (info.version !== version || info.files?.length !== 1 || ('packages' in info && info.packages) ||
       !info.files.every(file => (file.url === name || file.url === expected) &&
         /^[A-Za-z0-9+/]{86}==$/.test(file.sha512) && Number.isSafeInteger(file.size) && file.size! > 0)) {
@@ -46,8 +47,8 @@ export function validateWindowsUpdate(info: UpdateInfo, version: string, name: s
 }
 
 export async function downloadWindowsUpdate(version: string, name: string,
-  progress: (percent: number) => void): Promise<string> {
-  const updater = new ConsistentNsisUpdater({ provider: 'generic', url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/v${version}/`,
+  progress: (percent: number) => void, tag = BUILD_CHANNEL === 'beta' ? `beta-v${version}` : `v${version}`): Promise<string> {
+  const updater = new ConsistentNsisUpdater({ provider: 'generic', url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/`,
     channel: windowsUpdateChannel(process.arch) });
   // This engine must never own shutdown or install. In particular its normal-quit hook is off.
   configureWindowsDownloadEngine(updater);
@@ -72,7 +73,7 @@ export async function downloadWindowsUpdate(version: string, name: string,
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Checking OneCode update metadata timed out')), 15000); })
     ]);
     if (!result) throw new Error('OneCode update metadata is unavailable');
-    validateWindowsUpdate(result.updateInfo, version, name);
+    validateWindowsUpdate(result.updateInfo, version, name, tag);
     clearTimeout(timer);
     timer = setTimeout(() => cancellation.cancel(), 60000);
     updater.on('download-progress', value => {

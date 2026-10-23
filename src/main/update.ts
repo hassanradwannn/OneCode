@@ -54,11 +54,17 @@ import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotf
 import { baseRelease, type LinuxBaseRelease } from '../../resources/updater/hotfix-contract.cjs';
 import { activateLinuxHotfix } from './linux-hotfix.js';
 import { currentAppImageIdentity, installationKind, type AppImageIdentity } from './installation.js';
+import { explicitBrowserUserData } from './browser.js';
+import { launchBridgePorts } from './bridge-ports.js';
+import { BUILD_CHANNEL } from '../shared/build-channel.js';
 
 // Explicitly authorized OneCode publisher only. Never use the original project's feed.
 const UPDATES_ENABLED = true;
 const REPO = 'hassanradwannn/OneCode';
 const LATEST_RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
+let selectedReleaseTag = '';
+const releaseTagFor = (version: string) => selectedReleaseTag && releaseVersion(selectedReleaseTag) === version
+  ? selectedReleaseTag : BUILD_CHANNEL === 'beta' ? `beta-v${version}` : `v${version}`;
 
 const CHECK_TIMEOUT_MS = 15_000;
 /**
@@ -109,10 +115,10 @@ export function stagedArtifact(
 ): { name: string; kind: 'installer' | 'appimage'; target: string } | null {
   if (!packaged) return null;
   if (arch !== 'x64' && arch !== 'arm64') return null;
-  if (platform === 'win32') return { name: `OneCode-Setup-${arch}.exe`, kind: 'installer', target: '' };
+  if (platform === 'win32') return { name: `${BUILD_CHANNEL === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Setup-${arch}.exe`, kind: 'installer', target: '' };
   if (platform === 'linux' && installationKind(platform, packaged, appImage) === 'appimage') {
     const identity = currentAppImageIdentity();
-    if (identity) return { name: `OneCode-Linux-${arch}.AppImage`, kind: 'appimage', target: identity.target };
+    if (identity) return { name: `${BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-Linux' : 'OneCode-Linux'}-${arch}.AppImage`, kind: 'appimage', target: identity.target };
   }
   return null;
 }
@@ -148,21 +154,24 @@ export function manualDownloadName(
   kind = installationKind(platform, packaged, appImage)
 ): string | null {
   if (!packaged || (arch !== 'x64' && arch !== 'arm64')) return null;
-  if (platform === 'darwin') return `OneCode-macOS-${arch}.dmg`;
-  if (platform === 'linux' && kind === 'deb') return `OneCode-Linux-${arch}.deb`;
+  if (platform === 'darwin') return `${BUILD_CHANNEL === 'beta' ? 'OneCode-Beta' : 'OneCode'}-macOS-${arch}.dmg`;
+  if (platform === 'linux' && kind === 'deb') return `${BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-Linux' : 'OneCode-Linux'}-${arch}.deb`;
   return null;
 }
 
 /** Where "Get update" sends this installation: its exact file for `version`, else the page. */
 export function manualDownloadUrl(version: string | null, name: string | null = manualDownloadName()): string {
-  const page = `https://github.com/${REPO}/releases/latest`;
-  return version && /^\d+\.\d+\.\d+$/.test(version) && name ? `https://github.com/${REPO}/releases/download/v${version}/${name}` : page;
+  const page = BUILD_CHANNEL === 'beta' ? `https://github.com/${REPO}/releases?tab=pre-release-versions` : `https://github.com/${REPO}/releases/latest`;
+  return version && /^\d+\.\d+\.\d+$/.test(version) && name ? `https://github.com/${REPO}/releases/download/${encodeURIComponent(releaseTagFor(version))}/${name}` : page;
 }
 
 /** `v2.0.3` -> `2.0.3`, and anything that is not a release tag -> null. */
 export function releaseVersion(tag: unknown): string | null {
   if (typeof tag !== 'string') return null;
-  const version = tag.trim().replace(/^v/, '');
+  const normalized = tag.trim();
+  if (BUILD_CHANNEL === 'beta' && !/^beta-v\d+\.\d+\.\d+$/.test(normalized)) return null;
+  if (BUILD_CHANNEL === 'stable' && /^beta-/i.test(normalized)) return null;
+  const version = BUILD_CHANNEL === 'beta' ? normalized.slice('beta-v'.length) : normalized.replace(/^v/, '');
   return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
 }
 
@@ -295,7 +304,7 @@ export function checkForUpdates(): Promise<void> {
 
 async function runPass(): Promise<void> {
   set({ stage: 'checking', error: null });
-  const release = { version: await latestVersion() };
+  const release = await latestVersion();
   // GitHub answered. From here the UI can tell "current" from "not asked yet", whatever the
   // rest of this pass does with the answer.
   set({ checkedAt: Date.now() });
@@ -340,7 +349,8 @@ async function runPass(): Promise<void> {
   // both the manifest of what the release contains and the proof of what may be executed, so
   // neither adopting a file nor fetching one happens without it.
   const digests = await releaseDigests(release.version);
-  const hotfixName = process.platform === 'linux' ? `OneCode-Linux-Hotfix-${process.arch}.json` : `OneCode-Hotfix-${process.arch}.json`;
+  const prefix = BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-' : 'OneCode-';
+  const hotfixName = process.platform === 'linux' ? `${prefix}Linux-Hotfix-${process.arch}.json` : `${prefix}Hotfix-${process.arch}.json`;
   const hotfixDigest = hotfixCapable ? digests.get(hotfixName) : undefined;
   if (hotfixDigest) {
     const manifestFile = await adopt(release.version, hotfixName, hotfixDigest) ?? await download(release.version, hotfixName, hotfixDigest);
@@ -369,11 +379,11 @@ async function runPass(): Promise<void> {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
-      const base = manifest.base, baseDigests = await releaseDigests(base.version), descriptorName = `${process.platform === 'linux' ? 'OneCode-Linux-Base' : 'OneCode-Base'}-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
+      const base = manifest.base, baseDigests = await releaseDigests(base.version), channelPrefix = BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-' : 'OneCode-', descriptorName = `${channelPrefix}${process.platform === 'linux' ? 'Linux-Base' : 'Base'}-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
       if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
       const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
       const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
-      for (const key of ['version','platform','arch','runtime','installer','size','sha256'] as const) if (descriptor[key] !== base[key]) throw Error('The full release descriptor differs from the hotfix base');
+      for (const key of ['version','platform','arch','runtime','installer','size','sha256','channel','tag'] as const) if ((descriptor[key] ?? (key === 'channel' ? 'stable' : undefined)) !== (base[key] ?? (key === 'channel' ? 'stable' : undefined))) throw Error('The full release descriptor differs from the hotfix base');
       const total = manifest.size + base.size;
       const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
       const baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
@@ -408,7 +418,7 @@ async function runPass(): Promise<void> {
   }
   set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
   const file = artifact.kind === 'installer'
-    ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }))
+    ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }), release.tag)
     : await download(release.version, artifact.name, expected);
   if ((await fileDigest(file)) !== expected) throw new Error('The downloaded update does not match the OneCode release checksum');
   const imageIdentity = appImageEvidence(artifact);
@@ -467,22 +477,29 @@ async function adopt(version: string, name: string, expected: string): Promise<s
 }
 
 /** The one fact the release API is asked for: which version is newest. */
-async function latestVersion(): Promise<string> {
+async function latestVersion(): Promise<{ version: string; tag: string }> {
   let response: Response;
   try {
-    response = await get(LATEST_RELEASE_API, CHECK_TIMEOUT_MS, {
+    response = await get(BUILD_CHANNEL === 'beta'
+      ? `https://api.github.com/repos/${REPO}/releases?per_page=100` : LATEST_RELEASE_API, CHECK_TIMEOUT_MS, {
       accept: 'application/vnd.github+json'
     });
   } catch (err) {
     // GitHub's API refuses unauthenticated calls once an address has spent its hourly quota, and
     // some networks get 403 outright (#1253). The public release page has no such quota.
-    if (!/ answered (403|429)$/.test((err as Error).message)) throw err;
+    if (BUILD_CHANNEL === 'beta' || !/ answered (403|429)$/.test((err as Error).message)) throw err;
     return latestVersionFromPage();
   }
-  const body = (await response.json()) as { tag_name?: unknown };
-  const version = releaseVersion(body.tag_name);
-  if (!version) throw new Error('the latest release has no usable version tag');
-  return version;
+  const body = (await response.json()) as { tag_name?: unknown; prerelease?: unknown } | Array<{ tag_name?: unknown; prerelease?: unknown }>;
+  const candidate = BUILD_CHANNEL === 'beta'
+    ? Array.isArray(body) ? body.filter(item => item.prerelease === true && releaseVersion(item.tag_name) !== null)
+      .sort((left,right) => isNewer(releaseVersion(left.tag_name)!, releaseVersion(right.tag_name)!) ? -1 : 1)[0] : undefined
+    : !Array.isArray(body) ? body : undefined;
+  const tag = candidate?.tag_name;
+  const version = releaseVersion(tag);
+  if (!version || typeof tag !== 'string') throw new Error(`the ${BUILD_CHANNEL} release feed has no usable channel tag`);
+  selectedReleaseTag = tag;
+  return { version, tag };
 }
 
 /**
@@ -490,7 +507,7 @@ async function latestVersion(): Promise<string> {
  * redirects to `/releases/tag/v<version>`. A HEAD request reads only where it lands, and only a
  * landing on github.com counts.
  */
-async function latestVersionFromPage(): Promise<string> {
+async function latestVersionFromPage(): Promise<{ version: string; tag: string }> {
   const response = await fetch(`https://github.com/${REPO}/releases/latest`, {
     method: 'HEAD',
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
@@ -502,9 +519,11 @@ async function latestVersionFromPage(): Promise<string> {
   try { landed = new URL(response.url); } catch { landed = null; }
   const tag = landed?.origin === 'https://github.com' && landed.pathname.startsWith(`/${REPO}/releases/tag/`)
     ? /\/releases\/tag\/([^/]+)$/.exec(landed.pathname)?.[1] : undefined;
-  const version = releaseVersion(tag ? decodeURIComponent(tag) : undefined);
-  if (!version) throw new Error('the release page named no usable version tag');
-  return version;
+  const exactTag = tag ? decodeURIComponent(tag) : undefined;
+  const version = releaseVersion(exactTag);
+  if (!version || !exactTag) throw new Error('the release page named no usable version tag');
+  selectedReleaseTag = exactTag;
+  return { version, tag: exactTag };
 }
 
 /**
@@ -527,8 +546,8 @@ async function releaseDigests(version: string): Promise<Map<string, string>> {
 }
 
 /** The url of one release asset. Built here, never taken from a response body. */
-function assetUrl(version: string, name: string): string {
-  return `https://github.com/${REPO}/releases/download/v${encodeURIComponent(version)}/${name}`;
+function assetUrl(version: string, name: string, tag = releaseTagFor(version)): string {
+  return `https://github.com/${REPO}/releases/download/${encodeURIComponent(tag)}/${name}`;
 }
 
 async function get(url: string, timeout: number | AbortSignal, headers: Record<string, string> = {}): Promise<Response> {
@@ -767,7 +786,9 @@ export async function applyStagedUpdate(): Promise<void> {
       // NSIS /D must be the final, unquoted argument. It names only the verified current install.
       const elevate = ready.kind !== 'hotfix' && process.platform === 'win32' && !(await installFolderAccess(path.dirname(process.execPath)));
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
-        executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
+        executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log'),
+        userData: app.getPath('userData'), browserUserData: explicitBrowserUserData(),
+        bridgePorts: launchBridgePorts() });
     } else {
       if (!appImageIdentityMatches(ready.appImageIdentity, ready.target))
         throw new Error('The mounted AppImage identity changed');
@@ -821,7 +842,7 @@ export function resetUpdateForTests(): void {
   listeners.clear();
   if (recheck) clearInterval(recheck);
   if (retry) clearTimeout(retry);
-  recheck = null; retry = null; failures = 0;
+  recheck = null; retry = null; failures = 0; selectedReleaseTag = '';
 }
 
 /** Isolated tests supply existing-owner projections and a download engine without native actions. */

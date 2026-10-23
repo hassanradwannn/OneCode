@@ -1,0 +1,24 @@
+extends: electron-builder.yml
+appId: io.onecode.desktop.beta
+productName: OneCode Beta
+executableName: onecode-beta
+extraMetadata:
+  onecodeBuildChannel: beta
+  desktopName: io.onecode.desktop.beta
+publish:
+  provider: github
+  owner: hassanradwannn
+  repo: OneCode
+  updaterCacheDirName: onecode-beta-updater
+directories:
+  output: release-beta
+nsis:
+  guid: 35baded0-d4e2-5fee-872a-11b461352695
+  shortcutName: OneCode Beta
+  artifactName: OneCode-Beta-Setup-${arch}.${ext}
+  uninstallDisplayName: OneCode Beta
+linux:
+  executableName: onecode-beta
+  artifactName: OneCode-Beta-Linux-${env.COS_PACKAGE_ARCH}.${ext}
+deb:
+  packageName: onecode-beta

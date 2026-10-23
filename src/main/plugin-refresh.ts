@@ -16,6 +16,7 @@ const requestedVersion = z.string().regex(/^\d+\.\d+\.\d+$/).optional();
 const rowSchema = z.object({
   surface: z.enum(['core', 'desktop', 'plugins']), schemaId: z.string(), id: z.string().uuid(), appId: app.nullable(),
   completedSchemaId: z.string().nullable(), attempted: z.boolean(), manual: z.boolean().optional().default(false),
+  declarationId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   error: z.string().max(200).optional(), failure: z.enum(['inspection', 'confirmation']).optional(), versionId: z.string().max(200).optional(),
   failures: z.number().int().nonnegative().optional(), parked: z.boolean().optional(), parkedBy: z.string().max(40).optional(),
   tunnelKey: z.string().optional(), verifiedRun: z.string().optional(), observe: z.boolean().optional().default(false),
@@ -201,9 +202,9 @@ function enrollable(tools: unknown, publication: PluginPublication): boolean {
 function matches(tools: unknown, expected: PluginToolSchema[], surface: PluginSurface = 'core'): boolean {
   return recognizable(tools, surface) && hash(declaration(tools)) === hash(declaration(expected));
 }
-/** Refresh can invalidate existing Gemini chats. Only a changed visible tool contract warrants it. */
+/** A configured name is part of the provider-visible contract, alongside tools. */
 export function publishPluginSurface(surface: PluginSurface, connectorName: string, _version: string, _instructions: string, tools: PluginToolSchema[]): void {
-  const candidate = { surface, connectorName, tools, schemaId: hash(declaration(tools)) };
+  const candidate = { surface, connectorName, tools, schemaId: hash({ connectorName, declaration: declaration(tools) }) };
   const existing = publications.get(surface), tunnelKey = scope(surface);
   const restored = !existing || publicationScopes.get(surface) !== tunnelKey;
   const publication = existing?.schemaId === candidate.schemaId && existing.connectorName === connectorName && publicationScopes.get(surface) === tunnelKey ? existing : candidate;
@@ -348,7 +349,9 @@ function reconcileRows(current: Row[]): boolean {
       continue;
     }
     const found = stored?.tunnelKey === scope(publication.surface) ? stored : undefined;
+    const declarationId = hash(declaration(publication.tools));
     if (found?.schemaId === publication.schemaId) {
+      if (found.declarationId !== declarationId) { found.declarationId = declarationId; changed = true; }
       if (found.requestedVersion === APP_VERSION && found.requestedFromVersion !== APP_VERSION) {
         found.requestedFromVersion = APP_VERSION; changed = true;
       }
@@ -359,7 +362,16 @@ function reconcileRows(current: Row[]): boolean {
     // 2026-09-27: 11 -> 8 tools clicked, app quit before completion, back to 11 was then taken
     // as already current while Gemini showed 8.
     const unconfirmed = found?.attempted === true && found.completedSchemaId !== found.schemaId;
-    const next: Row = { surface: publication.surface, tunnelKey: scope(publication.surface), observe: false, schemaId: publication.schemaId, id: randomUUID(), appId: found?.appId ?? null, completedSchemaId: unconfirmed ? null : found?.completedSchemaId ?? null, verifiedRun: unconfirmed ? undefined : found?.verifiedRun, attempted: false, manual: false };
+    const next: Row = { surface: publication.surface, tunnelKey: scope(publication.surface), observe: false, schemaId: publication.schemaId, declarationId, id: randomUUID(), appId: found?.appId ?? null, completedSchemaId: unconfirmed ? null : found?.completedSchemaId ?? null, verifiedRun: unconfirmed ? undefined : found?.verifiedRun, attempted: false, manual: false };
+    // A name edit cannot mint another Refresh click for the same tool contract.
+    // The raw declaration hash also recognizes pre-name receipts on upgrade.
+    if (found && (found.declarationId === declarationId || found.schemaId === declarationId)) {
+      next.attempted = found.attempted; next.manual = found.manual;
+      next.observe = found.observe || !!found.appId;
+      for (const key of ['error', 'failure', 'failures', 'parked', 'parkedBy'] as const) {
+        if (found[key] !== undefined) Object.assign(next, { [key]: found[key] });
+      }
+    }
     // A requested app update may introduce new schemas on restart. Adopt those once; a later
     // settings edit in the same build must not borrow Update all's one-shot authorization.
     if (found?.requestedVersion && (!found.schemaId || found.requestedVersion !== APP_VERSION || found.requestedFromVersion !== APP_VERSION)) {
@@ -458,6 +470,7 @@ export function claimPluginRefresh(input: Identity & Enrollment & { alreadyCurre
     const current = await rows(); const row = exact(current, input, true);
     if (!row || (!automatic && !requestedHere(row)) || !recognizable(input.tools, row.surface)) return false;
     const publication = publications.get(row.surface)!;
+    if (input.connectorName !== publication.connectorName) return false;
     const legacy = legacyIdentity(row), migrationClick = legacy && refreshableLegacy(row, publication);
     const observation = (row.observe || legacy) && !migrationClick;
     if (observation && input.alreadyCurrent !== true) return false;
@@ -493,6 +506,7 @@ export function requireManualPluginRefresh(input: Identity & Enrollment & { erro
     const current = await rows(); const row = exact(current, input, true);
     if (!row || !recognizable(input.tools, row.surface)) return false;
     const publication = publications.get(row.surface)!;
+    if (input.connectorName !== publication.connectorName) return false;
     const legacy = legacyIdentity(row);
     if (legacy ? !refreshableLegacy(row, publication) || !provesLegacyTunnel(row, input) || !enrolls(row, publication, input)
       : row.observe || row.attempted || row.manual || row.completedSchemaId === row.schemaId) return false;

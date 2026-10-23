@@ -16,6 +16,9 @@ function value(name, fallback) {
 const platform = normalizePlatform(value('platform', process.platform));
 const arches = value('arch', process.arch).split(',').map((item) => normalizeArch(item.trim()));
 const dirOnly = args.includes('--dir');
+const channel = value('channel', 'stable');
+if (!['stable', 'beta'].includes(channel)) throw new Error('Build channel must be stable or beta');
+const outputDir = channel === 'beta' ? 'release-beta' : 'release';
 
 function run(command, commandArgs, env = process.env) {
   const result = spawnSync(command, commandArgs, { cwd: root, stdio: 'inherit', env });
@@ -34,7 +37,8 @@ run(node, ['scripts/make-icon.mjs']);
 // Before the bundle is built, so the stamp that ships is the stamp of what ships. The app and the
 // extension both read this one file to tell which extension build a browser is running.
 run(node, ['scripts/write-extension-stamp.mjs']);
-run(node, [path.join('node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build']);
+  const channelEnv = { ...process.env, ONECODE_BUILD_CHANNEL: channel };
+  run(node, [path.join('node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'], channelEnv);
 run(node, [path.join('node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', 'remote.vite.config.ts']);
 
 for (const arch of arches) {
@@ -53,16 +57,18 @@ for (const arch of arches) {
     '--publish',
     'never'
   ];
+  if (channel === 'beta') builderArgs.push('--config', 'electron-builder.beta.yml');
   if (dirOnly) builderArgs.push('--dir');
-  run(node, builderArgs, { ...process.env, COS_PACKAGE_ARCH: arch });
+  run(node, builderArgs, { ...channelEnv, COS_PACKAGE_ARCH: arch });
   if (platform === 'win32' && !dirOnly) {
     const { readFileSync } = await import('node:fs');
     const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-    run(node, ['scripts/write-update-metadata.mjs', path.join(root, 'release'), arch, version]);
+    run(node, ['scripts/write-update-metadata.mjs', path.join(root, outputDir), arch, version, channel]);
   }
   // A successful electron-builder exit only proves that an artifact was assembled. Exercise the
   // unpacked artifact immediately so missing transitive runtime modules (for example when the
   // checkout's node_modules was linked to another tree) fail this same packaging command instead
   // of producing an installer that crashes before the first BrowserWindow exists.
-  run(node, ['scripts/smoke-packaged-runtime.mjs', ...targetArgs, ...(!dirOnly && platform === 'win32' ? ['--check-installer'] : [])]);
+  run(node, ['scripts/smoke-packaged-runtime.mjs', ...targetArgs, ...(!dirOnly && platform === 'win32' ? ['--check-installer'] : [])],
+    { ...channelEnv, ONECODE_PACKAGE_OUTPUT: outputDir });
 }

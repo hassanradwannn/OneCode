@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { unzipSync } from 'fflate';
 import * as sharedContract from '../../resources/updater/hotfix-contract.cjs';
 import { rawFs, rawPromises } from './rawfs.js';
+import { BUILD_CHANNEL } from '../shared/build-channel.js';
 const contract = sharedContract.withFilesystem(rawFs);
 const { readFile, mkdir, writeFile } = rawPromises;
 
@@ -11,7 +12,7 @@ export async function readHotfixManifest(manifestFile: string, version: string, 
   const bytes = await readFile(manifestFile);
   if (bytes.length > 256 * 1024) throw Error('Hotfix manifest is too large');
   const manifest = contract.manifest(JSON.parse(bytes.toString('utf8')));
-  if (manifest.version !== version || manifest.arch !== arch || manifest.platform !== platform) throw Error('Hotfix manifest names another release, platform or architecture');
+  if (manifest.version !== version || manifest.arch !== arch || manifest.platform !== platform || (manifest.channel ?? 'stable') !== BUILD_CHANNEL) throw Error('Hotfix manifest names another release, platform, architecture or channel');
   return manifest;
 }
 export async function compatibleHotfix(manifestFile: string, version: string, resources = process.resourcesPath, arch = process.arch, platform = process.platform): Promise<HotfixManifest | null> {

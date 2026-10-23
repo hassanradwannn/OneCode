@@ -1,12 +1,14 @@
-import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { app } from 'electron';
 import { launchCommand, runCommand, runPowerShell } from './exec.js';
 import { getConfig } from './config.js';
 import type { ChatBrowser } from '../shared/types.js';
 import { browserWindowBounds } from './browser-window-layout.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderHomeUrl } from '../shared/chat-provider.js';
 import { registeredWindowsBrowsers, windowsBrowserExecutable, WINDOWS_BROWSER_NAMES } from './browser-windows.js';
+import { BUILD_CHANNEL, type BuildChannel } from '../shared/build-channel.js';
 
 type Exists = (candidate: string) => boolean;
 type Launch = typeof launchCommand;
@@ -15,14 +17,41 @@ export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
   chrome: 'Chrome', edge: 'Edge', brave: 'Brave', firefox: 'Firefox'
 };
 
-/** Explicit persistent QA profile; ordinary installations keep their existing browser profile. */
-function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+/** Only explicit isolation crosses an update receipt; defaults follow app/profile/family. */
+export function explicitBrowserUserData(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const p = platform === 'win32' ? path.win32 : path.posix;
   const argument = process.argv.find(value => value.startsWith('--onecode-browser-user-data='));
   const userData = env.ONECODE_BROWSER_USER_DATA?.trim() || argument?.slice('--onecode-browser-user-data='.length).trim();
-  if (userData === undefined) return [];
-  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (userData === undefined) return undefined;
   if (!userData || !p.isAbsolute(userData)) throw new Error('ONECODE_BROWSER_USER_DATA must be an absolute path.');
-  return [`--user-data-dir=${p.normalize(userData)}`];
+  return p.normalize(userData);
+}
+/** Explicit persistent QA profile; ordinary installations keep their existing browser profile. */
+export function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv,
+  channel: BuildChannel = BUILD_CHANNEL, appUserData?: string, browser: ExternalChatBrowser = 'chrome'): string[] {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const userData = explicitBrowserUserData(platform, env) ??
+    (channel === 'beta' ? p.join(appUserData ?? app.getPath('userData'), 'browser-profiles', browser) : undefined);
+  return userData ? [`--user-data-dir=${userData}`] : [];
+}
+
+/** Firefox uses its own persistent profile format, separate from Chromium. */
+export function isolatedFirefoxArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv,
+  channel: BuildChannel = BUILD_CHANNEL, appUserData?: string): string[] {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const profile = explicitBrowserUserData(platform, env) ??
+    (channel === 'beta' ? p.join(appUserData ?? app.getPath('userData'), 'browser-profiles', 'firefox') : undefined);
+  if (!profile) return [];
+  // Mozilla's startup selects the full profile path before StartClient remoting.
+  // Keep remoting enabled so later URLs reach this same profile rather than
+  // trying to lock a second instance of it (--no-remote would break that).
+  return ['--profile', profile];
+}
+async function firefoxProfileArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv,
+  prepare: (directory: string) => Promise<unknown> = directory => fs.mkdir(directory, { recursive: true })): Promise<string[]> {
+  const args = isolatedFirefoxArgs(platform, env);
+  if (args.length) await prepare(args[1]!);
+  return args;
 }
 
 /**
@@ -39,7 +68,7 @@ export async function installedSignInBrowsers(): Promise<Array<{ browser: Extern
 }
 
 export async function openBrowserSignIn(browser: ExternalChatBrowser,
-  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch' | 'discover'> = {}): Promise<string> {
+  options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch' | 'discover' | 'prepareProfile'> = {}): Promise<string> {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
@@ -50,7 +79,7 @@ export async function openBrowserSignIn(browser: ExternalChatBrowser,
     // Firefox takes neither Chromium's window-size switch nor its spelling of one.
     const homeUrl = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     await (options.launch ?? launchCommand)(candidate,
-      browser === 'firefox' ? ['--new-window', homeUrl] : [...isolatedChromiumArgs(platform, env), '--new-window', '--window-size=520,760', homeUrl],
+      browser === 'firefox' ? [...await firefoxProfileArgs(platform, env, options.prepareProfile), '--new-window', homeUrl] : [...isolatedChromiumArgs(platform, env, BUILD_CHANNEL, undefined, browser), '--new-window', '--window-size=520,760', homeUrl],
       (platform === 'win32' ? path.win32 : path.posix).dirname(candidate));
     return candidate;
   }
@@ -110,6 +139,8 @@ export interface PreferredBrowserOpenOptions {
   powershell?: typeof runPowerShell;
   /** Read-only installation discovery; test/alternate-host seam. */
   discover?: (browser: ExternalChatBrowser) => Promise<string[]>;
+  /** Creates only the selected isolated Firefox profile directory. */
+  prepareProfile?: (directory: string) => Promise<unknown>;
 }
 
 function isExecutableBrowser(candidate: string, platform: NodeJS.Platform): boolean {
@@ -337,8 +368,8 @@ export async function openInPreferredBrowser(
   // existing instance cannot change its policy. Memory Saver exclusions alone do not
   // prevent background timer/renderer throttling of long-running orchestration tabs.
   // Firefox knows none of these Chromium switches; it gets the URL alone.
-  const args = selected === 'firefox' ? [url] : [
-    ...isolatedChromiumArgs(platform, env),
+  const args = selected === 'firefox' ? [...await firefoxProfileArgs(platform, env, options.prepareProfile), url] : [
+    ...isolatedChromiumArgs(platform, env, BUILD_CHANNEL, undefined, selected),
     ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
     ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
     url

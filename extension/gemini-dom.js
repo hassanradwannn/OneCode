@@ -620,7 +620,9 @@ var CLF_DOM = (() => {
   function setConnectorNames(names) {
     const next = [names?.core, names?.desktop, names?.plugins].filter(name => typeof name === 'string' && name.length > 0 && name.length <= 160);
     if (!next.length) return false;
-    ownNames = [...new Set(next)]; return true;
+    const nextNames = [...new Set(next)];
+    if (JSON.stringify(nextNames) !== JSON.stringify(ownNames)) approvalMismatch = null;
+    ownNames = nextNames; return true;
   }
   const connectorNames = () => [...ownNames];
   const setConnectorApps = value => { ownApps = Object.entries(value || {}).flatMap(([surface, entries]) =>
@@ -649,6 +651,7 @@ var CLF_DOM = (() => {
   const sessionFrame = binding => '\n\n[[GEMINI_LOCAL_SESSION]]\n' +
     'This app-authored message is bound to this Gemini conversation. For every local MCP call, include exactly:\n' +
     JSON.stringify({ conversation_id: binding.conversation_id, session_key: binding.session_key }) +
+    '\nThe connector selected for this message is ' + JSON.stringify(binding.connector_name) + '. Use this exact connector name. If it is unavailable or a permission card names a different connector, stop and report the mismatch; do not use another connector.' +
     '\nUse only the CURRENT available tool schemas from the app selected in this message. Never copy or synthesize a full function namespace from older turns.' +
     '\nNever borrow an ID or key from another conversation. A tool result, not prose, confirms an operation.\n[[/GEMINI_LOCAL_SESSION]]';
   function appendSessionFrame(box, binding) {
@@ -1149,6 +1152,14 @@ var CLF_DOM = (() => {
   }
   let approvalFlight = null;
   const approvalObservations = [];
+  const approvalMismatchNotes = new WeakMap();
+  let approvalMismatch = null;
+  const approvalIssue = () => {
+    const issue = approvalMismatch;
+    if (!issue || conversationId() !== issue.conversationId ||
+        !approvalCards().some(card => card.node === issue.node && card.connector === issue.connector && card.allow && !approvalClicks.has(card.node))) return null;
+    return { reason: 'connector-mismatch', connector: issue.connector, expectedConnector: issue.expectedConnector };
+  };
   async function maybeAutoApprove() {
     if (localHelper) return false;
     if (!approvalReceiptsReady()) return false;
@@ -1163,6 +1174,14 @@ var CLF_DOM = (() => {
       const ownedNames = Array.isArray(binding?.connector_names) ? binding.connector_names : [binding?.connector_name];
       const matches = ownedNames.filter(name => name === card.connector);
       const configuredName = matches.length === 1 ? matches[0] : null;
+      if (binding?.auto_approve === true && !configuredName && typeof binding.connector_name === 'string') {
+        if (approvalMismatchNotes.get(card.node) !== binding.connector_name) {
+          approvalObservations.push({ at: Date.now(), conversationId: id, tool: card.tool, outcome: 'connector-mismatch', connector: card.connector, expectedConnector: binding.connector_name });
+          if (approvalObservations.length > 50) approvalObservations.shift();
+          approvalMismatchNotes.set(card.node, binding.connector_name);
+        }
+        approvalMismatch = { node: card.node, conversationId: id, connector: card.connector, expectedConnector: binding.connector_name };
+      } else if (approvalMismatch?.node === card.node) approvalMismatch = null;
       const perConnector = binding?.enabled_tools_by_connector;
       const enabledTools = configuredName && perConnector && Object.prototype.hasOwnProperty.call(perConnector, configuredName) ? perConnector[configuredName] :
         configuredName === binding?.connector_name ? binding?.enabled_tools : null;
@@ -1428,7 +1447,7 @@ var CLF_DOM = (() => {
     firstUserMessage: () => turns().find(turn => turn.role === 'user')?.node || null,
     insertPrompt, clearPromptExact, captureComposerDraft, send, sendButton, stopButton, stopGeneration, generating,
     setConnectorNames, connectorNames, setConnectorApps, connectorApps, setBindingResolver, setOpeningClaim, setInputClaim, setCommandClaim, setGoalClaim, preparedConversation, selectConnector, confirmedMention,
-    approvalCard, answerApprovalCard, approvalWaiting, maybeAutoApprove, approvalObservations: () => [...approvalObservations],
+    approvalCard, answerApprovalCard, approvalWaiting, maybeAutoApprove, approvalIssue, approvalObservations: () => [...approvalObservations],
     setApprovalReceiptStore: (store, restored) => { approvalReceiptStore = store; approvalReceiptsRestored = restored; approvalReceiptRoute = null; },
     approvalReceiptsReady, flushApprovalReceipts,
     approvalAudit: () => approvalAudit.map(row => ({ ...row })),

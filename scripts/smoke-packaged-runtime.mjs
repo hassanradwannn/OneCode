@@ -8,7 +8,7 @@ import { assertWindowsPackageIsolation } from './verify-windows-package.mjs';
 import { normalizeArch, normalizePlatform, PLATFORM_INFO } from './packaging-targets.mjs';
 
 const repository = path.resolve(import.meta.dirname, '..');
-const releaseDir = path.join(repository, 'release');
+const releaseDir = path.join(repository, process.env.ONECODE_PACKAGE_OUTPUT === 'release-beta' ? 'release-beta' : 'release');
 
 function argValue(name, fallback) {
   const direct = process.argv.find((arg) => arg.startsWith(`--${name}=`));
@@ -40,6 +40,8 @@ if (!packageRoot) throw new Error(`Could not find unpacked ${targetPlatform}-${t
 
 const sourcePackage = JSON.parse(readFileSync(path.join(repository, 'package.json'), 'utf8'));
 const expectedVersion = sourcePackage.version;
+const channel = process.env.ONECODE_BUILD_CHANNEL === 'beta' ? 'beta' : 'stable';
+const product = channel === 'beta' ? 'OneCode Beta' : 'OneCode';
 const expectedElectronVersion = sourcePackage.devDependencies?.electron;
 if (!/^\d+\.\d+\.\d+$/.test(expectedElectronVersion ?? '')) {
   throw new Error(`Electron must be pinned to an exact release version, got ${JSON.stringify(expectedElectronVersion)}`);
@@ -58,7 +60,7 @@ if (targetPlatform === 'darwin') {
   appExecutable = path.join(appBundle, 'Contents', 'MacOS', 'OneCode');
 } else {
   resourcesDir = path.join(packageRoot, 'resources');
-  appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? 'OneCode.exe' : 'onecode');
+  appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? channel === 'beta' ? 'onecode-beta.exe' : 'OneCode.exe' : channel === 'beta' ? 'onecode-beta' : 'onecode');
 }
 
 function required(relative) {
@@ -130,7 +132,7 @@ if (targetPlatform === 'win32') {
     // Check the executable and any completed installer so stale builder overrides
     // cannot ship a new product version with an old FileVersion.
     const expectedWindows = expectedVersion.split('.').concat('0').slice(0, 4).join('.');
-    const installer = path.join(releaseDir, `OneCode-Setup-${targetArch}.exe`);
+    const installer = path.join(releaseDir, `${channel === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Setup-${targetArch}.exe`);
     for (const file of [appExecutable, ...(process.argv.includes('--check-installer') ? [installer] : [])]) {
       const literal = file.replaceAll("'", "''");
       const command = `$ErrorActionPreference='Stop'; (Get-Item -LiteralPath '${literal}').VersionInfo | Select-Object FileVersion,ProductVersion | ConvertTo-Json -Compress`;
@@ -144,7 +146,7 @@ if (targetPlatform === 'win32') {
   }
   const update = yaml.load(readFileSync(required('app-update.yml'), 'utf8'));
   if (update?.provider !== 'github' || update.owner !== 'hassanradwannn' || update.repo !== 'OneCode' ||
-      update.updaterCacheDirName !== 'onecode-updater') throw new Error('Packaged Windows update configuration is missing or incorrect');
+      update.updaterCacheDirName !== (channel === 'beta' ? 'onecode-beta-updater' : 'onecode-updater')) throw new Error('Packaged Windows update configuration is missing or incorrect');
   const isolation = assertWindowsPackageIsolation(resourcesDir);
   process.stdout.write(`Windows package isolation verified (${isolation.ownedFiles} app-owned text files).\n`);
   for (const file of ['node.exe', 'LICENSE', 'SHASUMS256.txt', 'runtime.json', 'node_modules/npm/LICENSE',

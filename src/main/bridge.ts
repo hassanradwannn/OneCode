@@ -945,13 +945,20 @@ export function followChatInBackground(conversationId: string): void {
 
 export type SelectedChatReadiness = { phase: 'ready' | 'loading' | 'history-wait' | 'reconnecting' | 'refused'; retryAt?: number; reason?: string };
 const selectedChatReadiness = new Map<string, { conversationId: string; token: string; browser?: string;
-  state: SelectedChatReadiness; dismissedAt?: number }>();
+  state: SelectedChatReadiness; startedAt: number; dismissedAt?: number }>();
 const selectedChatFlights = new Map<string, Promise<SelectedChatReadiness>>();
+const SELECTED_CHAT_READY_MS = 60_000;
+function selectedReadinessState(request: NonNullable<ReturnType<typeof selectedChatReadiness.get>>): SelectedChatReadiness {
+  const historyWait = request.state.phase === 'history-wait' && (request.state.retryAt ?? 0) > Date.now();
+  if (!['ready', 'refused'].includes(request.state.phase) && !historyWait && Date.now() - request.startedAt >= SELECTED_CHAT_READY_MS)
+    return { phase: 'refused', reason: 'The browser Companion has not confirmed this chat within one minute. Select this chat again to retry, or check the chosen browser and Companion in Setup.' };
+  return request.state;
+}
 export function selectedChatReadinessFor(sessionId: string, currentConversationId?: string | null): SelectedChatReadiness | null {
   const request = selectedChatReadiness.get(sessionId);
   if (request && currentConversationId !== undefined && request.conversationId !== currentConversationId)
     return { phase: 'refused', reason: 'The chat attachment changed.' };
-  const state = request?.state;
+  const state = request && selectedReadinessState(request);
   return state ? { ...state } : null;
 }
 /** Explicit chat selection owns opening/readiness; history/status reads cannot open tabs. */
@@ -964,25 +971,25 @@ export function ensureSelectedChatReady(sessionId: string): Promise<SelectedChat
     if (!conversation || isChatBlocked(conversation) || await conversationWasSuperseded(conversation))
       return { phase: 'refused', reason: 'This chat has no current browser attachment.' };
     followChatInBackground(conversation);
-    let request = selectedChatReadiness.get(sessionId);
-    // A new explicit click probes even an earlier ready result: its tab may have
-    // been closed since then. Concurrent clicks still share this same request.
-    if (!request || request.conversationId !== conversation || request.dismissedAt !== session.browserRecoveryDismissedAt ||
-        request.state.phase === 'ready' || request.state.phase === 'refused') {
-      request = { conversationId: conversation, token: randomBytes(9).toString('base64url'), state: { phase: 'loading' },
-        dismissedAt: session.browserRecoveryDismissedAt };
-      selectedChatReadiness.set(sessionId, request);
-    }
+    // Every new explicit click owns a fresh opening. The prior token may have
+    // already opened a tab the user closed while its state still said loading.
+    const request = { conversationId: conversation, token: randomBytes(9).toString('base64url'), state: { phase: 'loading' } as SelectedChatReadiness,
+      startedAt: Date.now(), dismissedAt: session.browserRecoveryDismissedAt };
+    selectedChatReadiness.set(sessionId, request);
     const until = providerHistoryBackoff(conversation, Date.now());
-    if (until) request.state = { phase: 'history-wait', retryAt: until };
+    if (until) { request.state = { phase: 'history-wait', retryAt: until }; request.startedAt = Math.max(request.startedAt, until); }
     wakeBrowserWork();
     if (!browserWakeConnected()) {
       request.state = { phase: 'reconnecting', reason: 'Waiting for the browser Companion.' };
       const current = request;
       const { wakeBrowserUrl } = await import('./browser-startup.js');
-      await wakeBrowserUrl(chatUrl(conversation), false, true, { authoredInput: true,
-        current: async () => selectedChatReadiness.get(sessionId) === current &&
-          (await getSession(sessionId))?.conversationId === conversation });
+      try {
+        await wakeBrowserUrl(chatUrl(conversation), true, true, { authoredInput: true,
+          current: async () => selectedChatReadiness.get(sessionId) === current &&
+            (await getSession(sessionId))?.conversationId === conversation });
+      } catch (error) {
+        request.state = { phase: 'refused', reason: error instanceof Error ? error.message : 'The chosen browser could not be started. Check Setup.' };
+      }
     }
     return request.state;
   })();
@@ -995,7 +1002,7 @@ async function takeSelectedChatReadiness(browser: string | null): Promise<Array<
   if (!browser) return [];
   const result: Array<{ conversationId: string; token: string }> = [];
   for (const [sessionId, request] of selectedChatReadiness) {
-    if (request.state.phase === 'ready' || request.state.phase === 'refused' ||
+    if (selectedReadinessState(request).phase === 'ready' || selectedReadinessState(request).phase === 'refused' ||
         (request.browser && request.browser !== browser) || chatHeldElsewhere(request.conversationId, browser)) continue;
     const session = await getSession(sessionId);
     if (session?.conversationId !== request.conversationId) { selectedChatReadiness.delete(sessionId); continue; }
@@ -2382,14 +2389,6 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string,
   } else {
     await setSessionAutomation(sessionId, 'off');
     await assertCurrent();
-    // An explicit user Stop owns this chat's local runs too. Recovery's temporary
-    // Stop-before-Continue must preserve those runs for the unchanged task.
-    const outcomes = await stopExecProcessesForSession(sessionId);
-    for (const outcome of outcomes) {
-      const message = `bridge: user Stop for session ${sessionId}, process ${outcome.processId}/${outcome.incarnation}: ${outcome.outcome}`;
-      if (outcome.outcome === 'capture-failed') logWarn(message);
-      else logInfo(message);
-    }
   }
   await assertCurrent();
   if (continuationForSession(sessionId)) { await cancelResumeNow(sessionId); await assertCurrent(); }
@@ -2415,6 +2414,16 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string,
   if (!alreadyQueued) logInfo(`bridge: desktop Stop requested for session ${sessionId}, conversation ${id}, turn ${expectedTurnId}, command ${command.id}; native cancellation is unconfirmed`);
   wakeBrowserWork();
   changed();
+  if (!continuationInputId) {
+    // Publish native Stop before waiting for local termination. Recovery's
+    // temporary Stop-before-Continue preserves these runs for the unchanged task.
+    const outcomes = await stopExecProcessesForSession(sessionId);
+    for (const outcome of outcomes) {
+      const message = `bridge: user Stop for session ${sessionId}, process ${outcome.processId}/${outcome.incarnation}: ${outcome.outcome}`;
+      if (outcome.outcome === 'capture-failed' || outcome.outcome === 'termination-unconfirmed') logWarn(message);
+      else logInfo(message);
+    }
+  }
   if (!alreadyQueued) {
     const lifecycle = bridgeLifecycleEpoch;
     // The shared startup owner launches only on positive process absence. An
@@ -3196,14 +3205,26 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // checked for shape; what it proves is existence, which Setup reads instead of a test message.
   // A generated image's original, fetched by the page that shows it, for one pending export (#889).
   if (route === '/selected-chat/readiness' && req.method === 'POST') {
-    const body = await readBody(req) as { token?: unknown; phase?: unknown; retryAt?: unknown };
+    const body = await readBody(req) as { token?: unknown; phase?: unknown; retryAt?: unknown; reason?: unknown };
     const entry = [...selectedChatReadiness].find(([, request]) => request.token === body.token && request.browser === browserOf(req));
     if (!entry || !['ready', 'loading', 'history-wait', 'reconnecting', 'refused'].includes(String(body.phase)))
       return json(res, 200, { ok: false }, origin);
     const [sessionId, request] = entry;
     if ((await getSession(sessionId))?.conversationId !== request.conversationId) return json(res, 200, { ok: false }, origin);
+    const reasons: Record<string, string> = {
+      'opening-failed': 'The chosen browser could not open the provider tab. Select this chat again to retry.',
+      'opening-spent': 'This selection already opened a tab that was closed. Select this chat again to reopen it.',
+      'tab-changed': 'The provider tab changed while it was loading. Select this chat again to retry.',
+      'page-loading': 'Waiting for the provider page to finish loading.',
+      'tab-suspended': 'Waking the suspended provider tab.',
+      'companion-document': 'Waiting for the Companion to connect to this provider tab.',
+      'provider-unconfirmed': 'The provider tab is open, but its chat has not confirmed readiness.',
+      'probe-failed': 'The browser could not check this provider tab. Select this chat again to retry.'
+    };
     request.state = { phase: body.phase as SelectedChatReadiness['phase'],
+      ...(typeof body.reason === 'string' && reasons[body.reason] ? { reason: reasons[body.reason] } : {}),
       ...(body.phase === 'history-wait' && typeof body.retryAt === 'number' && body.retryAt > Date.now() ? { retryAt: body.retryAt } : {}) };
+    if (request.state.retryAt) request.startedAt = Math.max(request.startedAt, request.state.retryAt);
     changed();
     return json(res, 200, { ok: true }, origin);
   }

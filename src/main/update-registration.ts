@@ -2,17 +2,20 @@
 import { execFile } from 'node:child_process';
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { BUILD_CHANNEL } from '../shared/build-channel.js';
 
-export const ONECODE_INSTALLER_GUID = '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
+export const ONECODE_INSTALLER_GUID = BUILD_CHANNEL === 'beta' ? '35baded0-d4e2-5fee-872a-11b461352695' : '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
+const EXE = BUILD_CHANNEL === 'beta' ? 'onecode-beta.exe' : 'OneCode.exe';
+const UNINSTALLER = BUILD_CHANNEL === 'beta' ? 'Uninstall OneCode Beta.exe' : 'Uninstall OneCode.exe';
 type Registration = { location: string | null; uninstall: string | null };
 const same = (a: string, b: string) => path.win32.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.win32.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
 
 export function registeredInstallTarget(executable: string, rows: Registration[]): string | null {
   const target = path.win32.dirname(executable);
-  if (path.win32.basename(executable).toLowerCase() !== 'onecode.exe' || !path.win32.isAbsolute(target)) return null;
+  if (path.win32.basename(executable).toLowerCase() !== EXE.toLowerCase() || !path.win32.isAbsolute(target)) return null;
   const active = rows.filter(row => row.location !== null || row.uninstall !== null);
   if (!active.length || active.some(row => !row.location || !same(row.location, target) ||
-      row.uninstall !== `"${path.win32.join(target, 'Uninstall OneCode.exe')}" /currentuser`)) return null;
+      row.uninstall !== `"${path.win32.join(target, UNINSTALLER)}" /currentuser`)) return null;
   return target;
 }
 
@@ -44,7 +47,7 @@ export async function currentWindowsInstallTarget(executable = process.execPath)
       if ((await lstat(node)).isSymbolicLink()) return null;
       const parent = path.dirname(node); if (parent === node) break;
     }
-    if (!same(await realpath(executable), executable) || !(await lstat(path.join(target, 'Uninstall OneCode.exe'))).isFile()) return null;
+    if (!same(await realpath(executable), executable) || !(await lstat(path.join(target, UNINSTALLER))).isFile()) return null;
     return target;
   } catch { return null; }
 }

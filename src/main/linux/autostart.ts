@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { BUILD_CHANNEL, PRODUCT_LABEL } from '../../shared/build-channel.js';
 
-const AUTOSTART_FILE = 'io.onecode.desktop.desktop';
+const AUTOSTART_FILE = `${BUILD_CHANNEL === 'beta' ? 'io.onecode.desktop.beta' : 'io.onecode.desktop'}.desktop`;
 
 function desktopExecArg(value: string): string {
   if (/\r|\n|\0/.test(value)) throw new Error('Linux startup executable contains an invalid character');
@@ -43,8 +44,8 @@ export function linuxAutostartContents(executable: string): string {
     '[Desktop Entry]',
     'Type=Application',
     'Version=1.0',
-    'Name=OneCode',
-    'Comment=Start OneCode in the background',
+    `Name=${PRODUCT_LABEL}`,
+    `Comment=Start ${PRODUCT_LABEL} in the background`,
     `Exec=${desktopExecArg(executable)} --background`,
     'Terminal=false',
     'StartupNotify=false',

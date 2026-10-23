@@ -13,8 +13,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { app } from 'electron';
 
-const PRODUCT_NAME = 'OneCode';
-const APP_ID = 'io.onecode.desktop';
+declare const __ONECODE_BUILD_CHANNEL__: 'stable' | 'beta';
+const BUILD_CHANNEL = typeof __ONECODE_BUILD_CHANNEL__ !== 'undefined' && __ONECODE_BUILD_CHANNEL__ === 'beta' ? 'beta' : 'stable';
+
+const PRODUCT_NAME = BUILD_CHANNEL === 'beta' ? 'OneCode Beta' : 'OneCode';
+const APP_ID = BUILD_CHANNEL === 'beta' ? 'io.onecode.desktop.beta' : 'io.onecode.desktop';
 const VERSION = /^\d+\.\d+\.\d+$/;
 const HEX = /^[a-f0-9]{64}$/;
 const LAYER_DIR = /^[A-Za-z0-9._-]{1,120}$/;
@@ -54,13 +57,15 @@ function packagedLinuxKind(): { kind: 'appimage' | 'deb' | 'linux-unpacked'; app
   try {
     const executable = realpathSync(process.execPath);
     try {
-      if (readFileSync('/var/lib/dpkg/info/onecode.list', 'utf8').split(/\r?\n/).includes(executable)) return { kind: 'deb' };
+      const packageName = BUILD_CHANNEL === 'beta' ? 'onecode-beta' : 'onecode';
+      if (readFileSync(`/var/lib/dpkg/info/${packageName}.list`, 'utf8').split(/\r?\n/).includes(executable)) return { kind: 'deb' };
     } catch { /* Query the package database when the direct package inventory is absent. */ }
     const ownership = execFileSync('/usr/bin/dpkg-query', ['--search', executable], {
       encoding: 'utf8', timeout: 2_000, maxBuffer: 64 * 1024, stdio: ['ignore', 'pipe', 'ignore']
     });
     if (ownership.split(/\r?\n/).some(line => {
-      const match = /^onecode(?::[a-z0-9-]+)?: (.+)$/.exec(line);
+      const packageName = BUILD_CHANNEL === 'beta' ? 'onecode-beta' : 'onecode';
+      const match = new RegExp(`^${packageName}(?::[a-z0-9-]+)?: (.+)$`).exec(line);
       return !!match && match[1] === executable;
     })) return { kind: 'deb' };
   } catch { /* An unowned directory build cannot use the production profile or updater. */ }
@@ -74,7 +79,20 @@ Object.defineProperty(globalThis, '__onecodeInstallation', {
 
 const appDataDirectory = (): string => {
   const override = process.env.ONECODE_USER_DATA?.trim() || process.env.GEMINI_CODE_USER_DATA?.trim();
-  if (override) return path.resolve(override);
+  const stableProfiles = ['OneCode', 'GeminiCode'].map(name => path.join(app.getPath('appData'), name));
+  const isStableProfile = (candidate: string): boolean => {
+    const resolved = path.resolve(candidate);
+    return stableProfiles.some(stableProfile => {
+      if (resolved.toLowerCase() === path.resolve(stableProfile).toLowerCase()) return true;
+      try { return realpathSync(resolved).toLowerCase() === realpathSync(stableProfile).toLowerCase(); } catch { return false; }
+    });
+  };
+  if (override) {
+    const resolved = path.resolve(override);
+    if (BUILD_CHANNEL === 'beta' && isStableProfile(resolved))
+      throw new Error('Beta cannot use the stable OneCode profile');
+    return resolved;
+  }
   let commandLineProfile: string | null = null;
   for (let index = 0; index < process.argv.length; index++) {
     const argument = process.argv[index]!;
@@ -89,7 +107,10 @@ const appDataDirectory = (): string => {
   if (commandLineProfile !== null) {
     if (!commandLineProfile.trim() || !path.isAbsolute(commandLineProfile))
       throw new Error('The --user-data-dir argument requires an absolute path');
-    return path.resolve(commandLineProfile);
+    const resolved = path.resolve(commandLineProfile);
+    if (BUILD_CHANNEL === 'beta' && isStableProfile(resolved))
+      throw new Error('Beta cannot use the stable OneCode profile');
+    return resolved;
   }
   const appData = app.getPath('appData');
   if (linuxKind === 'linux-unpacked') {
@@ -97,7 +118,7 @@ const appDataDirectory = (): string => {
     return path.join(appData, 'OneCode-QA', incarnation);
   }
   const current = path.join(appData, PRODUCT_NAME), legacy = path.join(appData, 'GeminiCode');
-  return !existsSync(current) && existsSync(legacy) ? legacy : current;
+  return BUILD_CHANNEL === 'stable' && !existsSync(current) && existsSync(legacy) ? legacy : current;
 };
 
 app.setName(PRODUCT_NAME);
