@@ -89,7 +89,18 @@ async function tagCommit(tagName, token) {
 }
 
 async function getRelease(tagName, token) {
-  return github(`/releases/tags/${encodeURIComponent(tagName)}`, token);
+  // The by-tag endpoint exposes published releases only. List with the authenticated
+  // draft owner's token and require one exact tag before granting any upload.
+  const matches = [];
+  for (let page = 1; page <= 10; page++) {
+    const releases = await github(`/releases?per_page=100&page=${page}`, token);
+    matches.push(...releases.filter(release => release.tag_name === tagName));
+    if (releases.length < 100) {
+      if (matches.length !== 1) fail(`Expected one accessible release for ${tagName}.`);
+      return matches[0];
+    }
+  }
+  fail('Release inventory exceeds the bounded draft lookup.');
 }
 
 async function verifyDraft(token, metadata) {
