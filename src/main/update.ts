@@ -51,7 +51,7 @@ import { currentWindowsInstallTarget } from './update-registration.js';
 import { updateBusyReasons, type UpdateBusyReason } from './update-install.js';
 import { startWindowsUpdate } from './update-bootstrap.js';
 import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
-import { baseRelease } from '../../resources/updater/hotfix-contract.cjs';
+import { baseRelease, type LinuxBaseRelease } from '../../resources/updater/hotfix-contract.cjs';
 import { activateLinuxHotfix } from './linux-hotfix.js';
 import { currentAppImageIdentity, installationKind, type AppImageIdentity } from './installation.js';
 
@@ -169,7 +169,7 @@ export function releaseVersion(tag: unknown): string | null {
 const CLEAR: UpdateStatus = { current: APP_VERSION, latest: null, stage: 'idle', error: null, checkedAt: null };
 
 let status: UpdateStatus = CLEAR;
-let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'linux-hotfix' | 'composite'; target: string; digest: string; appImageIdentity?: AppImageIdentity; hotfix?: string; baseVersion?: string; patchFile?: string; patchDigest?: string } | null = null;
+let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'linux-hotfix' | 'composite' | 'linux-composite'; target: string; digest: string; appImageIdentity?: AppImageIdentity; hotfix?: string; hotfixDigest?: string; baseVersion?: string; base?: LinuxBaseRelease; patchFile?: string; patchDigest?: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
 let runAfterInstall = false;
@@ -353,21 +353,23 @@ async function runPass(): Promise<void> {
         const percent = Math.min(99, Math.floor(bytes / manifest.size * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent });
       });
       const hotfix = await stageHotfix(file, manifest);
+      const hotfixDigest = await fileDigest(hotfix);
       staged = process.platform === 'linux'
-        ? { version: release.version, file, kind: 'linux-hotfix', target: '', digest: manifest.sha256, hotfix,
+        ? { version: release.version, file, kind: 'linux-hotfix', target: '', digest: manifest.sha256, hotfix, hotfixDigest,
           appImageIdentity: kind === 'appimage' ? appImageEvidence({ kind, target: currentAppImageIdentity()?.target ?? '' }) : undefined }
-        : { version: release.version, file, kind: 'hotfix', target: artifact?.target ?? '', digest: manifest.sha256, hotfix };
+        : { version: release.version, file, kind: 'hotfix', target: artifact?.target ?? '', digest: manifest.sha256, hotfix, hotfixDigest };
       set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
       logInfo(`update: ${release.version} application hotfix is verified and ready; native runtime retained`);
       return;
     }
-    const needsBase = process.platform === 'win32' && artifact?.kind === 'installer' && !digests.has(artifact.name);
+    const needsBase = artifact && !digests.has(artifact.name) &&
+      ((process.platform === 'win32' && artifact.kind === 'installer') || (process.platform === 'linux' && artifact.kind === 'appimage'));
     if (needsBase && manifest.base) {
-      if (manifest.base.platform !== 'win32') throw Error('The Windows hotfix names a non-Windows base');
+      if (manifest.base.platform !== process.platform) throw Error('The hotfix names a base for another platform');
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
       set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
-      const base = manifest.base, baseDigests = await releaseDigests(base.version), descriptorName = `OneCode-Base-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
+      const base = manifest.base, baseDigests = await releaseDigests(base.version), descriptorName = `${process.platform === 'linux' ? 'OneCode-Linux-Base' : 'OneCode-Base'}-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
       if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
       const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
       const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
@@ -378,9 +380,11 @@ async function runPass(): Promise<void> {
       if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
       const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => report(base.size + bytes));
       const hotfix = await stageHotfix(file, manifest);
-      staged = { version: release.version, file: baseFile, kind: 'composite', target: artifact.target, digest: base.sha256, hotfix, baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256 };
+      staged = { version: release.version, file: baseFile, kind: base.platform === 'linux' ? 'linux-composite' : 'composite', target: artifact.target,
+        digest: base.sha256, hotfix, hotfixDigest: await fileDigest(hotfix), baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256,
+        ...(base.platform === 'linux' ? { base, appImageIdentity: appImageEvidence(artifact) } : {}) };
       set({ latest: release.version, stage: 'ready', downloadPercent: 100 });
-      logInfo(`update: ${release.version} composite Windows update is verified and ready`);
+      logInfo(`update: ${release.version} complete base and application hotfix are verified and ready for one restart`);
       return;
     }
     logInfo('update: hotfix runtime differs; checking for a full installer');
@@ -660,9 +664,10 @@ function checkInstallIntent(): Promise<void> {
       try {
         if (await fileDigest(ready.file) !== ready.digest) throw new Error('The staged update changed after verification');
         if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('The staged hotfix changed after verification');
+        if (ready.hotfix && await fileDigest(ready.hotfix) !== ready.hotfixDigest) throw new Error('The staged hotfix manifest changed after verification');
         if ((ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') && await installTarget() !== ready.target)
           throw new Error('The OneCode installation registration changed');
-        if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target))
+        if ((ready.kind === 'appimage' || ready.kind === 'linux-composite') && !appImageIdentityMatches(ready.appImageIdentity, ready.target))
           throw new Error('The mounted AppImage identity changed');
         // Re-read after filesystem/registry waits. No sampled timer or model status grants idleness.
         if (mode !== 'now') reasons = await busyProjection();
@@ -740,6 +745,8 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!ready) return;
   try {
     if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
+    if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('the staged hotfix changed after verification');
+    if (ready.hotfix && await fileDigest(ready.hotfix) !== ready.hotfixDigest) throw new Error('the staged hotfix manifest changed after verification');
     if (ready.kind === 'linux-hotfix') {
       if (!ready.hotfix) throw new Error('the Linux application layer manifest is missing');
       if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
@@ -762,17 +769,29 @@ export async function applyStagedUpdate(): Promise<void> {
       await startWindowsUpdate({ ...ready, elevate, note: handoffNote(), resources: process.resourcesPath,
         executable: process.execPath, pid: process.pid, log: path.join(app.getPath('userData'), 'app.log') });
     } else {
-      if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target))
+      if (!appImageIdentityMatches(ready.appImageIdentity, ready.target))
         throw new Error('The mounted AppImage identity changed');
       const next = `${ready.target}.new`;
       // Never follow or overwrite a pre-existing `.new` link/path next to the application.
       await copyFile(ready.file, next, constants.COPYFILE_EXCL);
-      await chmod(next, 0o755);
-      if (ready.kind === 'appimage' && !appImageIdentityMatches(ready.appImageIdentity, ready.target)) {
-        await rm(next, { force: true });
-        throw new Error('The mounted AppImage identity changed');
+      try {
+        await chmod(next, 0o755);
+        if (await fileDigest(next) !== ready.digest) throw new Error('The copied AppImage changed after verification');
+        await prepareUpdateHandoff?.(ready.version);
+        const replace = async () => {
+          if (!appImageIdentityMatches(ready.appImageIdentity, ready.target)) throw new Error('The mounted AppImage identity changed');
+          await rename(next, ready.target);
+        };
+        if (ready.kind === 'linux-composite') {
+          if (!ready.hotfix || !ready.base) throw new Error('The combined Linux update has no verified base and application layer');
+          // Publish the layer for the verified successor before swapping its base.
+          // No intermediate base is launched; a failed swap restores the prior receipt.
+          await activateLinuxHotfix(ready.hotfix, { base: ready.base, replace });
+        } else await replace();
+      } catch (error) {
+        await rm(next, { force: true }).catch(() => undefined);
+        throw error;
       }
-      await rename(next, ready.target);
       // No installer to hand the "start it again" to, so this process arranges its own successor.
       // Electron spawns it as this one exits, which is the app.exit() that ends the shutdown.
       if (relaunch) app.relaunch({ execPath: ready.target });

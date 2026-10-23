@@ -120,6 +120,7 @@ import {
   startGoalDraft
 } from './goal.js';
 import { logInfo, logWarn } from './logger.js';
+import { stopExecProcessesForSession } from './codex/ownership.js';
 import {
   closeConversation,
   liveConversations,
@@ -234,6 +235,8 @@ import {
   supersededSourceConversations,
   dispatchContinuationDestinationSendNow,
   dispatchContinuationSourceSendNow,
+  prepareContinuationSourcePromptNow,
+  deferContinuationSourceNow,
   releaseUndeliveredSourceDispatchNow,
   normalizeProjectId,
   openContinuationNow,
@@ -2376,7 +2379,18 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string,
     const input = (await listInputs()).find(row => row.id === continuationInputId && row.sessionId === sessionId &&
       row.state === 'queued' && row.steerTurnId === expectedTurnId && row.sendAuthorizedAt === undefined && !row.cancelledByUser);
     if (!input) throw new Error('continuation_input_changed');
-  } else await setSessionAutomation(sessionId, 'off');
+  } else {
+    await setSessionAutomation(sessionId, 'off');
+    await assertCurrent();
+    // An explicit user Stop owns this chat's local runs too. Recovery's temporary
+    // Stop-before-Continue must preserve those runs for the unchanged task.
+    const outcomes = await stopExecProcessesForSession(sessionId);
+    for (const outcome of outcomes) {
+      const message = `bridge: user Stop for session ${sessionId}, process ${outcome.processId}/${outcome.incarnation}: ${outcome.outcome}`;
+      if (outcome.outcome === 'capture-failed') logWarn(message);
+      else logInfo(message);
+    }
+  }
   await assertCurrent();
   if (continuationForSession(sessionId)) { await cancelResumeNow(sessionId); await assertCurrent(); }
   const userMessageId = await stopUserAnchor(sessionId, expectedTurnId);
@@ -2507,9 +2521,18 @@ async function fileCompactionTicket(sessionId: string, id: string, automatic = f
   if (automatic && !automaticCompactionAllowed(await getSession(sessionId))) throw new Error('automatic_compaction_disabled');
   const existing = continuationForSession(sessionId);
   const opened = existing ?? await openContinuationNow(sessionId, id, automatic);
+  if (opened.state === 'awaiting-summary' && sendUnattempted(opened.sourceSend)) {
+    const prompt = await prepareContinuationSourcePromptNow(opened.token, nativeHandoffPrompt(opened.token,
+      getConfig().goal.includeToolCalls === true, getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
+      getConfig().compaction.handoffLength, chatProviderForConversation(id, selectedChatProvider())));
+    if (prompt === null) {
+      await abortContinuationSourceBeforeSendNow(opened.token, 'The original handoff question changed before submission.');
+      throw new Error('source_question_changed');
+    }
+  }
   rememberToken(sessionId, opened.token);
   changed();
-  return { opened, started: !existing };
+  return { opened: continuationByToken(opened.token) ?? opened, started: !existing };
 }
 export async function compactSession(sessionId: string): Promise<SessionControlsView> {
   const { opened } = await fileCompactionTicket(sessionId, await controlledConversation(sessionId));
@@ -4252,6 +4275,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const id = conversationId(body['conversationId']);
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    if (body['sourceDeferred'] === true) {
+      const entry = continuationByToken(checkpointToken);
+      const reason = body['sourceWaitReason'];
+      if (!entry || entry.from !== id || isChatBlocked(id) || await conversationWasSuperseded(id) ||
+          !['source-loading', 'editor-unavailable', 'editor-rejected', 'send-not-ready'].includes(String(reason)))
+        return json(res, 409, { error: 'source_preparation_not_available' }, origin);
+      const deferred = await deferContinuationSourceNow(checkpointToken,
+        reason as NonNullable<ContinuationView['sourceSend']['preparationWait']>['reason']);
+      changed();
+      return json(res, deferred ? 200 : 409, { deferred, job: resumeJobFor(entry.sessionId) }, origin);
+    }
     if (body['sourceLost'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
@@ -4505,12 +4539,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (already) {
       const prompt =
         already.state === 'awaiting-summary' && sendUnattempted(already.sourceSend)
-          ? nativeHandoffPrompt(
+          ? await prepareContinuationSourcePromptNow(already.token, nativeHandoffPrompt(
               already.token,
               getConfig().goal.includeToolCalls === true,
               getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
               getConfig().compaction.handoffLength, chatProviderForConversation(id, selectedChatProvider())
-            )
+            ))
           : null;
       return json(
         res,
@@ -4549,12 +4583,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         token: opened.token,
         sourceSend: opened.sourceSend,
         // The prompt the page injects as the compaction turn. Its answer is the brief.
-        prompt: nativeHandoffPrompt(
+        prompt: await prepareContinuationSourcePromptNow(opened.token, nativeHandoffPrompt(
           opened.token,
           getConfig().goal.includeToolCalls === true,
           getConfig().compaction.handoffPrompt ?? DEFAULT_HANDOFF_PROMPT,
           getConfig().compaction.handoffLength, chatProviderForConversation(id, selectedChatProvider())
-        ),
+        )),
         job: resumeJobFor(sessionId)
       },
       origin
@@ -6765,10 +6799,7 @@ export interface ResumeJobView {
   /** True while the button must stay disabled. */
   busy: boolean;
   handoffId: string | null;
-  sourceSend: {
-    state: ContinuationSendState;
-    messageId: string | null;
-  };
+  sourceSend: ContinuationView['sourceSend'];
   destinationSend: {
     state: ContinuationSendState;
     conversationId: string | null;

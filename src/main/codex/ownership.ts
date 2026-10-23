@@ -378,6 +378,27 @@ export async function stopExecProcess(sessionId: string, processId: number, inca
   return unifiedExecManager.terminateProcess(processId, incarnation);
 }
 
+export interface OwnedExecStopOutcome {
+  processId: number;
+  incarnation: number;
+  /** `termination-requested` is not an OS-level proof for WSL descendants. */
+  outcome: 'termination-requested' | 'already-exited' | 'capture-failed';
+}
+
+/** Stop only the live processes opened by this exact durable chat, preserving their output. */
+export async function stopExecProcessesForSession(sessionId: string): Promise<OwnedExecStopOutcome[]> {
+  const rows = runningExecProcesses(sessionId);
+  return Promise.all(rows.map(async ({ processId, incarnation }): Promise<OwnedExecStopOutcome> => {
+    try {
+      const accepted = await stopExecProcess(sessionId, processId, incarnation);
+      return { processId, incarnation, outcome: accepted ? 'termination-requested' : 'already-exited' };
+    } catch {
+      // The manager keeps the process reservation when it cannot durably commit its final bytes.
+      return { processId, incarnation, outcome: 'capture-failed' };
+    }
+  }));
+}
+
 /** Owned sessions still running past the unattended threshold. */
 function unattended(running: readonly number[]): Array<{ processId: number; idleMs: number }> {
   const now = Date.now();

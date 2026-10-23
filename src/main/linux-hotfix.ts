@@ -26,14 +26,28 @@ async function existingActive(file: string): Promise<unknown | null> {
  * The immutable bootstrap validates this same inventory again before executing it, and its
  * launching marker rolls back if the successor dies before a ready main window confirms startup.
  */
-export async function activateLinuxHotfix(manifestFile: string): Promise<void> {
+export async function activateLinuxHotfix(manifestFile: string, replacement?: {
+  /** Release-checksummed descriptor of the AppImage being installed in this same handoff. */
+  base: sharedContract.LinuxBaseRelease;
+  replace: () => Promise<void>;
+}): Promise<void> {
   if (process.platform !== 'linux' || !app.isPackaged) throw new Error('Linux application hotfixes require a packaged Linux build');
   const manifest = contract.manifest(JSON.parse(await readFile(manifestFile, 'utf8')));
   if (manifest.platform !== 'linux') throw new Error('The staged hotfix is not a Linux application layer');
-  const runtimeFile = path.join(process.resourcesPath, 'updater', 'runtime.json');
-  const runtime = contract.runtime(JSON.parse(await readFile(runtimeFile, 'utf8')));
-  if (runtime.platform !== 'linux' || !runtime.baseVersion || !contract.compatibleBase(runtime, manifest))
-    throw new Error('The Linux hotfix does not match this complete runtime');
+  let runtimeId: string, baseVersion: string;
+  if (replacement) {
+    const base = contract.baseRelease(replacement.base);
+    if (base.platform !== 'linux' || base.arch !== process.arch || !manifest.base ||
+        (['version', 'platform', 'arch', 'runtime', 'installer', 'size', 'sha256'] as const).some(key => base[key] !== manifest.base![key]))
+      throw new Error('The Linux hotfix differs from its verified replacement base');
+    runtimeId = base.runtime; baseVersion = base.version;
+  } else {
+    const runtimeFile = path.join(process.resourcesPath, 'updater', 'runtime.json');
+    const runtime = contract.runtime(JSON.parse(await readFile(runtimeFile, 'utf8')));
+    if (runtime.platform !== 'linux' || !runtime.baseVersion || !contract.compatibleBase(runtime, manifest))
+      throw new Error('The Linux hotfix does not match this complete runtime');
+    runtimeId = runtime.id; baseVersion = runtime.baseVersion;
+  }
 
   const payload = path.join(path.dirname(manifestFile), 'hotfix-payload');
   contract.noLinks(payload);
@@ -73,6 +87,15 @@ export async function activateLinuxHotfix(manifestFile: string): Promise<void> {
 
   const activeFile = path.join(layers, 'active.json'), rollbackFile = path.join(layers, 'rollback.json');
   contract.noLinks(activeFile); contract.noLinks(rollbackFile);
-  await atomicJson(rollbackFile, { schema: 1, active: await existingActive(activeFile) });
-  await atomicJson(activeFile, { schema: 2, version: manifest.version, runtime: runtime.id, baseVersion: runtime.baseVersion, directory, files: manifest.files });
+  const prior = await existingActive(activeFile), priorRollback = await existingActive(rollbackFile);
+  await atomicJson(rollbackFile, { schema: 1, active: prior });
+  await atomicJson(activeFile, { schema: 2, version: manifest.version, runtime: runtimeId, baseVersion, directory, files: manifest.files });
+  if (replacement) {
+    try { await replacement.replace(); }
+    catch (error) {
+      if (prior === null) await rm(activeFile, { force: true }); else await atomicJson(activeFile, prior);
+      if (priorRollback === null) await rm(rollbackFile, { force: true }); else await atomicJson(rollbackFile, priorRollback);
+      throw error;
+    }
+  }
 }
