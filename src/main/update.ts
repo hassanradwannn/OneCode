@@ -336,6 +336,7 @@ async function runPass(): Promise<void> {
   if (artifact?.kind === 'installer') {
     const target = await installTarget();
     if (!target) {
+      logWarn('update: Windows internal update unavailable because the running installation registration could not be verified');
       staged = null; cancelUpdateInstall();
       set({ latest: release.version, stage: 'idle' });
       return;
