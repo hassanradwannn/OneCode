@@ -15,6 +15,16 @@ export const EXTERNAL_BROWSER_LABELS: Record<ExternalChatBrowser, string> = {
   chrome: 'Chrome', edge: 'Edge', brave: 'Brave', firefox: 'Firefox'
 };
 
+/** Explicit persistent QA profile; ordinary installations keep their existing browser profile. */
+function isolatedChromiumArgs(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+  const argument = process.argv.find(value => value.startsWith('--onecode-browser-user-data='));
+  const userData = env.ONECODE_BROWSER_USER_DATA?.trim() || argument?.slice('--onecode-browser-user-data='.length).trim();
+  if (userData === undefined) return [];
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  if (!userData || !p.isAbsolute(userData)) throw new Error('ONECODE_BROWSER_USER_DATA must be an absolute path.');
+  return [`--user-data-dir=${p.normalize(userData)}`];
+}
+
 /**
  * Sign-in uses the person's normal profile, including its installed companion extension. Firefox
  * is not offered: the session handoff reads Chromium's single cookie store, and Firefox keeps a
@@ -31,6 +41,7 @@ export async function installedSignInBrowsers(): Promise<Array<{ browser: Extern
 export async function openBrowserSignIn(browser: ExternalChatBrowser,
   options: Pick<PreferredBrowserOpenOptions, 'platform' | 'env' | 'home' | 'usable' | 'launch' | 'discover'> = {}): Promise<string> {
   const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
   const usable = options.usable ?? (candidate => isExecutableBrowser(candidate, platform));
   for await (const candidate of browserLaunchCandidates(browser, options)) {
     if (!usable(candidate)) continue;
@@ -39,7 +50,7 @@ export async function openBrowserSignIn(browser: ExternalChatBrowser,
     // Firefox takes neither Chromium's window-size switch nor its spelling of one.
     const homeUrl = chatProviderHomeUrl(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     await (options.launch ?? launchCommand)(candidate,
-      browser === 'firefox' ? ['--new-window', homeUrl] : ['--new-window', '--window-size=520,760', homeUrl],
+      browser === 'firefox' ? ['--new-window', homeUrl] : [...isolatedChromiumArgs(platform, env), '--new-window', '--window-size=520,760', homeUrl],
       (platform === 'win32' ? path.win32 : path.posix).dirname(candidate));
     return candidate;
   }
@@ -310,6 +321,7 @@ export async function openInPreferredBrowser(
   options: PreferredBrowserOpenOptions = {}
 ): Promise<string> {
   const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
   const usable = options.usable ?? ((candidate: string) => isExecutableBrowser(candidate, platform));
   const launch = options.launch ?? launchCommand;
   const selected = options.browser ?? getConfig().ui.chatBrowser ?? 'chrome';
@@ -326,6 +338,7 @@ export async function openInPreferredBrowser(
   // prevent background timer/renderer throttling of long-running orchestration tabs.
   // Firefox knows none of these Chromium switches; it gets the URL alone.
   const args = selected === 'firefox' ? [url] : [
+    ...isolatedChromiumArgs(platform, env),
     ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
     ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
     url
