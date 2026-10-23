@@ -8,10 +8,15 @@
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { app } from 'electron';
+
+const requireHere = createRequire(__filename);
+// Inventory the real archive bytes. Electron's node:fs presents app.asar as a virtual
+// directory; native require below still owns execution inside the verified archive.
+const { appendFileSync, existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } =
+  requireHere('original-fs') as typeof import('node:fs');
 
 declare const __ONECODE_BUILD_CHANNEL__: 'stable' | 'beta';
 const BUILD_CHANNEL = typeof __ONECODE_BUILD_CHANNEL__ !== 'undefined' && __ONECODE_BUILD_CHANNEL__ === 'beta' ? 'beta' : 'stable';
@@ -126,7 +131,6 @@ app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.development`);
 app.commandLine.appendSwitch('force-renderer-accessibility');
 app.setPath('userData', appDataDirectory());
 
-const requireHere = createRequire(__filename);
 const baseEntry = path.join(__dirname, 'index.js');
 
 function hash(file: string): string { return createHash('sha256').update(readFileSync(file)).digest('hex'); }
