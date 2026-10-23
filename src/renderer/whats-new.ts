@@ -16,7 +16,7 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
-  '0.5.2': {
+  '0.5.4': {
     lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
     highlights: [
       { icon: 'i-terminal', title: () => t('Find and stop background work'), text: () => t('Inspect commands from every chat and stop an individual process. Explicit chat Stop also cancels that chat’s owned commands while preserving their output.') },
