@@ -7,6 +7,7 @@
  * URLs, tunnel ids, plugin sources and config values) are deliberately absent, not masked.
  */
 import type { ArtifactPresentation } from './artifact.js';
+import type { UpdateStatus } from './types.js';
 export const CONTROL_API_PROTOCOL = 1;
 
 /** Listed in every health reply, so a caller learns what this build serves without guessing. */
@@ -96,7 +97,7 @@ export interface ControlApiStatus {
     error: string | null;
   };
   plugins: Array<{ id: string; name: string; enabled: boolean; status: string; enabledTools: number; error: string | null }>;
-  update: { current: string; latest: string | null; stage: string; error: string | null; checkedAt: number | null };
+  update: { current: string; latest: string | null; stage: string; error: string | null; checkedAt: number | null; installation?: UpdateStatus['installation'] };
   toolCalls: { running: number; settling: number; inFlight: number; inFlightMcpRequests: number };
 }
 
