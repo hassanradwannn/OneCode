@@ -23,10 +23,13 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
     throw new Error('OneCode Funnel relay requires its validated public hostname and owned mount.');
   }
   const expectedHosts = new Set([publicHost, publicHost.replace(/:443$/, '')]);
-  let diagnosticAt = Date.now(), diagnosticCount = 0;
+  let diagnosticAt = Date.now(), diagnosticCount = 0, warningCount = 0;
   const diagnostic = (message: string, warn = false): void => {
-    if (Date.now() - diagnosticAt >= 60_000) { diagnosticAt = Date.now(); diagnosticCount = 0; }
-    if (diagnosticCount++ >= 20) return;
+    if (Date.now() - diagnosticAt >= 60_000) { diagnosticAt = Date.now(); diagnosticCount = 0; warningCount = 0; }
+    // Healthy request summaries must never consume the budget for the stream-cut warning
+    // that explains a caller-visible Connection failed after local execution has started.
+    // Keep both channels independently bounded so a bad peer still cannot flood app.log.
+    if ((warn ? warningCount++ : diagnosticCount++) >= 20) return;
     (warn ? logWarn : logInfo)(message);
   };
   const server = http.createServer((req, res) => {
