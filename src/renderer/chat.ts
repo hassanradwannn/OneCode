@@ -6891,7 +6891,9 @@ function clearSelectedProviderReadiness(): void {
 }
 async function ensureSelectedProvider(id: string, selection: number, poll = false): Promise<void> {
   if (id !== selectedId || selection !== selectionGeneration || !api.followSessionTab) return;
-  if (poll && (document.hidden || !timelineShown() || $('chatView').hidden)) {
+  // This reads main's existing receipt only. A browser window taking focus must
+  // not freeze the app's visible status at its pre-launch reconnecting phase.
+  if (poll && (!timelineShown() || $('chatView').hidden)) {
     selectedProviderTimer = window.setTimeout(() => {
       selectedProviderTimer = null; void ensureSelectedProvider(id, selection, true);
     }, 2000);

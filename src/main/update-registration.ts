@@ -2,20 +2,29 @@
 import { execFile } from 'node:child_process';
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { BUILD_CHANNEL } from '../shared/build-channel.js';
+import { BUILD_CHANNEL, type BuildChannel } from '../shared/build-channel.js';
 
 export const ONECODE_INSTALLER_GUID = BUILD_CHANNEL === 'beta' ? '35baded0-d4e2-5fee-872a-11b461352695' : '7b3f238f-62c9-5e7a-a1d5-02806675d41d';
-const EXE = BUILD_CHANNEL === 'beta' ? 'onecode-beta.exe' : 'OneCode.exe';
-const UNINSTALLER = BUILD_CHANNEL === 'beta' ? 'Uninstall OneCode Beta.exe' : 'Uninstall OneCode.exe';
+export function windowsInstallerFiles(channel: BuildChannel): { executable: string; uninstaller: string } {
+  return channel === 'beta'
+    ? { executable: 'onecode-beta.exe', uninstaller: 'Uninstall onecode-beta.exe' }
+    : { executable: 'OneCode.exe', uninstaller: 'Uninstall OneCode.exe' };
+}
+const { uninstaller: UNINSTALLER } = windowsInstallerFiles(BUILD_CHANNEL);
 type Registration = { location: string | null; uninstall: string | null };
 const same = (a: string, b: string) => path.win32.normalize(a).replace(/[\\/]+$/, '').toLowerCase() === path.win32.normalize(b).replace(/[\\/]+$/, '').toLowerCase();
 
 export function registeredInstallTarget(executable: string, rows: Registration[]): string | null {
+  return registeredInstallTargetForChannel(executable, rows, BUILD_CHANNEL);
+}
+
+export function registeredInstallTargetForChannel(executable: string, rows: Registration[], channel: BuildChannel): string | null {
+  const { executable: exe, uninstaller } = windowsInstallerFiles(channel);
   const target = path.win32.dirname(executable);
-  if (path.win32.basename(executable).toLowerCase() !== EXE.toLowerCase() || !path.win32.isAbsolute(target)) return null;
+  if (path.win32.basename(executable).toLowerCase() !== exe.toLowerCase() || !path.win32.isAbsolute(target)) return null;
   const active = rows.filter(row => row.location !== null || row.uninstall !== null);
   if (!active.length || active.some(row => !row.location || !same(row.location, target) ||
-      row.uninstall !== `"${path.win32.join(target, UNINSTALLER)}" /currentuser`)) return null;
+      row.uninstall !== `"${path.win32.join(target, uninstaller)}" /currentuser`)) return null;
   return target;
 }
 

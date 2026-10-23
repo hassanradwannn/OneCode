@@ -303,11 +303,19 @@ export function checkForUpdates(): Promise<void> {
 }
 
 async function runPass(): Promise<void> {
-  set({ stage: 'checking', error: null });
+  set({ stage: 'checking', error: null, betaFeedEmpty: false });
   const release = await latestVersion();
   // GitHub answered. From here the UI can tell "current" from "not asked yet", whatever the
   // rest of this pass does with the answer.
   set({ checkedAt: Date.now() });
+  if (!release) {
+    // A well-formed Beta feed with no Beta prerelease is a successful answer. Keep it distinct
+    // from both a failed request and a claim that this build is the published latest release.
+    staged = null;
+    cancelUpdateInstall();
+    set({ latest: null, stage: 'idle', betaFeedEmpty: BUILD_CHANNEL === 'beta' });
+    return;
+  }
   // A newly published selection retires the previous executable authority before any file replacement.
   if (staged?.version !== release.version || !isNewer(release.version, APP_VERSION)) { staged = null; cancelUpdateInstall(); }
   if (!isNewer(release.version, APP_VERSION)) {
@@ -477,7 +485,7 @@ async function adopt(version: string, name: string, expected: string): Promise<s
 }
 
 /** The one fact the release API is asked for: which version is newest. */
-async function latestVersion(): Promise<{ version: string; tag: string }> {
+async function latestVersion(): Promise<{ version: string; tag: string } | null> {
   let response: Response;
   try {
     response = await get(BUILD_CHANNEL === 'beta'
@@ -490,16 +498,39 @@ async function latestVersion(): Promise<{ version: string; tag: string }> {
     if (BUILD_CHANNEL === 'beta' || !/ answered (403|429)$/.test((err as Error).message)) throw err;
     return latestVersionFromPage();
   }
-  const body = (await response.json()) as { tag_name?: unknown; prerelease?: unknown } | Array<{ tag_name?: unknown; prerelease?: unknown }>;
-  const candidate = BUILD_CHANNEL === 'beta'
-    ? Array.isArray(body) ? body.filter(item => item.prerelease === true && releaseVersion(item.tag_name) !== null)
-      .sort((left,right) => isNewer(releaseVersion(left.tag_name)!, releaseVersion(right.tag_name)!) ? -1 : 1)[0] : undefined
-    : !Array.isArray(body) ? body : undefined;
+  const body = await response.json() as unknown;
+  if (BUILD_CHANNEL === 'beta') {
+    const candidate = selectBetaRelease(body);
+    selectedReleaseTag = candidate?.tag ?? '';
+    return candidate;
+  }
+  const candidate = body && typeof body === 'object' && !Array.isArray(body)
+    ? body as { tag_name?: unknown } : undefined;
   const tag = candidate?.tag_name;
   const version = releaseVersion(tag);
   if (!version || typeof tag !== 'string') throw new Error(`the ${BUILD_CHANNEL} release feed has no usable channel tag`);
   selectedReleaseTag = tag;
   return { version, tag };
+}
+
+/** Select only a correctly shaped, exact Beta prerelease from GitHub's releases array. */
+export function selectBetaRelease(body: unknown): { version: string; tag: string } | null {
+  if (!Array.isArray(body)) throw new Error('the beta release feed returned an invalid response');
+  const candidates: Array<{ version: string; tag: string }> = [];
+  for (const item of body as unknown[]) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('the beta release feed returned a malformed release');
+    const release = item as { tag_name?: unknown; prerelease?: unknown };
+    if (typeof release.tag_name !== 'string' || typeof release.prerelease !== 'boolean') {
+      throw new Error('the beta release feed returned a malformed release');
+    }
+    // Stable releases and other channels in the shared repository are valid entries but never
+    // candidates for Beta. The tag grammar is exact; no stable fallback is possible here.
+    if (!release.prerelease) continue;
+    const version = /^beta-v(\d+\.\d+\.\d+)$/.exec(release.tag_name)?.[1];
+    if (version) candidates.push({ version, tag: release.tag_name });
+  }
+  candidates.sort((left, right) => isNewer(left.version, right.version) ? -1 : isNewer(right.version, left.version) ? 1 : 0);
+  return candidates[0] ?? null;
 }
 
 /**
