@@ -17,7 +17,10 @@ export class ConsistentNsisUpdater extends NsisUpdater {
     } catch {
       this.cacheNotice('update download: differential cache could not be checked; using the full installer'); return true;
     }
-    return super.differentialDownloadInstaller(fileInfo, options, destination, provider, installerName);
+    const useFullInstaller = await super.differentialDownloadInstaller(fileInfo, options, destination, provider, installerName);
+    if (!useFullInstaller)
+      this.cacheNotice('update download: differential reconstruction completed; verifying the release installer');
+    return useFullInstaller;
   }
   async rememberCache(sha512: string): Promise<void> {
     if (this.downloadedUpdateHelper) try { await rememberDifferentialCache(this.downloadedUpdateHelper.cacheDir, sha512); }
