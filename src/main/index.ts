@@ -112,6 +112,7 @@ import { runShutdownSequence } from './shutdown.js';
 import { startAgentRuntimeGc, stopAgentRuntimeGc } from './runtime-gc.js';
 import { restoreManagedWorktrees } from './worktrees/index.js';
 import { applyStagedUpdate, UPDATE_HANDOFF_MS, startUpdateChecks, updateStatus } from './update.js';
+import { confirmLinuxUpdateWindow } from './update-linux.js';
 import { requestProviderStopsForUpdate } from './update-stop.js';
 import { resumeUpdateRefresh } from './update-all.js';
 import { UI_BASE_ZOOM, windowLayoutForDisplays, windowPlacementWasMaximized, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
@@ -233,6 +234,7 @@ function createWindow(): void {
         writeDurableSoon(WINDOW_BOUNDS_STATE, placement);
       });
       void confirmActiveApplicationLayer().catch(error => logWarn(`linux application layer confirmation: ${error instanceof Error ? error.message : String(error)}`));
+      void confirmLinuxUpdateWindow(owner).catch(error => logWarn(`linux update window confirmation: ${error instanceof Error ? error.message : String(error)}`));
     }
   });
 
