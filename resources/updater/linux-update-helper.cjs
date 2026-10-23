@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const cp = require('node:child_process');
+const cp = process.getBuiltinModule('node:child_process');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const absolute = value => typeof value === 'string' && path.posix.isAbsolute(value) && !/[\0\r\n]/.test(value);
 function validate(record) {
