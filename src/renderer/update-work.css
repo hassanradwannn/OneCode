@@ -1,4 +1,4 @@
-.update-work-dialog { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+.update-work-dialog { width: min(760px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); margin: auto; overflow: auto; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
 .update-work-dialog::backdrop { background: #0008; }
 .update-work-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .update-work-dialog h2 { margin: 0; font-size: 18px; }
