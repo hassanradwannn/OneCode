@@ -5,13 +5,22 @@ import contract from '../resources/updater/hotfix-contract.cjs';
 import { getCurrentFuseWire, FuseV1Options } from '@electron/fuses';
 import { extractFile } from '@electron/asar';
 import { prepareChannelExtension } from './prepare-channel-extension.mjs';
+import { getAppUpdatePublishConfiguration } from 'app-builder-lib/out/publish/PublishManager.js';
+import { serializeToYaml } from 'builder-util';
 const BUILD_CHANNEL = process.env.ONECODE_BUILD_CHANNEL === 'beta' ? 'beta' : 'stable';
 export default async function afterPack(context) {
   if (context.electronPlatformName !== 'win32' && context.electronPlatformName !== 'linux') return;
   const resources = path.join(context.appOutDir, 'resources');
   await prepareChannelExtension(path.join(resources, 'extension'), BUILD_CHANNEL);
   if (BUILD_CHANNEL === 'beta') {
-    const betaFeed = 'owner: hassanradwannn\nrepo: OneCode\nprovider: github\nupdaterCacheDirName: onecode-beta-updater\n';
+    // PublishManager runs after this hook on Linux. Use its exact configuration and
+    // serializer so the later generated file cannot invalidate the native inventory.
+    const feed = await getAppUpdatePublishConfiguration(context.packager, null, context.arch, false);
+    if (feed?.provider !== 'github' || feed.owner !== 'hassanradwannn' || feed.repo !== 'OneCode' ||
+        feed.updaterCacheDirName !== 'onecode-beta-updater' ||
+        Object.keys(feed).some(key => !['provider', 'owner', 'repo', 'updaterCacheDirName'].includes(key)))
+      throw Error('Unexpected Beta updater publication identity');
+    const betaFeed = serializeToYaml(feed);
     await fs.writeFile(path.join(resources, 'app-update.yml'), betaFeed);
     const nestedFeed = path.join(resources, 'updater', 'app-update.yml');
     if (await fs.stat(nestedFeed).then(() => true, () => false)) await fs.writeFile(nestedFeed, betaFeed);

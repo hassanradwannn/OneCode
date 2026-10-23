@@ -9,6 +9,9 @@ import contract from '../resources/updater/hotfix-contract.cjs';
 import { writeUpdateMetadata } from './write-update-metadata.mjs';
 import { prepareChannelExtension } from './prepare-channel-extension.mjs';
 import { extensionStamp, STAMP_FILE } from './write-extension-stamp.mjs';
+import { getAppUpdatePublishConfiguration } from 'app-builder-lib/out/publish/PublishManager.js';
+import { Platform } from 'app-builder-lib';
+import { serializeToYaml } from 'builder-util';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -22,6 +25,12 @@ const { AppInfo } = require('app-builder-lib/out/appInfo.js');
 const generatedCacheName = Object.getOwnPropertyDescriptor(AppInfo.prototype, 'updaterCacheDirName').get
   .call({ sanitizedName: betaBuilder.extraMetadata.name });
 assert.equal(generatedCacheName, 'onecode-beta-updater');
+const builderInfo = { config: betaBuilder, appInfo: { channel: null } };
+const generatedFeed = await getAppUpdatePublishConfiguration({ info: builderInfo, config: betaBuilder,
+  platformSpecificBuildOptions: {}, platform: Platform.LINUX,
+  appInfo: { updaterCacheDirName: generatedCacheName }, expandMacro: value => value }, null, 1, false);
+assert.equal(generatedFeed.updaterCacheDirName, 'onecode-beta-updater');
+assert.deepEqual(yaml.load(serializeToYaml(generatedFeed)), betaBuilder.publish);
 assert.equal(betaBuilder.nsis.guid, '35baded0-d4e2-5fee-872a-11b461352695');
 assert.equal(betaBuilder.publish.updaterCacheDirName, 'onecode-beta-updater');
 assert.equal(betaBuilder.deb.packageName, 'onecode-beta');
