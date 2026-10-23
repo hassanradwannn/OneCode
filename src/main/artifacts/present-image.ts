@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
-import sharp from 'sharp';
+import { loadNativePackage } from '../native-package.js';
+const sharp = loadNativePackage('sharp');
 import type { Root } from '../../shared/types.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { resolvePath } from '../sandbox.js';

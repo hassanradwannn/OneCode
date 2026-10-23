@@ -210,6 +210,13 @@ if (targetPlatform === 'win32') {
   }
 }
 
+if (targetPlatform === 'linux') {
+  for (const file of ['linux-update-helper.cjs', 'hotfix-contract.cjs']) {
+    if (!readFileSync(required(`updater/${file}`)).equals(readFileSync(path.join(repository, 'resources/updater', file))))
+      throw new Error(`Packaged Linux updater differs from source: ${file}`);
+  }
+}
+
 const extensionManifest = JSON.parse(readFileSync(path.join(resourcesDir, 'extension', 'manifest.json'), 'utf8'));
 if (extensionManifest.version !== expectedVersion) {
   throw new Error(`Packaged extension ${extensionManifest.version} does not match app ${expectedVersion}`);

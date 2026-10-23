@@ -17,7 +17,10 @@ export class ConsistentNsisUpdater extends NsisUpdater {
     } catch {
       this.cacheNotice('update download: differential cache could not be checked; using the full installer'); return true;
     }
-    return super.differentialDownloadInstaller(fileInfo, options, destination, provider, installerName);
+    const useFullInstaller = await super.differentialDownloadInstaller(fileInfo, options, destination, provider, installerName);
+    if (!useFullInstaller)
+      this.cacheNotice('update download: differential reconstruction completed; verifying the release installer');
+    return useFullInstaller;
   }
   async rememberCache(sha512: string): Promise<void> {
     if (this.downloadedUpdateHelper) try { await rememberDifferentialCache(this.downloadedUpdateHelper.cacheDir, sha512); }
@@ -49,7 +52,9 @@ export function validateWindowsUpdate(info: UpdateInfo, version: string, name: s
 export async function downloadWindowsUpdate(version: string, name: string,
   progress: (percent: number) => void, tag = BUILD_CHANNEL === 'beta' ? `beta-v${version}` : `v${version}`): Promise<string> {
   const updater = new ConsistentNsisUpdater({ provider: 'generic', url: `https://github.com/${UPDATE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/`,
-    channel: windowsUpdateChannel(process.arch) });
+    // Match electron-updater's GitHub provider: its asset CDN supports individual ranges,
+    // while a multipart range request can return a non-multipart response.
+    useMultipleRangeRequest: false, channel: windowsUpdateChannel(process.arch) });
   // This engine must never own shutdown or install. In particular its normal-quit hook is off.
   configureWindowsDownloadEngine(updater);
   if (!isNewer(version, APP_VERSION)) throw new Error('Refusing an older OneCode release');

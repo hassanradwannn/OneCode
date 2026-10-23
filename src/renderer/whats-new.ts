@@ -7,6 +7,7 @@ import { providerText } from './provider-text.js';
  * language ships them like the rest of the interface. A version without an entry shows nothing.
  */
 import { releaseNotesUrl, whatsNewAction } from '../shared/whats-new.js';
+import { channelVersion } from '../shared/build-channel.js';
 import { $, el, icon, run } from './dom.js';
 import { t, ui } from './i18n.js';
 import { primaryShortcut } from './shortcuts.js';
@@ -15,6 +16,16 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.5.5': {
+    lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Find and stop background work'), text: () => t('Inspect commands from every chat and stop an individual process. Explicit chat Stop also cancels that chat’s owned commands while preserving their output.') },
+      { icon: 'i-retry', title: () => t('Recovery keeps the original task'), text: () => t('Opening a chat loads its exact browser tab. Continue and Compact & Resume retain their original intent while the page becomes ready, without resending an uncertain message.') },
+      { icon: 'i-lock', title: () => t('Task access survives a restart'), text: () => t('Valid task and device authorization stays tied to its original owner across restarts. Completed output is retained independently of live terminal capacity.') },
+      { icon: 'i-bolt', title: () => t('One update, one restart'), text: () => t('Windows and Linux AppImage updates can stage a required complete base and its application hotfix together. Update now stops owned work before restarting.') },
+      { icon: 'i-browser', title: () => t('A separate Beta installation'), text: () => t('Beta has its own installation, profile and update channel so release and hotfix acceptance can run alongside your normal workspace.') }
+    ]
+  },
   '0.5.1': {
     lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
     highlights: [
@@ -193,7 +204,7 @@ export function hasHighlights(version: string): boolean {
 export function paintWhatsNew(version: string): boolean {
   const release = RELEASES[version];
   if (!release) return false;
-  ui($('whatsNewVersion'), 'textContent', () => t('Version {0}', [version]));
+  ui($('whatsNewVersion'), 'textContent', () => t('Version {0}', [channelVersion(version)]));
   ui($('whatsNewLead'), 'textContent', release.lead);
   $('whatsNewList').replaceChildren(...release.highlights.map((item, index) => {
     const row = el('li', 'whats-new-item');

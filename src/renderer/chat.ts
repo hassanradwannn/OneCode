@@ -797,6 +797,11 @@ function sessionWorking(summary: SessionSummary): boolean {
   return sessionWorkingAt(summary, Date.now());
 }
 
+/** A reserved desktop chat has an identity before the provider assigns its conversation. */
+function isProvisionalDesktopSession(summary: SessionSummary): boolean {
+  return summary.conversationId === null && summary.origin?.kind === 'desktop';
+}
+
 /**
  * Sidebar rows are intentionally rebuilt when fresh activity arrives. Anchor the spinner to a
  * wall-clock phase so a new tool repaint does not visually restart an already-running turn.
@@ -825,9 +830,10 @@ function unattributedBlocked(): boolean {
 function sessionBadges(summary: SessionSummary): Badge[] {
   const badges: Badge[] = [];
   const origin = summary.origin;
-  // The one session that is not a chat. Saying so on the row is what stops it reading
-  // as a chat that mysteriously lost its name.
+  // A desktop opening already owns a chat, but has no provider conversation until Send
+  // attaches it. Only the unattributed stream gets the app-wide policy and non-chat label.
   if (summary.conversationId === null) {
+    if (isProvisionalDesktopSession(summary)) return badges;
     return unattributedBlocked()
       ? [{ text: 'blocked', tone: 'is-failed' }, { text: 'not a chat', tone: '' }]
       : [{ text: 'not a chat', tone: '' }];
@@ -949,7 +955,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
     title: () => providerText("Remove this chat and its saved history from the app. The chat stays in Gemini."),
     run: () => void deleteSession(summary.id)
   };
-  if (summary.conversationId === null) {
+  if (summary.conversationId === null && !isProvisionalDesktopSession(summary)) {
     // Strict mode cannot trust an unattributed stream by definition. Do not offer an "Allow"
     // that the kernel will intentionally ignore; the Settings checkbox explains that
     // unattributed calls stay blocked until strict mode is turned off.
@@ -968,7 +974,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
         run: () => void toggleUnattributedBlock(!blocked)
       });
     }
-  } else {
+  } else if (summary.conversationId !== null) {
     const policyLineage = [
       summary.conversationId,
       ...committedResumeAncestorsFromSummary(summary, summary.conversationId)
@@ -5473,7 +5479,7 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad'; working?:
   // from another browser or from another machine can only be recorded as what it is:
   // real, complete, and not placeable in any chat this app can observe.
   const selected = sessions.find((entry) => entry.id === selectedId) ?? null;
-  if (selected && selected.conversationId === null) {
+  if (selected && selected.conversationId === null && !isProvisionalDesktopSession(selected)) {
     return {
       text: providerText("Work this app could not place in a chat — driven from another device, or with no Gemini tab open"),
       tone: ''

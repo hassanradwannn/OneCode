@@ -48,7 +48,7 @@ extraResources:
     to: app-update.yml
   - from: resources/updater
     to: updater
-    filter: ['**/*.cjs', '**/*.yml', '**/*.ps1']
+    filter: ['**/*.cjs', '**/*.yml', '**/*.ps1', '!linux-update-helper.cjs']
   - from: LICENSE
     to: LICENSE
   - from: THIRD-PARTY-NOTICES.txt
@@ -202,6 +202,8 @@ linux:
       to: node_modules
       filter: ['**/*']
   extraResources:
+    - from: resources/updater/linux-update-helper.cjs
+      to: updater/linux-update-helper.cjs
     - from: resources/packaging/node/linux/${arch}
       to: node
       filter: ['**/*']

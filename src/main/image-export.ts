@@ -14,7 +14,8 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import sharp from 'sharp';
+import { loadNativePackage } from './native-package.js';
+const sharp = loadNativePackage('sharp');
 import { rawPromises as fs } from './rawfs.js';
 import { wakeBrowserWork } from './browser-wake.js';
 import { logInfo } from './logger.js';

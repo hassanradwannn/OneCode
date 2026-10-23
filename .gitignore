@@ -12,6 +12,8 @@ resources/skills/onecode-gemini/*
 !resources/updater/
 resources/updater/*
 !resources/updater/windows-update-helper.cjs
+!resources/updater/linux-update-helper.cjs
+!resources/updater/linux-update-helper.d.cts
 !resources/updater/hotfix-contract.cjs
 !resources/updater/hotfix-contract.d.cts
 !resources/updater/legacy-relaunch.ps1

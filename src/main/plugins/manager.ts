@@ -14,7 +14,8 @@ import { DEFAULT_PLUGIN_LONGEST_CALL_SECONDS, MAX_PLUGIN_LONGEST_CALL_SECONDS } 
 import { installSource, pluginEnvironment, resolveGithub, stopInstallers, type InstalledLaunch } from './installer.js';
 import { terminateProcessTree } from '../exec.js';
 import { pluginCatalog, reviewedPluginLicense } from './catalog.js';
-import sharp from 'sharp';
+import { loadNativePackage } from '../native-package.js';
+const sharp = loadNativePackage('sharp');
 import { pluginExposure } from './exposure.js';
 import { logWarn } from '../logger.js';
 import { SURFACES, surfaceDefinition } from '../mcp/surfaces.js';

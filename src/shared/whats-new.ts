@@ -1,4 +1,5 @@
 import { isNewer, RELEASES_PAGE } from './types.js';
+import { BUILD_CHANNEL, type BuildChannel } from './build-channel.js';
 
 /**
  * Whether this start shows the What's New dialog (#1172).
@@ -15,6 +16,6 @@ export function whatsNewAction(current: string, lastSeen: string | undefined, ha
 }
 
 /** The full notes of a version, on the project's release page. */
-export function releaseNotesUrl(version: string): string {
-  return RELEASES_PAGE.replace(/\/latest$/, `/tag/v${encodeURIComponent(version)}`);
+export function releaseNotesUrl(version: string, channel: BuildChannel = BUILD_CHANNEL): string {
+  return RELEASES_PAGE.replace(/\/latest$/, `/tag/${channel === 'beta' ? 'beta-v' : 'v'}${encodeURIComponent(version)}`);
 }

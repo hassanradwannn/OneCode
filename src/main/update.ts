@@ -54,6 +54,7 @@ import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotf
 import { inspectLocalBetaUpdate, localBetaUpdateConfig, startLocalBetaUpdate, verifyLocalBetaUpdate, type LocalBetaUpdateConfig } from './beta-update.js';
 import { baseRelease, type LinuxBaseRelease } from '../../resources/updater/hotfix-contract.cjs';
 import { activateLinuxHotfix } from './linux-hotfix.js';
+import { startLinuxUpdate, linuxUpdateFailure } from './update-linux.js';
 import { currentAppImageIdentity, installationKind, type AppImageIdentity } from './installation.js';
 import { explicitBrowserUserData } from './browser.js';
 import { launchBridgePorts } from './bridge-ports.js';
@@ -242,6 +243,11 @@ const handoffNote = () => path.join(app.getPath('userData'), 'updates', 'handoff
  */
 export async function restoreUpdateHandoff(): Promise<void> {
   if (!UPDATES_ENABLED) return;
+  const linuxFailure = await linuxUpdateFailure();
+  if (linuxFailure) {
+    set({ notInstalled: linuxFailure.version });
+    logWarn(`update: Linux ${linuxFailure.version} restart was not confirmed (${linuxFailure.error})`);
+  }
   let note: { version?: unknown; schema?: number; status?: string; error?: string; at?: number } | null = null;
   try { note = JSON.parse(await readFile(handoffNote(), 'utf8')); } catch { return; }
   // The external bootstrap owns its live handoff. Starting the successor must not erase it.
@@ -354,6 +360,7 @@ async function runPass(): Promise<void> {
   if (artifact?.kind === 'installer') {
     const target = await installTarget();
     if (!target) {
+      logWarn('update: Windows internal update unavailable because the running installation registration could not be verified');
       staged = null; cancelUpdateInstall();
       set({ latest: release.version, stage: 'idle' });
       return;
@@ -908,7 +915,6 @@ export async function applyStagedUpdate(): Promise<void> {
       await activateLinuxHotfix(ready.hotfix);
       if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
         throw new Error('The mounted AppImage identity changed');
-      if (relaunch) app.relaunch({ execPath: ready.appImageIdentity?.target ?? process.execPath });
     } else if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
@@ -947,9 +953,15 @@ export async function applyStagedUpdate(): Promise<void> {
         await rm(next, { force: true }).catch(() => undefined);
         throw error;
       }
-      // No installer to hand the "start it again" to, so this process arranges its own successor.
-      // Electron spawns it as this one exits, which is the app.exit() that ends the shutdown.
-      if (relaunch) app.relaunch({ execPath: ready.target });
+    }
+    if (relaunch && ['appimage', 'linux-composite', 'linux-hotfix'].includes(ready.kind)) {
+      const executable = ready.kind === 'linux-hotfix' ? ready.appImageIdentity?.target ?? process.execPath : ready.target;
+      if (!executable) throw new Error('The Linux successor installation is missing');
+      await startLinuxUpdate({ version: ready.version, executable,
+        digest: ready.kind === 'linux-hotfix' ? await fileDigest(executable) : ready.digest,
+        installation: ready.kind === 'linux-hotfix' && !ready.appImageIdentity ? 'deb' : 'appimage',
+        browserUserData: explicitBrowserUserData(), bridgePorts: launchBridgePorts() });
+      return;
     }
     logInfo(
       relaunch

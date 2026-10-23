@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import sharp from 'sharp';
+import { loadNativePackage } from './native-package.js';
+const sharp = loadNativePackage('sharp');
 import { getConfig } from './config.js';
 import { listDirectoryLevel, readTextFile, statInfo } from './codex/read-backend.js';
 import { getProject, projectWorkspace } from './projects.js';

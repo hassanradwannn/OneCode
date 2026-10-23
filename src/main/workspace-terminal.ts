@@ -1,9 +1,12 @@
-import { spawn, type IPty } from 'node-pty';
+import type { IPty } from 'node-pty';
+import { loadNativePackage } from './native-package.js';
 import { defaultUserShell } from './codex/shell.js';
 import { normalizeEnvironment, deleteEnvValue } from './env.js';
 import { projectWorkspace } from './projects.js';
 import { getConfig, effectiveCapabilities } from './config.js';
 import type { WorkspaceTerminalEvent, WorkspaceTerminalInfo } from '../shared/workspace-terminal.js';
+
+const { spawn } = loadNativePackage('node-pty');
 
 type Entry = { projectId: string | null; cwd: string; pty: IPty; unacked: number; paused: boolean; exited: Promise<void> };
 

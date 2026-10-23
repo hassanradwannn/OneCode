@@ -8,11 +8,14 @@
  */
 
 import nodePath from 'node:path';
-import Parser from 'tree-sitter';
-import Bash from 'tree-sitter-bash';
+import type ParserTypes from 'tree-sitter';
+import { loadNativePackage } from '../../native-package.js';
 
 import { ApplyPatchError, PatchParseError } from './errors.js';
 import { parsePatch, type ApplyPatchArgs } from './parser.js';
+
+const Parser = loadNativePackage('tree-sitter');
+const Bash = loadNativePackage('tree-sitter-bash');
 
 const APPLY_PATCH_COMMANDS = new Set(['apply_patch', 'applypatch']);
 
@@ -111,7 +114,7 @@ const APPLY_PATCH_QUERY = String.raw`
     .)
 `;
 
-const bashLanguage = Bash as unknown as Parser.Language;
+const bashLanguage = Bash as unknown as ParserTypes.Language;
 const query = new Parser.Query(bashLanguage, APPLY_PATCH_QUERY);
 
 function extractApplyPatchFromBash(script: string): { body: string; workdir: string | null } | null {

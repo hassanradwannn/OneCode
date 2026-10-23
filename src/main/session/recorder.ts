@@ -15,7 +15,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import sharp from 'sharp';
+import { loadNativePackage } from '../native-package.js';
+const sharp = loadNativePackage('sharp');
 import { userTitle } from './title.js';
 import type {
   ActivitySummary,
