@@ -15,6 +15,16 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.5.2': {
+    lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Find and stop background work'), text: () => t('Inspect commands from every chat and stop an individual process. Explicit chat Stop also cancels that chat’s owned commands while preserving their output.') },
+      { icon: 'i-retry', title: () => t('Recovery keeps the original task'), text: () => t('Opening a chat loads its exact browser tab. Continue and Compact & Resume retain their original intent while the page becomes ready, without resending an uncertain message.') },
+      { icon: 'i-lock', title: () => t('Task access survives a restart'), text: () => t('Valid task and device authorization stays tied to its original owner across restarts. Completed output is retained independently of live terminal capacity.') },
+      { icon: 'i-bolt', title: () => t('One update, one restart'), text: () => t('Windows and Linux AppImage updates can stage a required complete base and its application hotfix together. Update now stops owned work before restarting.') },
+      { icon: 'i-browser', title: () => t('A separate Beta installation'), text: () => t('Beta has its own installation, profile and update channel so release and hotfix acceptance can run alongside your normal workspace.') }
+    ]
+  },
   '0.5.1': {
     lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
     highlights: [
