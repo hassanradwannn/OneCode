@@ -2,6 +2,7 @@ import { providerText } from './provider-text.js';
 import { displayBuildVersion } from '../shared/release-version.js';
 import type { AppState } from '../shared/types.js';
 import { isNewer } from '../shared/types.js';
+import { selectedBrowserConnected } from '../shared/browser-readiness.js';
 import { t } from './i18n.js';
 import { updateErrorText } from './update-error.js';
 
@@ -30,7 +31,9 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
     : update.latest ? (update.stage === 'ready' ? t('Ready to install {0}', [displayBuildVersion(update.latest!)]) : t('Install {0} manually', [displayBuildVersion(update.latest!)]))
     : update.betaFeedEmpty ? t('No Beta update is published yet.')
     : appReady ? beta && update.betaRelation === 'local-ahead' ? t('Local beta branch is ahead of origin/beta') : t('Up to date') : t('Not checked yet');
-  const extensionReady = bridge.running && bridge.paired && bridge.present && bridge.extensionVersion === update.current && !bridge.extensionUpdateRequired;
+  const browserConnected = selectedBrowserConnected(bridge, next.config.ui.chatBrowser);
+  const extensionReady = browserConnected && bridge.extensionVersion === update.current &&
+    bridge.externalExtension?.version === update.current && !bridge.extensionUpdateRequired;
   const extensionOlder = bridge.extensionUpdateRequired === true || !!bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion);
   const appOlder = !!bridge.extensionVersion && isNewer(bridge.extensionVersion, update.current);
   const connectionFailed = ['offline', 'auth-failed', 'tunnel-unavailable'].includes(status.state);
@@ -43,7 +46,7 @@ export function updateReadiness(next: AppState): ReadinessRow[] {
           ? t('Finish active work and fully quit OneCode. Replace the app in /Applications, then open the updated app from there.') : undefined },
     { id: 'extension', label: t('Browser extension'), status: extensionReady ? 'pass' : 'not-run',
       detail: (bridge.extensionVersion ? t('Version {0}', [bridge.extensionVersion]) + ' · ' : '') +
-        (extensionReady ? t('Connected') : !bridge.present || !bridge.paired ? t('Not connected') :
+        (extensionReady ? t('Connected') : !browserConnected ? t('Not connected') :
           bridge.extensionVersion ? t('App and extension versions differ') : t('Version not verified')),
       reason: !bridge.running ? bridge.error ?? undefined : undefined,
       nextStep: extensionReady ? undefined : extensionOlder

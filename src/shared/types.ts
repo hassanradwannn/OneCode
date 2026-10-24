@@ -797,6 +797,10 @@ export interface UpdateStatus {
   /** A version handed to its installer that this start is still older than: it did not install. */
   notInstalled?: string | null;
   downloadPercent?: number;
+  /** Exact bytes received when a release branch has no trustworthy published total yet. */
+  downloadBytes?: number;
+  /** Coarse UI projection of downloadBytes for full Linux AppImage downloads. */
+  downloadMegabytes?: number;
   /** Explicit, cancellable user intent for this exact staged version. Never restored at startup. */
   installRequested?: boolean;
   busyReasons?: Array<'tools' | 'generation' | 'messages' | 'workers' | 'automation' | 'continuation' | 'commands' | 'browser' | 'terminals' | 'preparation' | 'unavailable'>;

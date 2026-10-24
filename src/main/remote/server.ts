@@ -41,7 +41,7 @@ async function retirePlaybacks(owner?: string): Promise<void> {
   }
 }
 let listener: http.Server | null = null, serve: PrivateServe | null = null, url: string | null = null, ready = false, enabled = false, error: string | null = null;
-let watcher: NodeJS.Timeout | null = null, verifying: Promise<void> | null = null, terminal = false;
+let watcher: NodeJS.Timeout | null = null, verifying: Promise<void> | null = null, terminal = false, routeVerifiedAt = 0;
 let accessKey: string | null = null;
 let canRefreshLink = false;
 let lifecycle = Promise.resolve();
@@ -51,6 +51,8 @@ const assetRoot = path.resolve(__dirname, '../remote');
 const gzipAsync = promisify(gzip);
 const compressedAssets = new Map<string, Promise<Buffer>>();
 const COMPRESSIBLE_REMOTE_ASSET = /\.(?:css|js)$/i;
+const ROUTE_VERIFY_INTERVAL_MS = 5_000;
+const ROUTE_VERIFY_MAX_AGE_MS = 10_000;
 function acceptsGzip(value: string | string[] | undefined): boolean {
   return typeof value === 'string' && value.split(',').some(token => /^\s*gzip(?:\s*;\s*q=(?!0(?:\.0*)?\b)[0-9.]+)?\s*$/i.test(token));
 }
@@ -68,16 +70,17 @@ async function remoteStaticBody(file: string, bytes: Buffer, acceptEncoding: str
   return { body: await encoded, gzip: true };
 }
 function json(res: http.ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
-async function checkRoute(): Promise<void> {
+async function checkRoute(force = false): Promise<void> {
   if (!serve || !listener || !enabled || (!ready && !routeRetry)) throw new Error('Remote access is unavailable.');
+  if (!force && ready && Date.now() - routeVerifiedAt <= ROUTE_VERIFY_MAX_AGE_MS) return;
   const owner = serve;
   if (!verifying) verifying = owner.verify().then(() => {
     if (serve !== owner || !listener || !enabled || terminal) throw new Error('Remote access is unavailable.');
     // Recovery only verifies the retained route. It never republishes a route or a message.
-    routeRetry = false; ready = true; error = null; canRefreshLink = false;
+    routeVerifiedAt = Date.now(); routeRetry = false; ready = true; error = null; canRefreshLink = false;
   }).catch(cause => {
     if (serve === owner && listener && enabled && !terminal) {
-      ready = false; error = (cause as Error).message;
+      routeVerifiedAt = 0; ready = false; error = (cause as Error).message;
       routeRetry = cause instanceof TailscaleNotReady;
       // Route errors suspend admission. They do not revoke the user's saved browser grants.
       canRefreshLink = cause instanceof RemoteRouteConflict;
@@ -107,7 +110,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route.pathname.startsWith('/api/')) {
     if (req.headers['x-onecode-remote'] !== '1' || (req.headers.origin !== undefined && req.headers.origin !== url) ||
         (req.method === 'POST' && req.headers.origin !== url)) throw new RequestError(403, 'origin_refused');
-    await checkRoute();
+    // Only safe reads reuse a recent route proof. Explicit mutations still prove
+    // route custody before admission, independently of the background watcher.
+    await checkRoute(req.method !== 'GET' && req.method !== 'HEAD');
     if (route.pathname === '/api/connect' && req.method === 'POST') {
       const connection = z.object({ key: z.string().min(1).max(128), name: z.string().trim().min(1).max(80) }).strict().parse(await body(req));
       await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name)); return;
@@ -230,13 +235,13 @@ async function start(refreshLink = false): Promise<void> {
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Remote listener did not start.');
     const proxy = `http://127.0.0.1:${address.port}`;
-    url = await (refreshLink ? serve.refresh(proxy) : serve.start(proxy)); ready = true; error = null; canRefreshLink = false;
-    watcher = setInterval(() => { void checkRoute().catch(() => undefined); }, 5_000); watcher.unref();
+    url = await (refreshLink ? serve.refresh(proxy) : serve.start(proxy)); routeVerifiedAt = Date.now(); ready = true; error = null; canRefreshLink = false;
+    watcher = setInterval(() => { void checkRoute(true).catch(() => undefined); }, ROUTE_VERIFY_INTERVAL_MS); watcher.unref();
   } catch (cause) { await closeListener(); throw cause; }
 }
 async function closeListener(): Promise<void> {
   await retirePlaybacks();
-  ready = false; routeRetry = false; previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
+  routeVerifiedAt = 0; ready = false; routeRetry = false; previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
   const server = listener; listener = null;
   if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   url = null;

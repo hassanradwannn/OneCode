@@ -698,8 +698,10 @@ async function sealTornTail(id: string): Promise<void> {
     }
     await fs.appendFile(file, '\n', 'utf8');
     logWarn(`session ${id}: sealed an unterminated final line before appending`);
-  } catch {
-    // No file yet, or unreadable: the append will recreate it.
+  } catch (error) {
+    // Only absence permits recreation. An unreadable tail may be torn: appending to
+    // it without proving its boundary can join two records and destroy both.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 }
 
@@ -1315,7 +1317,7 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
     entry.queue = write.then(
       () => undefined,
       (err: Error) => {
-        logError(`session append failed: ${err.message}`);
+        logError(`session ${sessionId} append failed: ${err.message}`);
       }
     );
     return write;

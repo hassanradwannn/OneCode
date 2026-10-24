@@ -1283,7 +1283,7 @@ export async function bridgeStatus(): Promise<BridgeStatus> {
 
 /** Live sightings this run, plus what lasts across restarts for Setup. */
 function externalExtensionStatus(): BridgeStatus['externalExtension'] {
-  const proof = externalBrowserProof();
+  const proof = externalBrowserProof(selectedChatProvider());
   if (!externalExtension && !proof) return null;
   return {
     present: externalExtensionPresent(),
@@ -1329,7 +1329,9 @@ function cosExtensionPresent(): boolean {
 }
 
 function externalExtensionPresent(): boolean {
-  return server !== null && externalExtension?.seenAt != null && Date.now() - externalExtension.seenAt < BROWSER_PRESENT_MS;
+  return server !== null && externalExtension?.seenAt != null &&
+    (Date.now() - externalExtension.seenAt < BROWSER_PRESENT_MS ||
+      !!externalExtension.browserId && browserWake?.connected('browser', externalExtension.browserId) === true);
 }
 
 /**

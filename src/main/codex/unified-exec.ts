@@ -64,6 +64,35 @@ export type UnifiedExecErrorKind =
   | 'stdin_closed'
   | 'missing_command_line';
 
+const SAFE_TERMINAL_STORAGE_MESSAGES = new Set([
+  'Terminal spool directory is unavailable.',
+  'Terminal allocation history is unreadable; process ids will not be reused.',
+  'A retained terminal result is unreadable; no process was replayed or discarded.',
+  'Retained terminal result identity is inconsistent.',
+  'A live terminal custody record is unreadable; no process was replayed or discarded.',
+  'Live terminal custody identity is inconsistent.',
+  'Terminal incarnation history is inconsistent; ids will not be reused.',
+  'Completed and live terminal custody identity is inconsistent.',
+  'Terminal live custody identity already exists.',
+  'Terminal output storage is full; no process was started.',
+  'Durable WSL process custody is not initialized.'
+]);
+
+/** Keep terminal-storage refusals useful without exposing host paths or stored terminal data. */
+function terminalStorageCause(error: unknown): string | null {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+  if (code === 'EACCES' || code === 'EPERM') return `Access denied by the operating system (${code})`;
+  if (code === 'EBUSY') return 'Storage is busy or locked (EBUSY)';
+  if (code === 'ENOSPC') return 'Storage is full (ENOSPC)';
+  if (code === 'EROFS') return 'Storage is read-only (EROFS)';
+  if (code === 'ENOTDIR') return 'Storage path is not a directory (ENOTDIR)';
+  if (code === 'EIO') return 'Storage input/output error (EIO)';
+  if (typeof code === 'string' && /^[A-Z0-9_]{1,32}$/.test(code)) return `Filesystem error (${code})`;
+
+  const message = error instanceof Error ? error.message : '';
+  return SAFE_TERMINAL_STORAGE_MESSAGES.has(message) ? message.replace(/\.$/, '') : null;
+}
+
 /**
  * `UnifiedExecError`, with both of the Rust renderings it is shown through.
  *
@@ -92,10 +121,12 @@ export class UnifiedExecError extends Error {
     return new UnifiedExecError('terminal_capacity', `TERMINAL_CAPACITY: ${message}`, message, null);
   }
 
-  static terminalStorageUnavailable(): UnifiedExecError {
+  static terminalStorageUnavailable(cause: string | null = null): UnifiedExecError {
+    const detail = 'durable terminal result storage is not ready; no command was started' +
+      (cause ? `; cause: ${cause}` : '');
     return new UnifiedExecError('terminal_storage_unavailable',
-      'TERMINAL_STORAGE_UNAVAILABLE: durable terminal result storage is not ready; no command was started.',
-      'durable terminal result storage is not ready; no command was started', null);
+      `TERMINAL_STORAGE_UNAVAILABLE: durable terminal result storage is not ready; no command was started.${cause ? ` Cause: ${cause}.` : ''}`,
+      detail, null);
   }
 
   static processFailed(message: string): UnifiedExecError {
@@ -853,6 +884,7 @@ export class UnifiedExecProcessManager {
   private readonly spoolFailures = new Set<number>();
   private spoolInitialized = false;
   private spoolInitializationError: string | null = null;
+  private spoolInitializationDiagnostic: string | null = null;
   private spoolUserDataDir: string | null = null;
   private spoolInitFlight: Promise<CompletedExecSpoolRecord[]> | null = null;
   private lastSpoolInitAttemptAt = 0;
@@ -916,6 +948,7 @@ export class UnifiedExecProcessManager {
         }
         this.spoolInitialized = true;
         this.spoolInitializationError = null;
+        this.spoolInitializationDiagnostic = null;
         this.lazyInitRetryUsed = false;
         this.spoolRestoreListener?.(records);
         if (wslCustody) {
@@ -929,6 +962,7 @@ export class UnifiedExecProcessManager {
       } catch (error) {
         this.spoolInitialized = false;
         this.spoolInitializationError = error instanceof Error ? error.message : 'Durable terminal result storage could not be opened or validated.';
+        this.spoolInitializationDiagnostic = terminalStorageCause(error);
         this.notifyProcessChange();
         throw new Error(this.spoolInitializationError);
       }
@@ -943,14 +977,14 @@ export class UnifiedExecProcessManager {
     if (!this.spoolUserDataDir) throw UnifiedExecError.terminalStorageUnavailable();
     if (this.spoolInitFlight) {
       try { await this.spoolInitFlight; return; }
-      catch { throw UnifiedExecError.terminalStorageUnavailable(); }
+      catch { throw UnifiedExecError.terminalStorageUnavailable(this.spoolInitializationDiagnostic); }
     }
     const firstLazyRetry = !this.lazyInitRetryUsed;
     if (!firstLazyRetry && Date.now() - this.lastSpoolInitAttemptAt < 1_000)
-      throw UnifiedExecError.terminalStorageUnavailable();
+      throw UnifiedExecError.terminalStorageUnavailable(this.spoolInitializationDiagnostic);
     this.lazyInitRetryUsed = true;
     try { await this.initializeSpool(this.spoolUserDataDir); }
-    catch { throw UnifiedExecError.terminalStorageUnavailable(); }
+    catch { throw UnifiedExecError.terminalStorageUnavailable(this.spoolInitializationDiagnostic); }
   }
 
   /** Durable monotonic id and incarnation allocation; the ledger commit precedes returning it. */
@@ -964,7 +998,7 @@ export class UnifiedExecProcessManager {
     } catch (error) {
       if (error instanceof UnifiedExecError) throw error;
       if ((error as Error).message.includes('exhausted')) throw UnifiedExecError.terminalCapacity('terminal process id range is exhausted; new_command_started=false');
-      throw UnifiedExecError.terminalStorageUnavailable();
+      throw UnifiedExecError.terminalStorageUnavailable(terminalStorageCause(error));
     }
   }
 
@@ -1301,11 +1335,11 @@ export class UnifiedExecProcessManager {
           throw error;
         }
       }
-    } catch {
+    } catch (error) {
       await this.spool.removeLive(request.processId, incarnation).catch(() => undefined);
       this.liveOperations.delete(request.processId);
       this.releaseProcessId(request.processId);
-      throw UnifiedExecError.terminalStorageUnavailable();
+      throw UnifiedExecError.terminalStorageUnavailable(terminalStorageCause(error));
     }
     let spawnedProcess: UnifiedExecProcess | null = null;
     let checkpointBeforeSpawnReturned = false;
@@ -2041,7 +2075,8 @@ export class UnifiedExecProcessManager {
 
   /** Capacity is admission, never garbage collection: every retained row still owes output. */
   private ensureProcessCapacity(requestProcessId: number): void {
-    if (this.requireDurableSpool && !this.spoolInitialized) throw UnifiedExecError.terminalStorageUnavailable();
+    if (this.requireDurableSpool && !this.spoolInitialized)
+      throw UnifiedExecError.terminalStorageUnavailable(this.spoolInitializationDiagnostic);
     // Reservations participate in the hard cap, so concurrent exec_command calls cannot
     // each observe one free slot and collectively insert a 65th live process.
     if (this.reservedProcessIds.size > MAX_UNIFIED_EXEC_PROCESSES) {

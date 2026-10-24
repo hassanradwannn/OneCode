@@ -38,9 +38,9 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, copyFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { receiveUpdateArtifact } from './update-artifact.js';
 import { pipeline } from 'node:stream/promises';
 import { app } from 'electron';
 import { logInfo, logWarn } from './logger.js';
@@ -391,7 +391,7 @@ async function runPass(): Promise<void> {
     const compatible = await compatibleHotfix(manifestFile, release.version);
     if (compatible) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
-      set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+      set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
       const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => {
         const percent = Math.min(99, Math.floor(bytes / manifest.size * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent });
       });
@@ -411,7 +411,7 @@ async function runPass(): Promise<void> {
       if (manifest.base.platform !== process.platform) throw Error('The hotfix names a base for another platform');
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
-      set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+      set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
       const base = manifest.base, baseDigests = await releaseDigests(base.version), channelPrefix = BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-' : 'OneCode-', descriptorName = `${channelPrefix}${process.platform === 'linux' ? 'Linux-Base' : 'Base'}-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
       if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
       const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
@@ -449,10 +449,18 @@ async function runPass(): Promise<void> {
     logInfo(`update: ${release.version} was already downloaded and is ready to install`);
     return;
   }
-  set({ latest: release.version, stage: 'downloading', downloadPercent: 0 });
+  set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
   const file = artifact.kind === 'installer'
     ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }), release.tag)
-    : await download(release.version, artifact.name, expected);
+    : await download(release.version, artifact.name, expected, undefined, (bytes, transportTotal) => {
+      // Full AppImage releases do not publish their byte count in SHA256SUMS. Content-Length is
+      // presentation only: SHA-256 remains the release authority and the completed file is never
+      // accepted merely because it reached this transport-reported total.
+      const mib = Math.floor(bytes / (1024 * 1024));
+      const percent = transportTotal ? Math.min(99, Math.floor(bytes / transportTotal * 100)) : 0;
+      if (status.downloadBytes === undefined || status.downloadMegabytes !== mib || status.downloadPercent !== percent)
+        set({ downloadBytes: bytes, downloadMegabytes: mib, downloadPercent: percent });
+    });
   if ((await fileDigest(file)) !== expected) throw new Error('The downloaded update does not match the OneCode release checksum');
   const imageIdentity = appImageEvidence(artifact);
   if (artifact.kind === 'installer') {
@@ -469,7 +477,7 @@ async function runPass(): Promise<void> {
   } else {
     staged = { version: release.version, file, kind: artifact.kind, target: artifact.target, digest: expected, appImageIdentity: imageIdentity };
   }
-  set({ stage: 'ready', downloadPercent: 100 });
+  set({ stage: 'ready', downloadPercent: 100, downloadBytes: undefined, downloadMegabytes: undefined });
   logInfo(`update: ${release.version} is downloaded and ready to install`);
 }
 
@@ -633,7 +641,7 @@ async function get(url: string, timeout: number | AbortSignal, headers: Record<s
     redirect: 'follow',
     headers: { 'user-agent': `onecode/${APP_VERSION}`, ...headers }
   });
-  if (!response.ok) throw new Error(`${new URL(url).pathname.split('/').pop()} answered ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(`${new URL(url).pathname.split('/').pop()} answered ${response.status}`), { status: response.status });
   return response;
 }
 
@@ -653,36 +661,13 @@ async function get(url: string, timeout: number | AbortSignal, headers: Record<s
  * `.part` until it has passed: the rename is what publishes it, so a download that was
  * interrupted or is not the right file can never be handed to an installer.
  */
-async function download(version: string, name: string, expected: string, size?: number, progress?: (bytes: number) => void): Promise<string> {
+async function download(version: string, name: string, expected: string, size?: number, progress?: (bytes: number, transportTotal?: number) => void): Promise<string> {
   const dir = stagingDir(version);
   // Versioned staging never removes the download engine's current-installer/blockmap cache.
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
-  // Stopped when the connection goes quiet, not when the file is simply large for the line.
-  const quiet = new AbortController();
-  const stalled = new Error(`downloading ${name} stopped: no data for ${DOWNLOAD_STALL_MS / 1000} seconds`);
-  const watch = setTimeout(() => quiet.abort(stalled), DOWNLOAD_STALL_MS);
-  const hash = createHash('sha256');
-  let received = 0;
-  try {
-    const response = await get(assetUrl(version, name), quiet.signal);
-    if (!response.body) throw new Error(`downloading ${name} returned no content`);
-    const body = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
-    body.on('data', (chunk: Buffer) => { received += chunk.length; hash.update(chunk); watch.refresh(); progress?.(received); });
-    await pipeline(body, createWriteStream(`${file}.part`), { signal: quiet.signal });
-  } catch (err) {
-    await rm(`${file}.part`, { force: true });
-    throw quiet.signal.aborted ? stalled : err;
-  } finally {
-    clearTimeout(watch);
-  }
-  const digest = hash.digest('hex');
-  if (digest !== expected || (size !== undefined && received !== size)) {
-    await rm(`${file}.part`, { force: true });
-    throw new Error(`${name} is not the published file: sha256 ${digest} instead of ${expected}`);
-  }
-  await rename(`${file}.part`, file);
-  return file;
+  return receiveUpdateArtifact({ file, name, expected, size, progress, stallMs: DOWNLOAD_STALL_MS,
+    fetch: (signal, headers) => get(assetUrl(version, name), signal, headers) });
 }
 
 /**

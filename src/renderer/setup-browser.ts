@@ -2,7 +2,8 @@ import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
 import { $, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
-import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
+import { chatProviderLabel, DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
+import { selectedBrowserConnected } from '../shared/browser-readiness.js';
 
 type ExternalBrowser = Exclude<ChatBrowser, 'cos'>;
 const icons = {
@@ -25,7 +26,7 @@ type Login = { done: boolean; signedIn: boolean; text(): string };
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   proof: { signedIn: boolean | null; provider?: 'gemini' | 'chatgpt' } | null): Login {
   const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
-  const providerName = 'the provider';
+  const providerName = chatProviderLabel(provider);
   if (where === 'cos') {
     return { done: false, signedIn: false, text: () => t('Choose a full browser to continue. Embedded Google sign-in is not supported.') };
   }
@@ -36,7 +37,8 @@ export function signInState(state: AppState, where: ChatBrowser, live: boolean,
   const liveAnswer = live && (observation?.provider ?? 'gemini') === provider ? observation?.signedIn ?? null : null;
   const answer = liveAnswer !== null ? liveAnswer : (proof?.provider ?? 'gemini') === provider ? proof?.signedIn ?? null : null;
   if (answer === false) return { done: false, signedIn: false, text: () => `Not signed in to ${providerName} in ${label}.` };
-  if (answer === true) return { done: true, signedIn: true, text: () => live ? `Signed in. ${providerName} is connected.` : t('Signed in.') };
+  if (answer === true) return { done: live, signedIn: true, text: () => live ? `Signed in. ${providerName} is connected.`
+    : `Previously signed in. Open ${providerName} in ${label} to reconnect.` };
   return { done: false, signedIn: false, text: () => `Open ${providerName} in ${label} to check the sign-in.` };
 }
 
@@ -113,7 +115,7 @@ export function initBrowserSetup(actions: {
     current = state;
     const browser = state.config.ui.chatBrowser ?? 'chrome';
     const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
-    const providerName = 'the provider';
+    const providerName = chatProviderLabel(provider);
     const providerHost = provider === 'chatgpt' ? 'chatgpt.com' : 'gemini.google.com';
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;
@@ -124,7 +126,7 @@ export function initBrowserSetup(actions: {
     // proof stands in. A live old version always asks to update.
     const observation = state.bridge.externalExtension;
     const proof = observation?.proof ?? null;
-    const live = observation?.present === true;
+    const live = selectedBrowserConnected(state.bridge, browser);
     const shownVersion = live ? observation!.version : proof?.version ?? null;
     const knownVersion = !!shownVersion && /^\d+\.\d+\.\d+$/.test(shownVersion);
     const outdated = state.bridge.extensionUpdateRequired === true || knownVersion && isNewer(state.update.current, shownVersion!);
@@ -143,7 +145,7 @@ export function initBrowserSetup(actions: {
     $('browserPhaseLocation').setAttribute('aria-current', phase === 'location' ? 'step' : 'false');
     $('browserPhaseExtension').classList.toggle('is-complete', ready);
     $<HTMLButtonElement>('browserContinue').disabled = !ready;
-    $('browserConnectionLost').hidden = ready || cos;
+    $('browserConnectionLost').hidden = live || !ready || cos;
     $('browserBack').hidden = cos;
     for (const segment of document.querySelectorAll<HTMLButtonElement>('[data-external-browser]')) {
       const selected = segment.dataset.externalBrowser === external;

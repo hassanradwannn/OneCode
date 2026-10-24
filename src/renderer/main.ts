@@ -7,6 +7,8 @@ import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { initRemoteSettings } from './remote-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
+import { selectedBrowserConnected } from '../shared/browser-readiness.js';
+import { chatProviderLabel } from '../shared/chat-provider.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
 import { initChatgptSkillSetup } from './setup-chatgpt-skill.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
@@ -1231,7 +1233,7 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   const repairExtension = bridge.extensionUpdateRequired === true;
   // A mismatched companion can fail the protocol gate before it becomes present.
   // Retain its last observed version until a matching companion actually reports in.
-  const missing = !stale && !repairExtension && bridge.running && !bridge.present && isRunning(status.state) && browserExtensionRequired(config);
+  const missing = !stale && !repairExtension && bridge.running && !selectedBrowserConnected(bridge, config.ui.chatBrowser) && isRunning(status.state) && browserExtensionRequired(config);
   if (!stale && !repairExtension && !missing && !update.latest && !update.latestRevision && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
 
   const lines: string[] = [];
@@ -1269,7 +1271,11 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
           ? updateInstallWaitingText(update)
           : t("{0} {1} is downloaded and ready. Choose Install when done to restart after your work finishes.", [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
         : update.stage === 'downloading'
-          ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent ?? 0)])
+          ? update.downloadPercent !== undefined && update.downloadPercent > 0
+            ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent)])
+            : update.downloadMegabytes !== undefined && update.downloadMegabytes > 0
+              ? t("{0} {1} is downloading ({2} MiB received). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadMegabytes)])
+              : t("{0} {1} is downloading. Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest)])
           : update.stage === 'failed'
             ? t("{0} {1} could not be downloaded: {2}.", [PRODUCT_LABEL, displayBuildVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
             : update.installation === 'linux-unpacked'
@@ -1299,8 +1305,10 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
     );
     tone = 'bad';
   }
-  if (missing) { lines.push(providerT("Browser extension not connected. Open Gemini and check the extension in Setup to load models and send messages.")); tone = 'bad'; }
-  return { text: lines.join(' '), tone, notice: Boolean(update.latest || update.latestRevision || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t("Check extension") : null };
+  if (missing) {
+    lines.push(t('The browser is disconnected. Open {0} in your selected browser to reconnect. Your saved setup is kept.', [chatProviderLabel(config.ui.chatProvider ?? 'gemini')])); tone = 'bad';
+  }
+  return { text: lines.join(' '), tone, notice: Boolean(update.latest || update.latestRevision || stale || repairExtension || missing), extensionAction: stale || repairExtension ? t("Update extension") : missing ? t('Open {0}', [chatProviderLabel(config.ui.chatProvider ?? 'gemini')]) : null };
 }
 
 /** The header bar, the Activity line and the one notification, from that single sentence. */
@@ -2909,6 +2917,11 @@ document.addEventListener('keydown', (event) => {
 
 $('bridgeDownload').addEventListener('click', () => void run(api.downloadExtension()));
 $('updateExtension').addEventListener('click', () => {
+  if (state && !state.bridge.extensionUpdateRequired && !selectedBrowserConnected(state.bridge, state.config.ui.chatBrowser) &&
+      (!state.bridge.extensionVersion || !isNewer(state.update.current, state.bridge.extensionVersion))) {
+    const browser = state.config.ui.chatBrowser ?? 'chrome';
+    if (browser !== 'cos') { void run(api.openSetupBrowser(browser, 'chatgpt')); return; }
+  }
   browserSetup.reviewExtension();
   step('browser').hidden = false;
   openSetupStep('browser');

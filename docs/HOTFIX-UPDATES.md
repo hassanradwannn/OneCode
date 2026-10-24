@@ -1,23 +1,24 @@
 # Application hotfix updates
 
-Windows has supported verified application capsules since the 0.4.x line. OneCode 0.5.0 adds the corresponding application-layer foundation for Linux AppImage installations. A hotfix is never a shortcut around an incompatible native runtime: every capsule is bound to an exact complete base/runtime fingerprint, and native/runtime changes require a full platform artifact.
+Windows has supported verified application capsules since the 0.4.x line. OneCode 0.5.0 added the corresponding application-layer foundation for Linux. A hotfix is never a shortcut around an incompatible native runtime: every capsule is bound to a verified complete-base/runtime fingerprint, and native/runtime changes require a full platform artifact. Current stable hotfixes are built on GitHub from one frozen source commit for Windows x64 and Linux x64.
 
-In the unreleased reliability repair, verified DEB installations can explicitly activate a compatible application capsule in the same user-space layer used by AppImage. The full DEB and native runtime remain package-manager-owned: incompatible updates offer the exact DEB and require normal package installation. OneCode never rewrites root-owned package files during shutdown.
+Current stable source allows a positively identified DEB installation to activate a compatible application capsule in the same user-space layer used by AppImage. The full DEB and native runtime remain package-manager-owned: incompatible updates offer the exact DEB and require normal package installation. OneCode never rewrites root-owned package files during shutdown.
 
 Packaged Linux directory builds have an explicit QA installation kind, an isolated default profile and no production updater. A missing `APPIMAGE` environment variable alone does not prove DEB ownership. Changes to immutable bootstrap classification/profile rules require a new complete Linux base; they cannot be delivered to an older base as an application capsule.
 
 ## Publish a compatible Windows hotfix
 
-From the canonical checkout, increment the normal three-part application version and matching Companion version. Run the relevant tests and public verification, then:
+From the canonical checkout, increment the normal three-part application version and matching Companion version, run the relevant focused tests and public verification, commit only the intended paths, push `release`, and freeze the exact 40-character source SHA. Create the exact version tag and an unpublished draft release before dispatching the cloud build.
 
-```powershell
-npm run dist:dir:x64
-npm run release:hotfix -- --base-version 0.4.5
+```sh
+gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release \
+  -f source_ref=EXACT_40_CHARACTER_COMMIT_SHA -f release_tag=vX.Y.Z \
+  -f operation=stable-capsule -f base_version=VERIFIED_MINIMUM_BASE -f platform=all
 ```
 
-Use the latest complete release compatible with this runtime as --base-version. The publisher verifies that release's checksum list and OneCode-Base-x64.json, including the installer digest, size, architecture and native fingerprint. Missing or changed native resources require a new full release rather than an application hotfix.
+Use the **minimum published complete base you intentionally support**, not simply the newest application version. The workflow verifies that base release's checksum list and platform base descriptor, including artifact digest, size, architecture and immutable runtime fingerprint. A newer application version does not imply a newer required base. Missing or changed immutable resources require a new full release rather than an application hotfix.
 
-The directory build runs packaged runtime smoke without assembling NSIS. The publishing command creates OneCode-Hotfix-x64.zip, OneCode-Hotfix-x64.json and SHA256SUMS.txt; publish these three files to the exact version's release. The manifest embeds the verified full-base descriptor. Do not upload a leftover installer. The standalone command replaces the checksum list so stale installers cannot be advertised.
+The `stable-capsule` workflow uses a directory package, runs the public verification and packaged-runtime smoke on the matching platform runner, then uploads only the curated capsule assets to the exact draft. For Windows these are `OneCode-Hotfix-x64.zip`, `OneCode-Hotfix-x64.json` and `SHA256SUMS-win32-x64.txt`. Linux has its own qualified capsule and sidecar. Do not upload a leftover installer, AppImage, DEB, blockmap or full feed to a hotfix-only release.
 
 Build complete releases from the `release` branch after all earlier hotfix commits, using `npm run dist:x64` and `node scripts/prepare-windows-release.mjs`. Preparation writes `OneCode-Base-x64.json` and includes it in release checksums. The normal mode can also emit a matching application capsule. A full release contains the current application snapshot, including prior hotfixes; it does not revert to an earlier application snapshot.
 
@@ -25,7 +26,7 @@ The capsule is a complete snapshot of allowed application resources, not a binar
 
 ## Runtime compatibility and activation
 
-A hotfix-only latest release has no installer asset or latest-x64.yml. Keep the README's fresh-install link pinned to the latest complete release. The 0.4.5 updater discovers the normal three-part hotfix tag and verifies SHA256SUMS.txt plus the manifest. A compatible installation downloads only the capsule. Otherwise it independently verifies the required base descriptor and installer against the base release's checksums, downloads both artifacts into versioned stages, and offers one install action. Legacy hotfix manifests without a base remain usable on compatible installations; they cannot authorize a guessed installer.
+A hotfix-only latest release has no installer/AppImage/DEB asset or full feed. Keep README fresh-install links pinned to the latest complete release. The updater discovers the normal three-part hotfix tag and verifies the release `SHA256SUMS.txt` plus the platform manifest. A compatible installation downloads only the capsule. Otherwise it independently verifies the required base descriptor and complete artifact against that base release's checksums, downloads both artifacts into versioned stages where supported, and offers one install action. Legacy hotfix manifests without a base remain usable only on compatible installations; they cannot authorize a guessed complete artifact.
 
 Downloads report actual received bytes, weighted across the base and hotfix when both are required; 100% means the whole plan has verified and staged. Full Windows feeds are pinned to the selected tag, never reselected from a moving latest release during download.
 
@@ -73,20 +74,21 @@ The final preparation step verifies the AppImage, DEB and packaged runtime, writ
 
 ### Publish a later compatible Linux application hotfix
 
-Build the updated application against the same immutable runtime, then name the newest compatible complete Linux base explicitly:
+The stable GitHub workflow builds Linux from the same frozen source used for Windows. Name the verified minimum compatible complete Linux base explicitly; the Linux job fails closed if its immutable runtime or channel differs:
 
 ```bash
-npm run dist:dir:linux:x64
-npm run release:hotfix:linux -- --base-version 0.5.0
+gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release \
+  -f source_ref=EXACT_40_CHARACTER_COMMIT_SHA -f release_tag=vX.Y.Z \
+  -f operation=stable-capsule -f base_version=VERIFIED_MINIMUM_BASE -f platform=linux
 ```
 
-Replace `0.5.0` with the latest compatible complete Linux base. The publisher downloads that base descriptor and checksum list from its exact GitHub tag, verifies the AppImage digest and runtime fingerprint, and refuses the hotfix if any immutable resource changed. A standalone hotfix checksum list does not advertise stale AppImage/DEB/base files from the local release directory.
+The publisher reads that base descriptor and checksum list from its exact GitHub tag, verifies the AppImage digest and runtime fingerprint, and refuses the hotfix if any immutable resource changed. A capsule sidecar never advertises stale AppImage/DEB/base files from a local release directory.
 
 Linux capsule assets are platform-qualified:
 
 - `OneCode-Linux-Hotfix-x64.zip`
 - `OneCode-Linux-Hotfix-x64.json`
-- `SHA256SUMS.txt`
+- `SHA256SUMS-linux-x64.txt`
 
 Native runtime changes, a different bootstrap, a different packaged Node/native module/tunnel/rg payload, or another incompatible immutable resource require a new full AppImage/DEB release.
 
@@ -102,6 +104,6 @@ Explicit acceptance profiles and browser-profile overrides survive the Windows u
 
 GitHub's moving `/releases/latest` is a repository-wide concept, but OneCode update applicability is platform/install-type specific. The updater therefore treats a release with no applicable delivery artifact as not applicable to that installation instead of surfacing a broken update. Publication policy should still prefer synchronized versions that provide a valid delivery path for every supported platform.
 
-For 0.5.0 and later, a synchronized full release should publish at least the Windows installer/base metadata and the Linux AppImage/DEB/base metadata together. A future hotfix-only release should publish the applicable Windows and Linux capsules together when both bases are compatible; when a platform requires a new native base, publish that platform's full artifact in the same version rather than making the other platform's updater chase a nonexistent file.
+For 0.5.0 and later, a synchronized full release should publish at least the Windows installer/base metadata and the Linux AppImage/DEB/base metadata together. A synchronized hotfix-only release publishes both platform capsules and sidecars, then combines the four manifest/archive rows into the release-level `SHA256SUMS.txt` that update discovery trusts. The combined register must not advertise absent full artifacts. When a platform requires a new native base, publish that platform's full artifact in the same version rather than making another platform's updater chase a nonexistent file.
 
 Fresh-install links must always target a complete base artifact, never a capsule. “Latest application version” and “latest complete installable base” are distinct concepts.

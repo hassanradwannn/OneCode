@@ -33,6 +33,7 @@ import { pluginManager } from '../plugins/manager.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { withMcpProvider } from './provider-context.js';
 import { authenticateChatgptExec, type LocalBindingEvidence } from '../session/local-binding.js';
+import { sessionHistoryUnavailable } from '../session/journal-io.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 // Public tool calls can cross several HTTP/TLS hops before they reach ChatGPT. Keep the
@@ -487,10 +488,17 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
           try {
             const authenticated = await withMcpProvider(provider, () => authenticateChatgptExec(message.params?.name, message.params?.arguments));
             dispatch({ ...message, params: { ...message.params, arguments: authenticated.args } }, authenticated.evidence);
-          } catch {
+          } catch (error) {
             if (res.destroyed || res.headersSent) return;
+            const storage = sessionHistoryUnavailable(error);
+            // Never log credentials, arguments or journal contents. A failed proof
+            // read preserves the grant; reporting it as revoked hides recovery.
+            logWarn(`ChatGPT MCP admission refused: ${storage ? `session storage ${error.code}` : 'task authorization unavailable'}`);
+            const text = storage
+              ? `CHATGPT_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
+              : 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.';
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text: 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.' }] } });
+              result: { isError: true, content: [{ type: 'text', text }] } });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
             res.end(body);
           }
@@ -505,7 +513,8 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
             if (res.destroyed || res.headersSent) return;
             // Only fixed codes and bounded routing shape enter diagnostics. Unknown tool
             // names can themselves contain a credential/task, so log declared names only.
-            const code = error instanceof GeminiBindingError && /^[A-Z_]{1,80}$/.test(error.code)
+            const storage = sessionHistoryUnavailable(error);
+            const code = storage ? 'GEMINI_SESSION_STORAGE_UNAVAILABLE' : error instanceof GeminiBindingError && /^[A-Z_]{1,80}$/.test(error.code)
               ? error.code : 'GEMINI_SESSION_NOT_AUTHORIZED';
             const candidate = message.params?.arguments;
             const args = candidate && typeof candidate === 'object' && !Array.isArray(candidate)
@@ -519,7 +528,9 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
               keyStringLength: typeof args.session_key === 'string' ? args.session_key.length : null
             })}`);
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text: `${code}: no local tool ran. Reconnect the paired companion to this exact chat to refresh its session binding.` }] } });
+              result: { isError: true, content: [{ type: 'text', text: storage
+                ? `${code}: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
+                : `${code}: no local tool ran. Reconnect the paired companion to this exact chat to refresh its session binding.` }] } });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
             res.end(body);
           }

@@ -16,6 +16,16 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.0': {
+    lead: () => t('Recoverable history access, installation-local Windows data, and faster Remote and Linux updates.'),
+    highlights: [
+      { icon: 'i-file-text', title: () => t('History and task access recover together'), text: () => t('A temporarily inaccessible journal retains its history and task grant. Windows copies and verifies default profile data beside the installation on a normal launch, preserving the original backup.') },
+      { icon: 'i-bolt', title: () => t('Readiness follows the live browser'), text: () => t('Setup distinguishes saved sign-in from a live connection, remembers each provider separately, and opens the selected provider to reconnect. Busy connections no longer delay every desktop state update.') },
+      { icon: 'i-bolt', title: () => t('Remote opens without repeated route checks'), text: () => t('Remote reuses a recent verified private route and its first bootstrap instead of blocking each read on repeated Tailscale CLI checks. Background route verification still suspends access if custody changes.') },
+      { icon: 'i-terminal', title: () => t('Linux downloads show progress'), text: () => t('AppImage downloads report transport progress while SHA-256 remains the authority for accepting the completed update. Hotfix and combined update progress continue to use their published sizes.') },
+      { icon: 'i-file-text', title: () => t('Natural Linux text spacing'), text: () => t('Linux prefers the system UI font before CJK fallbacks so Latin punctuation and apostrophes keep normal spacing without rewriting message text.') }
+    ]
+  },
   '0.5.10': {
     lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
     highlights: [

@@ -69,6 +69,7 @@ import { confirmedPluginSchemas, pluginRefreshPublications, pluginRefreshStatuse
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import path from 'node:path';
+import { statePublisher } from './state-publisher.js';
 import { z } from 'zod';
 import {
   CAPABILITIES,
@@ -618,28 +619,35 @@ function resolvedBinary(config: Config): string | null {
 async function buildState(): Promise<AppState> {
   const config = getConfig();
   const provider = config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+  const [refreshes, refreshUnreadable, secureStorage, apiKey, goalKey, customKey, bridge] = await Promise.all([
+    pluginRefreshStatuses(), pluginRefreshUnreadable(), secureStorageStatus(),
+    hasSecret(setupApiKeySlot(config.tunnel.profileId)), hasSecret('openRouterApiKey'), hasSecret('customProviderApiKey'), bridgeStatus()
+  ]);
+  // A real settings change invalidates this projection. Unrelated connection
+  // activity does not: otherwise a busy bridge can prevent every state delivery.
+  if (getConfig() !== config) return buildState();
   return {
     config,
     status: getStatus(),
     connectorSchemas: Object.fromEntries(
       pluginRefreshPublications().map(({ surface, schemaId }) => [surface, schemaId])
     ),
-    connectorRefresh: Object.fromEntries(Object.entries(await pluginRefreshStatuses()).map(([surface, status]) =>
+    connectorRefresh: Object.fromEntries(Object.entries(refreshes).map(([surface, status]) =>
       [surface, chatProviderCapabilities(provider).nativePluginRefresh ? status : { ...status, state: 'manual' as const }])),
     confirmedConnectorSchemas: chatProviderCapabilities(provider).nativePluginRefresh ? confirmedPluginSchemas() : {},
-    pluginRefreshUnreadable: await pluginRefreshUnreadable(),
+    pluginRefreshUnreadable: refreshUnreadable,
     recordingStorageFull: recordingStorageFull(),
     platform: hostPlatformInfo(),
     loginStartupAvailable: supportsLoginStartup(process.platform, app.isPackaged),
-    secureStorage: await secureStorageStatus(),
-    hasApiKey: await hasSecret(setupApiKeySlot(config.tunnel.profileId)),
-    hasGoalKey: await hasSecret('openRouterApiKey'),
-    hasCustomProviderKey: await hasSecret('customProviderApiKey'),
+    secureStorage,
+    hasApiKey: apiKey,
+    hasGoalKey: goalKey,
+    hasCustomProviderKey: customKey,
     // After the reads above: only a read can find the file unreadable.
     credentialsUnreadable: storedSecretsUnreadable(),
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
-    bridge: await bridgeStatus(),
+    bridge,
     cosBrowserSignedIn: cosBrowserSignedIn(),
     update: updateStatus(),
     desktopAccess: getMacOSDesktopAccess(),
@@ -2345,13 +2353,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     }
   });
 
-  let statePushGeneration = 0;
+  const publishState = statePublisher(buildState, state => push('state:changed', state),
+    error => logWarn(`Desktop state refresh failed: ${(error as Error).message}`));
   const pushState = (): void => {
-    const generation = ++statePushGeneration;
-    void buildState().then((state) => {
-      if (generation !== statePushGeneration) return;
-      push('state:changed', state);
-    });
+    const window = getWindow();
+    if (window && !window.isDestroyed()) publishState();
   };
   onStatusChange(pushState);
   onRemotePreferencesChange(pushState);
