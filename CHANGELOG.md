@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.5.9] — 2026-10-24
+
+Repair terminal result delivery and legacy spool recovery, worker reuse across chat handoffs, durable Stop handling, immediate folder grants, journal access failure preservation and Remote history/attachments. The Beta validation release exercised native Windows and Linux internal updates. See [0.5.9 release notes](docs/release-notes/v0.5.9.md).
+
 ## [0.5.0] — 2026-10-23
 
 Ship the first full Windows x64 + Linux x64 release, including AppImage/DEB packaging and a verified AppImage application-hotfix foundation. Repair Linux embedded-browser bounds, preserve fresh authenticated Core routing for plans/plugins/sub-agents, add pre-Send image preview, bundle the supported Linux dictation runtime, and carry forward the accepted Tailscale, connector-identity, transcript and long-response reliability repairs. See [0.5.0 release notes](docs/release-notes/v0.5.0.md).

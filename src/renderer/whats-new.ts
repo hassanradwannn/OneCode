@@ -16,7 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
-  '0.5.7': {
+  '0.5.10': {
+    lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Recover completed terminal results'), text: () => t('Completed output releases its live slot, remains recoverable after restart, and no longer blocks new work after delivery.') },
+      { icon: 'i-retry', title: () => t('Recovery keeps the original task'), text: () => t('Opening a chat loads its exact browser tab. Continue and Compact & Resume retain their original intent while the page becomes ready, without resending an uncertain message.') }
+    ]
+  },
+  '0.5.9': {
     lead: () => t('Terminal recovery, reliable Stop, and folder access in existing chats.'),
     highlights: [
       { icon: 'i-terminal', title: () => t('Recover completed terminal results'), text: () => t('Completed output releases its live slot, remains recoverable after restart, and no longer blocks new work after delivery.') },

@@ -2192,11 +2192,15 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
   const resident = !navigate && historyBefore !== null && detailFor === wanted && events.length > 0;
   // Live deltas must not evict a historical page while the user is reading it.
   const incremental = !prepend && newerFrom === undefined && historyBefore === null && detailFor === wanted && detailCursor !== null;
-  const detail = await run(
+  const reply = await (
     api.getSession(wanted, resident ? { after: Math.min(...events.map(residenceOf)) - 1, limit: MAX_TIMELINE_ROWS }
       : newerFrom !== undefined ? { after: newerFrom, limit: TIMELINE_BATCH_SIZE } : incremental ? { from: detailCursor!, limit: TIMELINE_BATCH_SIZE } : { ...(olderBefore !== undefined ? { before: olderBefore } : historyBefore !== null ? { before: historyBefore } : {}), limit: TIMELINE_BATCH_SIZE })
   );
   if (generation !== detailLoadGeneration || selection !== selectionGeneration || selectedId !== wanted) return false;
+  // Navigation can retire/delete an opening while its history request is in flight.
+  // Only the still-selected request may surface a failure; stale replies must not
+  // toast "Session not found" over Setup or another chat.
+  const detail = await run(Promise.resolve(reply));
   if (!detail) {
     // A failed destination read must not leave another chat displayed indefinitely.
     // run() already presents the read error; keep the destination empty and retryable.
@@ -6426,7 +6430,11 @@ async function adoptAcceptedOpening(entry: InputEntry): Promise<boolean> {
   const id = entry.opening ? entry.sessionId : entry.state === 'sent' ? entry.deliveredSessionId : null;
   if (!id || !pending || pending.id !== entry.id || pending.generation !== selectionGeneration || !newChatSelected || selectedId !== null) return false;
   let summary = sessions.find(row => row.id === id);
-  if (!summary) summary = (await run(api.getSession(id, { limit: 1 })))?.summary ?? undefined;
+  if (!summary) {
+    const reply = await api.getSession(id, { limit: 1 });
+    if (pendingNewInput !== pending || pending.generation !== selectionGeneration || selectedId !== null) return false;
+    summary = (await run(Promise.resolve(reply)))?.summary ?? undefined;
+  }
   if (!summary || pendingNewInput !== pending || pending.generation !== selectionGeneration || selectedId !== null) return false;
   pendingNewInput = null;
   mergeSessionRows([summary]);

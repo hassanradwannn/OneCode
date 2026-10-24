@@ -417,7 +417,12 @@ function validateRecord(value: unknown): CompletedExecSpoolRecord {
   if (row.outputOffsetBasis === undefined && typeof row.rawOutput === 'string' &&
       typeof row.displayOutput === 'string' && row.displayOutput === row.pendingOutput &&
       row.rawOutput !== row.displayOutput && Number.isSafeInteger(row.initialOutputOffset) &&
-      row.initialOutputOffset! >= 0 && row.initialOutputOffset! <= Buffer.from(row.rawOutput, 'base64').length) {
+      row.initialOutputOffset! >= 0 && Number.isSafeInteger(row.rawOmittedBytes) && row.rawOmittedBytes! >= 0 &&
+      // The old cursor counted captured bytes before the bounded tail dropped them.
+      // Its retained raw stream includes an omission marker; it is not the cursor's
+      // original byte domain. Reset only this legacy representation, then validate
+      // the retained streams and their original digest below as usual.
+      row.initialOutputOffset! <= Buffer.from(row.rawOutput, 'base64').length + row.rawOmittedBytes!) {
     row = { ...row, initialOutputOffset: 0, outputOffsetBasis: 'display' };
   }
   if (row.version !== EXEC_SPOOL_VERSION || !Number.isSafeInteger(row.processId) ||

@@ -1130,9 +1130,23 @@ async function fetchBounded(url, init = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   // Aborted with a reason on purpose. An abort with none rejects as the platform's opaque
   // "signal is aborted without reason", which is exactly what this worker's own deadline
   // used to put on screen in place of anything a reader could act on.
-  const timer = setTimeout(() => controller.abort(new Error(TIMED_OUT)), timeoutMs);
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+  const timer = setTimeout(() => {
+    controller.abort(new Error(TIMED_OUT));
+    rejectDeadline(new Error(TIMED_OUT));
+  }, timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    // fetch resolves at the headers. Clearing the deadline there left json()
+    // unbounded, pinning discovery/maintenance forever on an incomplete body.
+    // Keep the same deadline through the complete bridge response. A timeout
+    // supplies no receipt and never authorizes replay of an uncertain mutation.
+    return await Promise.race([deadline, (async () => {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      const data = await response.json().catch(() => ({}));
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error(TIMED_OUT);
+      return { ok: response.ok, status: response.status, json: async () => data };
+    })()]);
   } finally {
     clearTimeout(timer);
     if (external && typeof external.removeEventListener === 'function') external.removeEventListener('abort', abort);
