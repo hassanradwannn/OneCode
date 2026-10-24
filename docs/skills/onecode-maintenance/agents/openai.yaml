@@ -1,0 +1,4 @@
+interface:
+  display_name: "OneCode Maintenance"
+  short_description: "Maintain, test and release OneCode on Windows and Linux"
+  default_prompt: "Use $onecode-maintenance to diagnose, validate and ship the requested OneCode maintenance change."
