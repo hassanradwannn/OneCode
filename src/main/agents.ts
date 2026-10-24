@@ -3164,9 +3164,14 @@ function runProjectionStillOwned(owner: Run): boolean {
   return [...dormantRuns.values()].some((history) => history.agents === owner.agents);
 }
 
-function stageFinish(agent: Agent, result: string, acknowledgedMessageIds: readonly string[] = []): StagedFinish {
+function stageFinish(
+  agent: Agent,
+  result: string,
+  acknowledgedMessageIds: readonly string[] = [],
+  options: { allowWaking?: boolean } = {}
+): StagedFinish {
   const run = runForAgent(agent);
-  if (!canStageFinish(agent)) {
+  if (!canStageFinish(agent) && !(options.allowWaking === true && agent.info.state === 'waking')) {
     logInfo(`multi-agent: ${agent.info.id} called finish again after it had already stopped (${agent.info.state})`);
     return {
       info: { ...agent.info },
@@ -3301,8 +3306,20 @@ export function stageWorkerConversationFinish(conversationId: string, result: st
 /** A native Stop frees the slot without claiming queued instructions were completed or read. */
 export function stageWorkerConversationStop(conversationId: string): StagedFinish | null {
   const agent = agentForConversationId(conversationId);
-  if (!agent || agent.info.role !== 'worker' || !canStageFinish(agent)) return null;
-  return stageFinish(agent, 'Stopped by the user. The provider confirmed that this turn is no longer running; the task may be incomplete.');
+  if (!agent || agent.info.role !== 'worker' || (!canStageFinish(agent) && agent.info.state !== 'waking')) return null;
+  // A newly revived worker can have a real provider turn before its first authenticated MCP
+  // call changes waking to active. An exact browser-observed Stop may end that one state too.
+  // Retire only revival rows already submitted as the user message for this turn; untouched
+  // queued instructions stay in the inbox for the next wake.
+  const stoppedRevival = agent.queue
+    .filter((message) => message.ackedAt === null && message.offeredViaRevival && message.offeredAt !== null)
+    .map((message) => message.id);
+  return stageFinish(
+    agent,
+    'Stopped by the user. The provider confirmed that this turn is no longer running; the task may be incomplete.',
+    stoppedRevival,
+    { allowWaking: agent.info.state === 'waking' }
+  );
 }
 
 /**
@@ -4587,6 +4604,41 @@ export function repairPrimeConversationAfterRecovery(
   logInfo(`multi-agent: recovered ${owned.length} prime fleet(s) from ${fromConversationId} to ${toConversationId}`);
   changed();
   return true;
+}
+
+/**
+ * Reattach one parked/active prime family after the durable session has already moved to a
+ * successor conversation but the broker projection still names an older chat in that same
+ * lineage. This is recovery only: the current frontend and the old prime must resolve uniquely
+ * to the same durable session, and ordinary Setup/local-owner/collision fences still apply.
+ *
+ * Without this join, agents status/spawn sees no owned family in the successor chat and the
+ * model is encouraged to create replacement workers even though reusable sleepers still exist.
+ */
+export async function repairPrimeFamilyFromSessionLineage(input: Caller): Promise<boolean> {
+  const caller = exactCaller(input);
+  if (!caller.conversationId || !caller.sessionId || caller.localOwnerId) return false;
+  if (familiesForCaller(caller).length > 0) return true;
+  const current = await findSessionByConversation(caller.conversationId, { requireUnique: true });
+  if (!current || current.id !== caller.sessionId || current.conversationId !== caller.conversationId) return false;
+
+  const candidates = allFamilies().filter(owner => {
+    if (unpublishedRuns.has(owner as Run) || owner.localOwnerId || !owner.primeConversationId) return false;
+    if (owner.primeConversationId === caller.conversationId || !current.chatIds.includes(owner.primeConversationId)) return false;
+    return setupProfileMatches(caller, owner);
+  });
+  if (candidates.length !== 1) return false;
+  const owner = candidates[0]!, fromConversationId = owner.primeConversationId!;
+  const historical = await findSessionByConversation(fromConversationId, { includeHistorical: true, requireUnique: true });
+  if (!historical || historical.id !== current.id || historical.conversationId !== caller.conversationId) return false;
+
+  // Re-read after filesystem awaits. A concurrent handoff/profile/family change must win rather
+  // than letting this recovery attach stale authority to the new frontend.
+  const latest = await getSession(current.id);
+  if (!latest || latest.conversationId !== caller.conversationId || !latest.chatIds.includes(fromConversationId)) return false;
+  if (!allFamilies().includes(owner) || owner.primeConversationId !== fromConversationId || owner.localOwnerId ||
+      !setupProfileMatches(caller, owner) || familiesForCaller(caller).length > 0) return false;
+  return repairPrimeConversationAfterRecovery(fromConversationId, caller.conversationId);
 }
 
 // -------------------------------------------------------------------- state

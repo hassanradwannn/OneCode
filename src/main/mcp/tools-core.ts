@@ -128,6 +128,7 @@ import {
   PRIME_ID,
   requestWorkerBootstraps,
   requestWorkerRevivals,
+  repairPrimeFamilyFromSessionLineage,
   statusForCaller,
   stageFinishAgent,
   stageMessages,
@@ -979,6 +980,10 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               conversationId: caller.conversationId,
               setupProfileId: caller.setupProfileId
             });
+            const publication = currentCall()?.publication;
+            if (output.completedSessionId !== undefined && publication) {
+              await unifiedExecManager.noteCompletedOutputPublication(output.completedSessionId, publication, 'exec');
+            }
             // Which exact session or temporary request principal may later write to this
             // process id. Request custody upgrades lazily when exact correlation arrives.
             noteExecOwner(output.processId ?? output.completedSessionId ?? null, owner);
@@ -1136,6 +1141,10 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               maxOutputTokens: undefined,
               truncationPolicy: EXEC_OUTPUT_CEILING_POLICY
             });
+            const publication = currentCall()?.publication;
+            if (output.completedSessionId !== undefined && publication) {
+              await unifiedExecManager.noteCompletedOutputPublication(output.completedSessionId, publication, 'poll');
+            }
             noteExecAttended(input.session_id);
             noteExec({
               ...(output.processId === null ? {} : { id: String(output.processId) }),
@@ -1664,6 +1673,10 @@ async function callerNow(startedAt: number, options: { exact?: boolean; runId?: 
     // only that durably-proven historical failure before membership is evaluated; unrelated
     // conversations still hit AGENTS_BUSY exactly as before.
     await repairPrimeFromResumeShadow(resolved);
+    // Normal durable handoffs can also move the current session from A to B while a parked
+    // reusable family remains projected onto A. Recover only from exact same-session lineage
+    // proof before status/spawn decides this caller owns no workers.
+    await repairPrimeFamilyFromSessionLineage(caller);
   }
   if (!resolved && !allowRequest) {
     logWarn(

@@ -1767,6 +1767,7 @@ function paintDeliveryControls(): void {
   for (const button of document.querySelectorAll<HTMLButtonElement>('#finishQueue .queue-send-now'))
     paintQueuedNow(button, pendingComposerInputs.find(entry => entry.id === button.closest<HTMLElement>('[data-input-id]')?.dataset.inputId));
   const working = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledTurnId !== null;
+  const stoppable = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledUnfinishedTurnId !== null;
   const queueAtFinish = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledQueueAtFinish;
   const canInject = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledCanInject;
   const canSendDirectly = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledCanSendDirectly;
@@ -1800,7 +1801,7 @@ function paintDeliveryControls(): void {
   if ($<HTMLSelectElement>('sendMode').value === 'tool' && !explicitInjection) $<HTMLSelectElement>('sendMode').value = 'auto';
   if (!working) $<HTMLSelectElement>('sendMode').value = 'auto';
   const pending = pendingComposerInput();
-  const stop = (working || !!pending) && !currentPreparedPlan() && !authoredComposerText().trim() && !(imageDrafts.get(draftKey())?.length);
+  const stop = (stoppable || !!pending) && !currentPreparedPlan() && !authoredComposerText().trim() && !(imageDrafts.get(draftKey())?.length);
   // Hover selects delivery for the next message. Clicking the empty-composer
   // Stop still acts immediately; there is no second Stop action in the menu.
   $('sendOptions').hidden = !working;
@@ -2200,7 +2201,13 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
     // A failed destination read must not leave another chat displayed indefinitely.
     // run() already presents the read error; keep the destination empty and retryable.
     if (opening) {
-      $('timeline').replaceChildren();
+      const notice = el('div', 'empty-state');
+      notice.append(el('p', '', () => t('Chat history could not be read. Your saved history has been preserved.')));
+      const retry = el('button', '', () => t('Reload chat'));
+      retry.setAttribute('type', 'button');
+      retry.addEventListener('click', () => { if (selectedId === wanted) void loadDetail(true); });
+      notice.append(retry);
+      $('timeline').replaceChildren(notice);
       $('timeline').removeAttribute('inert');
       $('timeline').removeAttribute('aria-busy');
     }
@@ -6700,7 +6707,7 @@ function showAutoSkillReceipt(entry: Pick<InputEntry, 'autoSkills'>): void {
   if (entry.autoSkills?.length) toast(t('Auto-selected Skill: /{0}', [entry.autoSkills[0]!.id]));
 }
 async function stopCurrentTurn(confirmed?: { sessionId: string; selection: number; turnId: string }): Promise<void> {
-  const id = selectedId, turnId = confirmed?.turnId ?? controlledTurnId, generation = selectionGeneration;
+  const id = selectedId, turnId = confirmed?.turnId ?? controlledUnfinishedTurnId ?? controlledTurnId, generation = selectionGeneration;
   if (!id || !turnId || controlledStopPending || (confirmed
     ? confirmed.sessionId !== id || confirmed.selection !== generation
     : controlledSessionId !== id || controlledSelection !== generation)) return;
@@ -6727,12 +6734,12 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
     // this response before the exact turn reaches the Stop IPC.
     const currentControls = target ? await run(api.getSessionControls(target)) : null;
     if (!sameSelection()) return;
-    if (target && currentControls?.activeTurnId) {
-      await stopCurrentTurn({ sessionId: target, selection, turnId: currentControls.activeTurnId }); return;
+    if (target && (currentControls?.unfinishedTurnId || currentControls?.activeTurnId)) {
+      await stopCurrentTurn({ sessionId: target, selection, turnId: currentControls.unfinishedTurnId ?? currentControls.activeTurnId! }); return;
     }
     // An actual turn takes precedence over queued follow-ups. Stop never silently
     // becomes cancellation of a different pending input in that same chat.
-    if (target && controlledSessionId === target && controlledSelection === selection && controlledTurnId) {
+    if (target && controlledSessionId === target && controlledSelection === selection && (controlledUnfinishedTurnId || controlledTurnId)) {
       await stopCurrentTurn(); return;
     }
     const pending = pendingComposerInput();

@@ -204,7 +204,7 @@ function findTaskkill(): string | null {
 export async function terminateProcessTree(
   pid: number,
   force = true,
-  helperTimeoutMs = force ? 1_000 : 500
+  helperTimeoutMs = force ? 5_000 : 2_500
 ): Promise<boolean> {
   // child.kill() leaves grandchildren running on Windows; taskkill /T handles the tree.
   // taskkill itself can block while waiting on an uncooperative console process, so
@@ -229,9 +229,13 @@ export async function terminateProcessTree(
         if (force) args.push('/F');
         const killer = spawn(taskkill, args, {
           windowsHide: true,
-          stdio: 'ignore',
+          stdio: ['ignore', 'pipe', 'pipe'],
           env: childEnv()
         });
+        // Drain native diagnostics even though callers only need the exit status.
+        // Windows taskkill can fail with fully discarded standard handles.
+        killer.stdout?.resume();
+        killer.stderr?.resume();
         killer.once('error', () => finish(false));
         // Exit code 128 is "no such process", which is the outcome asked for. Anything
         // else non-zero means the tree may still be standing and the fallback should run.

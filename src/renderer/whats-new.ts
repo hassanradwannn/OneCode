@@ -16,6 +16,15 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.5.6': {
+    lead: () => t('Terminal recovery, reliable Stop, and folder access in existing chats.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Recover completed terminal results'), text: () => t('Completed output releases its live slot, remains recoverable after restart, and no longer blocks new work after delivery.') },
+      { icon: 'i-retry', title: () => t('Stop and reuse workers'), text: () => t('Stop waits for the provider’s confirmed boundary. Sleeping workers remain reusable after a chat handoff, and pending terminal launches are cancelled during shutdown.') },
+      { icon: 'i-folder', title: () => t('Folder access without a new chat'), text: () => t('Shared folders apply to existing chats immediately. A standalone written folder approval in the app uses the same folder-grant owner.') },
+      { icon: 'i-image', title: () => t('Easier Remote conversations'), text: () => t('Scroll upward to load earlier history, preview image attachments, and find workers beneath their parent chat.') }
+    ]
+  },
   '0.5.5': {
     lead: () => t('More reliable long chats, visible background work, and verified updates on Windows and Linux.'),
     highlights: [

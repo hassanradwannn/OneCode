@@ -2118,7 +2118,7 @@ async function reconcileWorkerFinish(id: string, sessionId: string, observations
     retainedTerminalText = completed?.text || 'Worker turn ended without a canonical final answer.';
     worker = agentInfoForOwnedConversation(id);
   }
-  if (!worker || (!retainedTerminalText && !['active', 'detached', 'invited'].includes(worker.state))) return true;
+  if (!worker || (!retainedTerminalText && !['active', 'detached', 'invited', 'waking'].includes(worker.state))) return true;
   // A stopped turn has no completed final to reconcile. Use the durable current boundary,
   // not an ACK for the click or a historical stop delivered after a newer task started.
   const stopObserved = observations?.some(entry => entry.kind === 'turn_end' && entry.outcome === 'stopped');
@@ -2146,6 +2146,12 @@ async function reconcileWorkerFinish(id: string, sessionId: string, observations
     return false;
   }
   staged.commit();
+  if (stopped && staged.info.runId) {
+    // The durable broker transition above is the authority. Remove only this exact worker's
+    // bootstrap/revival transport after it is safely sleeping again, so a stale leased wake
+    // cannot re-submit the assignment the user just stopped.
+    cancelWorkerCommands('the worker turn was stopped by the user', staged.info.id, staged.info.runId);
+  }
   await recordAgentMessage(staged.report, 'sent', id);
   if (staged.info.runId) {
     // Explicit Stop must stay stopped. A new prime message may wake this same worker later.
@@ -2360,7 +2366,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
     goalDraft: draft ? { stage: draft.stage, model: draft.model, text: draft.text.slice(-8000), error: draft.error } : null,
     goalWait: !blocked && !draft && goalActiveFor(id)
       ? await goalWaitFor(id, sessionId, Date.now(), session.browserRecoveryDismissedAt !== undefined) : null,
-    stopPending: commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === activeTurnId),
+    stopPending: commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId),
     objective: goalObjectiveFor(id),
     loopAfterTurn: control.afterTurn,
     proLoopDelivery: control.enabled && getConfig().ui.finishTool === true && session.selectedModel?.conversationId === id &&
@@ -5177,7 +5183,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (command.spec.type === 'stop') {
       if (!client || Date.now() - command.createdAt >= STOP_COMMAND_TIMEOUT_MS || reportedConversation !== command.spec.conversationId || !await stopCommandCurrent(command.spec))
         return json(res, 409, { error: 'stop_turn_changed' }, origin);
-      if (!await persistCommandLease(command, client, Date.now(), false)) return json(res, 409, { error: 'stop_not_owned' }, origin);
+      // Explicit user Stop may move to a replacement/reloaded document because the command
+      // names the exact durable session + conversation + turn, all rechecked around this write.
+      // A continuation-owned Stop keeps its original single-document lease.
+      if (!await persistCommandLease(command, client, Date.now(), !command.spec.continuationInputId)) return json(res, 409, { error: 'stop_not_owned' }, origin);
       if (!commands.includes(command) || Date.now() - command.createdAt >= STOP_COMMAND_TIMEOUT_MS || !await stopCommandCurrent(command.spec)) return json(res, 409, { error: 'stop_turn_changed' }, origin);
       return json(res, 200, { command: describe(command, client) }, origin);
     }
@@ -5439,6 +5448,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (ownedCommand.spec.type === 'stop') {
       if (!client || conversation !== ownedCommand.spec.conversationId || body.turnId !== ownedCommand.spec.turnId)
         return json(res, 409, { error: 'stop_identity_changed' }, origin);
+      if (!ownedCommand.spec.continuationInputId) {
+        // sent means only that the native Stop control accepted a click, not that the provider
+        // turn ended. Keep this exact cancellation request durable/redeemable until the recorder
+        // observes its matching stopped boundary, or its absolute deadline/stale-turn guard wins.
+        return json(res, 200, {
+          ok: true,
+          final: false,
+          committed: false,
+          outcome: 'pending',
+          error: status === 'failed' ? error || 'native_stop_unavailable' : null
+        }, origin);
+      }
       const receipt: CommandReceipt = { id, client, conversationId: conversation, outcome: status === 'sent' ? 'committed' : 'terminal-failure',
         committed: status === 'sent', error: status === 'sent' ? null : error || 'native_stop_unavailable', completedAt: Date.now() };
       if (!await finalizeCommand(ownedCommand, receipt)) return json(res, 503, { error: 'command_receipt_not_durable' }, origin);

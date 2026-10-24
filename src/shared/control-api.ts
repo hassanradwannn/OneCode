@@ -190,6 +190,8 @@ export interface ControlApiRecovery {
 export interface ControlApiLive {
   /** The turn Gemini is running now, if the app judges it still running. */
   activeTurnId: string | null;
+  /** Durable unfinished turn, retained even when the short-lived activity projection expires. */
+  unfinishedTurnId?: string | null;
   stopPending: boolean;
   /** `off`, `goal` or `loop`. */
   automation: string;

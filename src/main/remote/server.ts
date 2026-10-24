@@ -23,7 +23,7 @@ import { getSecret, setSecret } from '../secrets.js';
 import { readArtifact } from '../artifacts/service.js';
 import { getSession, readAsset, readEvents } from '../session/store.js';
 import { PreviewDocuments, ARTIFACT_DOCUMENT_CSP } from '../artifacts/preview-documents.js';
-import { stageInputAttachment } from '../session/input-attachments.js';
+import { previewInputAttachment, stageInputAttachment } from '../session/input-attachments.js';
 import { listManagedSkills } from '../skills.js';
 import { prepareNativeVideoPlayback, preparePresentedVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback } from '../native-media.js';
 import type { RemoteBootstrap, RemoteStatus } from '../../shared/remote.js';
@@ -145,6 +145,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
       const retained = new Set((await listInputs()).filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).flatMap(row => row.attachments?.map(file => file.id) ?? []));
       json(res, 200, await stageInputAttachment({ name: file.name, bytes }, retained)); return;
+    }
+    if (req.method === 'GET' && /^\/api\/attachments\/[0-9a-f-]{36}\/preview$/.test(route.pathname)) {
+      const id = z.string().uuid().parse(route.pathname.split('/')[3]);
+      json(res, 200, await previewInputAttachment(id)); return;
     }
     if (req.method === 'POST' && route.pathname === '/api/previews') {
       const request = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/), artifactId: z.string().uuid(), revision: z.number().int().min(1), document: z.string().min(1).max(4 * 1024 * 1024) }).strict().parse(await body(req, 8 * 1024 * 1024));

@@ -22,6 +22,7 @@
  */
 
 import { modelFacingText } from '../../shared/content-reference.js';
+import { appendJournal, openJournal } from './journal-io.js';
 import { continuationReceipt } from '../../shared/continuation-receipt.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isProModel } from '../../shared/chat-models.js';
@@ -653,7 +654,7 @@ async function lastSeqOnDisk(id: string): Promise<number> {
   // almost-full torn line after it. Read enough for both, otherwise the only parseable
   // predecessor can sit outside the tail window and restart would reuse sequence 1.
   const from = Math.max(0, size - (MAX_LINE_BYTES * 2 + 2));
-  const handle = await fs.open(file, 'r');
+  const handle = await openJournal(file);
   try {
     const buffer = Buffer.alloc(size - from);
     await handle.read(buffer, 0, buffer.length, from);
@@ -687,7 +688,7 @@ async function sealTornTail(id: string): Promise<void> {
   try {
     const stat = await fs.stat(file);
     if (stat.size === 0) return;
-    const handle = await fs.open(file, 'r');
+    const handle = await openJournal(file);
     try {
       const buffer = Buffer.alloc(1);
       await handle.read(buffer, 0, 1, stat.size - 1);
@@ -835,7 +836,12 @@ async function rebuildSummaryFromHistory(
         conversationId: event.call.conversationId, attribution: event.call.attribution } } : {}) });
   };
   let carry = Buffer.alloc(0);
-  const handle = await fs.open(path.join(sessionDir(id), 'events.jsonl'), 'r').catch(() => null);
+  const handle = await openJournal(path.join(sessionDir(id), 'events.jsonl')).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // A locked/denied journal is not empty. Publishing a reconstruction from messages
+    // alone would erase durable turn/tool ownership from both metadata checkpoints.
+    throw error;
+  });
   const accept = (line: Buffer): void => {
     if (line.length === 0 || line.length > MAX_LINE_BYTES) return;
     try {
@@ -1278,7 +1284,7 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
         throw new Error('Session event is too large to store');
       }
       try {
-        await fs.appendFile(path.join(sessionDir(sessionId), 'events.jsonl'), line, 'utf8');
+        await appendJournal(path.join(sessionDir(sessionId), 'events.jsonl'), line);
       } catch (error) {
         // Windows/filesystem errors are allowed to be uncertain commits: the write may have
         // reached disk before the promise rejected. Reconcile the authoritative tail before
@@ -1887,7 +1893,7 @@ export async function readEvents(sessionId: string, options: ReadOptions = {}): 
 /** A bounded line scan, including torn/oversized legacy lines and UTF-8 split across blocks. */
 async function scanJournalLines(sessionId: string, accept: (line: string) => void): Promise<number> {
   let handle: Awaited<ReturnType<typeof fs.open>>;
-  try { handle = await fs.open(path.join(sessionDir(sessionId), 'events.jsonl'), 'r'); }
+  try { handle = await openJournal(path.join(sessionDir(sessionId), 'events.jsonl')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
   const block = Buffer.alloc(256 * 1024);
   const empty = Buffer.alloc(0);
@@ -2324,7 +2330,7 @@ async function readRecentEventsFromDisk(
   let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   let cursor = 0;
   try {
-    handle = await fs.open(file, 'r');
+    handle = await openJournal(file);
     cursor = (await handle.stat()).size;
     let bytes = 0;
     let carry = Buffer.alloc(0);
