@@ -2,13 +2,17 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Application update: [OneCode 0.6.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Application update: [OneCode 0.6.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.1)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.0 through the smaller application hotfix; 0.6.0 does not replace the complete installer assets with stale copies.
+The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.1 through the smaller application hotfix; 0.6.1 is intentionally hotfix-only and does not replace the complete installer/AppImage/DEB assets with stale copies.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-**Already installed?** Open **Settings → General → Check for updates → Install when done**. Windows and Linux AppImage installations use OneCode's verified internal update path. A DEB installation remains package-manager-owned and receives the exact DEB download instead of an implicit root-owned mutation. Your profile and saved chats are preserved.
+**Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.6.1
+
+Terminal-storage refusals now include a bounded, sanitized cause while preserving the existing fail-closed rule: if durable terminal custody is unavailable, no command starts. OneCode exposes only known errno categories or already-safe path-free custody diagnostics; raw host paths and retained terminal data stay private. The release ships only verified Windows and Linux application capsules and keeps the minimum compatible complete base at 0.5.9. See [0.6.1 notes](docs/release-notes/v0.6.1.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md).
 
 ## What's new in 0.6.0
 
@@ -141,7 +145,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can find the 0.5.0 engineering evidence in the [release notes](docs/release-notes/v0.5.0.md) and the acceptance record published with this candidate. Historical releases and their acceptance records remain available.
+Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.6.1 release notes](docs/release-notes/v0.6.1.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
