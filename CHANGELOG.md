@@ -2,7 +2,7 @@
 
 ## [0.6.3] — 2026-10-24
 
-Ship the experimental local OneCode API in the stable application channel after native IDE acceptance. IDE chats are isolated per project/thread, JetBrains retrieval/title helper calls are handled locally, prior client transcript is no longer replayed into durable OneCode history, approved IDE projects bind to OneCode's normal direct filesystem workspace, slash controls work through ordinary chat-completion clients, and Gemini completion waits resolve against the canonical response-turn identity. See [0.6.3 release notes](docs/release-notes/v0.6.3.md).
+Ship the experimental local OneCode API in the stable application channel after native IDE acceptance. IDE chats are isolated per project/thread, JetBrains retrieval/title helper calls are handled locally, prior client transcript is no longer replayed into durable OneCode history, approved IDE projects bind to OneCode's normal direct filesystem workspace, slash controls work through ordinary chat-completion clients, and Gemini completion waits resolve against the canonical response-turn identity. The release now carries complete Windows/Linux install artifacts for new users alongside smaller runtime-compatible capsules for existing installations. See [0.6.3 release notes](docs/release-notes/v0.6.3.md).
 
 ## [0.6.2 Beta] — 2026-10-24
 
