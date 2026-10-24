@@ -133,9 +133,9 @@ jobs:
           fi
           GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel beta --platform "$BUILD_PLATFORM" --arch x64 --dir
           if [[ "$BUILD_PLATFORM" == win32 ]]; then
-            node scripts/write-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
+            node scripts/write-hotfix-package.mjs release-beta --base-version "$BASE_VERSION" --preserve-full-checksums
           else
-            node scripts/write-linux-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
+            node scripts/write-linux-hotfix-package.mjs release-beta --base-version "$BASE_VERSION" --preserve-full-checksums
           fi
 
       - name: Package complete Beta release with backward-compatible capsule
@@ -199,9 +199,9 @@ jobs:
           fi
           GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel stable --platform "$BUILD_PLATFORM" --arch x64 --dir
           if [[ "$BUILD_PLATFORM" == win32 ]]; then
-            node scripts/write-hotfix-package.mjs release --base-version "$BASE_VERSION"
+            node scripts/write-hotfix-package.mjs release --base-version "$BASE_VERSION" --preserve-full-checksums
           else
-            node scripts/write-linux-hotfix-package.mjs release --base-version "$BASE_VERSION"
+            node scripts/write-linux-hotfix-package.mjs release --base-version "$BASE_VERSION" --preserve-full-checksums
           fi
 
       - name: Package complete stable release with backward-compatible capsule

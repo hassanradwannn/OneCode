@@ -54,7 +54,7 @@ const sumsFile = path.join(output, 'SHA256SUMS.txt');
 let old = '';
 try { old = await fs.readFile(sumsFile, 'utf8'); } catch { }
 const linuxFull = [`${prefix}-Linux-${runtime.arch}.AppImage`, `${prefix}-Linux-${runtime.arch}.deb`, `${prefix}-Linux-Base-${runtime.arch}.json`];
-const preserveFull = process.argv.includes('--with-appimage');
+const preserveFull = process.argv.includes('--with-appimage') || process.argv.includes('--preserve-full-checksums');
 const filtered = old.split(/\r?\n/).filter(line => line && !line.endsWith('  ' + archive) && !line.endsWith('  ' + manifestName) &&
   (preserveFull || !linuxFull.some(name => line.endsWith('  ' + name))));
 for (const name of [archive, manifestName]) filtered.push((await contract.hash(path.join(output, name))) + '  ' + name);

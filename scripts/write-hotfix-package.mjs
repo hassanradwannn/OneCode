@@ -43,7 +43,8 @@ const manifestName = `${prefix}-Hotfix-${runtime.arch}.json`;
 await fs.writeFile(path.join(output, manifestName), JSON.stringify(manifest));
 const sumsFile = path.join(output, 'SHA256SUMS.txt');
 // A standalone hotfix release must never advertise a stale installer left in release/.
-const old = process.argv.includes('--with-installer') ? await fs.readFile(sumsFile, 'utf8') : '';
+const preserveFull = process.argv.includes('--with-installer') || process.argv.includes('--preserve-full-checksums');
+const old = preserveFull ? await fs.readFile(sumsFile, 'utf8') : '';
 const sums = old.split(/\r?\n/).filter(line => line && !line.endsWith('  '+archive) && !line.endsWith('  '+manifestName));
 for (const name of [archive, manifestName]) sums.push(`${await contract.hash(path.join(output, name))}  ${name}`);
 await fs.writeFile(sumsFile, sums.join('\n') + '\n');
