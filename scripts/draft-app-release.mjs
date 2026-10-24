@@ -27,9 +27,9 @@ function fail(message) {
 function validateInputs() {
   if (!['verify', 'stage', 'upload'].includes(operation)) fail('Choose verify, stage, or upload.');
   if (!/^[0-9a-f]{40}$/.test(sourceRef)) fail('source_ref must be an exact 40 character commit SHA.');
-  if (!['beta-full', 'beta-capsule', 'stable-full', 'stable-capsule', 'stable-release', 'stable-full-backfill'].includes(selectedOperation)) fail('Unsupported app build operation.');
+  if (!['beta-full', 'beta-capsule', 'beta-release', 'beta-full-backfill', 'stable-full', 'stable-capsule', 'stable-release', 'stable-full-backfill'].includes(selectedOperation)) fail('Unsupported app build operation.');
   if (!['win32', 'linux'].includes(platform)) fail('Only Windows x64 and Linux x64 are supported.');
-  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
+  if (selectedOperation === 'beta-capsule' || selectedOperation === 'beta-release' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
     if (!/^\d+\.\d+\.\d+$/.test(baseVersion)) fail('Capsule operations require base_version in X.Y.Z form.');
   } else if (baseVersion) {
     fail('base_version is only valid for capsule operations.');
@@ -105,16 +105,16 @@ async function getRelease(tagName, token) {
 
 async function verifyReleaseTarget(token, metadata) {
   const release = await getRelease(metadata.tag, token);
-  const publishedBackfill = selectedOperation === 'stable-full-backfill';
+  const publishedBackfill = selectedOperation === 'stable-full-backfill' || selectedOperation === 'beta-full-backfill';
   if (publishedBackfill) {
-    if (release.tag_name !== metadata.tag || release.draft !== false || !release.published_at || release.prerelease !== false) {
-      fail('Stable full backfill requires the exact already-published stable release.');
+    if (release.tag_name !== metadata.tag || release.draft !== false || !release.published_at || release.prerelease !== (metadata.channel === 'beta')) {
+      fail('Full backfill requires the exact already-published release on the selected channel.');
     }
   } else if (release.tag_name !== metadata.tag || release.draft !== true || release.published_at !== null || release.prerelease !== (metadata.channel === 'beta')) {
     fail('The requested release must still be an unpublished draft with the exact tag.');
   }
   if (await tagCommit(metadata.tag, token) !== metadata.sha) fail('The release tag no longer points at source_ref.');
-  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
+  if (selectedOperation === 'beta-capsule' || selectedOperation === 'beta-release' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
     const compare = (left, right) => {
       const a = left.split('.').map(Number), b = right.split('.').map(Number);
       for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
@@ -139,7 +139,7 @@ function expectedNames({ version, channel, op = selectedOperation }) {
   }
   if (platform === 'linux') {
     const full = [`${prefix}-Linux-x64.AppImage`, `${prefix}-Linux-x64.deb`, `${prefix}-Linux-Base-x64.json`];
-    return op === 'stable-full' || op === 'stable-release' ? [...full, `${prefix}-Linux-Hotfix-x64.zip`, `${prefix}-Linux-Hotfix-x64.json`] : full;
+    return op === 'beta-release' || op === 'stable-full' || op === 'stable-release' ? [...full, `${prefix}-Linux-Hotfix-x64.zip`, `${prefix}-Linux-Hotfix-x64.json`] : full;
   }
   const full = [
     `${prefix}-Setup-x64.exe`, `${prefix}-Setup-x64.exe.blockmap`,
@@ -147,7 +147,8 @@ function expectedNames({ version, channel, op = selectedOperation }) {
     `${prefix}-Companion-${version}.zip`, 'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip',
     'SKILL.md', 'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', `${prefix}-Base-x64.json`
   ];
-  return op === 'stable-full' || op === 'stable-release' ? [...full, 'OneCode-Hotfix-x64.zip', 'OneCode-Hotfix-x64.json'] : full;
+  return op === 'beta-release' ? [...full, 'OneCode-Beta-Hotfix-x64.zip', 'OneCode-Beta-Hotfix-x64.json']
+    : op === 'stable-full' || op === 'stable-release' ? [...full, 'OneCode-Hotfix-x64.zip', 'OneCode-Hotfix-x64.json'] : full;
 }
 
 function sha256File(file) {
@@ -224,7 +225,7 @@ async function verifyPrepared(metadata) {
   const hotfixName = platform === 'win32'
     ? `${metadata.channel === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Hotfix-x64.json`
     : `${metadata.channel === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Linux-Hotfix-x64.json`;
-  if (capsule || selectedOperation === 'stable-full' || selectedOperation === 'stable-release') {
+  if (capsule || selectedOperation === 'beta-release' || selectedOperation === 'stable-full' || selectedOperation === 'stable-release') {
     const hotfix = JSON.parse(await fs.readFile(path.join(dir, hotfixName), 'utf8'));
     if (hotfix.version !== metadata.version || hotfix.platform !== platform || hotfix.arch !== arch || hotfix.runtime !== runtime.id) {
       fail('Hotfix manifest does not match the packaged runtime and target.');
@@ -233,6 +234,9 @@ async function verifyPrepared(metadata) {
     if (!base || base.runtime !== runtime.id || base.platform !== platform || base.arch !== arch) fail('Hotfix base binding does not match its runtime.');
     if (selectedOperation === 'beta-capsule' && (hotfix.channel !== 'beta' || base.version !== baseVersion || base.channel !== 'beta' || base.tag !== `beta-v${baseVersion}`)) {
       fail('Beta capsule is not bound to the requested published Beta base.');
+    }
+    if (selectedOperation === 'beta-release' && (hotfix.channel !== 'beta' || base.version !== baseVersion || base.channel !== 'beta' || base.tag !== `beta-v${baseVersion}`)) {
+      fail('Beta release compatibility capsule is not bound to the requested published Beta base.');
     }
     if (selectedOperation === 'stable-capsule' && (hotfix.channel && hotfix.channel !== 'stable' || base.version !== baseVersion || base.channel && base.channel !== 'stable' || base.tag && base.tag !== `v${baseVersion}`)) {
       fail('Stable capsule is not bound to the requested published stable base.');

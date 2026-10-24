@@ -23,6 +23,14 @@ gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release 
 
 `stable-capsule` remains available for exceptional hotfix-only releases, but it is no longer the normal stable publication shape. `stable-full-backfill` is a guarded repair operation for adding missing full artifacts to an already-published stable tag without replacing existing assets; do not use it as the normal release workflow.
 
+Beta follows the same delivery policy on its isolated prerelease channel. Normal Beta publication uses `beta-release`: GitHub builds a complete Beta Windows installer and Linux AppImage/DEB plus Beta capsules bound to the oldest intentionally supported published Beta base whose runtime matches. `beta-full-backfill` is the guarded equivalent for adding missing full artifacts to an already-published Beta prerelease without moving the tag or replacing its existing capsule assets. Stable and Beta package identities, updater feeds, profiles, bridge ports and base descriptors remain channel-separated.
+
+```sh
+gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release \
+  -f source_ref=EXACT_40_CHARACTER_COMMIT_SHA -f release_tag=beta-vX.Y.Z \
+  -f operation=beta-release -f base_version=VERIFIED_MINIMUM_BETA_BASE -f platform=all
+```
+
 ## Publish a compatible Windows hotfix
 
 From the canonical checkout, increment the normal three-part application version and matching Companion version, run the relevant focused tests and public verification, commit only the intended paths, push `release`, and freeze the exact 40-character source SHA. Create the exact version tag and an unpublished draft release before dispatching the cloud build.

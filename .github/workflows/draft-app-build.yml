@@ -18,6 +18,8 @@ on:
         options:
           - beta-full
           - beta-capsule
+          - beta-release
+          - beta-full-backfill
           - stable-full
           - stable-capsule
           - stable-release
@@ -42,7 +44,7 @@ permissions:
 jobs:
   build-and-upload:
     name: ${{ matrix.platform }} x64 app release assets
-    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full' || inputs.operation == 'stable-capsule' || inputs.operation == 'stable-release' || inputs.operation == 'stable-full-backfill'
+    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'beta-release' || inputs.operation == 'beta-full-backfill' || inputs.operation == 'stable-full' || inputs.operation == 'stable-capsule' || inputs.operation == 'stable-release' || inputs.operation == 'stable-full-backfill'
     strategy:
       fail-fast: false
       matrix:
@@ -134,6 +136,40 @@ jobs:
             node scripts/write-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
           else
             node scripts/write-linux-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
+          fi
+
+      - name: Package complete Beta release with backward-compatible capsule
+        if: inputs.operation == 'beta-release'
+        working-directory: app-source
+        shell: bash
+        run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
+          GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel beta --platform "$BUILD_PLATFORM" --arch x64
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            node scripts/prepare-windows-release.mjs release-beta --full-only
+            node scripts/write-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
+          else
+            node scripts/prepare-linux-release.mjs release-beta --full-only
+            node scripts/write-linux-hotfix-package.mjs release-beta --base-version "$BASE_VERSION"
+          fi
+
+      - name: Backfill complete Beta artifacts on an existing prerelease
+        if: inputs.operation == 'beta-full-backfill'
+        working-directory: app-source
+        shell: bash
+        run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
+          GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel beta --platform "$BUILD_PLATFORM" --arch x64
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            node scripts/prepare-windows-release.mjs release-beta --full-only
+          else
+            node scripts/prepare-linux-release.mjs release-beta --full-only
           fi
 
       - name: Package stable full release
