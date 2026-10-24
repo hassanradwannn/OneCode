@@ -32,6 +32,7 @@ export interface CompletedExecSpoolRecord {
   pendingOutput: string;
   /** Bytes included in the initial exec response, separate from later background receipts. */
   initialOutputOffset?: number;
+  outputOffsetBasis?: 'display';
   outputSha256: string;
   rawOmittedBytes: number;
   displayOmittedBytes: number;
@@ -409,7 +410,16 @@ export class MemoryExecSpool implements ExecSpool {
 
 function validateRecord(value: unknown): CompletedExecSpoolRecord {
   if (!value || typeof value !== 'object') throw new Error('invalid record');
-  const row = value as Partial<CompletedExecSpoolRecord>;
+  let row = value as Partial<CompletedExecSpoolRecord>;
+  // Older batch captures stored a raw-byte cursor against filtered display bytes.
+  // Preserve both streams and reoffer output from zero only for this proved legacy
+  // representation. This neither replays commands nor acknowledges unseen output.
+  if (row.outputOffsetBasis === undefined && typeof row.rawOutput === 'string' &&
+      typeof row.displayOutput === 'string' && row.displayOutput === row.pendingOutput &&
+      row.rawOutput !== row.displayOutput && Number.isSafeInteger(row.initialOutputOffset) &&
+      row.initialOutputOffset! >= 0 && row.initialOutputOffset! <= Buffer.from(row.rawOutput, 'base64').length) {
+    row = { ...row, initialOutputOffset: 0, outputOffsetBasis: 'display' };
+  }
   if (row.version !== EXEC_SPOOL_VERSION || !Number.isSafeInteger(row.processId) ||
       !Number.isSafeInteger(row.incarnation) || !['anonymous', 'request', 'session'].includes(row.ownerKind ?? '') ||
       !(row.principal === null || typeof row.principal === 'string') ||
@@ -424,6 +434,7 @@ function validateRecord(value: unknown): CompletedExecSpoolRecord {
       (row.outputCaptureIncomplete !== undefined && typeof row.outputCaptureIncomplete !== 'boolean') ||
       (!row.outputClosed && row.outputInterrupted !== true) || (row.outputClosed && row.outputInterrupted === true) ||
       (row.provider !== undefined && row.provider !== 'chatgpt' && row.provider !== 'gemini') ||
+      (row.outputOffsetBasis !== undefined && row.outputOffsetBasis !== 'display') ||
       typeof row.rawOutput !== 'string' || typeof row.pendingOutput !== 'string' ||
       (row.displayOutput !== undefined && typeof row.displayOutput !== 'string') ||
       typeof row.outputSha256 !== 'string' || !Number.isSafeInteger(row.rawOmittedBytes) ||

@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Anbieter"
+  },
+  "content_connector_mismatch": {
+    "message": "Connector stimmt nicht überein"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "Diese Genehmigung nennt „$1“; die Einrichtung erwartet „$2“. Automatisches Zulassen ist für diese Karte pausiert. Prüfe und aktualisiere den Connector in der Einrichtung."
   }
 }

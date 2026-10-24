@@ -40,6 +40,7 @@ import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish
 import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
 import { validateInputImages } from './session/input-images.js';
 import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
+import { approveFolder, applyWrittenFolderApproval } from './root-approval.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -100,7 +101,7 @@ import { listOfferedWorkerWorktrees, disposeOfferedWorkerWorktree, WorkerWorktre
 import type { WorkerWorktreeCleanupOffer } from '../shared/session.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { inFlightToolCalls } from './mcp/call-context.js';
-import { RESERVED_ROOT_NAMES, uniqueRootName, validateNewRoot, SandboxError, resolvePath } from './sandbox.js';
+import { RESERVED_ROOT_NAMES, SandboxError, resolvePath } from './sandbox.js';
 import { addProject, expireArmedProjectCreates, getSessionProject, listProjects, onProjectLinkChange, projectWorkspace, removeProject, retryProjectCreate, setProjectColor } from './projects.js';
 import { createProjectEntry, listProjectDirectory, previewProjectFile, projectFileTarget, renameProjectEntry, revalidateProjectFileTarget, saveProjectTextFile } from './project-files.js';
 import { ProjectFileWatchSet } from './project-file-watcher.js';
@@ -909,15 +910,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
 
   /** Approves one folder by path. The picker dialog and the drop zone both end here. */
   const approveRoot = async (folderPath: string): Promise<AppState> => {
-    let addedName = '';
-    await updateConfig(async (config) => {
-      const real = await validateNewRoot(folderPath, config.roots);
-      const name = uniqueRootName(real, config.roots);
-      addedName = name;
-      return { ...config, roots: [...config.roots, { name, path: real }] };
-    });
-    logInfo(`approved folder /${addedName}`);
-    return buildState();
+    await approveFolder(folderPath);
+    const state = await buildState();
+    push('state:changed', state);
+    return state;
   };
 
   handle('roots:add', async () => {
@@ -1766,6 +1762,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const input = inputArgs.parse(payload);
     try { logInfo('main window send received'); } catch { /* Diagnostics cannot reject or replay a Send. */ }
     await validateInputImages(input.images ?? []);
+    if ((input.authoredSource ?? 'text') === 'text' && !input.stages?.length &&
+        !input.images?.length && !input.attachments?.length && await applyWrittenFolderApproval(input.text)) {
+      push('state:changed', await buildState());
+    }
     const accepted = await sendDesktopInput(input);
     try { logInfo('main window send admitted'); } catch { /* Admission already belongs to the outbox. */ }
     return accepted;

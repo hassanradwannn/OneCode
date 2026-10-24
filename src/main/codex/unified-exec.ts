@@ -801,6 +801,8 @@ interface ProcessEntry {
   setupProfileId?: string | null;
   initialExecCommandActive: boolean;
   initialOutputOffset?: number;
+  initialOutputSha256?: string;
+  collectedOutputOffset?: number;
   /** Cursor into this process's own completed buffer; offers never consume bytes. */
   delivery?: { offset: number; offer?: { end: number; publication: OutputPublication } };
 }
@@ -829,6 +831,16 @@ export interface BackgroundExecState {
 }
 
 export class UnifiedExecProcessManager {
+  private readonly spawnFlights = new Map<number, { done: Promise<void>; settle: () => void }>();
+  private readonly terminationSlots = Array.from({ length: 4 }, () => Promise.resolve());
+  private terminationSlot = 0;
+
+  private terminateChild(process: UnifiedExecProcess): Promise<boolean> {
+    const slot = this.terminationSlot++ % this.terminationSlots.length;
+    const operation = this.terminationSlots[slot]!.then(() => process.terminate());
+    this.terminationSlots[slot] = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
   private readonly processes = new Map<number, ProcessEntry>();
   private readonly completed = new Map<number, Pick<ExecCommandToolOutput, 'rawOutput' | 'displayOutput' | 'exitCode' | 'benignExit'> & { identity: object }>();
   private releaseListener?: (processId: number) => void;
@@ -1031,6 +1043,10 @@ export class UnifiedExecProcessManager {
     const raw = entry.process.retainedOutput();
     const display = entry.process.retainedDisplayOutput();
     const pending = pendingOverride ?? entry.process.completedOutput() ?? Buffer.alloc(0);
+    const initialOffset = entry.initialOutputOffset === undefined ? undefined
+      : entry.initialOutputOffset <= pending.length && entry.initialOutputSha256 ===
+        createHash('sha256').update(pending.subarray(0, entry.initialOutputOffset)).digest('hex')
+        ? entry.initialOutputOffset : 0;
     return {
       version: 1,
       processId: entry.processId,
@@ -1054,7 +1070,8 @@ export class UnifiedExecProcessManager {
       rawOutput: raw.toString('base64'),
       ...(display.equals(raw) ? {} : { displayOutput: display.toString('base64') }),
       pendingOutput: pending.toString('base64'),
-      ...(entry.initialOutputOffset === undefined ? {} : { initialOutputOffset: entry.initialOutputOffset }),
+      outputOffsetBasis: 'display',
+      ...(initialOffset === undefined ? {} : { initialOutputOffset: initialOffset }),
       outputSha256: createHash('sha256').update(raw).digest('hex'),
       rawOmittedBytes: entry.process.rawOmittedBytes(),
       displayOmittedBytes: entry.process.displayOmittedBytes(),
@@ -1092,6 +1109,12 @@ export class UnifiedExecProcessManager {
     }
     await this.spool.removeLive(entry.processId, entry.incarnation);
     this.spooled.set(entry.processId, record);
+    // A completed exec/write_stdin response can already own this result publication while
+    // asynchronous capture is moving the live entry into the durable spool. Keep that exact
+    // response receipt with the row; otherwise the next call has nothing it can acknowledge
+    // and the already-returned completion remains stuck in exitedUnread forever.
+    const publicationOffer = entry.delivery?.offer;
+    if (publicationOffer) this.spoolOffers.set(entry.processId, publicationOffer);
     this.liveOperations.delete(entry.processId);
     this.allocations.delete(entry.processId);
     this.checkpointFlights.delete(entry.processId);
@@ -1234,6 +1257,18 @@ export class UnifiedExecProcessManager {
   }
 
   async execCommand(request: ExecCommandRequest): Promise<ExecCommandToolOutput> {
+    let settle!: () => void;
+    const done = new Promise<void>(resolve => { settle = resolve; });
+    const flight = { done, settle };
+    this.spawnFlights.set(request.processId, flight);
+    try { return await this.execCommandImpl(request); }
+    finally {
+      settle();
+      if (this.spawnFlights.get(request.processId) === flight) this.spawnFlights.delete(request.processId);
+    }
+  }
+
+  private async execCommandImpl(request: ExecCommandRequest): Promise<ExecCommandToolOutput> {
     let process: UnifiedExecProcess;
     try {
       await this.ensureSpoolReady();
@@ -1296,7 +1331,7 @@ export class UnifiedExecProcessManager {
       // Stop may arrive while the native spawn promise is still pending. Once it yields the
       // exact child handle, terminate that incarnation before exposing it as an ordinary run.
       if (this.cancelBeforeSpawnReturns.delete(request.processId)) {
-        const confirmed = await process.terminate();
+        const confirmed = await this.terminateChild(process);
         if (confirmed && wslRecord) await this.terminateWslCustody(wslRecord, false, true);
         if (!confirmed) this.unconfirmedTerminationIncarnations.set(request.processId, incarnation);
         if (!confirmed && wslRecord) {
@@ -1342,6 +1377,9 @@ export class UnifiedExecProcessManager {
         () => { this.notifyProcessChange(); void this.captureExitedEntry(entry); },
         () => { this.notifyProcessChange(); void this.captureExitedEntry(entry); }
       );
+      // Shutdown may have seen the durable pre-spawn reservation before this child existed.
+      // Once registered, the ordinary exact-process shutdown path can own it.
+      this.spawnFlights.get(request.processId)?.settle();
     }
 
     const deadline = start + clampYieldTime(request.yieldTimeMs);
@@ -1353,7 +1391,9 @@ export class UnifiedExecProcessManager {
     if (processStartedAlive) {
       const entry = this.processes.get(request.processId);
       if (entry?.process === process) {
-        entry.initialOutputOffset = rawOutput.length;
+        // Delivery cursors index the filtered stream returned by completedOutput().
+        entry.initialOutputOffset = visible.toBytesWithOmissionMarker().length;
+        entry.initialOutputSha256 = createHash('sha256').update(visible.toBytesWithOmissionMarker()).digest('hex');
         entry.delivery = { offset: entry.initialOutputOffset };
       }
     }
@@ -1390,7 +1430,9 @@ export class UnifiedExecProcessManager {
         hookCommand: request.hookCommand, tty: request.tty, startedAt: start, ownerPrincipal: request.ownerPrincipal ?? null,
         provider: request.provider, requestId: request.requestId, sessionId: request.sessionId,
         conversationId: request.conversationId, setupProfileId: request.setupProfileId,
-        incarnation, initialExecCommandActive: false, classifyExit: request.classifyExit, batchMarker: request.batchMarker };
+        incarnation, initialExecCommandActive: false, initialOutputOffset: visible.toBytesWithOmissionMarker().length,
+        initialOutputSha256: createHash('sha256').update(visible.toBytesWithOmissionMarker()).digest('hex'),
+        classifyExit: request.classifyExit, batchMarker: request.batchMarker };
       this.processes.set(request.processId, entry);
       if (!process.outputClosed && !process.outputInterrupted &&
           !await process.waitForOutputClosed(POST_EXIT_CLOSE_WAIT_CAP_MS)) await process.terminate();
@@ -1548,8 +1590,12 @@ export class UnifiedExecProcessManager {
       // An explicit poll may replay an offered-but-unacknowledged page, but must not
       // repeat earlier pages that this caller has already acknowledged automatically.
       const deliveredOffset = current.delivery?.offset ?? 0;
-      const rawOutput = deliveredOffset > 0
-        ? visible.toBytesWithOmissionMarker().subarray(deliveredOffset)
+      const collectedStart = current.collectedOutputOffset ?? current.initialOutputOffset ?? 0;
+      const visibleBytes = visible.toBytesWithOmissionMarker();
+      current.collectedOutputOffset = collectedStart + visibleBytes.length;
+      const skip = Math.max(0, deliveredOffset - collectedStart);
+      const rawOutput = skip > 0
+        ? visibleBytes.subarray(skip)
         : collected.raw.toBytesWithOmissionMarker();
       const chunkId = generateChunkId();
 
@@ -1583,7 +1629,7 @@ export class UnifiedExecProcessManager {
         chunkId,
         wallTimeMs,
         rawOutput,
-        ...(collected.display ? { displayOutput: deliveredOffset > 0 ? rawOutput : collected.display.toBytesWithOmissionMarker() } : {}),
+        ...(collected.display ? { displayOutput: skip > 0 ? rawOutput : visibleBytes } : {}),
         truncationPolicy: request.truncationPolicy,
         maxOutputTokens: request.maxOutputTokens,
         processId: responseProcessId,
@@ -1675,6 +1721,56 @@ export class UnifiedExecProcessManager {
       running: running.sort((left, right) => left - right),
       exitedUnread: exitedUnread.sort((left, right) => left.processId - right.processId)
     };
+  }
+
+  /**
+   * Bind output returned by exec_command/write_stdin itself to the transport response that
+   * carried it. The following owner call can then acknowledge that exact publication through
+   * the same durable cursor used by appended background-result pages.
+   *
+   * An exec may have returned only the prefix collected before a formerly-running process
+   * finished, so it offers only initialOutputOffset. An explicit completed poll returns the
+   * remaining retained result and therefore offers through the end of the pending buffer.
+   */
+  async noteCompletedOutputPublication(
+    processId: number,
+    publication: OutputPublication,
+    source: 'exec' | 'poll'
+  ): Promise<boolean> {
+    if (publication.failed) return false;
+    const offerSpooled = (): boolean => {
+      const record = this.spooled.get(processId);
+      if (!record) return false;
+      const prior = this.spoolOffers.get(processId);
+      if (prior && !prior.publication.failed) return false;
+      const total = Buffer.from(record.pendingOutput, 'base64').length;
+      const end = source === 'poll'
+        ? total
+        : Math.min(total, record.initialOutputOffset ?? total);
+      this.spoolOffers.set(processId, { end, publication });
+      return true;
+    };
+    if (offerSpooled()) return true;
+    const entry = this.processes.get(processId);
+    if (!entry) return offerSpooled();
+    const release = await entry.process.interactionLock.lock();
+    try {
+      // Capture uses this same lock. If it won the race while the tool response was being
+      // assembled, bind the receipt to the newly durable row instead of losing the receipt.
+      if (this.spooled.has(processId)) return offerSpooled();
+      if (this.processes.get(processId) !== entry || entry.initialExecCommandActive) return false;
+      const output = entry.process.completedOutput();
+      if (output === null) return false;
+      const delivery = entry.delivery ??= { offset: entry.initialOutputOffset ?? 0 };
+      if (delivery.offer && !delivery.offer.publication.failed) return false;
+      const end = source === 'poll'
+        ? output.length
+        : entry.initialOutputOffset !== undefined && entry.initialOutputOffset <= output.length &&
+          entry.initialOutputSha256 === createHash('sha256').update(output.subarray(0, entry.initialOutputOffset)).digest('hex')
+          ? entry.initialOutputOffset : 0;
+      delivery.offer = { end, publication };
+      return true;
+    } finally { release(); }
   }
 
   /** Exited rows not handled by the starting exec; polling releases these rows. */
@@ -1840,6 +1936,9 @@ export class UnifiedExecProcessManager {
   }
 
   async terminateAllProcesses(): Promise<void> {
+    const spawning = [...this.spawnFlights];
+    for (const [id] of spawning) if (!this.processes.has(id)) this.cancelBeforeSpawnReturns.add(id);
+    await Promise.all(spawning.map(([, flight]) => flight.done));
     const entries = [...this.processes.values()];
     // This cache contains only results whose output was already acknowledged. Keep unread
     // durable spool records and their custody across a forced update or app shutdown.
@@ -1848,11 +1947,11 @@ export class UnifiedExecProcessManager {
     this.notifyProcessChange();
     // Handle every process independently so one kill or disk error cannot leave the rest
     // running. A failed commit deliberately leaves that process and its reservation visible.
-    const results = await Promise.allSettled(entries.map(async (entry) => {
+    const stopEntry = async (entry: ProcessEntry) => {
       if (this.processes.get(entry.processId) !== entry) return { processId: entry.processId, confirmed: true };
       // An exited leader can still have descendants holding inherited output pipes open.
       // Ask the process-tree helper to close those pipes before waiting on the spool boundary.
-      const confirmed = !entry.process.hasExited() && !entry.process.outputClosed
+      const confirmed = !entry.process.hasExited() || !entry.process.outputClosed
         ? await entry.process.terminate() : true;
       if (!confirmed && this.wslCustody?.get(entry.processId, entry.incarnation)) {
         this.wslLeaderExitUnconfirmed.add(entry.processId);
@@ -1861,7 +1960,12 @@ export class UnifiedExecProcessManager {
       }
       await this.sealExitedEntry(entry, true);
       return { processId: entry.processId, confirmed };
-    }));
+    };
+    // Launching a taskkill helper for every terminal at once can exhaust its own
+    // confirmation deadline under load. Keep independent exact stops bounded.
+    const results: PromiseSettledResult<{ processId: number; confirmed: boolean }>[] = [];
+    for (let index = 0; index < entries.length; index += 4)
+      results.push(...await Promise.allSettled(entries.slice(index, index + 4).map(stopEntry)));
     const failed = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failed.length > 0) {
       throw new Error(`${failed.length} terminal session(s) could not be safely sealed during shutdown; their reservations remain held.`);

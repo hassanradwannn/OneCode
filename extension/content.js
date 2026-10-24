@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 69;
+  const RECORDER_VERSION = 70;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -2154,8 +2154,21 @@
     const current = () => alive && epoch === heldEpoch && conversationId === target && CLF_DOM.conversationId() === target && turnId === expected;
     if (!current()) return false;
     if (stoppedAppCommands.has(commandId)) {
-      await ask({ type: 'stop_ack', id: commandId, client: RUN_ID, conversationId: target, turnId: expected, status: 'sent' });
-      return true;
+      // Explicit Stop remains pending until the provider actually ends the exact turn. If an
+      // exact later tool call proved that same turn continued, the activity feed clears
+      // stopRequestedAt. The page itself is also positive evidence after the normal settle
+      // window: if this exact turn is still visibly generating four seconds after the click,
+      // the click plainly did not stop it. Let the unchanged command click Stop again, bounded
+      // by that settle window, instead of treating the old click ACK as completion. A
+      // continuation-owned Stop keeps its one-shot semantics because its transaction owns the
+      // terminal boundary separately.
+      const explicitStopStillRunning = !request?.continuationInputId && generating &&
+        (!stopRequestedAt || Date.now() - stopRequestedAt >= TURN_SETTLE_MS);
+      if (explicitStopStillRunning) stoppedAppCommands.delete(commandId);
+      else {
+        await ask({ type: 'stop_ack', id: commandId, client: RUN_ID, conversationId: target, turnId: expected, status: 'sent' });
+        return true;
+      }
     }
     // The app asks to stop a turn this page already ended as stopped and that late work reopened,
     // whether or not this page follows it again (see stoppedEnd). With ChatGPT idle there is

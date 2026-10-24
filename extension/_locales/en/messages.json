@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Provider"
+  },
+  "content_connector_mismatch": {
+    "message": "Connector mismatch"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "This approval names “$1”; Setup expects “$2”. Auto-allow is paused for this card. Check and refresh the connector in Setup."
   }
 }

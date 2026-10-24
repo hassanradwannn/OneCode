@@ -4,6 +4,7 @@ import { CHAT_PROVIDERS, chatProviderForConversation } from '../../shared/chat-p
 import { REASONING_EFFORTS } from '../../shared/session.js';
 import { getSession, renameSession } from '../session/store.js';
 import { sendDesktopInput, cancelDesktopInput } from '../session/start-input.js';
+import { applyWrittenFolderApproval } from '../root-approval.js';
 import { listInputs } from '../session/input.js';
 import { ensureSelectedChatReady, sessionControlsFor, stopSessionTurn } from '../bridge.js';
 import { getChatModels, startChatModelDiscovery } from '../chat-models.js';
@@ -62,13 +63,15 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
     const project = await getProject(body.projectId);
     if (!project || (!session && project.ungrouped)) throw new Error('This project is unavailable.');
   }
-  const activeTurnId = session ? (await sessionControlsFor(session.id)).activeTurnId : null;
+  const controls = session ? await sessionControlsFor(session.id) : null;
+  const activeTurnId = controls?.unfinishedTurnId ?? controls?.activeTurnId ?? null;
   if ((activeTurnId ?? null) !== body.expectedTurnId) throw new Error('Task state changed. Refresh before sending.');
   if (body.model) {
     const model = resolveChatModel(getChatModels(body.provider).models, body.model);
     if (!model || (body.reasoningEffort && !model.efforts.includes(body.reasoningEffort))) throw new Error('Refresh models and choose an available model and thinking effort.');
   } else if (body.reasoningEffort) throw new Error('Select a model before choosing thinking effort.');
   if (body.automation === 'goal' && body.text.length > 16_000) throw new Error('Keep a new Goal objective below 16,000 characters.');
+  if (!body.plan && !body.attachments?.length) await applyWrittenFolderApproval(text);
   const input = await sendDesktopInput({ id: body.id, sessionId: body.sessionId, provider: body.provider, text,
     ...(body.projectId ? { projectId: body.projectId } : {}),
     ...(body.automation ? { automation: body.automation } : {}),

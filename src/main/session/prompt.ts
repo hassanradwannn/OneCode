@@ -37,7 +37,7 @@ function geminiOpeningInstructions(): string {
     config.mcp.useGeminiWebSkill === true ? '@onecode-gemini' : 'Use the connected OneCode tools. Their schemas carry usage rules; plugins action=list discovers enabled MCPs. Verify results; do not replay uncertain mutations.',
     ...(effectiveCapabilities(config).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(pluginManager.tools().length ? [pluginDiscoveryInstructions(configuredConnectorName('core'), 'gemini')] : []),
-    `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
+    `Platform: ${process.platform}. Approved roots now: ${config.roots.map(root => `/${root.name} (${root.path})`).join(', ') || 'none'}. Folder grants apply immediately; cached lists may be stale.`,
     'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
     ...(effectiveCapabilities(config).read ? ['Local skills: read /skills/.catalog.json, then the chosen SKILL.md.', 'Local chat history: read /sessions/.catalog.json, then the relevant history.md.'] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
@@ -50,7 +50,7 @@ function chatgptSkillInstructions(): string {
   return [
     'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
     `Use the onecode-chatgpt skill installed in the ChatGPT browser backend; do not look for it in the local /skills catalog. Current OneCode connector: ${JSON.stringify(configuredConnectorName('core'))}.`,
-    `Platform: ${process.platform}. Approved roots: ${config.roots.map(root => `/${root.name}`).join(', ') || 'none'}.`,
+    `Platform: ${process.platform}. Approved roots now: ${config.roots.map(root => `/${root.name} (${root.path})`).join(', ') || 'none'}. Folder-picker grants apply immediately to existing chats and workers; an older prompt or cached tool description is not the current root list.`,
     ...(effectiveCapabilities(config).read ? ['Live local references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.'] : []),
     ...(pluginManager.tools().length ? ['Discover enabled integrations through Core plugins {action:"list"}; use returned schemas and the live plugin bridge for Computer use.'] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])

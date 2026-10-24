@@ -92,14 +92,17 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   const [appearance, setAppearance] = useState(loadAppearance);
   const [mode, setMode] = useState<'off' | 'goal' | 'loop'>('off'), [modeChanged, setModeChanged] = useState(false);
   const [attachments, setAttachments] = useState<InputAttachment[]>([]), [uploading, setUploading] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{ id: string; name: string; src: string } | null>(null), [previewingAttachment, setPreviewingAttachment] = useState<string | null>(null);
   const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string }>>([]), [showSkills, setShowSkills] = useState(false);
   const [focusOpenId, setFocusOpenId] = useState<string | null>(null);
   const [nextBefore, setNextBefore] = useState<number | null>(null), [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [earlierFailed, setEarlierFailed] = useState(false);
+  const earlierFlight = useRef<object | null>(null);
   const [skillsLoaded, setSkillsLoaded] = useState(false), [skillsLoading, setSkillsLoading] = useState(false), [modelEdited, setModelEdited] = useState(false);
   type PlanDraft = { key: string; text: string; stages: string[] | null; requestId: string | null; busy: boolean; error: string; unconfirmed?: boolean };
   const [plan, setPlan] = useState<PlanDraft | null>(null), plans = useRef(new Map<string, PlanDraft>());
   const input = useRef<HTMLTextAreaElement>(null);
-  const files = useRef<HTMLInputElement>(null), attachmentDrafts = useRef(new Map<string, InputAttachment[]>());
+  const files = useRef<HTMLInputElement>(null), addMenu = useRef<HTMLDetailsElement>(null), attachmentDrafts = useRef(new Map<string, InputAttachment[]>());
   const saveAppearance = (value: RemoteAppearance) => { setAppearance(value); try { localStorage.setItem('onecode-remote-appearance', JSON.stringify(value)); } catch { /* in-memory preference */ } };
   const selectedRef = useRef(selected), draftRef = useRef(draft), drafts = useRef(new Map<string, string>()), pane = useRef<HTMLDivElement>(null), following = useRef(true), boot = useRef(bootstrap);
   const composerKey = selected ?? `new:${newProject ?? ''}`;
@@ -164,9 +167,14 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     void poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [selected]);
   useEffect(() => { if (following.current && boot.current?.preferences.followOutput !== false) pane.current?.scrollTo({ top: pane.current.scrollHeight }); }, [events, optimistic]);
+  useEffect(() => {
+    const node = pane.current;
+    if (selected && nextBefore !== null && !loadingEarlier && !earlierFailed && node && node.scrollHeight <= node.clientHeight + 96) void loadEarlier();
+  }, [selected, nextBefore, loadingEarlier, earlierFailed, events.length]);
   function select(id: string | null, projectId: string | null = null): void {
     const nextKey = id ?? `new:${projectId ?? ''}`;
     setNewProject(projectId);
+    earlierFlight.current = null; setEarlierFailed(false);
     setFocusOpenId(null);
     attachmentDrafts.current.set(composerKey, attachments); setAttachments(attachmentDrafts.current.get(nextKey) ?? []); setMode('off'); setModeChanged(false);
     drafts.current.set(composerKey, draft); setSelected(id); setDetail(null); setEvents([]); setNextBefore(null); setLoadingEarlier(false); setNotice(''); setPlan(plans.current.get(nextKey) ?? null); setDraft(drafts.current.get(nextKey) ?? ''); setView('chat'); setModel(''); setEffort(''); setModelEdited(false); setEditing(false); following.current = true;
@@ -176,6 +184,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   }
   const currentDetail = detail?.session.id === selected ? detail : null;
   const summary = currentDetail?.session ?? sessions.find(row => row.id === selected), activeTurn = currentDetail?.live?.activeTurnId ?? null;
+  const unfinishedTurn = currentDetail?.live?.unfinishedTurnId ?? activeTurn;
   const actualProvider = selected ? summary?.provider ?? null : provider;
   const actualMode = modeChanged || !selected ? mode : (['goal', 'loop'].includes(currentDetail?.live?.automation ?? '') ? currentDetail!.live!.automation as 'goal' | 'loop' : 'off');
   const catalog = bootstrap?.providers.find(row => row.id === actualProvider);
@@ -198,9 +207,9 @@ function Workspace({ disconnect }: { disconnect(): void }) {
     const id = crypto.randomUUID(), target = selected, targetKey = composerKey; pendingTarget.current = targetKey; pendingDraft.current = draft; setSending(true); setError(''); setPending(id);
     setOptimistic(rows => [...rows, { id, sessionId: target, composerKey: targetKey, text: draft.trim(), state: 'sending' }]);
     try {
-      const result = await action<{ input: ControlApiInput }>({ action: 'send', id, sessionId: selected, projectId: selected ? summary?.projectId ?? null : newProject, provider: actualProvider, text: draft.trim(), model: model || null, reasoningEffort: effort || null, expectedTurnId: activeTurn,
+      const result = await action<{ input: ControlApiInput }>({ action: 'send', id, sessionId: selected, projectId: selected ? summary?.projectId ?? null : newProject, provider: actualProvider, text: draft.trim(), model: model || null, reasoningEffort: effort || null, expectedTurnId: unfinishedTurn,
         ...(modeChanged || !selected ? { automation: actualMode } : {}), ...(attachments.length ? { attachments } : {}), ...(activePlan?.stages ? { plan: activePlan.stages } : {}),
-        afterTurn: !!activeTurn && bootstrap?.preferences.followUp === 'queue' });
+        afterTurn: !!unfinishedTurn && bootstrap?.preferences.followUp === 'queue' });
       setOptimistic(rows => rows.map(row => row.id === id ? { ...row, sessionId: result.input.deliveredSessionId ?? result.input.sessionId, receipt: result.input, state: 'accepted' } : row));
       retireSubmittedDraft(drafts.current, attachmentDrafts.current, targetKey, pendingDraft.current);
       if (composerKeyRef.current === targetKey) { if (draftRef.current === pendingDraft.current) { setDraft(''); drafts.current.delete(targetKey); setAttachments([]); attachmentDrafts.current.delete(targetKey); } if (result.input.sessionId) setSelected(result.input.sessionId); }
@@ -255,6 +264,7 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   }, [completion.visible, skillsLoaded]);
   const upload = async (chosen: FileList | null) => {
     if (!chosen?.length || uploading) return;
+    if (addMenu.current) addMenu.current.open = false;
     const targetKey = composerKey; setUploading(true); setError('');
     try {
       if (attachments.length + chosen.length > 20) throw new Error('Attach up to 20 files per message');
@@ -268,27 +278,54 @@ function Workspace({ disconnect }: { disconnect(): void }) {
       else attachmentDrafts.current.set(targetKey, [...(attachmentDrafts.current.get(targetKey) ?? []), ...uploaded]);
     } catch (error) { setError((error as Error).message); } finally { setUploading(false); if (files.current) files.current.value = ''; }
   };
-  const taskRow = (session: RemoteSession) => <button key={session.id} className={`task ${selected === session.id ? 'active' : ''}`} onClick={() => select(session.id)} title={session.title || 'Untitled chat'}><strong>{session.title || 'Untitled chat'}</strong></button>;
+  const previewAttachment = async (file: InputAttachment) => {
+    if (!file.mimeType.startsWith('image/') || previewingAttachment === file.id) return;
+    setPreviewingAttachment(file.id); setError('');
+    if (file.preview) setAttachmentPreview({ id: file.id, name: file.name, src: file.preview });
+    try {
+      const src = await request<string | null>(`attachments/${encodeURIComponent(file.id)}/preview`);
+      if (src) setAttachmentPreview({ id: file.id, name: file.name, src });
+      else if (!file.preview) throw new Error('This image preview is unavailable.');
+    } catch (error) { if (!file.preview) setError((error as Error).message); }
+    finally { setPreviewingAttachment(null); }
+  };
+  const loadEarlier = async (retry = false) => {
+    if (!selected || nextBefore === null || earlierFlight.current || loadingEarlier || (earlierFailed && !retry)) return;
+    const flight = {}; earlierFlight.current = flight; setEarlierFailed(false);
+    const target = selected, before = nextBefore, node = pane.current, height = node?.scrollHeight ?? 0, top = node?.scrollTop ?? 0;
+    following.current = false; setLoadingEarlier(true);
+    try {
+      const page = await request<ControlApiEvents>(`sessions/${encodeURIComponent(target)}/events?before=${before}&limit=100`);
+      if (selectedRef.current !== target || earlierFlight.current !== flight) return;
+      setEvents(rows => mergeHistory(rows, page.events)); setNextBefore(page.nextBefore ?? null);
+      requestAnimationFrame(() => { if (pane.current && selectedRef.current === target) pane.current.scrollTop = top + pane.current.scrollHeight - height; });
+    } catch (error) { if (selectedRef.current === target && earlierFlight.current === flight) { setEarlierFailed(true); setError((error as Error).message); } }
+    finally {
+      if (earlierFlight.current === flight) { earlierFlight.current = null; if (selectedRef.current === target) setLoadingEarlier(false); }
+    }
+  };
+  const taskRow = (session: RemoteSession) => {
+    const workers = sessions.filter(row => row.origin?.kind === 'worker' && row.origin.fromSessionId === session.id);
+    const row = <button className={`task ${selected === session.id ? 'active' : ''}`} onClick={() => select(session.id)} title={session.title || 'Untitled chat'}><strong>{session.title || 'Untitled chat'}</strong></button>;
+    if (!workers.length) return <div className="task-family" key={session.id}>{row}</div>;
+    return <details className="task-family worker-family" key={session.id}><summary><span className="task-family-main" onClick={event => { event.preventDefault(); select(session.id); }}>{session.title || 'Untitled chat'}</span><span className="worker-count">{workers.length}</span><Icon name="chevron" /></summary>
+      <div className="worker-list">{workers.map(worker => <button key={worker.id} className={`task worker-task ${selected === worker.id ? 'active' : ''}`} onClick={() => select(worker.id)} title={worker.title || worker.origin?.agentId || 'Worker'}><strong>{worker.origin?.agentId ? `${worker.origin.agentId} · ` : ''}{worker.title || 'Worker'}</strong></button>)}</div></details>;
+  };
+  const visibleSessions = (rows: RemoteSession[]) => rows.filter(session => !(session.origin?.kind === 'worker' && session.origin.fromSessionId && sessions.some(parent => parent.id === session.origin!.fromSessionId)));
   if (!bootstrap) return <main className="pair"><h1>Loading OneCode…</h1><p role="alert">{error}</p><button onClick={() => location.reload()}>Reconnect</button></main>;
   return <div className="app" data-view={view} data-theme={bootstrap.preferences.theme} data-remote-theme={appearance.theme} data-text-size={appearance.textSize}><header className="top"><div className="brand">◈ OneCode <small>Remote</small></div><span className={connected ? 'connected' : 'muted'}>{connected ? '●' : '○'} {bootstrap.host} · {connected ? 'Connected' : 'Reconnecting'}</span></header><div className="body">
     <aside className={view === 'tasks' ? 'visible' : ''}><button onClick={() => select(null)}>＋ New chat</button>
       <div className="task-list">{(bootstrap.projects ?? []).map(project => <details className="project-group" key={project.id} open data-project-color={project.color}>
         <summary><span>{project.name}</span><button aria-label={`New chat in ${project.name}`} onClick={event => { event.preventDefault(); select(null, project.id); }}>＋</button></summary>
-        {sessions.filter(session => session.projectId === project.id).map(taskRow)}
-      </details>)}<p className="eyebrow">Chats</p>{sessions.filter(session => !(bootstrap.projects ?? []).some(project => project.id === session.projectId)).map(taskRow)}
+        {visibleSessions(sessions.filter(session => session.projectId === project.id)).map(taskRow)}
+      </details>)}<p className="eyebrow">Chats</p>{visibleSessions(sessions.filter(session => !(bootstrap.projects ?? []).some(project => project.id === session.projectId))).map(taskRow)}
       {nextCursor && <button onClick={async () => { const page = await request<RemoteSessionList>(`sessions?limit=50&cursor=${encodeURIComponent(nextCursor)}`); setSessions(rows => [...rows, ...page.sessions.filter(row => !rows.some(existing => existing.id === row.id))]); setNextCursor(page.nextCursor); }}>Load more</button>}</div><button className="settings-link" aria-current={view === 'settings' ? 'page' : undefined} onClick={() => setView('settings')}><Icon name="settings" /> Settings</button></aside>
     {view === 'settings' ? <Settings bootstrap={bootstrap} appearance={appearance} saveAppearance={saveAppearance} refresh={refreshBootstrap} back={() => setView('chat')} disconnect={() => { void request('disconnect', {}).catch(() => undefined).finally(() => { setRemoteToken(''); disconnect(); }); }} /> : <main className={view === 'tasks' ? 'mobile-hidden' : ''}><header className="chat-heading"><div className="heading-line"><h1>{selected ? summary?.title || 'Loading task…' : newProject ? `New chat · ${bootstrap.projects?.find(project => project.id === newProject)?.name ?? 'Project unavailable'}` : 'New chat'}</h1>{!selected && !sending && !pending ? <select aria-label="Provider for this chat" disabled={sending || !!pending} value={actualProvider ?? ''} onChange={event => { setProvider(event.target.value as ChatProvider); setModel(''); setEffort(''); setModelEdited(true); }}>{bootstrap.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select> : <span className="muted">{catalog?.label}</span>}</div>{selected && <button onClick={() => { setTitle(summary?.title ?? ''); setEditing(value => !value); }}>Edit task</button>}</header>
       {editing && <form className="edit-title" onSubmit={event => { event.preventDefault(); void mutate({ action: 'rename', sessionId: selected, title, expectedTitle: summary?.title ?? '' }); setEditing(false); }}><input aria-label="Task title" value={title} maxLength={120} onChange={event => setTitle(event.target.value)} required /><button>Save title</button></form>}
-      <div className="thread" ref={pane} onScroll={() => { const node = pane.current; if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60; }}>
+      <div className="thread" ref={pane} onScroll={() => { const node = pane.current; if (!node) return; following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60; if (node.scrollTop < 96 && nextBefore !== null && !loadingEarlier) void loadEarlier(); }}>
         <div className="transcript">{!selected && <div className="welcome"><h2>What are we working on?</h2><p>Start a task on {bootstrap.host}.</p></div>}
-          {selected && nextBefore !== null && <button className="load-earlier" disabled={loadingEarlier} onClick={async () => {
-            const target = selected, before = nextBefore, height = pane.current?.scrollHeight ?? 0; following.current = false; setLoadingEarlier(true);
-            try { const page = await request<ControlApiEvents>(`sessions/${encodeURIComponent(target)}/events?before=${before}&limit=100`);
-              if (selectedRef.current !== target) return; setEvents(rows => mergeHistory(rows, page.events)); setNextBefore(page.nextBefore ?? null);
-              requestAnimationFrame(() => { if (pane.current && selectedRef.current === target) pane.current.scrollTop += pane.current.scrollHeight - height; });
-            } catch (error) { if (selectedRef.current === target) setError((error as Error).message); }
-            finally { if (selectedRef.current === target) setLoadingEarlier(false); }
-          }}>{loadingEarlier ? 'Loading…' : 'Load earlier'}</button>}
+          {selected && loadingEarlier && <div className="history-loading" role="status">Loading earlier messages…</div>}
+          {selected && earlierFailed && <button type="button" onClick={() => void loadEarlier(true)}>Retry earlier messages</button>}
           {selected && <Transcript events={events} sessionId={selected} openRequestId={focusOpenId} />}
           {pendingMessages(optimistic, inputs, events, selected, composerKey).map(row => <article className="human optimistic" key={row.id}><div className="msg" dir="auto">{row.text}</div><small>{row.receipt?.delivery === 'sent' ? 'Sent ✓' : row.receipt?.delivery === 'not_sent' ? 'Not sent' : row.state === 'unconfirmed' || row.receipt?.delivery === 'unconfirmed' ? 'Delivery unconfirmed' : 'Sending…'}</small></article>)}
           {activeTurn && <div className="thinking" role="status"><span className="thinking-dot" />{events.some(event => event.turnId === activeTurn && ['assistant_message', 'tool_call'].includes(event.kind)) ? 'Working…' : 'Thinking…'}</div>}
@@ -312,21 +349,23 @@ function Workspace({ disconnect }: { disconnect(): void }) {
           {!activePlan.busy && !activePlan.stages && <p>Describe your task, then send to create editable stages.</p>}
         </section>}
         <form className="composer" onSubmit={send}>{completion.menu}<textarea ref={input} rows={2} dir="auto" aria-label="Message" aria-expanded={completion.visible} aria-controls={completion.visible ? 'composer-completion' : undefined} aria-activedescendant={completion.activeId} readOnly={activePlan?.busy} placeholder={activePlan ? 'Describe the task to turn into a plan…' : 'Ask anything…'} value={draft} onSelect={completion.selectionChanged} onChange={event => { updateDraft(event.target.value); completion.selectionChanged(); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`; }} onKeyDown={event => { if (completion.keyDown(event)) return; if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && bootstrap.preferences.enterSends !== false) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
-          {!!attachments.length && <div className="attachment-chips">{attachments.map(file => <button type="button" key={file.id} disabled={sending || !!pending} onClick={() => setAttachments(rows => rows.filter(row => row.id !== file.id))}>{file.name} ×</button>)}</div>}
+          {!!attachments.length && <div className="attachment-chips">{attachments.map(file => <span className="attachment-chip" key={file.id}>{file.mimeType.startsWith('image/')
+            ? <button type="button" className="attachment-open" disabled={sending || !!pending} onClick={() => { void previewAttachment(file); }} aria-label={`Preview ${file.name}`}>{file.preview && <img src={file.preview} alt="" />}{file.name}{previewingAttachment === file.id ? ' …' : ''}</button>
+            : <span className="attachment-name">{file.name}</span>}<button type="button" className="attachment-remove" disabled={sending || !!pending} onClick={() => setAttachments(rows => rows.filter(row => row.id !== file.id))} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}
           <div className="composer-toolbar">
             <input ref={files} type="file" multiple hidden onChange={event => { void upload(event.target.files); }} />
-            <details className="add-menu"><summary aria-label="Add photos, files or skills" aria-disabled={sending || !!pending || uploading} onClick={event => { if (sending || pending || uploading) event.preventDefault(); }}><Icon name="plus" /></summary><div className="model-popover"><button type="button" disabled={uploading || sending || !!pending} onClick={() => files.current?.click()}>Add photos &amp; files</button><button type="button" onClick={async () => { try { setSkills(await request('skills')); setSkillsLoaded(true); setShowSkills(value => !value); } catch (error) { setError((error as Error).message); } }}>Skills <span>＋</span></button>{showSkills && skills.map(skill => <button type="button" key={skill.id} title={skill.description} onClick={() => { updateDraft(`/${skill.id}\n${draft}`); setShowSkills(false); }}>{skill.name}</button>)}{showSkills && !skills.length && <small>No installed skills</small>}</div></details>
+            <details className="add-menu" ref={addMenu}><summary aria-label="Add photos, files or skills" aria-disabled={sending || !!pending || uploading} onClick={event => { if (sending || pending || uploading) event.preventDefault(); }}><Icon name="plus" /></summary><div className="model-popover"><button type="button" disabled={uploading || sending || !!pending} onClick={() => files.current?.click()}>Add photos &amp; files</button><button type="button" onClick={async () => { try { setSkills(await request('skills')); setSkillsLoaded(true); setShowSkills(value => !value); } catch (error) { setError((error as Error).message); } }}>Skills <span>＋</span></button>{showSkills && skills.map(skill => <button type="button" key={skill.id} title={skill.description} onClick={() => { updateDraft(`/${skill.id}\n${draft}`); setShowSkills(false); if (addMenu.current) addMenu.current.open = false; }}>{skill.name}</button>)}{showSkills && !skills.length && <small>No installed skills</small>}</div></details>
             <ModelMenu models={catalog?.models.models ?? []} model={model} effort={effort} disabled={sending || !!pending} choose={(model, effort) => { setModel(model); setEffort(effort); setModelEdited(true); }} refresh={async () => { await mutate({ action: 'refreshModels', provider: actualProvider }); await refreshBootstrap(); }} />
             <label className="chat-mode" title="Chat mode"><Icon name="chat" /><select aria-label="Chat mode" disabled={sending || !!pending} value={actualMode} onChange={event => { setMode(event.target.value as typeof mode); setModeChanged(true); }}><option value="off">Normal</option><option value="goal">Goal</option><option value="loop">Loop</option></select><Icon name="chevron" /></label>
             <button type="button" className="plan-control" aria-label="Plan" aria-pressed={!!activePlan} onClick={togglePlan}><Icon name="plan" /><span>Plan</span></button>
             <DictationButton disabled={sending || !!pending || !!activePlan?.busy} append={value => updateDraft(`${draftRef.current}${draftRef.current ? ' ' : ''}${value}`)} />
-            <div className="actions">{activeTurn && !draft.trim()
-              ? <button type="button" className="send-control" aria-label="Stop" onClick={() => { void mutate({ action: 'stop', sessionId: selected, expectedTurnId: activeTurn }); }}><Icon name="stop" /></button>
+            <div className="actions">{unfinishedTurn && !draft.trim()
+              ? <button type="button" className="send-control" aria-label={currentDetail?.live?.stopPending ? 'Stop requested' : 'Stop'} onClick={() => { void mutate({ action: 'stop', sessionId: selected, expectedTurnId: unfinishedTurn }); }}><Icon name="stop" /></button>
               : <button className="send-control" aria-label={activePlan?.stages ? 'Start full plan' : activePlan ? 'Generate plan' : 'Send'} disabled={!connected || sending || !!pending || uploading || !!activePlan?.busy || !!activePlan?.unconfirmed || planInvalid || !draft.trim() || !!selected && !currentDetail || !!modelProblem}><Icon name="send" /></button>}</div>
           </div></form>
         {modelProblem && <p role="alert">{modelProblem}</p>}{pending && <p className="muted">Checking this message’s original delivery. It will not be sent again automatically. <button onClick={async () => { try { const input = await request<ControlApiInput | null>(`inputs/${pending}`); if (input) setNotice(input.error ?? (input.delivery === 'sent' ? 'Message sent' : input.delivery === 'not_sent' ? 'Message was not sent' : 'Delivery remains unconfirmed')); else { const receipt = await request<{state: string; result?: {ok: boolean; error?: string}} | null>(`operations/${pending}`); if (receipt?.state === 'done' && receipt.result?.ok === false) { setError(receipt.result.error ?? 'Message was not admitted'); setPending(null); } else setNotice('Delivery remains unconfirmed.'); } } catch (error) { setError((error as Error).message); } }}>Check delivery</button></p>}
         </div></main>}
-  </div>{error && <div className="error" role="alert">{error}</div>}<nav className="mobile-nav"><button aria-label="Tasks" onClick={() => setView('tasks')}><Icon name="tasks" /></button><button aria-label="Chat" onClick={() => setView('chat')}><Icon name="chat" /></button><button aria-label="New chat" onClick={() => select(null)}><Icon name="plus" /></button><button aria-label="Settings" onClick={() => setView('settings')}><Icon name="settings" /></button></nav></div>;
+  </div>{attachmentPreview && <div className="attachment-preview-backdrop" role="presentation" onClick={() => setAttachmentPreview(null)}><section className="attachment-preview" role="dialog" aria-modal="true" aria-label={`Preview ${attachmentPreview.name}`} onClick={event => event.stopPropagation()}><header><strong>{attachmentPreview.name}</strong><button type="button" aria-label="Close image preview" onClick={() => setAttachmentPreview(null)}>×</button></header><img src={attachmentPreview.src} alt={attachmentPreview.name} /></section></div>}{error && <div className="error" role="alert">{error}</div>}<nav className="mobile-nav"><button aria-label="Tasks" onClick={() => setView('tasks')}><Icon name="tasks" /></button><button aria-label="Chat" onClick={() => setView('chat')}><Icon name="chat" /></button><button aria-label="New chat" onClick={() => select(null)}><Icon name="plus" /></button><button aria-label="Settings" onClick={() => setView('settings')}><Icon name="settings" /></button></nav></div>;
 }
 function App() {
   useEffect(() => {

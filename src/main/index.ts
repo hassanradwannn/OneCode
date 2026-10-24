@@ -793,7 +793,10 @@ app.on('will-quit', (event) => {
       // Phase 2: only after request handlers are done may their owned child processes go.
       {
         name: 'process cleanup',
-        budgetMs: 15_000,
+        // At capacity, exact Windows tree stops run in sixteen batches of four.
+        // Their bounded helpers may each need five seconds; the outer deadline
+        // must let those stops finish before deciding whether an update can run.
+        budgetMs: 120_000,
         run: () => [unifiedExecManager.terminateAllProcesses(), workspaceTerminalsExited(), stopComputerHelper(), shutdownPetOverlay(), pluginManager.close(),
           Promise.resolve().then(() => loadedCosBrowser()?.stop())]
       },
