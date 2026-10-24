@@ -6,7 +6,7 @@ Ship the experimental local OneCode API in the stable application channel after 
 
 ## [0.6.2 Beta] — 2026-10-24
 
-Add an opt-in local OpenAI-compatible OneCode API for IDEs and other same-computer clients. `/new`, `/provider` and `/session` control real durable OneCode chats; chat-completion/Responses requests enter the ordinary desktop input owner so provider turns retain Core tools, permissions, skills, plugins and workers. Add live capability discovery, OS-encrypted persistent per-device authentication, explicit key rotation and a loopback-only disabled-by-default listener. Beta capsule compatibility targets the complete 0.5.7 Beta base and fails closed on immutable-runtime mismatch. See [0.6.2 Beta release notes](docs/release-notes/v0.6.2.md) and [OneCode API](docs/ONECODE-API.md).
+Add an opt-in local OpenAI-compatible OneCode API for IDEs and other same-computer clients. `/new`, `/provider` and `/session` control real durable OneCode chats; chat-completion/Responses requests enter the ordinary desktop input owner so provider turns retain Core tools, permissions, skills, plugins and workers. Add live capability discovery, OS-encrypted persistent per-device authentication, explicit key rotation and a loopback-only disabled-by-default listener. Beta 0.6.2 now carries complete Windows/Linux install artifacts for new users alongside smaller capsules bound to the complete 0.5.7 Beta base; immutable-runtime or channel mismatch still fails closed. See [0.6.2 Beta release notes](docs/release-notes/v0.6.2.md) and [OneCode API](docs/ONECODE-API.md).
 
 ## [0.6.1] — 2026-10-24
 
