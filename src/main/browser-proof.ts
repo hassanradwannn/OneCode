@@ -17,7 +17,9 @@ import { logWarn } from './logger.js';
 import type { ChatProvider } from '../shared/chat-provider.js';
 
 /** The last answer Gemini gave there, kept as yes (`signedInAt`), no (`signedOutAt`) or neither. */
-type Proof = { browserId: string; version: string; installedAt: number; signedInAt: number | null; signedOutAt: number | null; provider?: ChatProvider };
+type LoginProof = { signedInAt: number | null; signedOutAt: number | null };
+type Proof = LoginProof & { browserId: string; version: string; installedAt: number; provider?: ChatProvider;
+  providers?: Partial<Record<ChatProvider, LoginProof>> };
 
 let filePath = '';
 let proof: Proof | null = null;
@@ -41,6 +43,14 @@ export async function loadBrowserProof(): Promise<void> {
       proof = { browserId: value.browserId, version: value.version, installedAt: time(value.installedAt)!, signedInAt,
         signedOutAt: signedInAt === null ? time(value.signedOutAt) : null,
         ...(value.provider === 'chatgpt' ? { provider: 'chatgpt' as const } : {}) };
+      const providers: Partial<Record<ChatProvider, LoginProof>> = {};
+      for (const provider of ['gemini', 'chatgpt'] as const) {
+        const row = value.providers?.[provider];
+        if (!row || typeof row !== 'object') continue;
+        const signedInAt = time(row.signedInAt), signedOutAt = signedInAt === null ? time(row.signedOutAt) : null;
+        if (signedInAt !== null || signedOutAt !== null) providers[provider] = { signedInAt, signedOutAt };
+      }
+      if (Object.keys(providers).length) proof.providers = providers;
     }
   } catch (error) {
     // Missing on a first run; anything unreadable is only lost evidence, never a wrong answer.
@@ -69,6 +79,7 @@ export function noteExternalInstalled(browserId: string, version: string, at = D
   // Another instance (another browser or profile) proves nothing about the old one's login.
   const same = proof?.browserId === browserId;
   proof = { browserId, version, installedAt: at, signedInAt: same ? proof!.signedInAt : null, signedOutAt: same ? proof!.signedOutAt : null,
+    ...(same && proof?.providers ? { providers: proof.providers } : {}),
     ...(same && proof?.provider ? { provider: proof.provider } : {}) };
   persist();
   return true;
@@ -80,7 +91,11 @@ export function noteExternalInstalled(browserId: string, version: string, at = D
  */
 export function noteExternalSignedIn(browserId: string, signedIn: boolean, at = Date.now(), provider: ChatProvider = 'gemini'): boolean {
   if (!proof || proof.browserId !== browserId) return false;
-  const known = (proof.provider ?? 'gemini') !== provider ? null : proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null;
+  const previous = proof.providers?.[provider] ?? ((proof.provider ?? 'gemini') === provider ? proof : null);
+  const known = previous?.signedInAt != null ? true : previous?.signedOutAt != null ? false : null;
+  // Upgrade legacy single-provider proof in place before observing another provider.
+  proof.providers ??= { [proof.provider ?? 'gemini']: { signedInAt: proof.signedInAt, signedOutAt: proof.signedOutAt } };
+  proof.providers[provider] = { signedInAt: signedIn ? at : null, signedOutAt: signedIn ? null : at };
   proof.provider = provider;
   if (signedIn) { proof.signedInAt = at; proof.signedOutAt = null; }
   else { proof.signedOutAt = at; proof.signedInAt = null; }
@@ -91,10 +106,13 @@ export function noteExternalSignedIn(browserId: string, signedIn: boolean, at = 
 }
 
 /** The lasting evidence for the person's own browser, or null. `signedIn` null: never answered. */
-export function externalBrowserProof(): { browserId: string; version: string; signedIn: boolean | null; provider?: ChatProvider } | null {
-  return proof && { browserId: proof.browserId, version: proof.version,
-    signedIn: proof.signedInAt !== null ? true : proof.signedOutAt !== null ? false : null,
-    ...(proof.provider === 'chatgpt' ? { provider: proof.provider } : {}) };
+export function externalBrowserProof(provider?: ChatProvider): { browserId: string; version: string; signedIn: boolean | null; provider?: ChatProvider } | null {
+  if (!proof) return null;
+  const selected = provider ?? proof.provider ?? 'gemini';
+  const login = proof.providers?.[selected] ?? ((proof.provider ?? 'gemini') === selected ? proof : null);
+  return { browserId: proof.browserId, version: proof.version,
+    signedIn: login?.signedInAt != null ? true : login?.signedOutAt != null ? false : null,
+    ...(selected === 'chatgpt' ? { provider: selected } : {}) };
 }
 
 /** For tests: wait for the file to settle. */

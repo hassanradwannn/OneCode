@@ -3031,7 +3031,7 @@ function closeWakeSocket() {
 function connectWakeSocket() {
   if (!token || disconnected || !port || typeof WebSocket === 'undefined') return;
   // Which copy this is, never a credential: the token goes in the first message, below.
-  const url = `ws://127.0.0.1:${port}/wake?host=${globalThis.__cosBrowserWorker ? 'cos' : 'browser'}`;
+  const url = `ws://127.0.0.1:${port}/wake?host=${globalThis.__cosBrowserWorker ? 'cos' : 'browser'}&browser=${encodeURIComponent(browserId)}`;
   if (wakeSocket?.url === url && wakeSocket.readyState <= 1) return;
   closeWakeSocket();
   const connection = new WebSocket(url);
