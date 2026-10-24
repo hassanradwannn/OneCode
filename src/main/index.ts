@@ -84,6 +84,7 @@ import {
 import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
 import { loadConnectorIdentity } from './connector-identity.js';
 import { initControlApiPath, shutdownControlApi, startControlApi } from './control-api.js';
+import { shutdownAgentApi, startAgentApi } from './agent-api.js';
 import { restoreRemote, shutdownRemote } from './remote/server.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
 import { restoreBlockedChats } from './session/blocked-chats.js';
@@ -741,6 +742,9 @@ void app.whenReady().then(async () => {
   if (getConfig().controlApi.enabled) {
     startControlApi().catch((error: Error) => logWarn(`control API did not start: ${error.message}`));
   }
+  if (getConfig().agentApi.enabled) {
+    startAgentApi().catch((error: Error) => logWarn(`OneCode API did not start: ${error.message}`));
+  }
   void restoreRemote().catch(() => logWarn('Remote access could not start. Open Settings on this PC.'));
   if (getConfig().ui.autoConnect) void connect();
   void resumeUpdateRefresh().catch((error: Error) => logWarn(`update refresh did not resume: ${error.message}`));
@@ -811,7 +815,7 @@ app.on('will-quit', (event) => {
       {
         name: 'admission/drain',
         budgetMs: 40_000,
-        run: () => [chatScheduler.stop(), shutdownConnection(), shutdownBridge(), shutdownControlApi(), shutdownRemote(), stopAgentRuntimeGc()]
+        run: () => [chatScheduler.stop(), shutdownConnection(), shutdownBridge(), shutdownControlApi(), shutdownAgentApi(), shutdownRemote(), stopAgentRuntimeGc()]
       },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {

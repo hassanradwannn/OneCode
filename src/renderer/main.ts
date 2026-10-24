@@ -782,6 +782,7 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
       appearance: over.appearance ?? previous.ui.appearance
     },
     controlApi: { enabled: $<HTMLInputElement>('controlApiEnabled').checked, allowActions: $<HTMLInputElement>('controlApiAllowActions').checked },
+    agentApi: { enabled: $<HTMLInputElement>('agentApiEnabled').checked, port: Number($<HTMLInputElement>('agentApiPort').value) },
     ...chatPatch,
     // After the chat patch, which still carries the stored mcp settings it no longer edits.
     mcp: { instructions: previous.mcp?.instructions ?? '', persistentUrls: $<HTMLInputElement>('mcpPersistentUrls').checked,
@@ -819,6 +820,7 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     compaction: previous.compaction,
     mcp: previous.mcp ?? { instructions: '', persistentUrls: false },
     controlApi: previous.controlApi ?? { enabled: false, allowActions: false },
+    agentApi: previous.agentApi ?? { enabled: false, port: 32123 },
     multiAgent: previous.multiAgent,
     goal: previous.goal
   };
@@ -852,6 +854,12 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     }
     if (state && (!requestedSettings || requestedSettings.controlApi?.enabled === patch.controlApi?.enabled)) {
       $<HTMLInputElement>('controlApiEnabled').checked = state.config.controlApi?.enabled === true;
+    }
+    if (state && (!requestedSettings || requestedSettings.agentApi?.enabled === patch.agentApi?.enabled)) {
+      $<HTMLInputElement>('agentApiEnabled').checked = state.config.agentApi?.enabled === true;
+    }
+    if (state && (!requestedSettings || requestedSettings.agentApi?.port === patch.agentApi?.port)) {
+      $<HTMLInputElement>('agentApiPort').value = String(state.config.agentApi?.port ?? 32123);
     }
   }
 }
@@ -1786,6 +1794,12 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('followOutput'), config.ui.followOutput !== false, previousState?.config.ui.followOutput);
   applyChecked($<HTMLInputElement>('mentionCore'), config.ui.mentionCore !== false, previousState?.config.ui.mentionCore);
   applyChecked($<HTMLInputElement>('controlApiEnabled'), config.controlApi?.enabled === true, previousState?.config.controlApi?.enabled);
+  applyChecked($<HTMLInputElement>('agentApiEnabled'), config.agentApi?.enabled === true, previousState?.config.agentApi?.enabled);
+  applyValue($<HTMLInputElement>('agentApiPort'), String(config.agentApi?.port ?? 32123), String(previousState?.config.agentApi?.port ?? 32123));
+  ui($('agentApiAddress'), 'textContent', () => `http://127.0.0.1:${config.agentApi?.port ?? 32123}/v1`);
+  const agentApiSecretsAvailable = next.secureStorage?.available !== false;
+  $<HTMLButtonElement>('agentApiCopyKey').disabled = !agentApiSecretsAvailable;
+  $<HTMLButtonElement>('agentApiRotateKey').disabled = !agentApiSecretsAvailable;
   applyChecked($<HTMLInputElement>('mcpPersistentUrls'), config.mcp?.persistentUrls === true, previousState?.config.mcp?.persistentUrls);
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
   applyChecked($<HTMLInputElement>('useChatgptWebSkill'), config.mcp?.useChatgptWebSkill === true, previousState?.config.mcp?.useChatgptWebSkill);
@@ -2873,6 +2887,17 @@ $('removeApiKey').addEventListener('click', async () => {
   }
 });
 
+$('agentApiCopyUrl').addEventListener('click', async () => {
+  if (await run(api.copyAgentApiUrl())) toast(t('OneCode API URL copied'));
+});
+$('agentApiCopyKey').addEventListener('click', async () => {
+  if (await run(api.copyAgentApiKey())) toast(t('OneCode API key copied'));
+});
+$('agentApiRotateKey').addEventListener('click', async () => {
+  if (!window.confirm(t('Rotate the OneCode API key? Existing IDEs and clients will stop authenticating until you paste the new key.'))) return;
+  if (await run(api.rotateAgentApiKey())) toast(t('OneCode API key rotated'));
+});
+
 for (const id of [
   'autoConnect',
   'startAtLogin',
@@ -2888,6 +2913,8 @@ for (const id of [
   'mentionCore',
   'controlApiEnabled',
   'controlApiAllowActions',
+  'agentApiEnabled',
+  'agentApiPort',
   'mcpPersistentUrls',
   'useGeminiWebSkill', 'useChatgptWebSkill',
   'privacyScreenshots',

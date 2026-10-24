@@ -69,6 +69,8 @@ export interface SettingsPatch {
   mcp: Config['mcp'];
   /** Optional so callers that save other sections never have to carry it. */
   controlApi?: Config['controlApi'];
+  /** Experimental local OpenAI-compatible API; optional for older settings callers. */
+  agentApi?: Config['agentApi'];
   /** This computer's connector name suffix; omitted by callers that do not edit it. */
   connectorSuffix?: string;
 }
@@ -231,6 +233,10 @@ const api = {
   /** Sets an unreadable credentials file aside (kept as a backup) so keys can be saved again. */
   startFreshCredentials: () => call<{ state: AppState; setAside: boolean }>('credentials:start-fresh'),
   saveSettings: (patch: SettingsPatch, base: SettingsPatch) => call<AppState>('settings:save', { patch, base }),
+  copyAgentApiUrl: () => call<boolean>('agentApi:copyUrl'),
+  /** The key is copied by main directly from secure storage and never returned to this renderer. */
+  copyAgentApiKey: () => call<boolean>('agentApi:copyKey'),
+  rotateAgentApiKey: () => call<boolean>('agentApi:rotateKey'),
   addRoot: () => call<AppState>('roots:add'),
   /** A folder dropped on the window; only the preload can learn a dropped File's path. */
   addRootPath: (file: File) => call<AppState>('roots:addPath', { path: webUtils.getPathForFile(file) }),

@@ -426,6 +426,17 @@ export interface ControlApiSettings {
   allowActions: boolean;
 }
 
+/**
+ * Opt-in OpenAI-compatible API served by this OneCode installation.
+ * The bearer key is intentionally absent: it lives only in the OS-backed secret store.
+ */
+export interface AgentApiSettings {
+  /** No listener or background API work exists while this is off. */
+  enabled: boolean;
+  /** Stable loopback port so IDE/client configuration survives app restarts and updates. */
+  port: number;
+}
+
 export interface Config {
   /**
    * Names this computer's connectors in Gemini, for one Gemini account used on several
@@ -447,6 +458,7 @@ export interface Config {
   goal: GoalSettings;
   mcp: McpSettings;
   controlApi: ControlApiSettings;
+  agentApi: AgentApiSettings;
 }
 
 export type ConnectionState =

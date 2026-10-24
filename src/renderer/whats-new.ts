@@ -16,6 +16,15 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.2': {
+    lead: () => t('Use the OneCode agent from IDEs and local OpenAI-compatible clients.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('OneCode API (Beta)'), text: () => t('Turn on a local OpenAI-compatible endpoint in Settings, then copy its loopback URL and encrypted per-device key into an IDE or other client.') },
+      { icon: 'i-chat', title: () => t('API calls control real OneCode chats'), text: () => t('/new opens a durable OneCode chat, /provider chooses ChatGPT or Gemini for new chats, and completions use the same provider and durable Send path as the desktop.') },
+      { icon: 'i-skill', title: () => t('Skills and plugins stay live'), text: () => t('Capability discovery reads the current Core tools, permissions, skills and installed plugins so newly enabled abilities appear without restarting the API.') },
+      { icon: 'i-lock', title: () => t('Local, persistent and opt-in'), text: () => t('The listener is off by default and loopback-only. Its bearer key stays in encrypted OS storage, survives compatible updates and can be rotated from the trusted desktop.') }
+    ]
+  },
   '0.6.0': {
     lead: () => t('Recoverable history access, installation-local Windows data, and faster Remote and Linux updates.'),
     highlights: [

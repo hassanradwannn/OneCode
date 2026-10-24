@@ -7,6 +7,10 @@ export function updateErrorText(source: string): string {
       return t('GitHub could not be reached. Check your connection');
     case 'There is no downloaded update to install yet':
     case 'the Linux application layer manifest is missing':
+    case 'The combined Linux update has no verified base and application layer':
+    case 'The Linux successor installation is missing':
+    case 'The mounted AppImage identity changed':
+    case 'This Beta branch update is no longer current. Check for updates again.':
     case 'This downloaded update is no longer current. Check for updates again.':
     case 'The OneCode update metadata does not match this release and architecture':
     case 'OneCode did not download one complete installer':
@@ -21,9 +25,15 @@ export function updateErrorText(source: string): string {
       return t('The saved plugin update state could not be read.');
     case 'the latest release has no usable version tag':
     case 'the release page named no usable version tag':
+    case 'the beta release feed returned an invalid response':
+    case 'the beta release feed returned a malformed release':
       return t('The release information has no valid version number.');
     case 'it is not the published file':
     case 'the staged artifact changed after verification':
+    case 'the staged hotfix changed after verification':
+    case 'the staged hotfix manifest changed after verification':
+    case 'The staged hotfix manifest changed after verification':
+    case 'The copied AppImage changed after verification':
     case 'The staged update changed after verification':
     case 'The staged hotfix changed after verification':
     case 'The downloaded update does not match the OneCode release checksum':

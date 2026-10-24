@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.2 Beta] — 2026-10-24
+
+Add an opt-in local OpenAI-compatible OneCode API for IDEs and other same-computer clients. `/new`, `/provider` and `/session` control real durable OneCode chats; chat-completion/Responses requests enter the ordinary desktop input owner so provider turns retain Core tools, permissions, skills, plugins and workers. Add live capability discovery, OS-encrypted persistent per-device authentication, explicit key rotation and a loopback-only disabled-by-default listener. Beta capsule compatibility targets the complete 0.5.7 Beta base and fails closed on immutable-runtime mismatch. See [0.6.2 Beta release notes](docs/release-notes/v0.6.2.md) and [OneCode API](docs/ONECODE-API.md).
+
 ## [0.6.1] — 2026-10-24
 
 Make terminal-storage refusals actionable without exposing host paths or retained terminal data. OneCode now preserves the fail-closed boundary while reporting a bounded sanitized storage cause such as access denied, storage full, busy/locked, read-only, I/O error, or an already-safe terminal custody validation failure. The application hotfix retains the verified 0.5.9 complete-base minimum on Windows and Linux. See [0.6.1 release notes](docs/release-notes/v0.6.1.md).

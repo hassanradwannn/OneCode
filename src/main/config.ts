@@ -282,6 +282,8 @@ export const MAX_MCP_INSTRUCTIONS_CHARS = 4000;
 const DEFAULT_MCP = { instructions: '', persistentUrls: true } as const;
 /** Off for fresh installs and for every config written before the switches existed. */
 const DEFAULT_CONTROL_API = { enabled: false, allowActions: false } as const;
+/** Experimental Beta API: off unless explicitly enabled; its endpoint stays stable once configured. */
+const DEFAULT_AGENT_API = { enabled: false, port: 32123 } as const;
 const DEFAULT_COMMAND_ALLOWLIST = { enabled: false, mode: 'allow', rules: [] } as const;
 const commandAllowlistRuleSchema = z.string().max(MAX_COMMAND_ALLOWLIST_RULE_CHARS).superRefine((rule, ctx) => {
   const message = validateCommandAllowlistRule(rule);
@@ -561,7 +563,15 @@ const configSchema = z.object({
     .transform((value) => ({ enabled: value.enabled, allowActions: value.enabled && value.allowActions }))
     .optional()
     .default({ ...DEFAULT_CONTROL_API })
-    .catch({ ...DEFAULT_CONTROL_API })
+    .catch({ ...DEFAULT_CONTROL_API }),
+  agentApi: z
+    .object({
+      enabled: z.boolean().optional().default(DEFAULT_AGENT_API.enabled).catch(DEFAULT_AGENT_API.enabled),
+      port: z.number().int().min(1024).max(65535).optional().default(DEFAULT_AGENT_API.port).catch(DEFAULT_AGENT_API.port)
+    })
+    .optional()
+    .default({ ...DEFAULT_AGENT_API })
+    .catch({ ...DEFAULT_AGENT_API })
 }).transform(value => value.tunnel.kind === 'tailscale'
   ? { ...value, mcp: { ...value.mcp, persistentUrls: true } }
   : value);
@@ -599,7 +609,8 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform, rele
     multiAgent: { ...FIRST_LAUNCH_MULTI_AGENT },
     goal: { ...DEFAULT_GOAL },
     mcp: { ...DEFAULT_MCP },
-    controlApi: { ...DEFAULT_CONTROL_API }
+    controlApi: { ...DEFAULT_CONTROL_API },
+    agentApi: { ...DEFAULT_AGENT_API }
   };
 }
 
@@ -860,4 +871,3 @@ export function updateConfig(
 export function saveConfig(next: Config): Promise<Config> {
   return updateConfig(() => next);
 }
-

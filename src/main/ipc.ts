@@ -10,6 +10,7 @@ import { setStopNoticeTranslations } from './stuck-notice.js';
 import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
+import { agentApiBaseUrl, agentApiKeyForClipboard, restartAgentApi, rotateAgentApiKey, startAgentApi, stopAgentApi } from './agent-api.js';
 import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink } from './remote/server.js';
 import { TAILSCALE_SETUP_ACTIONS, tailscaleSetupAction, type TailscaleSetupStep } from '../shared/tailscale-setup.js';
 import { retryTailscaleSetup } from './tunnel/tailscale-setup.js';
@@ -308,6 +309,7 @@ const settingsPatch = z.object({
   }),
   mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS), persistentUrls: z.boolean().optional(), useGeminiWebSkill: z.boolean().optional(), useChatgptWebSkill: z.boolean().optional() }).strict().optional(),
   controlApi: z.object({ enabled: z.boolean(), allowActions: z.boolean().optional() }).strict().optional(),
+  agentApi: z.object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65535) }).strict().optional(),
   goal: z.object({
     impulseMinutes: z.number().int().min(0).max(60).optional(),
     includeToolCalls: z.boolean().optional(),
@@ -363,7 +365,7 @@ type SettingsSnapshot = z.infer<typeof settingsPatch>;
  * unchanged between `base` and `wanted` was not edited by this renderer save and therefore keeps
  * the current main-process value. A field that differs was deliberately edited here and wins.
  */
-function mergeSettings(current: Config, base: SettingsSnapshot, wanted: SettingsSnapshot): Omit<SettingsSnapshot, 'controlApi'> & { controlApi: Config['controlApi'] } {
+function mergeSettings(current: Config, base: SettingsSnapshot, wanted: SettingsSnapshot): Omit<SettingsSnapshot, 'controlApi' | 'agentApi'> & { controlApi: Config['controlApi']; agentApi: Config['agentApi'] } {
   const tunnelEdited = (['tunnelId', 'desktopTunnelId', 'pluginsTunnelId'] as const)
     .some(key => (base.tunnel[key] ?? '') !== (wanted.tunnel[key] ?? ''));
   if (tunnelEdited && ((base.tunnel.profileId ?? 'default') !== (current.tunnel.profileId ?? 'default') ||
@@ -389,6 +391,13 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       : pick(current.controlApi.allowActions, base.controlApi?.allowActions ?? false, wanted.controlApi.allowActions);
     controlApi = { enabled, allowActions: enabled && allowActions === true };
   }
+  let agentApi = current.agentApi;
+  if (wanted.agentApi) {
+    agentApi = {
+      enabled: pick(current.agentApi.enabled, base.agentApi?.enabled ?? false, wanted.agentApi.enabled),
+      port: pick(current.agentApi.port, base.agentApi?.port ?? 32123, wanted.agentApi.port)
+    };
+  }
   return {
     ...(wanted.connectorSuffix === undefined ? {} : {
       connectorSuffix: pick(current.connectorSuffix ?? '', base.connectorSuffix ?? '', wanted.connectorSuffix)
@@ -404,6 +413,7 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       }),
       persistentUrls: pick(current.mcp.persistentUrls === true, base.mcp?.persistentUrls === true, wanted.mcp.persistentUrls ?? current.mcp.persistentUrls === true) } : current.mcp,
     controlApi,
+    agentApi,
     capabilities,
     readOnly: pick(current.readOnly, base.readOnly, wanted.readOnly),
     commandAllowlist: {
@@ -790,6 +800,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
         throw new Error('Browser bridge port is controlled by CLF_BRIDGE_PORTS.');
       }
       const proposed = { ...config, ...mergeSettings(config, request.base, request.patch) };
+      if (!config.agentApi.enabled && proposed.agentApi.enabled && !(await isEncryptionAvailable())) {
+        throw new Error('Secure operating-system credential storage is required before enabling the OneCode API.');
+      }
       // If an earlier Off retirement failed, On must retry it before admission.
       if (!config.ui.finishTool && proposed.ui.finishTool) await cancelFinishInputs(false);
       else if (!config.goal.impulseMinutes && (proposed.goal.impulseMinutes ?? 0) > 0) await cancelFinishInputs(true);
@@ -899,6 +912,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       try { await (next.controlApi.enabled ? startControlApi() : stopControlApi()); }
       catch (error) { controlApiError = error; }
     }
+    let agentApiError: unknown;
+    if (before.agentApi.enabled !== next.agentApi.enabled) {
+      try { await (next.agentApi.enabled ? startAgentApi() : stopAgentApi()); }
+      catch (error) { agentApiError = error; }
+    } else if (next.agentApi.enabled && before.agentApi.port !== next.agentApi.port) {
+      try { await restartAgentApi(); }
+      catch (error) { agentApiError = error; }
+    }
     // Stable connector URLs (#924): turning it on keeps the URLs running now, so nothing has to be
     // re-entered in Gemini; turning it off forgets them, and the next start rotates again.
     if ((before.mcp.persistentUrls === true) !== (next.mcp.persistentUrls === true)) {
@@ -917,6 +938,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (authorityPersistError) throw authorityPersistError;
     if (loginStartupError) throw loginStartupError;
     if (controlApiError) throw controlApiError;
+    if (agentApiError) throw agentApiError;
     return buildState();
   });
 
@@ -1465,6 +1487,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     await clipboard.writeText(text);
     return true;
   });
+  handle('agentApi:copyUrl', async () => {
+    await clipboard.writeText(agentApiBaseUrl());
+    return true;
+  }, getWindow);
+  handle('agentApi:copyKey', async () => {
+    await clipboard.writeText(await agentApiKeyForClipboard());
+    return true;
+  }, getWindow);
+  handle('agentApi:rotateKey', async () => {
+    await rotateAgentApiKey();
+    return true;
+  }, getWindow);
   handle('chatgptSkill:export', async payload => {
     const { format } = z.object({ format: z.enum(['markdown', 'zip']) }).strict().parse(payload);
     return exportBundledChatgptSkill(format, getWindow());
