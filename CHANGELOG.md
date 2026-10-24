@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.1] — 2026-10-24
+
+Make terminal-storage refusals actionable without exposing host paths or retained terminal data. OneCode now preserves the fail-closed boundary while reporting a bounded sanitized storage cause such as access denied, storage full, busy/locked, read-only, I/O error, or an already-safe terminal custody validation failure. The application hotfix retains the verified 0.5.9 complete-base minimum on Windows and Linux. See [0.6.1 release notes](docs/release-notes/v0.6.1.md).
+
 ## [0.6.0] — 2026-10-24
 
 Preserve journal failures as recoverable storage errors instead of revoked task authority, verify and migrate default Windows data beside the installation, resume interrupted artifact downloads, reduce Remote startup latency while retaining route custody checks, and improve Linux fonts and download progress. Add a verified GitHub stable-capsule lane against the compatible existing base. See [0.6.0 release notes](docs/release-notes/v0.6.0.md).
