@@ -1,3 +1,5 @@
+import type { RemoteBootstrap } from '../shared/remote.js';
+
 let token = '';
 try { token = localStorage.getItem('onecode-remote-session') ?? sessionStorage.getItem('onecode-remote-session') ?? ''; } catch { /* memory-only browser */ }
 // Fragments never reach HTTP logs or referrers. Keep the installation's link in
@@ -41,15 +43,16 @@ async function reconnect(): Promise<void> {
   })().finally(() => { if (reconnecting === run) reconnecting = null; });
   reconnecting = run; return run;
 }
-export async function connectRemote(): Promise<void> {
+export async function connectRemote(): Promise<RemoteBootstrap | null> {
   if (hasRemoteToken()) {
-    try { await request('bootstrap'); setRemoteToken(token); return; }
+    try { const bootstrap = await request<RemoteBootstrap>('bootstrap'); setRemoteToken(token); return bootstrap; }
     catch (error) {
       if (!(error instanceof RemoteRequestError) || error.status !== 401 || !linkKey) throw error;
       throw new RemoteRequestError('This browser was disconnected. Select Reconnect to request access again.', 401);
     }
   }
   await reconnect();
+  return request<RemoteBootstrap>('bootstrap');
 }
 /** Re-enrollment is available only after an explicit user action. */
 export async function reconnectRemote(): Promise<void> { await reconnect(); }

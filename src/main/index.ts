@@ -13,6 +13,7 @@ import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js
  */
 
 import path from 'node:path';
+import { existingInstalledProfile, prepareInstalledProfile } from './installed-profile.js';
 import { APP_VERSION } from './version.js';
 import { app, Notification, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, screen, session, shell } from 'electron';
 import { createKeepAwake, installKeepAwake } from './keep-awake.js';
@@ -154,7 +155,28 @@ const usageWarmup = new AbortController();
 
 // The immutable bootstrap establishes product identity/userData before selecting a Linux
 // application layer. One instance only: two copies would fight over the tunnel and config file.
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const profileOptions = { packaged: app.isPackaged, platform: process.platform,
+  executable: process.execPath, current: app.getPath('userData'),
+  legacy: [path.join(app.getPath('appData'), PRODUCT_NAME), ...(PRODUCT_NAME === 'OneCode' ? [path.join(app.getPath('appData'), 'GeminiCode')] : [])],
+  argv: process.argv };
+let profileMigrationError: string | null = null;
+try {
+  const existing = existingInstalledProfile(profileOptions);
+  if (existing !== profileOptions.current) { app.setPath('userData', existing); app.setPath('sessionData', existing); }
+} catch (error) { profileMigrationError = (error as Error).message; }
+let hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (hasSingleInstanceLock) {
+  const previous = app.getPath('userData');
+  try {
+    const profile = prepareInstalledProfile({ ...profileOptions, current: previous });
+    if (profile !== previous) {
+      app.setPath('userData', profile); app.setPath('sessionData', profile);
+      // Another launch may already have found the completed receipt. Join its
+      // namespace before any profile owner starts; only one may initialize it.
+      app.releaseSingleInstanceLock(); hasSingleInstanceLock = app.requestSingleInstanceLock();
+    }
+  } catch (error) { profileMigrationError = (error as Error).message; }
+}
 if (!hasSingleInstanceLock) {
   // `app.quit()` does not make the rest of this module stop executing. Mark this process as a
   // terminal secondary instance immediately, so neither native activation nor the async bootstrap
@@ -440,6 +462,7 @@ void app.whenReady().then(async () => {
   startRuntimeHealth();
   const userData = app.getPath('userData');
   initLogFile(path.join(userData, 'app.log'));
+  if (profileMigrationError) logWarn(`Installation data migration was not activated; existing profile retained: ${profileMigrationError}`);
   if (process.platform === 'win32' && app.isPackaged) {
     try { repairWindowsShortcuts(shell, { appData: app.getPath('appData'), desktop: app.getPath('desktop'), executable: process.execPath, resources: process.resourcesPath }); }
     catch (error) { logWarn(`shortcut identity: ${(error as Error).message}`); }

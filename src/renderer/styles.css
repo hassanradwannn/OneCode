@@ -336,7 +336,7 @@ body {
 body {
   background: var(--page);
   color: var(--ink);
-  font: calc(14px * var(--text-scale, 1))/1.5 var(--ui-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif);
+  font: calc(14px * var(--text-scale, 1))/1.5 var(--ui-font, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif);
   letter-spacing: -0.004em;
   -webkit-font-smoothing: antialiased;
 }

@@ -19,8 +19,9 @@ on:
           - beta-full
           - beta-capsule
           - stable-full
+          - stable-capsule
       base_version:
-        description: Required published base version for beta-capsule
+        description: Required published compatible base version for capsule operations
         required: false
         type: string
       platform:
@@ -39,7 +40,7 @@ permissions:
 jobs:
   build-and-upload:
     name: ${{ matrix.platform }} x64 app release assets
-    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full'
+    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full' || inputs.operation == 'stable-capsule'
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +69,7 @@ jobs:
         with:
           ref: ${{ inputs.source_ref }}
           path: app-source
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js 24
@@ -96,6 +97,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libblas3 liblapack3 pulseaudio-utils
           /usr/bin/python3 --version
+
+      - name: Verify public source, types, notices and production bundles
+        working-directory: app-source
+        run: npm run verify
 
       - name: Package Beta full release
         if: inputs.operation == 'beta-full'
@@ -145,11 +150,27 @@ jobs:
             node scripts/prepare-linux-release.mjs release
           fi
 
+      - name: Package stable compatibility capsule
+        if: inputs.operation == 'stable-capsule'
+        working-directory: app-source
+        shell: bash
+        run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
+          GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel stable --platform "$BUILD_PLATFORM" --arch x64 --dir
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            node scripts/write-hotfix-package.mjs release --base-version "$BASE_VERSION"
+          else
+            node scripts/write-linux-hotfix-package.mjs release --base-version "$BASE_VERSION"
+          fi
+
       - name: Run packaged runtime smoke
         working-directory: app-source
         shell: bash
         run: |
-          if [[ "$BUILD_OPERATION" == stable-full ]]; then
+          if [[ "$BUILD_OPERATION" == stable-full || "$BUILD_OPERATION" == stable-capsule ]]; then
             ONECODE_BUILD_CHANNEL=stable ONECODE_PACKAGE_OUTPUT=release node scripts/smoke-packaged-runtime.mjs --platform "$BUILD_PLATFORM" --arch x64
           else
             ONECODE_BUILD_CHANNEL=beta ONECODE_PACKAGE_OUTPUT=release-beta node scripts/smoke-packaged-runtime.mjs --platform "$BUILD_PLATFORM" --arch x64

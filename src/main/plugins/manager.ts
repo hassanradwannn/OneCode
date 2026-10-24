@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { getMcpConfigForManifest, vAny } from '@anthropic-ai/mcpb/browser';
 import { getSecret, setSecret, clearSecret } from '../secrets.js';
 import { readDurable, writeDurableNow } from '../durable.js';
+import { relocatedPluginRecord } from '../installed-profile.js';
 import { setEnvValue } from '../env.js';
 import { redactCredentialText } from '../redaction.js';
 import type { PluginConfigPatch, PluginInstallRequest, PluginSnapshot, PluginView } from '../../shared/plugins.js';
@@ -131,7 +132,10 @@ export class PluginManager {
     this.root = path.join(userDataDir, 'plugins');
     this.closing = false;
     await fs.mkdir(this.root, { recursive: true });
-    const stored = await readDurable<RecordEntry[]>('plugins');
+    const previous = await readDurable<RecordEntry[]>('plugins');
+    const stored = Array.isArray(previous) && previous.length <= 24
+      ? previous.map(record => record && typeof record === 'object' ? relocatedPluginRecord(record, userDataDir) : record) : previous;
+    if (Array.isArray(previous) && JSON.stringify(stored) !== JSON.stringify(previous)) await writeDurableNow('plugins', stored);
     this.records = Array.isArray(stored) && stored.length <= 24
       ? stored.filter(p => this.validRecord(p)).map(p => {
         const { tools: _legacyTools, ...record } = p as RecordEntry & { tools?: unknown };

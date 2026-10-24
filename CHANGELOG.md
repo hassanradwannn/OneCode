@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.0] — 2026-10-24
+
+Preserve journal failures as recoverable storage errors instead of revoked task authority, verify and migrate default Windows data beside the installation, resume interrupted artifact downloads, reduce Remote startup latency while retaining route custody checks, and improve Linux fonts and download progress. Add a verified GitHub stable-capsule lane against the compatible existing base. See [0.6.0 release notes](docs/release-notes/v0.6.0.md).
+
 ## [0.5.9] — 2026-10-24
 
 Repair terminal result delivery and legacy spool recovery, worker reuse across chat handoffs, durable Stop handling, immediate folder grants, journal access failure preservation and Remote history/attachments. The Beta validation release exercised native Windows and Linux internal updates. See [0.5.9 release notes](docs/release-notes/v0.5.9.md).

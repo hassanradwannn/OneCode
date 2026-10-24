@@ -1253,7 +1253,11 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
           ? updateInstallWaitingText(update)
           : t("{0} {1} is downloaded and ready. Choose Install when done to restart after your work finishes.", [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
         : update.stage === 'downloading'
-          ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent ?? 0)])
+          ? update.downloadPercent !== undefined && update.downloadPercent > 0
+            ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent)])
+            : update.downloadMegabytes !== undefined && update.downloadMegabytes > 0
+              ? t("{0} {1} is downloading ({2} MiB received). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadMegabytes)])
+              : t("{0} {1} is downloading. Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest)])
           : update.stage === 'failed'
             ? t("{0} {1} could not be downloaded: {2}.", [PRODUCT_LABEL, displayBuildVersion(update.latest), update.error ? updateErrorText(update.error) : t("the download stopped")])
             : update.installation === 'linux-unpacked'

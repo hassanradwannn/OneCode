@@ -81,11 +81,11 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
     <footer><span role="status">{message}</span><button className="primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button><button onClick={async () => { const value = await refresh(); setDraft(value.preferences); baseline.current = value.preferences; setRevision(value.preferencesRevision); setMessage('Reloaded'); }}>Reload host preferences</button></footer></section>;
 }
 
-function Workspace({ disconnect }: { disconnect(): void }) {
-  const [bootstrap, setBootstrap] = useState<RemoteBootstrap | null>(null), [sessions, setSessions] = useState<RemoteSession[]>([]), [nextCursor, setNextCursor] = useState<string | null>(null);
+function Workspace({ disconnect, initialBootstrap }: { disconnect(): void; initialBootstrap: RemoteBootstrap | null }) {
+  const [bootstrap, setBootstrap] = useState<RemoteBootstrap | null>(initialBootstrap), [sessions, setSessions] = useState<RemoteSession[]>([]), [nextCursor, setNextCursor] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [detail, setDetail] = useState<RemoteSessionDetail | null>(null), [events, setEvents] = useState<ControlApiEvents['events']>([]), [inputs, setInputs] = useState<ControlApiInput[]>([]);
-  const [provider, setProvider] = useState<ChatProvider | null>(null), [model, setModel] = useState(''), [effort, setEffort] = useState(''), [draft, setDraft] = useState(''), [view, setView] = useState('chat');
+  const [provider, setProvider] = useState<ChatProvider | null>(initialBootstrap?.preferences.chatProvider ?? initialBootstrap?.providers[0]?.id ?? null), [model, setModel] = useState(''), [effort, setEffort] = useState(''), [draft, setDraft] = useState(''), [view, setView] = useState('chat');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [connected, setConnected] = useState(false), [sending, setSending] = useState(false), [pending, setPending] = useState<string | null>(null), [editing, setEditing] = useState(false), [title, setTitle] = useState('');
   const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
   const pendingRef = useRef(pending); pendingRef.current = pending;
@@ -110,10 +110,10 @@ function Workspace({ disconnect }: { disconnect(): void }) {
   selectedRef.current = selected; draftRef.current = draft; boot.current = bootstrap;
   const pendingTarget = useRef<string | null>(null), pendingDraft = useRef(''), listLoaded = useRef(false);
   const refreshBootstrap = async () => { const value = await request<RemoteBootstrap>('bootstrap'); setBootstrap(value); return value; };
-  useEffect(() => { let alive = true; void refreshBootstrap().then(value => { if (alive) setProvider(value.preferences.chatProvider ?? value.providers[0]!.id); }).catch(error => alive && setError(error.message)); return () => { alive = false; }; }, []);
+  useEffect(() => { if (bootstrap && provider === null) setProvider(bootstrap.preferences.chatProvider ?? bootstrap.providers[0]!.id); }, [bootstrap, provider]);
   useEffect(() => {
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const seenPresentations = new Set<string>(); let historyInitialized = false, historyFrom: number | undefined;
+    const seenPresentations = new Set<string>(); let historyInitialized = false, historyFrom: number | undefined, skipBootstrapOnce = initialBootstrap !== null;
     const poll = async () => {
       const fresh = () => !controller.signal.aborted && selectedRef.current === selected;
       const tasks: Array<() => Promise<void>> = [];
@@ -148,7 +148,8 @@ function Workspace({ disconnect }: { disconnect(): void }) {
           setEvents(previous => mergeHistory(previous, history.events));
         }
       });
-      tasks.push(async () => {
+      if (skipBootstrapOnce) skipBootstrapOnce = false;
+      else tasks.push(async () => {
         const value = await request<RemoteBootstrap>('bootstrap', undefined, controller.signal);
         if (fresh()) setBootstrap(value);
       });
@@ -384,19 +385,20 @@ function App() {
     return () => { viewport?.removeEventListener('resize', fit); viewport?.removeEventListener('scroll', fit); window.removeEventListener('resize', fit); document.removeEventListener('focusin', focusChanged); document.removeEventListener('focusout', focusChanged); };
   }, []);
   const [connected, setConnected] = useState(false);
+  const [initialBootstrap, setInitialBootstrap] = useState<RemoteBootstrap | null>(null);
   const [connecting, setConnecting] = useState(hasRemoteLink() || hasRemoteToken()), [error, setError] = useState('');
   const reconnect = async () => {
     setConnecting(true); setError('');
-    try { await reconnectRemote(); setConnected(true); }
+    try { await reconnectRemote(); setInitialBootstrap(await connectRemote()); setConnected(true); }
     catch (cause) { setError((cause as Error).message); }
     finally { setConnecting(false); }
   };
   useEffect(() => {
     if (!hasRemoteLink() && !hasRemoteToken()) return;
-    void connectRemote().then(() => setConnected(true))
+    void connectRemote().then(value => { setInitialBootstrap(value); setConnected(true); })
       .catch(error => setError((error as Error).message)).finally(() => setConnecting(false));
   }, []);
-  return connected ? <Workspace disconnect={() => { forgetRemoteLink(); setConnected(false); }} />
+  return connected ? <Workspace initialBootstrap={initialBootstrap} disconnect={() => { forgetRemoteLink(); setInitialBootstrap(null); setConnected(false); }} />
     : <main className="pair"><div className="brand">◈ OneCode <small>Remote</small></div><h1>{connecting ? 'Connecting…' : 'Open your remote link'}</h1>
       {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>{error && hasRemoteLink() && <button onClick={() => void reconnect()}>Reconnect</button>}</>}</main>;
 }

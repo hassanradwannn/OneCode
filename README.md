@@ -2,11 +2,17 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest release: [OneCode 0.5.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.5.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Application update: [OneCode 0.6.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+
+The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.0 through the smaller application hotfix; 0.6.0 does not replace the complete installer assets with stale copies.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Windows and Linux AppImage installations use OneCode's verified internal update path. A DEB installation remains package-manager-owned and receives the exact DEB download instead of an implicit root-owned mutation. Your profile and saved chats are preserved.
+
+## What's new in 0.6.0
+
+Recoverable history access, verified installation-adjacent Windows data, resumable update downloads, faster Remote startup, and improved Linux text and download progress. Both platform capsules are built and checked in GitHub against the existing compatible base. See [0.6.0 notes](docs/release-notes/v0.6.0.md).
 
 ## What's new in 0.5.0
 
@@ -97,7 +103,7 @@ Keep chats and projects together, delegate workers, use account-available models
 
 ## Install
 
-1. **Windows x64:** run the [0.5.0 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Setup-x64.exe). **Linux x64:** download the [0.5.0 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.AppImage) or [0.5.0 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.0/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; DEB upgrades remain package-manager-owned.
+1. **Windows x64:** run the [0.5.10 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe). **Linux x64:** download the [0.5.10 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage) or [0.5.10 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; DEB upgrades remain package-manager-owned.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
