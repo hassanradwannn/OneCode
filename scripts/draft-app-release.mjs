@@ -27,9 +27,9 @@ function fail(message) {
 function validateInputs() {
   if (!['verify', 'stage', 'upload'].includes(operation)) fail('Choose verify, stage, or upload.');
   if (!/^[0-9a-f]{40}$/.test(sourceRef)) fail('source_ref must be an exact 40 character commit SHA.');
-  if (!['beta-full', 'beta-capsule', 'stable-full', 'stable-capsule'].includes(selectedOperation)) fail('Unsupported app build operation.');
+  if (!['beta-full', 'beta-capsule', 'stable-full', 'stable-capsule', 'stable-release', 'stable-full-backfill'].includes(selectedOperation)) fail('Unsupported app build operation.');
   if (!['win32', 'linux'].includes(platform)) fail('Only Windows x64 and Linux x64 are supported.');
-  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule') {
+  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
     if (!/^\d+\.\d+\.\d+$/.test(baseVersion)) fail('Capsule operations require base_version in X.Y.Z form.');
   } else if (baseVersion) {
     fail('base_version is only valid for capsule operations.');
@@ -37,7 +37,7 @@ function validateInputs() {
 }
 
 function channelFor(op = selectedOperation) {
-  return op === 'stable-full' || op === 'stable-capsule' ? 'stable' : 'beta';
+  return op === 'stable-full' || op === 'stable-capsule' || op === 'stable-release' || op === 'stable-full-backfill' ? 'stable' : 'beta';
 }
 
 function outputDirectory() {
@@ -103,13 +103,18 @@ async function getRelease(tagName, token) {
   fail('Release inventory exceeds the bounded draft lookup.');
 }
 
-async function verifyDraft(token, metadata) {
+async function verifyReleaseTarget(token, metadata) {
   const release = await getRelease(metadata.tag, token);
-  if (release.tag_name !== metadata.tag || release.draft !== true || release.published_at !== null || release.prerelease !== (metadata.channel === 'beta')) {
+  const publishedBackfill = selectedOperation === 'stable-full-backfill';
+  if (publishedBackfill) {
+    if (release.tag_name !== metadata.tag || release.draft !== false || !release.published_at || release.prerelease !== false) {
+      fail('Stable full backfill requires the exact already-published stable release.');
+    }
+  } else if (release.tag_name !== metadata.tag || release.draft !== true || release.published_at !== null || release.prerelease !== (metadata.channel === 'beta')) {
     fail('The requested release must still be an unpublished draft with the exact tag.');
   }
   if (await tagCommit(metadata.tag, token) !== metadata.sha) fail('The release tag no longer points at source_ref.');
-  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule') {
+  if (selectedOperation === 'beta-capsule' || selectedOperation === 'stable-capsule' || selectedOperation === 'stable-release') {
     const compare = (left, right) => {
       const a = left.split('.').map(Number), b = right.split('.').map(Number);
       for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
@@ -134,7 +139,7 @@ function expectedNames({ version, channel, op = selectedOperation }) {
   }
   if (platform === 'linux') {
     const full = [`${prefix}-Linux-x64.AppImage`, `${prefix}-Linux-x64.deb`, `${prefix}-Linux-Base-x64.json`];
-    return op === 'stable-full' ? [...full, `${prefix}-Linux-Hotfix-x64.zip`, `${prefix}-Linux-Hotfix-x64.json`] : full;
+    return op === 'stable-full' || op === 'stable-release' ? [...full, `${prefix}-Linux-Hotfix-x64.zip`, `${prefix}-Linux-Hotfix-x64.json`] : full;
   }
   const full = [
     `${prefix}-Setup-x64.exe`, `${prefix}-Setup-x64.exe.blockmap`,
@@ -142,7 +147,7 @@ function expectedNames({ version, channel, op = selectedOperation }) {
     `${prefix}-Companion-${version}.zip`, 'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip',
     'SKILL.md', 'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', `${prefix}-Base-x64.json`
   ];
-  return op === 'stable-full' ? [...full, 'OneCode-Hotfix-x64.zip', 'OneCode-Hotfix-x64.json'] : full;
+  return op === 'stable-full' || op === 'stable-release' ? [...full, 'OneCode-Hotfix-x64.zip', 'OneCode-Hotfix-x64.json'] : full;
 }
 
 function sha256File(file) {
@@ -219,7 +224,7 @@ async function verifyPrepared(metadata) {
   const hotfixName = platform === 'win32'
     ? `${metadata.channel === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Hotfix-x64.json`
     : `${metadata.channel === 'beta' ? 'OneCode-Beta' : 'OneCode'}-Linux-Hotfix-x64.json`;
-  if (capsule || selectedOperation === 'stable-full') {
+  if (capsule || selectedOperation === 'stable-full' || selectedOperation === 'stable-release') {
     const hotfix = JSON.parse(await fs.readFile(path.join(dir, hotfixName), 'utf8'));
     if (hotfix.version !== metadata.version || hotfix.platform !== platform || hotfix.arch !== arch || hotfix.runtime !== runtime.id) {
       fail('Hotfix manifest does not match the packaged runtime and target.');
@@ -231,6 +236,9 @@ async function verifyPrepared(metadata) {
     }
     if (selectedOperation === 'stable-capsule' && (hotfix.channel && hotfix.channel !== 'stable' || base.version !== baseVersion || base.channel && base.channel !== 'stable' || base.tag && base.tag !== `v${baseVersion}`)) {
       fail('Stable capsule is not bound to the requested published stable base.');
+    }
+    if (selectedOperation === 'stable-release' && (hotfix.channel && hotfix.channel !== 'stable' || base.version !== baseVersion || base.channel && base.channel !== 'stable' || base.tag && base.tag !== `v${baseVersion}`)) {
+      fail('Stable release compatibility capsule is not bound to the requested published stable base.');
     }
     if (selectedOperation === 'stable-full' && (hotfix.channel && hotfix.channel !== 'stable' || base.version !== metadata.version)) {
       fail('Stable compatibility capsule is not bound to this full stable release.');
@@ -321,19 +329,19 @@ async function uploadFile(uploadUrl, token, asset) {
 }
 
 async function performUpload(token, metadata, staged) {
-  let release = await verifyDraft(token, metadata);
+  let release = await verifyReleaseTarget(token, metadata);
   const assets = await listAssets(release, token);
   const uploadList = [...staged.rows, { name: staged.sidecarName, file: staged.sidecarPath, size: Buffer.byteLength(staged.sidecar), sha256: createHash('sha256').update(staged.sidecar).digest('hex') }];
   const existingByName = new Map(assets.map(asset => [asset.name, asset]));
   for (const asset of uploadList) {
-    release = await verifyDraft(token, metadata);
+    release = await verifyReleaseTarget(token, metadata);
     const previous = existingByName.get(asset.name);
     if (previous) {
       if (previous.size === asset.size && previous.digest === `sha256:${asset.sha256}`) {
         console.log(`Already present and verified: ${asset.name}`);
         continue;
       }
-      fail(`Draft already contains a different asset named ${asset.name}; refusing replacement.`);
+      fail(`Release already contains a different asset named ${asset.name}; refusing replacement.`);
     }
     await uploadFile(`https://uploads.github.com/repos/${OWNER}/${REPOSITORY}/releases/${release.id}/assets`, token, asset);
     console.log(`Uploaded ${asset.name} (${asset.size} bytes).`);
@@ -344,15 +352,15 @@ async function performUpload(token, metadata, staged) {
     const remote = finalByName.get(asset.name);
     if (!remote || remote.size !== asset.size || remote.digest !== `sha256:${asset.sha256}`) fail(`Draft asset verification failed for ${asset.name}.`);
   }
-  console.log(`Verified ${uploadList.length} curated assets on draft ${metadata.tag}; the release remains a draft.`);
+  console.log(`Verified ${uploadList.length} curated assets on ${metadata.tag}.`);
 }
 
 validateInputs();
 const metadata = sourceMetadata();
 if (operation === 'verify') {
   if (!env.GH_TOKEN) fail('GH_TOKEN is required only for draft checks.');
-  await verifyDraft(env.GH_TOKEN, metadata);
-  console.log(`Verified exact source ${metadata.sha}, version ${metadata.version}, and draft ${metadata.tag}.`);
+  await verifyReleaseTarget(env.GH_TOKEN, metadata);
+  console.log(`Verified exact source ${metadata.sha}, version ${metadata.version}, and release ${metadata.tag}.`);
 } else if (operation === 'stage') {
   const staged = await verifyPrepared(metadata);
   await writeBuildReceipt(metadata, staged);

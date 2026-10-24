@@ -6,6 +6,23 @@ Current stable source allows a positively identified DEB installation to activat
 
 Packaged Linux directory builds have an explicit QA installation kind, an isolated default profile and no production updater. A missing `APPIMAGE` environment variable alone does not prove DEB ownership. Changes to immutable bootstrap classification/profile rules require a new complete Linux base; they cannot be delivered to an older base as an application capsule.
 
+## Stable release policy
+
+Every new stable OneCode version publishes both delivery forms from the same frozen source commit:
+
+- a complete Windows installer plus Linux AppImage/DEB and their base descriptors for new users and clean installs;
+- cumulative Windows/Linux application capsules bound to the oldest intentionally supported published stable base whose immutable runtime still matches, so existing compatible users get the smaller internal update.
+
+Use the `stable-release` GitHub operation for ordinary future stable releases. It builds the full artifacts and the backward-compatible capsules on GitHub, verifies both platform runtimes, and uploads the curated set to the same draft. A runtime mismatch fails the release; never weaken the compatibility contract just to keep the capsule small.
+
+```sh
+gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release \
+  -f source_ref=EXACT_40_CHARACTER_COMMIT_SHA -f release_tag=vX.Y.Z \
+  -f operation=stable-release -f base_version=VERIFIED_MINIMUM_BASE -f platform=all
+```
+
+`stable-capsule` remains available for exceptional hotfix-only releases, but it is no longer the normal stable publication shape. `stable-full-backfill` is a guarded repair operation for adding missing full artifacts to an already-published stable tag without replacing existing assets; do not use it as the normal release workflow.
+
 ## Publish a compatible Windows hotfix
 
 From the canonical checkout, increment the normal three-part application version and matching Companion version, run the relevant focused tests and public verification, commit only the intended paths, push `release`, and freeze the exact 40-character source SHA. Create the exact version tag and an unpublished draft release before dispatching the cloud build.
@@ -106,4 +123,4 @@ GitHub's moving `/releases/latest` is a repository-wide concept, but OneCode upd
 
 For 0.5.0 and later, a synchronized full release should publish at least the Windows installer/base metadata and the Linux AppImage/DEB/base metadata together. A synchronized hotfix-only release publishes both platform capsules and sidecars, then combines the four manifest/archive rows into the release-level `SHA256SUMS.txt` that update discovery trusts. The combined register must not advertise absent full artifacts. When a platform requires a new native base, publish that platform's full artifact in the same version rather than making another platform's updater chase a nonexistent file.
 
-Fresh-install links must always target a complete base artifact, never a capsule. “Latest application version” and “latest complete installable base” are distinct concepts.
+Fresh-install links must always target the complete artifacts from the latest stable release. Existing compatible installations should prefer that same release's smaller capsule through the internal updater. “Latest application version” and “latest complete installable base” should therefore normally be the same version, while the capsule may still target an older compatible immutable base.

@@ -2,9 +2,9 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable application update: [OneCode 0.6.3](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.3)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.6.3](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.3)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.3/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.3/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.3/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.3 through the smaller application hotfix; 0.6.3 is intentionally hotfix-only and does not replace the complete installer/AppImage/DEB assets with stale copies.
+Fresh installs use the complete 0.6.3 Windows/Linux artifacts. Compatible existing stable installations receive the same 0.6.3 application through the smaller verified capsule when their immutable runtime matches the supported base, preserving the internal updater's smaller download path.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 

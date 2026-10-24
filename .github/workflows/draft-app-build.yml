@@ -20,6 +20,8 @@ on:
           - beta-capsule
           - stable-full
           - stable-capsule
+          - stable-release
+          - stable-full-backfill
       base_version:
         description: Required published compatible base version for capsule operations
         required: false
@@ -40,7 +42,7 @@ permissions:
 jobs:
   build-and-upload:
     name: ${{ matrix.platform }} x64 app release assets
-    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full' || inputs.operation == 'stable-capsule'
+    if: inputs.operation == 'beta-full' || inputs.operation == 'beta-capsule' || inputs.operation == 'stable-full' || inputs.operation == 'stable-capsule' || inputs.operation == 'stable-release' || inputs.operation == 'stable-full-backfill'
     strategy:
       fail-fast: false
       matrix:
@@ -166,11 +168,45 @@ jobs:
             node scripts/write-linux-hotfix-package.mjs release --base-version "$BASE_VERSION"
           fi
 
+      - name: Package complete stable release with backward-compatible capsule
+        if: inputs.operation == 'stable-release'
+        working-directory: app-source
+        shell: bash
+        run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
+          GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel stable --platform "$BUILD_PLATFORM" --arch x64
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            node scripts/prepare-windows-release.mjs release --full-only
+            node scripts/write-hotfix-package.mjs release --base-version "$BASE_VERSION"
+          else
+            node scripts/prepare-linux-release.mjs release --full-only
+            node scripts/write-linux-hotfix-package.mjs release --base-version "$BASE_VERSION"
+          fi
+
+      - name: Backfill complete stable artifacts on an existing release
+        if: inputs.operation == 'stable-full-backfill'
+        working-directory: app-source
+        shell: bash
+        run: |
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            export PATH="$(cygpath -u "$WINDIR")/System32:$PATH"
+            tar.exe --version
+          fi
+          GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=4096 node scripts/package.mjs --channel stable --platform "$BUILD_PLATFORM" --arch x64
+          if [[ "$BUILD_PLATFORM" == win32 ]]; then
+            node scripts/prepare-windows-release.mjs release --full-only
+          else
+            node scripts/prepare-linux-release.mjs release --full-only
+          fi
+
       - name: Run packaged runtime smoke
         working-directory: app-source
         shell: bash
         run: |
-          if [[ "$BUILD_OPERATION" == stable-full || "$BUILD_OPERATION" == stable-capsule ]]; then
+          if [[ "$BUILD_OPERATION" == stable-full || "$BUILD_OPERATION" == stable-capsule || "$BUILD_OPERATION" == stable-release || "$BUILD_OPERATION" == stable-full-backfill ]]; then
             ONECODE_BUILD_CHANNEL=stable ONECODE_PACKAGE_OUTPUT=release node scripts/smoke-packaged-runtime.mjs --platform "$BUILD_PLATFORM" --arch x64
           else
             ONECODE_BUILD_CHANNEL=beta ONECODE_PACKAGE_OUTPUT=release-beta node scripts/smoke-packaged-runtime.mjs --platform "$BUILD_PLATFORM" --arch x64
