@@ -16,7 +16,7 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
-  '0.5.6': {
+  '0.5.7': {
     lead: () => t('Terminal recovery, reliable Stop, and folder access in existing chats.'),
     highlights: [
       { icon: 'i-terminal', title: () => t('Recover completed terminal results'), text: () => t('Completed output releases its live slot, remains recoverable after restart, and no longer blocks new work after delivery.') },

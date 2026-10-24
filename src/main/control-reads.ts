@@ -390,7 +390,7 @@ async function sessionEvents(id: string, params: URLSearchParams): Promise<Contr
     throw new RequestError(400, 'invalid_query', 'from cannot be combined with before or after');
   }
   return heavy(async () => {
-    const page = await readSessionEvents(id, { ...query, limit: query.limit ?? 50 });
+    const page = await readSessionEvents(id, { ...query, limit: query.limit ?? 50, byResidence: false });
     if (!page) throw new RequestError(404, 'session_not_found');
     return { events: page.events.map(projectReadableEvent), total: page.total, nextFrom: page.nextFrom,
       ...(page.nextBefore !== undefined ? { nextBefore: page.nextBefore } : {}) };

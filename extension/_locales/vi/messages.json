@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Nhà cung cấp"
+  },
+  "content_connector_mismatch": {
+    "message": "Trình kết nối không khớp"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "Yêu cầu phê duyệt này ghi “$1”; Thiết lập yêu cầu “$2”. Tự động cho phép đã tạm dừng đối với thẻ này. Hãy kiểm tra và làm mới trình kết nối trong Thiết lập."
   }
 }

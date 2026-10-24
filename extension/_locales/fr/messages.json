@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Fournisseur"
+  },
+  "content_connector_mismatch": {
+    "message": "Connecteur différent"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "Cette autorisation indique « $1 » ; la configuration attend « $2 ». L’autorisation automatique est suspendue pour cette fiche. Vérifiez et actualisez le connecteur dans la configuration."
   }
 }

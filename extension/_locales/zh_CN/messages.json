@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "提供方"
+  },
+  "content_connector_mismatch": {
+    "message": "连接器不匹配"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "此授权指定了“$1”，但设置中要求“$2”。此卡片的自动允许已暂停。请在设置中检查并刷新连接器。"
   }
 }

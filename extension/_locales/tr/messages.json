@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Sağlayıcı"
+  },
+  "content_connector_mismatch": {
+    "message": "Bağlayıcı eşleşmiyor"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "Bu onay “$1” adını belirtiyor; kurulum “$2” bekliyor. Bu kart için otomatik izin duraklatıldı. Kurulumda bağlayıcıyı kontrol edip yenileyin."
   }
 }

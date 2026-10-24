@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "プロバイダー"
+  },
+  "content_connector_mismatch": {
+    "message": "コネクターが一致しません"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "この承認は「$1」を指定していますが、セットアップでは「$2」が必要です。このカードの自動許可を停止しました。セットアップでコネクターを確認して更新してください。"
   }
 }

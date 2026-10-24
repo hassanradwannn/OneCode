@@ -1951,7 +1951,7 @@ export class UnifiedExecProcessManager {
       if (this.processes.get(entry.processId) !== entry) return { processId: entry.processId, confirmed: true };
       // An exited leader can still have descendants holding inherited output pipes open.
       // Ask the process-tree helper to close those pipes before waiting on the spool boundary.
-      const confirmed = !entry.process.hasExited() && !entry.process.outputClosed
+      const confirmed = !entry.process.hasExited() || !entry.process.outputClosed
         ? await entry.process.terminate() : true;
       if (!confirmed && this.wslCustody?.get(entry.processId, entry.incarnation)) {
         this.wslLeaderExitUnconfirmed.add(entry.processId);

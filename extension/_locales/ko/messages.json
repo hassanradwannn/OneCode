@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "제공업체"
+  },
+  "content_connector_mismatch": {
+    "message": "커넥터 불일치"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "이 승인은 “$1”을 지정하지만 설정에서는 “$2”가 필요합니다. 이 카드의 자동 허용이 일시 중지되었습니다. 설정에서 커넥터를 확인하고 새로고침하세요."
   }
 }

@@ -1171,5 +1171,11 @@
   },
   "popup_provider": {
     "message": "Proveedor"
+  },
+  "content_connector_mismatch": {
+    "message": "El conector no coincide"
+  },
+  "content_connector_mismatch_tip": {
+    "message": "Esta aprobación indica «$1»; Configuración espera «$2». La autorización automática está en pausa para esta tarjeta. Revisa y actualiza el conector en Configuración."
   }
 }

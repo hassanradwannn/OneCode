@@ -10,7 +10,7 @@ import { trustedChatIds } from './trusted-chats.js';
 import { findSessionByConversation, getSession, listSessionPage, readEvents, readRecentEvents } from './store.js';
 import type { SessionListCursor } from './store.js';
 import type { SessionEventKind, SessionSummary } from '../../shared/session.js';
-import { residenceOf } from '../../shared/chronology.js';
+import { positionOf, residenceOf } from '../../shared/chronology.js';
 
 /**
  * The session list and event pages as clients read them.
@@ -78,7 +78,7 @@ export async function readSessionList(options: { cursor?: SessionListCursor; lim
 /** Null when there is no such session. */
 export async function readSessionEvents(
   id: string,
-  options: { from?: number; before?: number; after?: number; limit?: number; kinds?: readonly SessionEventKind[] }
+  options: { from?: number; before?: number; after?: number; limit?: number; kinds?: readonly SessionEventKind[]; byResidence?: boolean }
 ) {
   const summary = await getSession(id);
   if (!summary) return null;
@@ -91,10 +91,15 @@ export async function readSessionEvents(
     // Navigation uses immutable origins. `from` alone is a publication cursor
     // for live revisions and must never decide which history page owns a row.
     // A long turn's final answer is paged beside the turn's end, where it is drawn (`residenceOf`).
-    const events = await readRecentEvents(id, cap, { before: options.before, after: options.after, kinds: options.kinds, byResidence: true });
+    // Desktop/Remote pages group late final answers at their display residence.
+    // The local control API publishes immutable origin positions as its cursor;
+    // filtering and nextBefore must stay in that same domain for those callers.
+    const byResidence = options.byResidence !== false;
+    const position = byResidence ? residenceOf : positionOf;
+    const events = await readRecentEvents(id, cap, { before: options.before, after: options.after, kinds: options.kinds, byResidence });
     const nextFrom = events.reduce((cursor, event) => Math.max(cursor, event.seq + 1), 0);
-    const before = events.length ? Math.min(...events.map(residenceOf)) : null;
-    const earlier = before === null ? [] : await readRecentEvents(id, 1, { before, kinds: options.kinds, byResidence: true });
+    const before = events.length ? Math.min(...events.map(position)) : null;
+    const earlier = before === null ? [] : await readRecentEvents(id, 1, { before, kinds: options.kinds, byResidence });
     return { summary, events, total: summary.events, nextFrom, nextBefore: earlier.length ? before : null };
   }
   const events = await readEvents(id, { from: options.from, limit: cap, kinds: options.kinds });
