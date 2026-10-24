@@ -659,6 +659,10 @@ function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>, deskto
       }
       return { ok: true as const, data: await fn(payload) };
     } catch (err) {
+      if (err instanceof Error && err.message === 'Session not found') {
+        // Diagnose the failing owner without recording prompts, session ids or IPC payloads.
+        logWarn(`desktop request ${channel} failed: session_missing`);
+      }
       const message =
         err instanceof SandboxError || err instanceof z.ZodError
           ? err instanceof z.ZodError
