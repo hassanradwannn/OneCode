@@ -282,7 +282,7 @@ export const MAX_MCP_INSTRUCTIONS_CHARS = 4000;
 const DEFAULT_MCP = { instructions: '', persistentUrls: true } as const;
 /** Off for fresh installs and for every config written before the switches existed. */
 const DEFAULT_CONTROL_API = { enabled: false, allowActions: false } as const;
-/** Experimental Beta API: off unless explicitly enabled; its endpoint stays stable once configured. */
+/** Experimental API: off unless explicitly enabled; its endpoint stays stable once configured. */
 const DEFAULT_AGENT_API = { enabled: false, port: 32123 } as const;
 const DEFAULT_COMMAND_ALLOWLIST = { enabled: false, mode: 'allow', rules: [] } as const;
 const commandAllowlistRuleSchema = z.string().max(MAX_COMMAND_ALLOWLIST_RULE_CHARS).superRefine((rule, ctx) => {

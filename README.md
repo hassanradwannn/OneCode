@@ -2,20 +2,21 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Experimental Beta: [OneCode Beta 0.6.2](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.6.2)** · **Stable application update: [OneCode 0.6.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.1)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable application update: [OneCode 0.6.3](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.3)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.5.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.1 through the smaller application hotfix; 0.6.1 is intentionally hotfix-only and does not replace the complete installer/AppImage/DEB assets with stale copies.
+The fresh-install links provide the complete 0.5.10 base. Compatible installed copies receive 0.6.3 through the smaller application hotfix; 0.6.3 is intentionally hotfix-only and does not replace the complete installer/AppImage/DEB assets with stale copies.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
 
-## Experimental Beta 0.6.2: local OneCode API
+## Experimental local OneCode API
 
-Beta 0.6.2 adds an opt-in loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. It controls real OneCode chats: `/new` opens/selects a new chat, `/provider` chooses ChatGPT or Gemini for subsequent new chats, and OpenAI-compatible chat-completion/Responses calls enter OneCode's ordinary durable input path. The provider turn keeps the same Core tools, permissions, managed skills, installed MCP plugins and workers available to OneCode itself.
+OneCode 0.6.3 adds an opt-in **Experimental** loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. `/new`, `/provider` and `/session` control durable OneCode chats, while IDE-originated requests are mapped to their own project/thread sessions instead of sharing one global IDE chat. JetBrains retrieval/title helper requests are handled locally so they do not create provider turns or delay the real coding request.
 
-The API is off by default and binds no listener while disabled. Its per-device bearer key is stored in OS-encrypted credential storage and survives compatible updates; the trusted desktop can copy or rotate it without displaying it. Live capability discovery reflects new skills/plugins and permission changes without restarting the API. See [OneCode API (Beta)](docs/ONECODE-API.md) and the [0.6.2 Beta notes](docs/release-notes/v0.6.2.md).
+The durable OneCode session owns chat history, so IDE system/current-file context is preserved without replaying earlier assistant/tool transcript into every turn. When an IDE project already matches an approved OneCode project/root, the API binds that session to the normal project owner and OneCode can read, patch and run the project files directly; otherwise it returns the IDE-native edit/snippet format until that folder is approved once.
 
-Beta 0.6.2 is an application-capsule update over the complete 0.5.7 Beta base when the platform runtime fingerprint matches. This keeps old 0.5.7 Beta installations internally updateable while stable `v0.6.1` remains untouched.
+The API remains off by default and binds no listener while disabled. Its per-device bearer key is stored in OS-encrypted credential storage and survives compatible updates; the trusted desktop can copy or rotate it without displaying it. Live capability discovery reflects new skills/plugins and permission changes without restarting the API. See [OneCode API (Experimental)](docs/ONECODE-API.md) and the [0.6.3 release notes](docs/release-notes/v0.6.3.md).
 
+Stable 0.6.3 is an application-capsule update over the compatible stable base when the platform runtime fingerprint matches. The release build verifies that compatibility against the published base instead of assuming Beta runtime compatibility carries across channels.
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
 
 ## What's new in 0.6.1
@@ -153,7 +154,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.6.2 Beta release notes](docs/release-notes/v0.6.2.md), the [OneCode API guide](docs/ONECODE-API.md), the [0.6.1 stable release notes](docs/release-notes/v0.6.1.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
+Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.6.3 release notes](docs/release-notes/v0.6.3.md), the [OneCode API guide](docs/ONECODE-API.md), the [0.6.1 stable release notes](docs/release-notes/v0.6.1.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

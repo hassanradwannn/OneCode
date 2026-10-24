@@ -16,6 +16,16 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.3': {
+    lead: () => t('Use OneCode reliably from IDE chat clients such as CLion.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('IDE new chats map to new OneCode chats'), text: () => t('A fresh OpenAI-compatible client thread can start the provider selected by its OneCode model instead of inheriting a stale provider-bound API chat.') },
+      { icon: 'i-chat', title: () => t('Slash controls work inside IDE chat'), text: () => t('/new and /provider can be sent as ordinary OpenAI chat messages when the client cannot call OneCode-specific HTTP control routes directly.') },
+      { icon: 'i-file-text', title: () => t('IDE context without chat bloat'), text: () => t('Current project/file context is preserved while JetBrains helper calls stay local and old assistant/tool transcript is not duplicated into every durable OneCode turn.') },
+      { icon: 'i-terminal', title: () => t('Approved IDE projects edit directly'), text: () => t('When the IDE project is already approved in OneCode, its API chat binds to that workspace so OneCode can read, patch and run project files directly instead of driving the editor by mouse.') },
+      { icon: 'i-retry', title: () => t('API waits for the recorded final correctly'), text: () => t('Gemini completion waits resolve through OneCode’s response-turn chronology instead of waiting forever after the exact final has already been recorded.') }
+    ]
+  },
   '0.6.2': {
     lead: () => t('Use the OneCode agent from IDEs and local OpenAI-compatible clients.'),
     highlights: [

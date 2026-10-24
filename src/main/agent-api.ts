@@ -10,15 +10,17 @@
  * The listener is deliberately loopback-only and completely absent while disabled. Its bearer
  * key is stable across restarts/updates and lives only in the OS-backed encrypted secret store.
  */
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { z } from 'zod';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderForConversation, type ChatProvider } from '../shared/chat-provider.js';
 import { effectiveCapabilities, getConfig } from './config.js';
 import { readDurable, writeDurableNow } from './durable.js';
 import { logInfo, logWarn, redact } from './logger.js';
 import { pluginManager } from './plugins/manager.js';
+import { addProject, assignSessionProject, listProjects, projectWorkspace } from './projects.js';
 import { getSecret, setSecret } from './secrets.js';
 import { listSkillLibrary } from './skill-library.js';
 import { deliveryProof, listInputs, type InputEntry } from './session/input.js';
@@ -33,14 +35,36 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const COMPLETION_TIMEOUT_MS = 30 * 60_000;
 const DRAIN_MS = 2_000;
 
+const ideThreadSchema = z.object({
+  sessionId: z.string().min(8).max(64),
+  provider: z.enum(CHAT_PROVIDERS),
+  openingPending: z.boolean(),
+  project: z.string().max(240).nullable(),
+  projectId: z.string().uuid().nullable().default(null),
+  touchedAt: z.number().int().nonnegative()
+}).strict();
+
 const runtimeStateSchema = z.object({
   schema: z.literal(1),
   provider: z.enum(CHAT_PROVIDERS),
   sessionId: z.string().min(8).max(64).nullable(),
-  openingPending: z.boolean()
+  openingPending: z.boolean(),
+  ideThreads: z.record(z.string(), ideThreadSchema).default({})
 }).strict();
 
 type AgentApiRuntimeState = z.infer<typeof runtimeStateSchema>;
+
+type AgentApiCompletionResult = {
+  text: string;
+  sessionId: string;
+  provider: ChatProvider;
+  conversationId: string | null;
+  inputId: string;
+  model: string;
+  completedAt: number;
+  ideProject?: string | null;
+  workspaceBound?: boolean;
+};
 
 const messageSchema = z.object({
   role: z.enum(['system', 'developer', 'user', 'assistant', 'tool']),
@@ -128,16 +152,28 @@ async function defaultRuntimeState(): Promise<AgentApiRuntimeState> {
     schema: 1,
     provider: getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER,
     sessionId: null,
-    openingPending: false
+    openingPending: false,
+    ideThreads: {}
   };
 }
 
 async function reconcileRuntimeState(state: AgentApiRuntimeState): Promise<AgentApiRuntimeState> {
-  if (!state.sessionId) return state;
-  const session = await getSession(state.sessionId);
-  if (!session) return { ...state, sessionId: null, openingPending: false };
-  if (session.conversationId && state.openingPending) return { ...state, openingPending: false };
-  return state;
+  let next = state;
+  if (state.sessionId) {
+    const session = await getSession(state.sessionId);
+    if (!session) next = { ...next, sessionId: null, openingPending: false };
+    else if (session.conversationId && state.openingPending) next = { ...next, openingPending: false };
+  }
+  const ideThreads: AgentApiRuntimeState['ideThreads'] = {};
+  for (const [key, thread] of Object.entries(next.ideThreads)) {
+    const session = await getSession(thread.sessionId);
+    if (!session) continue;
+    ideThreads[key] = {
+      ...thread,
+      openingPending: thread.openingPending && !session.conversationId
+    };
+  }
+  return { ...next, ideThreads };
 }
 
 async function loadRuntimeState(): Promise<AgentApiRuntimeState> {
@@ -169,7 +205,95 @@ async function apiNewChat(provider?: ChatProvider): Promise<AgentApiRuntimeState
     titleSource: 'fallback',
     origin: { kind: 'desktop', fromSessionId: null, agentId: null, task: 'OneCode API' }
   });
-  return saveRuntimeState({ schema: 1, provider: provider ?? current.provider, sessionId: id, openingPending: true });
+  return saveRuntimeState({ ...current, schema: 1, provider: provider ?? current.provider, sessionId: id, openingPending: true });
+}
+
+function trimIdeThreads(threads: AgentApiRuntimeState['ideThreads']): AgentApiRuntimeState['ideThreads'] {
+  return Object.fromEntries(Object.entries(threads)
+    .sort((left, right) => right[1].touchedAt - left[1].touchedAt)
+    .slice(0, 64));
+}
+
+function sameProjectName(left: string, right: string): boolean {
+  return left.localeCompare(right, undefined, { sensitivity: 'accent', usage: 'search' }) === 0;
+}
+
+async function approvedIdeProject(project: string | null, hintedPath: string | null): Promise<{ id: string; name: string } | null> {
+  const catalog = (await listProjects()).filter(row => !row.ungrouped);
+  if (hintedPath && (path.isAbsolute(hintedPath) || path.win32.isAbsolute(hintedPath))) {
+    try {
+      const added = await addProject(hintedPath);
+      await projectWorkspace(added.id);
+      return { id: added.id, name: added.name };
+    } catch {
+      // A client-supplied path never grants access. It can bind only when the folder is already
+      // inside OneCode's approved roots; addProject/projectWorkspace enforce that boundary.
+    }
+  }
+  if (!project) return null;
+  const named: Array<{ id: string; name: string }> = [];
+  for (const row of catalog) {
+    if (!sameProjectName(row.name, project)) continue;
+    try {
+      await projectWorkspace(row.id);
+      named.push({ id: row.id, name: row.name });
+    } catch { /* stale project entries cannot authorize an IDE request */ }
+  }
+  if (named.length === 1) return named[0]!;
+  const roots = getConfig().roots.filter(root => sameProjectName(path.basename(root.path), project));
+  if (roots.length !== 1) return null;
+  try {
+    const added = await addProject(roots[0]!.path);
+    return { id: added.id, name: added.name };
+  } catch {
+    return null;
+  }
+}
+
+async function createIdeThread(threadKey: string, provider: ChatProvider, project: string | null, hintedPath: string | null): Promise<string> {
+  const current = await loadRuntimeState();
+  const sessionId = randomUUID();
+  await createSession({
+    reservedId: sessionId,
+    title: project ? 'IDE · ' + project : 'IDE · New chat',
+    titleSource: 'fallback',
+    origin: { kind: 'desktop', fromSessionId: null, agentId: null, task: 'OneCode API' }
+  });
+  const approved = await approvedIdeProject(project, hintedPath);
+  if (approved) await assignSessionProject(sessionId, approved.id);
+  const ideThreads = trimIdeThreads({
+    ...current.ideThreads,
+    [threadKey]: { sessionId, provider, openingPending: true, project, projectId: approved?.id ?? null, touchedAt: Date.now() }
+  });
+  await saveRuntimeState({ ...current, ideThreads });
+  logInfo('OneCode API created IDE thread project=' + (project ?? 'unknown') + ' provider=' + provider +
+    ' workspace=' + (approved ? 'bound' : 'unbound') + ' session=' + sessionId);
+  return sessionId;
+}
+
+async function updateIdeThread(threadKey: string, provider: ChatProvider, sessionId: string, openingPending: boolean): Promise<void> {
+  const current = await loadRuntimeState();
+  const existing = current.ideThreads[threadKey];
+  if (!existing || existing.sessionId !== sessionId) return;
+  const ideThreads = trimIdeThreads({
+    ...current.ideThreads,
+    [threadKey]: { ...existing, provider, openingPending, touchedAt: Date.now() }
+  });
+  await saveRuntimeState({ ...current, ideThreads });
+}
+
+async function refreshIdeThreadProject(threadKey: string, hintedPath: string | null): Promise<AgentApiRuntimeState['ideThreads'][string] | null> {
+  const current = await loadRuntimeState();
+  const existing = current.ideThreads[threadKey];
+  if (!existing) return null;
+  if (existing.projectId) return existing;
+  const approved = await approvedIdeProject(existing.project, hintedPath);
+  if (!approved) return existing;
+  await assignSessionProject(existing.sessionId, approved.id);
+  const next = { ...existing, projectId: approved.id, touchedAt: Date.now() };
+  await saveRuntimeState({ ...current, ideThreads: trimIdeThreads({ ...current.ideThreads, [threadKey]: next }) });
+  logInfo('OneCode API bound IDE project=' + (existing.project ?? approved.name) + ' session=' + existing.sessionId);
+  return next;
 }
 
 async function apiSelectProvider(provider: ChatProvider): Promise<AgentApiRuntimeState> {
@@ -185,7 +309,7 @@ async function apiSelectSession(sessionId: string): Promise<AgentApiRuntimeState
   }
   const current = await loadRuntimeState();
   const provider = session.conversationId ? chatProviderForConversation(session.conversationId, current.provider) : current.provider;
-  return saveRuntimeState({ schema: 1, provider, sessionId, openingPending: !session.conversationId });
+  return saveRuntimeState({ ...current, schema: 1, provider, sessionId, openingPending: !session.conversationId });
 }
 
 function safeEqual(leftValue: string, rightValue: string): boolean {
@@ -254,17 +378,114 @@ function messageText(content: z.infer<typeof messageSchema>['content']): string 
   return content.map(part => part.text ?? part.input_text ?? '').filter(Boolean).join('\n').trim();
 }
 
-function requestPrompt(messages: z.infer<typeof messageSchema>[]): string {
-  const latestUser = [...messages].reverse().find(message => message.role === 'user');
-  if (!latestUser) throw new ApiError(400, 'missing_user_message', 'A chat completion needs at least one user message.');
-  const user = messageText(latestUser.content);
+function ideProject(messages: z.infer<typeof messageSchema>[]): string | null {
+  const text = messages
+    .filter(message => message.role === 'system' || message.role === 'developer')
+    .map(message => messageText(message.content))
+    .join('\n');
+  return text.match(/You are working on project named ["']([^"']+)["']/i)?.[1]?.trim() ?? null;
+}
+
+type ApiEnvelope = Record<string, unknown>;
+
+function record(value: unknown): ApiEnvelope | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as ApiEnvelope : null;
+}
+
+function envelopeRecords(envelope: ApiEnvelope, messages: z.infer<typeof messageSchema>[]): ApiEnvelope[] {
+  const out: ApiEnvelope[] = [envelope];
+  const metadata = record(envelope.metadata);
+  if (metadata) out.push(metadata);
+  for (const message of messages) {
+    const row = message as ApiEnvelope;
+    out.push(row);
+    const messageMetadata = record(row.metadata);
+    if (messageMetadata) out.push(messageMetadata);
+  }
+  return out;
+}
+
+function stringFrom(records: ApiEnvelope[], keys: readonly string[], max = 2048): string | null {
+  for (const row of records) {
+    for (const key of keys) {
+      const value = row[key];
+      if (typeof value === 'string' && value.length > 0 && value.length <= max) return value;
+    }
+  }
+  return null;
+}
+
+function clientThreadHint(envelope: ApiEnvelope, messages: z.infer<typeof messageSchema>[]): string | null {
+  const firstUser = messages.find(message => message.role === 'user' && !!messageText(message.content)) as ApiEnvelope | undefined;
+  const firstId = firstUser && typeof firstUser.id === 'string' && firstUser.id.length <= 512 ? firstUser.id : null;
+  if (firstId) return firstId;
+  return stringFrom(envelopeRecords(envelope, messages), ['thread_id', 'threadId', 'conversation_id', 'conversationId', 'chat_id', 'chatId'], 512);
+}
+
+function ideProjectPathHint(envelope: ApiEnvelope, messages: z.infer<typeof messageSchema>[]): string | null {
+  const value = stringFrom(envelopeRecords(envelope, messages),
+    ['project_path', 'projectPath', 'workspace_path', 'workspacePath', 'working_directory', 'workingDirectory', 'cwd'], 32768);
+  if (!value || (!path.isAbsolute(value) && !path.win32.isAbsolute(value))) return null;
+  return value;
+}
+
+function isIdeRequest(messages: z.infer<typeof messageSchema>[], envelope: ApiEnvelope = {}): boolean {
+  return !!ideProject(messages) || !!ideProjectPathHint(envelope, messages) ||
+    messages.some(message => messageText(message.content).includes('<context-attachment>'));
+}
+
+type IdeThreadIdentity = { key: string; explicit: boolean; project: string | null; projectPath: string | null };
+
+function ideThreadIdentity(messages: z.infer<typeof messageSchema>[], envelope: ApiEnvelope = {}): IdeThreadIdentity | null {
+  if (!isIdeRequest(messages, envelope)) return null;
+  const project = ideProject(messages);
+  const projectPath = ideProjectPathHint(envelope, messages);
+  const explicit = clientThreadHint(envelope, messages);
+  if (explicit) {
+    return {
+      key: createHash('sha256').update((project ?? projectPath ?? 'ide') + '\0' + explicit).digest('hex').slice(0, 32),
+      explicit: true, project, projectPath
+    };
+  }
+  const first = messages.find(message => message.role === 'user' && !!messageText(message.content));
+  if (!first) return null;
+  return {
+    key: createHash('sha256').update((project ?? projectPath ?? 'unknown-project') + '\0' + messageText(first.content)).digest('hex').slice(0, 32),
+    explicit: false, project, projectPath
+  };
+}
+
+function requestEnvelopeShape(envelope: ApiEnvelope, messages: z.infer<typeof messageSchema>[]): string {
+  const top = Object.keys(envelope).filter(key => key !== 'messages' && key !== 'input').sort();
+  const extras = new Set<string>();
+  for (const message of messages) {
+    for (const key of Object.keys(message as ApiEnvelope)) if (key !== 'role' && key !== 'content') extras.add(key);
+  }
+  const tools = Array.isArray(envelope.tools) ? envelope.tools.length : 0;
+  return ' fields=' + top.join(',') + ' message_fields=' + [...extras].sort().join(',') + ' client_tools=' + tools;
+}
+
+function requestPrompt(messages: z.infer<typeof messageSchema>[], ideWorkspaceBound = false,
+  ideMode = isIdeRequest(messages)): string {
+  const latestUserIndex = messages.findLastIndex(message => message.role === 'user' && !!messageText(message.content));
+  if (latestUserIndex < 0) throw new ApiError(400, 'missing_user_message', 'A chat completion needs at least one user message.');
+  const user = messageText(messages[latestUserIndex]!.content);
   if (!user) throw new ApiError(400, 'empty_user_message', 'The latest user message is empty.');
   const instructions = messages
     .filter(message => message.role === 'system' || message.role === 'developer')
     .map(message => messageText(message.content))
     .filter(Boolean);
-  if (!instructions.length) return user;
-  return 'API client instructions:\n' + instructions.join('\n\n') + '\n\nUser request:\n' + user;
+  const sections: string[] = [];
+  if (ideMode) {
+    sections.push(ideWorkspaceBound
+      ? 'IDE integration mode: this OneCode session is bound to the IDE project\'s approved workspace. Treat the IDE context as authoritative, and for edits use OneCode\'s direct filesystem/project tools so the IDE observes file changes immediately. Prefer project read/apply_patch/exec tools; do not use computer or desktop automation to edit the IDE.'
+      : 'IDE integration mode: the calling IDE supplied project/file context, but this OneCode session is not bound to an approved workspace yet. Treat the supplied context as authoritative. Do not use computer or desktop automation to edit the IDE. For edits, return the JetBrains-compatible edit/snippet format requested by the client until the project folder is approved in OneCode once.');
+  }
+  if (instructions.length) sections.push('API client instructions:\n' + instructions.join('\n\n'));
+  // The durable OneCode session already owns prior chat history. Replaying the client's whole
+  // transcript on each follow-up duplicates context and makes IDE chats grow quadratically.
+  sections.push('User request:\n' + user);
+  return sections.length === 1 ? user : sections.join('\n\n');
 }
 
 function responsesMessages(input: unknown): z.infer<typeof messageSchema>[] {
@@ -284,11 +505,84 @@ function responsesMessages(input: unknown): z.infer<typeof messageSchema>[] {
         return { type: String(value.type ?? 'text'), text: typeof value.text === 'string' ? value.text : typeof value.input_text === 'string' ? value.input_text : '' };
       });
     }
-    const parsed = messageSchema.safeParse({ role, content });
+    // Preserve client metadata/id fields just like Chat Completions does. IDE thread identity may
+    // live on an input message, and the Responses adapter must not erase it while normalizing text.
+    const parsed = messageSchema.safeParse({ ...row, role, content });
     if (parsed.success) messages.push(parsed.data);
   }
   if (!messages.length) throw new ApiError(400, 'invalid_input', 'Responses input contains no supported text messages.');
   return messages;
+}
+
+type IdeHelper = { kind: 'subqueries'; request: string } | { kind: 'title'; source: string };
+
+function ideHelper(messages: z.infer<typeof messageSchema>[]): IdeHelper | null {
+  const latest = [...messages].reverse().find(message => message.role === 'user' && !!messageText(message.content));
+  if (!latest) return null;
+  const text = messageText(latest.content);
+  if (text.includes('You are given a user') && text.includes('create sub-requests') && /Give subqueries that would be useful to search for (?:in )?project/i.test(text)) {
+    const request = text.match(/Now, here you got a user request:\s*([\s\S]*?)\s*Give subqueries that would be useful to search for (?:in )?project/i)?.[1]?.trim();
+    if (request) return { kind: 'subqueries', request };
+  }
+  if (text.includes('Suggest a MOST SPECIFIC title for this chat') && text.includes('answer only with the title text')) {
+    const source = messages.find(message => message.role === 'user' && message !== latest && !!messageText(message.content));
+    return { kind: 'title', source: source ? messageText(source.content) : 'OneCode IDE Chat' };
+  }
+  return null;
+}
+
+const QUERY_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'at', 'be', 'code', 'do', 'does', 'for', 'from', 'how', 'i', 'in', 'into',
+  'is', 'it', 'of', 'on', 'please', 'that', 'the', 'this', 'to', 'what', 'with', 'write', 'you'
+]);
+
+function helperSubqueries(request: string): string {
+  const lower = request.toLowerCase();
+  const out: string[] = [];
+  const add = (value: string) => { if (value && !out.includes(value)) out.push(value); };
+  for (const phrase of ['linked list', 'priority queue', 'binary tree', 'hash table', 'main menu', 'insert at position']) {
+    if (lower.includes(phrase)) add(phrase);
+  }
+  for (const raw of request.match(/\b[A-Za-z_][A-Za-z0-9_]{2,}\b/g) ?? []) {
+    const word = raw.toLowerCase();
+    if (!QUERY_STOP_WORDS.has(word)) add(raw);
+    if (out.length >= 7) break;
+  }
+  if (lower.includes('delete')) add('delete');
+  if (lower.includes('display')) add('display');
+  if (lower.includes('insert')) add('insert');
+  if (lower.includes('main')) add('main');
+  if (!out.length) add('main');
+  return out.slice(0, 8).join('\n');
+}
+
+function helperTitle(source: string): string {
+  const lower = source.toLowerCase();
+  if (lower.includes('linked list')) return 'C++ Linked List Interactive Menu';
+  if (lower.includes('priority queue')) return 'C++ Priority Queue Code Explanation';
+  if (/what does (this )?code do/.test(lower)) return 'C++ Code Explanation';
+  const words = source.replace(/<[^>]+>/g, ' ').match(/[A-Za-z0-9_+#.-]+/g) ?? [];
+  const useful = words.filter(word => !QUERY_STOP_WORDS.has(word.toLowerCase())).slice(0, 7);
+  if (!useful.length) return 'OneCode IDE Chat';
+  return useful.map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+}
+
+async function runIdeHelper(model: string, messages: z.infer<typeof messageSchema>[]): Promise<AgentApiCompletionResult | null> {
+  const helper = ideHelper(messages);
+  if (!helper) return null;
+  const current = await loadRuntimeState();
+  const provider = requestedProvider(model, current.provider).provider;
+  const text = helper.kind === 'subqueries' ? helperSubqueries(helper.request) : helperTitle(helper.source);
+  logInfo('OneCode API handled IDE helper locally kind=' + helper.kind);
+  return {
+    text,
+    sessionId: '',
+    provider,
+    conversationId: null,
+    inputId: randomUUID(),
+    model,
+    completedAt: Date.now()
+  };
 }
 
 function requestedProvider(model: string, fallback: ChatProvider): { provider: ChatProvider; explicit: boolean } {
@@ -297,6 +591,63 @@ function requestedProvider(model: string, fallback: ChatProvider): { provider: C
   if (normalized === 'onecode-chatgpt' || normalized === 'chatgpt') return { provider: 'chatgpt', explicit: true };
   if (normalized === 'onecode-gemini' || normalized === 'gemini') return { provider: 'gemini', explicit: true };
   throw new ApiError(404, 'model_not_found', 'Use onecode, onecode-chatgpt, or onecode-gemini.');
+}
+
+type ApiSlashControl =
+  | { kind: 'new'; provider?: ChatProvider }
+  | { kind: 'provider'; provider?: ChatProvider };
+
+function slashControl(messages: z.infer<typeof messageSchema>[]): ApiSlashControl | null {
+  const latest = [...messages].reverse().find(message => message.role === 'user' && !!messageText(message.content));
+  if (!latest) return null;
+  const match = messageText(latest.content).match(/^\/(new|provider)(?:\s+(chatgpt|gemini))?\s*$/i);
+  if (!match) return null;
+  const provider = match[2]?.toLowerCase() as ChatProvider | undefined;
+  return match[1]!.toLowerCase() === 'new' ? { kind: 'new', provider } : { kind: 'provider', provider };
+}
+
+function clientConversationHasAnswer(messages: z.infer<typeof messageSchema>[]): boolean {
+  return messages.some(message => message.role === 'assistant' && !!messageText(message.content));
+}
+
+function requestShape(messages: z.infer<typeof messageSchema>[]): string {
+  const roles = messages.map(message => message.role).join(',');
+  const chars = messages.reduce((total, message) => total + messageText(message.content).length, 0);
+  return 'messages=' + messages.length + ' roles=' + roles + ' text_chars=' + chars;
+}
+
+async function runSlashControl(model: string, messages: z.infer<typeof messageSchema>[]): Promise<AgentApiCompletionResult | null> {
+  const command = slashControl(messages);
+  if (!command) return null;
+  const current = await loadRuntimeState();
+  const wanted = requestedProvider(model, current.provider);
+  if (command.kind === 'new') {
+    const provider = command.provider ?? wanted.provider;
+    const next = await apiNewChat(provider);
+    logInfo('OneCode API slash /new selected provider=' + provider + ' session=' + next.sessionId);
+    return {
+      text: 'Started a new OneCode ' + provider + ' chat.',
+      sessionId: next.sessionId!, provider, conversationId: null,
+      inputId: randomUUID(), model, completedAt: Date.now()
+    };
+  }
+  if (command.provider) {
+    const next = await apiSelectProvider(command.provider);
+    logInfo('OneCode API slash /provider selected default=' + next.provider);
+    return {
+      text: 'Default provider set to ' + next.provider + '. Existing OneCode chats keep their provider; use /new to start a chat with the selected provider.',
+      sessionId: next.sessionId ?? '', provider: next.provider,
+      conversationId: next.sessionId ? (await getSession(next.sessionId))?.conversationId ?? null : null,
+      inputId: randomUUID(), model, completedAt: Date.now()
+    };
+  }
+  const projection = await runtimeProjection() as Record<string, unknown>;
+  return {
+    text: 'Default provider is ' + current.provider + '; current chat provider is ' + String(projection.provider ?? current.provider) + '.',
+    sessionId: current.sessionId ?? '', provider: current.provider,
+    conversationId: current.sessionId ? (await getSession(current.sessionId))?.conversationId ?? null : null,
+    inputId: randomUUID(), model, completedAt: Date.now()
+  };
 }
 
 async function waitForSessionChange(sessionId: string, signal: AbortSignal): Promise<void> {
@@ -332,7 +683,20 @@ async function waitForFinal(inputId: string, sessionId: string, signal: AbortSig
       const events = await readRecentEvents(sessionId, 128, { kinds: ['user_message', 'chat_error', 'turn_end'], orderByOrigin: true });
       const question = [...events].reverse().find(event => event.kind === 'user_message' && event.inputId === inputId);
       if (question?.kind === 'user_message') {
-        const final = await readCompletedFinal(sessionId, session.conversationId, question.turnId ?? null);
+        // A provider's canonical user-message identity is not necessarily its response-turn
+        // identity. Gemini, for example, records the native question with a provider message id
+        // while `timelineTurns` owns the generated response under a separate local turn id.
+        // Passing the question's raw turnId therefore waits forever even after the exact final
+        // is durable. Resolve the response turn through the chronology owner instead. When the
+        // same question was reopened after a stall, the newest matching turn is the best anchor;
+        // readCompletedFinal already joins those related generations by questionId.
+        const responseTurnId = Object.entries(session.timelineTurns ?? {})
+          .filter(([, turn]) => turn.questionId === question.messageId)
+          .sort((left, right) => left[1].origin - right[1].origin)
+          .at(-1)?.[0] ?? null;
+        const final = responseTurnId
+          ? await readCompletedFinal(sessionId, session.conversationId, responseTurnId)
+          : null;
         if (final && final.completedAt >= question.time) return { ...final, conversationId: session.conversationId };
         const blocking = [...events].reverse().find(event => event.kind === 'chat_error' && event.time >= question.time && event.blocking === true);
         if (blocking?.kind === 'chat_error') throw new ApiError(502, 'provider_error', blocking.message.text || blocking.reason || 'The provider stopped this turn.');
@@ -347,32 +711,96 @@ async function existingOpening(sessionId: string): Promise<InputEntry | undefine
   return (await listInputs()).find(row => row.id === sessionId && row.opening === true && row.sessionId === sessionId);
 }
 
-async function runCompletion(model: string, messages: z.infer<typeof messageSchema>[], signal: AbortSignal): Promise<{
-  text: string; sessionId: string; provider: ChatProvider; conversationId: string; inputId: string; model: string; completedAt: number;
-}> {
+async function runCompletion(model: string, messages: z.infer<typeof messageSchema>[], signal: AbortSignal,
+  envelope: ApiEnvelope = {}): Promise<AgentApiCompletionResult> {
   if (completionActive) throw new ApiError(409, 'onecode_busy', 'Another OneCode API completion is still running. Use a separate OneCode chat after it finishes.');
   completionActive = true;
   try {
     let state = await loadRuntimeState();
-    if (!state.sessionId) state = await apiNewChat();
-    let sessionId = state.sessionId!;
-    let session = await getSession(sessionId);
-    if (!session) {
-      state = await apiNewChat(state.provider);
+    const wanted = requestedProvider(model, state.provider);
+    const identity = ideThreadIdentity(messages, envelope);
+    const clientHasAnswer = clientConversationHasAnswer(messages);
+    let sessionId: string;
+    let session;
+    let openingPending = false;
+    let ideWorkspaceBound = false;
+    let ideKey: string | null = null;
+    let preferredProvider = wanted.provider;
+
+    if (identity) {
+      ideKey = identity.key;
+      let thread = state.ideThreads[identity.key];
+      let threadSession = thread ? await getSession(thread.sessionId) : null;
+      // Without an explicit client thread id, a first-turn request after the prior mapped chat has
+      // already completed is a new IDE chat. While an opening is still pending we reuse it instead
+      // of replaying the same uncertain first Send.
+      const newHeuristicThread = !!thread && !identity.explicit && !clientHasAnswer && !thread.openingPending && !!threadSession?.conversationId;
+      if (!thread || !threadSession || newHeuristicThread) {
+        await createIdeThread(identity.key, wanted.provider, identity.project, identity.projectPath);
+        state = await loadRuntimeState();
+        thread = state.ideThreads[identity.key];
+        threadSession = thread ? await getSession(thread.sessionId) : null;
+      } else {
+        thread = await refreshIdeThreadProject(identity.key, identity.projectPath) ?? thread;
+        threadSession = await getSession(thread.sessionId);
+      }
+      if (!thread || !threadSession) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the IDE API chat.');
+      if (wanted.explicit && wanted.provider !== thread.provider && !threadSession.conversationId) {
+        await createIdeThread(identity.key, wanted.provider, identity.project, identity.projectPath);
+        state = await loadRuntimeState();
+        thread = state.ideThreads[identity.key];
+        threadSession = thread ? await getSession(thread.sessionId) : null;
+        if (!thread || !threadSession) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the provider-specific IDE chat.');
+      }
+      sessionId = thread.sessionId;
+      session = threadSession;
+      openingPending = thread.openingPending && !session.conversationId;
+      ideWorkspaceBound = !!thread.projectId;
+      preferredProvider = thread.provider;
+    } else {
+      if (!state.sessionId) state = await apiNewChat();
       sessionId = state.sessionId!;
       session = await getSession(sessionId);
-      if (!session) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the API chat.');
+      if (!session) {
+        state = await apiNewChat(state.provider);
+        sessionId = state.sessionId!;
+        session = await getSession(sessionId);
+        if (!session) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the API chat.');
+      }
+      openingPending = state.openingPending && !session.conversationId;
     }
-    const wanted = requestedProvider(model, state.provider);
-    const boundProvider = session.conversationId ? chatProviderForConversation(session.conversationId, state.provider) : null;
+
+    let boundProvider = session.conversationId ? chatProviderForConversation(session.conversationId, state.provider) : null;
     if (boundProvider && wanted.explicit && wanted.provider !== boundProvider) {
-      throw new ApiError(409, 'provider_locked', 'This chat already belongs to ' + boundProvider + '. Call /new before switching providers.');
+      if (identity && !clientHasAnswer) {
+        await createIdeThread(identity.key, wanted.provider, identity.project, identity.projectPath);
+        state = await loadRuntimeState();
+        const thread = state.ideThreads[identity.key];
+        sessionId = thread?.sessionId ?? '';
+        session = sessionId ? await getSession(sessionId) : null;
+        if (!thread || !session) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the provider-specific IDE chat.');
+        openingPending = thread.openingPending && !session.conversationId;
+        ideWorkspaceBound = !!thread.projectId;
+        preferredProvider = thread.provider;
+        boundProvider = null;
+        logInfo('OneCode API opened a fresh ' + wanted.provider + ' IDE chat for explicit model ' + model + ' session=' + sessionId);
+      } else if (!identity && !clientHasAnswer) {
+        state = await apiNewChat(wanted.provider);
+        sessionId = state.sessionId!;
+        session = await getSession(sessionId);
+        if (!session) throw new ApiError(500, 'session_create_failed', 'OneCode could not create the provider-specific API chat.');
+        openingPending = state.openingPending;
+        preferredProvider = wanted.provider;
+        boundProvider = null;
+      } else {
+        throw new ApiError(409, 'provider_locked', 'This chat already belongs to ' + boundProvider + '. Use /new before switching providers.');
+      }
     }
-    const provider = boundProvider ?? wanted.provider;
-    const text = requestPrompt(messages);
+    const provider = boundProvider ?? preferredProvider;
+    const text = requestPrompt(messages, ideWorkspaceBound, !!identity);
     let inputId: string = randomUUID();
     let row: InputEntry;
-    if (state.openingPending && !session.conversationId) {
+    if (openingPending && !session.conversationId) {
       inputId = sessionId;
       const existing = await existingOpening(sessionId);
       if (existing) {
@@ -394,11 +822,19 @@ async function runCompletion(model: string, messages: z.infer<typeof messageSche
     }
     const actualSessionId = row.sessionId ?? row.deliveredSessionId ?? sessionId;
     const final = await waitForFinal(inputId, actualSessionId, signal);
-    const current = await loadRuntimeState();
-    if (current.sessionId === actualSessionId && current.openingPending) {
-      await saveRuntimeState({ ...current, provider, openingPending: false });
+    if (ideKey) {
+      await updateIdeThread(ideKey, provider, actualSessionId, false);
+    } else {
+      const current = await loadRuntimeState();
+      if (current.sessionId === actualSessionId && current.openingPending) {
+        await saveRuntimeState({ ...current, provider, openingPending: false });
+      }
     }
-    return { text: final.text, sessionId: actualSessionId, provider, conversationId: final.conversationId, inputId, model, completedAt: final.completedAt };
+    return {
+      text: final.text, sessionId: actualSessionId, provider, conversationId: final.conversationId,
+      inputId, model, completedAt: final.completedAt,
+      ...(identity ? { ideProject: identity.project, workspaceBound: ideWorkspaceBound } : {})
+    };
   } finally {
     completionActive = false;
   }
@@ -453,18 +889,21 @@ function modelList(state: AgentApiRuntimeState): unknown {
   return { object: 'list', data: [model('onecode', 'selected'), model('onecode-chatgpt', 'chatgpt'), model('onecode-gemini', 'gemini')], onecode: { selected_provider: state.provider } };
 }
 
-function completionBody(result: Awaited<ReturnType<typeof runCompletion>>): unknown {
+function completionBody(result: AgentApiCompletionResult): unknown {
   return {
     id: 'chatcmpl-' + result.inputId.replace(/-/g, ''),
     object: 'chat.completion',
     created: Math.floor(result.completedAt / 1000),
     model: result.model,
     choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
-    onecode: { session_id: result.sessionId, provider: result.provider, conversation_id: result.conversationId, input_id: result.inputId }
+    onecode: {
+      session_id: result.sessionId, provider: result.provider, conversation_id: result.conversationId, input_id: result.inputId,
+      ...(result.ideProject !== undefined ? { ide_project: result.ideProject, workspace_bound: result.workspaceBound === true } : {})
+    }
   };
 }
 
-function responseBody(result: Awaited<ReturnType<typeof runCompletion>>): unknown {
+function responseBody(result: AgentApiCompletionResult): unknown {
   return {
     id: 'resp_' + result.inputId.replace(/-/g, ''),
     object: 'response',
@@ -473,11 +912,14 @@ function responseBody(result: Awaited<ReturnType<typeof runCompletion>>): unknow
     model: result.model,
     output: [{ id: 'msg_' + result.inputId.replace(/-/g, ''), type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: result.text, annotations: [] }] }],
     output_text: result.text,
-    onecode: { session_id: result.sessionId, provider: result.provider, conversation_id: result.conversationId, input_id: result.inputId }
+    onecode: {
+      session_id: result.sessionId, provider: result.provider, conversation_id: result.conversationId, input_id: result.inputId,
+      ...(result.ideProject !== undefined ? { ide_project: result.ideProject, workspace_bound: result.workspaceBound === true } : {})
+    }
   };
 }
 
-function streamChatCompletion(res: http.ServerResponse, result: Awaited<ReturnType<typeof runCompletion>>): void {
+function streamChatCompletion(res: http.ServerResponse, result: AgentApiCompletionResult): void {
   const id = 'chatcmpl-' + result.inputId.replace(/-/g, '');
   const created = Math.floor(result.completedAt / 1000);
   res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive', 'x-onecode-session': result.sessionId, 'x-onecode-provider': result.provider });
@@ -486,7 +928,7 @@ function streamChatCompletion(res: http.ServerResponse, result: Awaited<ReturnTy
   res.end('data: [DONE]\n\n');
 }
 
-function streamResponse(res: http.ServerResponse, result: Awaited<ReturnType<typeof runCompletion>>): void {
+function streamResponse(res: http.ServerResponse, result: AgentApiCompletionResult): void {
   const response = responseBody(result);
   res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive', 'x-onecode-session': result.sessionId, 'x-onecode-provider': result.provider });
   res.write('event: response.completed\ndata: ' + JSON.stringify({ type: 'response.completed', response }) + '\n\n');
@@ -534,18 +976,27 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, insta
   }
   if (method === 'POST' && route === '/v1/chat/completions') {
     const body = parseBody(completionSchema, await readJson(req));
+    const envelope = body as ApiEnvelope;
+    logInfo('OneCode API chat request model=' + body.model + ' ' + requestShape(body.messages) + requestEnvelopeShape(envelope, body.messages));
     const gone = new AbortController();
     res.once('close', () => { if (!res.writableEnded) gone.abort(); });
-    const result = await runCompletion(body.model, body.messages, gone.signal);
+    const result = await runSlashControl(body.model, body.messages) ??
+      await runIdeHelper(body.model, body.messages) ??
+      await runCompletion(body.model, body.messages, gone.signal, envelope);
     if (gone.signal.aborted || res.destroyed) return;
     if (body.stream) return streamChatCompletion(res, result);
     return reply(res, 200, completionBody(result), { 'x-onecode-session': result.sessionId, 'x-onecode-provider': result.provider });
   }
   if (method === 'POST' && route === '/v1/responses') {
     const body = parseBody(responsesSchema, await readJson(req));
+    const messages = responsesMessages(body.input);
+    const envelope = body as ApiEnvelope;
+    logInfo('OneCode API responses request model=' + body.model + ' ' + requestShape(messages) + requestEnvelopeShape(envelope, messages));
     const gone = new AbortController();
     res.once('close', () => { if (!res.writableEnded) gone.abort(); });
-    const result = await runCompletion(body.model, responsesMessages(body.input), gone.signal);
+    const result = await runSlashControl(body.model, messages) ??
+      await runIdeHelper(body.model, messages) ??
+      await runCompletion(body.model, messages, gone.signal, envelope);
     if (gone.signal.aborted || res.destroyed) return;
     if (body.stream) return streamResponse(res, result);
     return reply(res, 200, responseBody(result), { 'x-onecode-session': result.sessionId, 'x-onecode-provider': result.provider });

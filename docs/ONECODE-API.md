@@ -1,12 +1,12 @@
-# OneCode API (Beta)
+# OneCode API (Experimental)
 
-OneCode 0.6.2 Beta can expose the running desktop app as a local OpenAI-compatible API. The API is a façade over OneCode, not a second agent runtime: requests enter the same durable chat/input path used by the desktop, the selected browser provider runs the turn, and that turn keeps OneCode's normal Core tools, permissions, skills, installed MCP plugins, workers and recording rules.
+OneCode 0.6.3 can expose the running desktop app as an **Experimental** local OpenAI-compatible API. The API is a façade over OneCode, not a second agent runtime: requests enter the same durable chat/input path used by the desktop, the selected browser provider runs the turn, and that turn keeps OneCode's normal Core tools, permissions, skills, installed MCP plugins, workers and recording rules.
 
 The feature is **off by default**. While it is off, OneCode does not bind the API port or run API-specific background work.
 
 ## Enable and connect
 
-Open **Settings → General → For developers**, turn on **OneCode API (Beta)**, and keep or change the loopback port. The default base URL is:
+Open **Settings → General → For developers**, turn on **OneCode API (Experimental)**, and keep or change the loopback port. The default base URL is:
 
 ```text
 http://127.0.0.1:32123/v1
@@ -20,7 +20,7 @@ The listener binds only to `127.0.0.1`. Requests must use its loopback Host, mus
 
 ## OpenAI-compatible endpoints
 
-The Beta supports these client-facing endpoints:
+The experimental API supports these client-facing endpoints:
 
 - `GET /v1/models` — advertises `onecode`, `onecode-chatgpt`, and `onecode-gemini`.
 - `POST /v1/chat/completions` — accepts text chat messages and returns an OpenAI-style chat completion. `stream: true` returns SSE after the native OneCode answer is complete.
@@ -28,7 +28,17 @@ The Beta supports these client-facing endpoints:
 
 `onecode` uses the API's currently selected provider for a new chat. `onecode-chatgpt` and `onecode-gemini` explicitly select that provider for an unbound new chat. Once a OneCode chat is bound to a provider, that chat keeps its provider; switch provider by selecting it and opening a new chat rather than retargeting an existing conversation.
 
-This Beta is text-in/text-out at the OpenAI HTTP boundary. Files, images and provider-native request features are not claimed as OpenAI API compatibility yet. The OneCode agent inside the selected browser chat can still use all OneCode capabilities that the user has enabled.
+The experimental API is text-in/text-out at the OpenAI HTTP boundary. Files, images and provider-native request features are not claimed as OpenAI API compatibility yet. The OneCode agent inside the selected browser chat can still use all OneCode capabilities that the user has enabled.
+
+## IDE integration
+
+0.6.3 keeps IDE-originated chats separate from the device-level control chat. When a client supplies a stable thread or conversation identifier, OneCode uses it. For clients such as JetBrains BYOK that may not expose one, OneCode uses the IDE project plus first user turn as a bounded fallback and starts a fresh mapping for a new first-turn chat after the previous mapping has completed. A different IDE project therefore cannot silently continue the previous project's OneCode chat.
+
+JetBrains AI Assistant also sends internal model requests for code-search subqueries and chat titles. OneCode handles those known housekeeping requests locally; they do not create provider chats, consume the real OneCode completion slot, or enter durable OneCode history.
+
+The durable OneCode session is the history owner. The API keeps the IDE's system/developer instructions and current user/file attachment context, but it does not copy the client's earlier assistant/tool transcript back into every turn. This avoids quadratic context growth while preserving the editor/project context needed for the current request.
+
+For direct edits, IDE metadata never grants filesystem permission. If the IDE project matches an already-approved OneCode project/root, the API binds that session to the normal OneCode project owner and the agent can use direct filesystem read/patch/exec tools; CLion or PyCharm then observe the file changes normally. If the project is not approved, approve/share that folder in OneCode once. Until then the agent is told not to drive the IDE by mouse and to return the IDE's native edit/snippet format instead.
 
 ## OneCode controls
 
@@ -60,9 +70,9 @@ The capability document is descriptive. It does not grant permissions. Actual to
 
 ## Chat and concurrency behavior
 
-The API keeps one device/profile-level current chat and default provider across restarts. This is intentionally close to using the OneCode desktop: `/new` changes the current API chat, `/session` selects another, and the next completion goes there.
+The API keeps one device/profile-level control chat/default provider across restarts, plus a bounded set of recent IDE thread mappings. `/new` and `/session` still control the explicit API chat; IDE-originated requests use their own mapped OneCode sessions so a new project/chat does not inherit unrelated provider history.
 
-One API completion is admitted at a time in 0.6.2 Beta. This avoids races between independent OpenAI clients and the single current-chat pointer while the behavior is experimental. `/new`, `/provider` and reads remain explicit controls; a later Beta can add client-scoped sessions without changing the underlying OneCode chat/input owner.
+One real OneCode API completion is admitted at a time in the current experimental implementation. Known IDE housekeeping requests are answered locally and do not occupy that slot, preventing JetBrains' parallel retrieval/title calls from delaying the real coding turn. Each IDE thread still has its own durable OneCode session.
 
 If the HTTP client disconnects, OneCode stops waiting for that HTTP response. It does **not** assume the provider turn was cancelled or replay the request: the already-admitted OneCode input retains custody and may still finish in its chat.
 
@@ -70,4 +80,4 @@ If the HTTP client disconnects, OneCode stops waiting for that HTTP response. It
 
 The API enable switch, port, current API chat/default provider, and encrypted bearer key survive ordinary restarts. Application hotfix/capsule updates preserve the same profile, so the API identity survives compatible updates as well.
 
-Beta 0.6.2 is designed as an application capsule over the complete Beta 0.5.7 runtime. Packaging verifies the immutable runtime fingerprint before a capsule is accepted; a mismatch fails the release instead of weakening update compatibility.
+Stable 0.6.3 is designed to ship as an application capsule when the published stable base has the same immutable runtime fingerprint. Packaging verifies that fingerprint before a capsule is accepted; a mismatch fails the release instead of weakening update compatibility.

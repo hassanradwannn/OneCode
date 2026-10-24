@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.3] — 2026-10-24
+
+Ship the experimental local OneCode API in the stable application channel after native IDE acceptance. IDE chats are isolated per project/thread, JetBrains retrieval/title helper calls are handled locally, prior client transcript is no longer replayed into durable OneCode history, approved IDE projects bind to OneCode's normal direct filesystem workspace, slash controls work through ordinary chat-completion clients, and Gemini completion waits resolve against the canonical response-turn identity. See [0.6.3 release notes](docs/release-notes/v0.6.3.md).
+
 ## [0.6.2 Beta] — 2026-10-24
 
 Add an opt-in local OpenAI-compatible OneCode API for IDEs and other same-computer clients. `/new`, `/provider` and `/session` control real durable OneCode chats; chat-completion/Responses requests enter the ordinary desktop input owner so provider turns retain Core tools, permissions, skills, plugins and workers. Add live capability discovery, OS-encrypted persistent per-device authentication, explicit key rotation and a loopback-only disabled-by-default listener. Beta capsule compatibility targets the complete 0.5.7 Beta base and fails closed on immutable-runtime mismatch. See [0.6.2 Beta release notes](docs/release-notes/v0.6.2.md) and [OneCode API](docs/ONECODE-API.md).
