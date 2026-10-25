@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.12': {
+    lead: () => t('Keep long tasks authorized after Compact & Resume.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Long resumed tasks'), text: () => t('Completed handoff receipts survive cleanup and restart, so an ongoing resumed task keeps its local tool access. Replaced questions, stopped responses and changed chat attachments still require fresh task authorization.') },
+      { icon: 'i-terminal', title: () => t('Messages alongside local work'), text: () => t('Includes the early Steer and retained follow-up fixes while local tasks and polls continue.') }
+    ]
+  },
   '0.6.11': {
     lead: () => t('Confirm early Steer without waiting for local work.'),
     highlights: [

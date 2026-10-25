@@ -542,7 +542,11 @@ function sweep(): void {
     // declared dead and had released the very handover it was carrying. The deadline applies
     // to *waiting*, and once the durable phase starts there is nothing left to wait for.
     if (entry.state === 'committing' || commitLocks.has(entry.token) || checkpointLocks.has(entry.token)) continue;
-    if (entry.state === 'committed' || entry.state === 'aborted') {
+    // A committed handoff is also the original receipt for the successor's
+    // task capability. Its waiting deadline cannot revoke that running task.
+    // Admission still checks its current attachment, exact question and turn.
+    if (entry.state === 'committed') continue;
+    if (entry.state === 'aborted') {
       // Kept briefly so a repeated ack can be answered with "already done" rather than with
       // a fresh transaction, then forgotten.
       if (Date.now() - entry.touchedAt > CONTINUATION_TTL_MS * 2) byToken.delete(entry.token);
@@ -1788,8 +1792,13 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
     'committed',
     'aborted'
   ]);
-  for (const raw of snapshot.entries.slice(0, 32)) {
+  // Completed handoffs retain exact task proof independently of the bounded
+  // unfinished transaction recovery budget. Older receipts must not crowd a
+  // still-current successor out of recovery after restart.
+  let unfinishedCount = 0;
+  for (const raw of snapshot.entries) {
     if (!raw) continue;
+    if (raw.state !== 'committed' && unfinishedCount++ >= 32) continue;
     // The retention window scales with the same per-ticket deadline the live sweep uses:
     // a Pro brief still inside its longer writing clock must survive a restart within it
     // rather than vanish silently at twice the ordinary TTL.
@@ -1802,8 +1811,8 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
       raw.from.length === 0 || raw.from.length > 256 ||
       !validStates.has(raw.state) ||
       !Number.isFinite(raw.openedAt) ||
-      ((raw.state === 'committed' || raw.state === 'aborted') && now - lastTouchedAt >= retentionMs) ||
-      (raw.automatic !== true && now - lastTouchedAt >= retentionMs &&
+      (raw.state === 'aborted' && now - lastTouchedAt >= retentionMs) ||
+      (raw.state !== 'committed' && raw.automatic !== true && now - lastTouchedAt >= retentionMs &&
         !(raw.state === 'awaiting-summary' && raw.sourceSend?.preparationWait && sendUnattempted(raw.sourceSend)))
     ) {
       continue;
