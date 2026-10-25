@@ -43,7 +43,15 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 71;
+  const RECORDER_VERSION = 72;
+  // Presentation belongs to this extension installation, even when Stable and
+  // Beta share a native browser profile. Keep the shared styling/exclusion classes,
+  // but never expose the legacy cleanup markers: older healthy worlds remove every
+  // such node and both MutationObservers would reinsert forever. This is a DOM
+  // cleanup namespace only; it supplies no provider identity or task authority.
+  const PRESENTATION_OWNER = (() => {
+    try { return globalThis.chrome?.runtime?.id || ''; } catch { return ''; }
+  })();
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -8679,7 +8687,7 @@
   function buildControl() {
     const root = document.createElement('div');
     root.className = 'clf-composer';
-    root.dataset.clfComposer = '1';
+    root.dataset.onecodeComposerOwner = PRESENTATION_OWNER;
 
     const pill = document.createElement('span');
     pill.className = 'clf-pill';
@@ -8783,6 +8791,7 @@
    * it cannot be interrupted by a repaint.
    */
   function injectControl() {
+    if (!PRESENTATION_OWNER) return;
     // A brand-new ChatGPT tab used to have nothing to offer — nothing to compact, no feed to
     // read, and a disabled "send a message first" button is not worth half a composer. It has
     // something now: a goal written here is what writes the chat's first message, so the sheet
@@ -8791,10 +8800,10 @@
     if (!spot || !spot.host) return;
     if (!control || !control.root.isConnected) {
       if (!control) control = buildControl();
-      // A host that already holds one of ours (a stale node from a previous subtree)
-      // gets cleaned up rather than accumulating copies.
-      for (const stale of spot.host.querySelectorAll('[data-clf-composer]')) {
-        if (stale !== control.root) stale.remove();
+      // Retire only this installation's stale projection. A different Companion
+      // retains its own control and observer, including legacy unowned controls.
+      for (const stale of spot.host.querySelectorAll('[data-onecode-composer-owner]')) {
+        if (stale !== control.root && stale.getAttribute('data-onecode-composer-owner') === PRESENTATION_OWNER) stale.remove();
       }
       if (spot.before && spot.before.parentElement === spot.host) spot.host.insertBefore(control.root, spot.before);
       else spot.host.append(control.root);
@@ -10108,7 +10117,7 @@
   function buildStage() {
     const root = document.createElement('div');
     root.className = 'clf-stage';
-    root.dataset.clfStage = '1';
+    root.dataset.onecodeStageOwner = PRESENTATION_OWNER;
     root.setAttribute('role', 'status');
     root.setAttribute('aria-live', 'polite');
 
@@ -10218,6 +10227,7 @@
    * control beside it: ChatGPT replaces this subtree whenever it feels like it.
    */
   function injectStage() {
+    if (!PRESENTATION_OWNER) return;
     // Stage state is conversation-scoped. A concrete different route is handled by
     // resetConversation(); an id-less route is the New Chat/transient-router gap. In both
     // cases the current composer is not proven to belong to the state we would paint.
@@ -10250,8 +10260,8 @@
     if (!spot || !spot.host) return;
     if (!stagePanel) stagePanel = buildStage();
     if (stagePanel.root.parentElement !== spot.host) {
-      for (const old of spot.host.querySelectorAll('[data-clf-stage]')) {
-        if (old !== stagePanel.root) old.remove();
+      for (const old of spot.host.querySelectorAll('[data-onecode-stage-owner]')) {
+        if (old !== stagePanel.root && old.getAttribute('data-onecode-stage-owner') === PRESENTATION_OWNER) old.remove();
       }
       if (spot.before && spot.before.parentElement === spot.host) spot.host.insertBefore(stagePanel.root, spot.before);
       else spot.host.append(stagePanel.root);

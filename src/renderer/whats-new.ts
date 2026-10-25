@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.7': {
+    lead: () => t('Keep the browser responsive when Stable and Beta Companions share a profile.'),
+    highlights: [
+      { icon: 'i-browser', title: () => t('Companion controls coexist'), text: () => t('Stable and Beta keep their own composer controls and progress panels, preventing repeated removal and reinsertion from freezing a provider page.') },
+      { icon: 'i-retry', title: () => t('Recovery and startup improvements'), text: () => t('Includes the earlier Stop/restart, bounded startup and keyring waits, correct Windows/Linux connection routing, recorded file links and centered previews.') }
+    ]
+  },
   '0.6.6': {
     lead: () => t('Keep Windows and Linux browser connections on the correct host.'),
     highlights: [
