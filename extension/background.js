@@ -1207,18 +1207,52 @@ function clearRetryIfIdle() {
   }
 }
 
+let browserPlatform = null;
+let platformLookup = null;
+let platformRetryAt = 0;
+/** Native runtime metadata, never a provider page or user-agent guess. */
+function nativeBrowserPlatform() {
+  if (browserPlatform) return Promise.resolve(browserPlatform);
+  const embedded = globalThis.__cosBrowserWorker?.platform;
+  if (['win32', 'linux', 'darwin'].includes(embedded)) return Promise.resolve(browserPlatform = embedded);
+  if (typeof chrome.runtime.getPlatformInfo !== 'function' || Date.now() < platformRetryAt) return Promise.resolve(null);
+  if (platformLookup) return platformLookup;
+  const lookup = (async () => {
+    let timer;
+    try {
+      const info = await Promise.race([
+        chrome.runtime.getPlatformInfo(),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 500); })
+      ]);
+      browserPlatform = ({ win: 'win32', linux: 'linux', mac: 'darwin' })[info?.os] ?? null;
+      return browserPlatform;
+    } catch { return null; }
+    finally {
+      clearTimeout(timer);
+      if (!browserPlatform) platformRetryAt = Date.now() + 5000;
+    }
+  })();
+  const tracked = lookup.finally(() => { if (platformLookup === tracked) platformLookup = null; });
+  platformLookup = tracked;
+  return tracked;
+}
+
 async function hello(candidate) {
   try {
     // The first greeting should already name the build, but it is a diagnostic: never let it
     // hold up discovery for longer than a packaged file read takes.
     await Promise.race([workerStampReady, new Promise(resolve => setTimeout(resolve, 500))]);
+    const nativePlatform = await nativeBrowserPlatform();
     const response = await fetchBounded(`http://127.0.0.1:${candidate}/hello`, {
       cache: 'no-store',
       headers: versionHeaders()
     }, HELLO_TIMEOUT_MS);
     if (!response.ok) return null;
     const body = await response.json();
-    return body && body.app === 'onecode' ? body : null;
+    // WSL can forward a Linux loopback listener into Windows while its own app is
+    // closed. Do not attach, re-pair or import another OS's conversations through it.
+    // Missing platform evidence cannot prove that a legacy listener is on this OS.
+    return body && body.app === 'onecode' && nativePlatform !== null && body.platform === nativePlatform ? body : null;
   } catch {
     return null;
   }
@@ -1254,6 +1288,7 @@ function versionHeaders() {
   return {
     'x-extension-version': version,
     'x-extension-protocol': String(BRIDGE_PROTOCOL),
+    ...(browserPlatform ? { 'x-extension-platform': browserPlatform } : {}),
     ...(workerStampValue ? { 'x-extension-build': workerStampValue } : {}),
     ...(browserId ? { 'x-extension-browser': browserId } : {}),
     // The app tells the person's own browser apart from the CoS browser's copy of this extension.

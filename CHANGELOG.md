@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.6 Beta candidate] — 2026-10-25
+
+Keep Companion discovery and pairing on the browser's native OS when WSL forwards another installation's loopback listener. Refuse foreign-OS authenticated actions before processing observations or changing credentials. Preserve pairing through a transient native-platform lookup failure. Includes the 0.6.4 and 0.6.5 recovery, Stop/restart, startup, downloads and preview fixes. Native acceptance and stable promotion remain pending. See [0.6.6 candidate notes](docs/release-notes/v0.6.6.md).
+
 ## [0.6.5 Beta candidate] — 2026-10-25
 
 Let a fresh explicit message restart the chat after confirmed native Stop without waiting for the old activity timer; earlier queued work and automation remain held. Bound asynchronous OS credential-storage calls so an unanswered keyring prompt cannot prevent the first window or hold state reads indefinitely. Preserve ciphertext and installation identity, discard late results, and avoid stacking native calls behind the same prompt. Includes the 0.6.4 recovery, Stop, browser-startup, file-link and preview fixes. Native acceptance and stable promotion remain pending. See [0.6.5 candidate notes](docs/release-notes/v0.6.5.md).

@@ -2684,7 +2684,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!origin) return json(res, 403, { error: 'forbidden_origin' }, null);
     res.writeHead(204, {
       'access-control-allow-origin': origin,
-      'access-control-allow-headers': 'authorization, content-type, x-extension-version, x-extension-protocol, x-extension-build, x-extension-browser, x-extension-host, x-extension-engine',
+      'access-control-allow-headers': 'authorization, content-type, x-extension-version, x-extension-protocol, x-extension-build, x-extension-browser, x-extension-host, x-extension-engine, x-extension-platform',
       'access-control-allow-methods': 'GET, POST, OPTIONS',
       // Chrome asks for this before letting an extension reach a loopback address.
       'access-control-allow-private-network': 'true',
@@ -2696,20 +2696,26 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (!originAllowed) return json(res, 403, { error: 'forbidden_origin' }, null);
 
-  noteExtensionVersion(req);
+  // A forwarded WSL loopback port is not the browser's native host. Fence both
+  // discovery-to-pair races and authenticated writes without changing credentials.
+  const declaredPlatform = req.headers['x-extension-platform'];
+  const foreignHost = declaredPlatform !== undefined && declaredPlatform !== process.platform;
+  if (foreignHost && route !== '/hello') return json(res, 409, { error: 'browser_host_mismatch' }, origin);
+  if (!foreignHost) noteExtensionVersion(req);
 
   // Identification only. Deliberately says nothing about roots, permissions or state.
   if (route === '/hello') {
-    const stored = await getSecret('bridgeToken');
+    const stored = foreignHost ? null : await getSecret('bridgeToken');
     return json(
       res,
       200,
       {
         app: 'onecode',
+        platform: process.platform,
         version: APP_VERSION,
         bridge: BRIDGE_PROTOCOL,
         // Unknown, not incompatible, for a caller that states no protocol (curl in a bug report).
-        compatible: extensionProtocol(req) === null ? null : protocolCompatible(req),
+        compatible: extensionProtocol(req) === null ? null : !foreignHost && protocolCompatible(req),
         paired: stored !== null && stored !== BROWSER_DISCONNECTED,
         disconnected: stored === BROWSER_DISCONNECTED
       },

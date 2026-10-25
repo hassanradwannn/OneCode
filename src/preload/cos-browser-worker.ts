@@ -37,6 +37,7 @@ if (workerProtocol === 'chrome-extension:') {
     for (const subscriber of subscribers) subscriber(name, args);
   });
   contextBridge.exposeInMainWorld('__cosBrowserWorker', {
+    platform: process.platform,
     call: async (name: string, args: unknown[]): Promise<unknown> => {
       const reply = await invoke(name, args);
       // Chrome's exact messages, such as "No tab with id: 7.", reach the extension unchanged.
