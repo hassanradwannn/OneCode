@@ -652,13 +652,20 @@ export function createBrowserControl(chrome, transport, protectedTab = () => fal
     if (!poll.ok) { if (poll.status === 401 || poll.status === 426) await revoke(); return; }
     policy = poll.data.policy;
     if (epoch !== poll.data.epoch) { await Promise.all([...tabs.values()].map(release)); epoch = poll.data.epoch; await save(); }
-    if (!enabled || !policy?.read) { await revoke(); return; }
+    const canControl = enabled && policy?.read;
+    // The desktop's exact recorded-file activation does not attach a debugger
+    // or spend model screen/control authority. Revoke those leases, while still
+    // accepting this separate, one-shot native-link command from the broker.
+    if (!canControl) await revoke();
     for (const request of poll.data.requests || []) {
       const owners = [...new Set([...tabs.values()].map(state => state.owner).filter(owner => owner.startsWith('request:')))];
       const claim = await transport('/browser-control',{method:'POST',body:JSON.stringify({action:'claim',browserId,id:request,epoch,owners})});
       if (!claim.ok || !claim.data.command) continue;
       let result;
-      try { result = await execute(claim.data.command); }
+      try {
+        if (!canControl && claim.data.command.tool !== 'native_file_link') error('BROWSER_PERMISSION_REVOKED: no operation dispatched.');
+        result = await execute(claim.data.command);
+      }
       catch (cause) { result = {error:cut(cause?.message || cause,1500)}; }
       if (new TextEncoder().encode(JSON.stringify(result)).length > 1_800_000) result = {error:'BROWSER_RESULT_TOO_LARGE: operation may have completed; inspect before repeating.'};
       receipt = {id:request,epoch,result}; await save();

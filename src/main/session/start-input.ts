@@ -35,20 +35,34 @@ const startupError = (error: unknown): string =>
   (error instanceof SetupNotReady ? SETUP_PREFIX : BROWSER_PREFIX) + (error as Error).message;
 
 async function ready(signal?: AbortSignal): Promise<void> {
+  const deadline = new AbortController();
+  const lifetime = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
+  const timer = setTimeout(() => deadline.abort(new Error('The connector did not become ready. Check its connection status and try again.')), 65000);
+  timer.unref?.();
+  let abort = () => {};
+  try {
+    lifetime.throwIfAborted();
+    // Include connect() itself: a stalled serialized lifecycle must not retain
+    // this input's startup slot forever or open its tab after the deadline.
+    await Promise.race([ensureReady(lifetime), new Promise<never>((_resolve, reject) => {
+      abort = () => reject(lifetime.reason);
+      lifetime.addEventListener('abort', abort, { once: true });
+    })]);
+  } finally { clearTimeout(timer); lifetime.removeEventListener('abort', abort); }
+}
+async function ensureReady(signal: AbortSignal): Promise<void> {
   await connect();
   signal?.throwIfAborted();
   // startTunnel returns a lifecycle handle before OpenAI /readyz or cloudflared's URL.
   // Await the existing status authority before browser work; local admission is already durable.
   await new Promise<void>((resolve, reject) => {
     let unsubscribe = () => {};
-    const timer = setTimeout(() => { unsubscribe(); signal?.removeEventListener('abort', abort); reject(new Error('The connector did not become ready. Check its connection status and try again.')); }, 65000);
-    timer.unref?.();
-    const abort = () => { clearTimeout(timer); unsubscribe(); reject(signal?.reason); };
+    const abort = () => { unsubscribe(); reject(signal.reason); };
     signal?.addEventListener('abort', abort, { once: true });
     const inspect = () => {
       const status = getStatus();
       if (['starting-server', 'connecting-tunnel', 'offline'].includes(status.state)) return;
-      clearTimeout(timer); unsubscribe(); signal?.removeEventListener('abort', abort);
+      unsubscribe(); signal.removeEventListener('abort', abort);
       if (status.state === 'connected') resolve();
       else reject(new SetupNotReady(status.detail || 'Finish connection setup before sending.'));
     };

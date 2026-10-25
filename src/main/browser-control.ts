@@ -51,8 +51,8 @@ export class BrowserControlBroker {
     for (const [id, client] of this.clients) if (Date.now() - client.seen >= BROWSER_LIMITS.presenceMs) this.clients.delete(id);
     if (!this.clients.has(browserId) && this.clients.size >= BROWSER_LIMITS.clients) throw new Error('Too many browser connections');
     this.clients.set(browserId, { name: name.slice(0, 80), seen: Date.now(), enabled });
-    return { epoch: this.epoch, requests: enabled ? [...this.pending].filter(([, p]) => p.browserId === browserId && !p.claimed && !p.claiming)
-      .map(([id]) => id) : [] };
+    return { epoch: this.epoch, requests: [...this.pending].filter(([, p]) => p.browserId === browserId && !p.claimed && !p.claiming &&
+      (enabled || p.command.tool === 'native_file_link')).map(([id]) => id) };
   }
 
   async claim(browserId: string, id: string, epoch: string,
@@ -109,7 +109,7 @@ export class BrowserControlBroker {
     }
     const client = browsers.find(b => b.id === browserId);
     if (!client) return { error: 'BROWSER_OFFLINE: this browser incarnation is no longer connected. List browsers again.' };
-    if (!client.enabled) return { error: 'BROWSER_EXTENSION_PERMISSION: Chrome must grant the companion its debugger and tabs permissions. Reload/update the extension.' };
+    if (!client.enabled && tool !== 'native_file_link') return { error: 'BROWSER_EXTENSION_PERMISSION: Chrome must grant the companion its debugger and tabs permissions. Reload/update the extension.' };
     delete args.browserId;
     const id = randomUUID();
     const command: BrowserCommand = { id, epoch: this.epoch, owner, conversationId, tool, args, expiresAt: Date.now() + BROWSER_LIMITS.timeoutMs };

@@ -10801,6 +10801,7 @@ const REPAIR_HOLD_REASONS: Record<string, string> = {
   'page-changed': 'the page is on another chat or was reloaded',
   'stop-requested': 'a Stop is in progress',
   'tool-running': 'a local tool call for this chat is still running',
+  'tool-state-unavailable': 'the app could not confirm whether local tools have drained',
   sending: 'a sent message is still waiting for the provider to confirm it',
   'page-busy': 'the page is busy with another action',
   compaction: 'a Compact & resume is in progress',

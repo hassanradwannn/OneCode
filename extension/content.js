@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 70;
+  const RECORDER_VERSION = 71;
   const recorderHandle = {
     version: RECORDER_VERSION,
     healthy: () => false,
@@ -2196,13 +2196,19 @@
     const native = currentAssistantTurn();
     const nativeId = pageTurnIds.get(expected);
     const latestNative = () => CLF_DOM.turns().at(-1);
-    if (!generating || !nativeId || native?.id !== nativeId || latestNative()?.id !== nativeId) return false;
+    const mountedAnswer = () => !!nativeId && native?.id === nativeId && latestNative()?.id === nativeId;
+    // Thinking may begin before any assistant section is mounted. The redeemed
+    // command's exact latest user anchor can prove that boundary too; a Stop icon
+    // or an old assistant section alone cannot identify the requested response.
+    if (!generating || (!mountedAnswer() && latestNative()?.role !== 'user')) return false;
     const reply = await ask({ type: 'stop_redeem', id: commandId, client: RUN_ID, conversationId: target });
     observe();
     const command = reply?.command;
     if (!reply?.ok || command?.type !== 'stop' || command.turnId !== expected || command.conversationId !== target) return false;
-    const canStop = () => current() && generating && (!unwitnessedGeneration || stopQuestionMatches(command.userMessageId)) && latestNative()?.role === 'assistant' &&
-      latestNative()?.id === nativeId && pageTurnIds.get(expected) === nativeId;
+    const canStop = () => current() && generating &&
+      ((latestNative()?.role === 'assistant' && mountedAnswer() && pageTurnIds.get(expected) === nativeId &&
+        (!unwitnessedGeneration || stopQuestionMatches(command.userMessageId))) ||
+       (latestNative()?.role === 'user' && CLF_DOM.generating() && stopQuestionMatches(command.userMessageId)));
     if (command.continuationInputId) {
       // This Stop belongs to the user's pending continuation. Keep user Stop
       // flags clear; only native terminal evidence may release that same input.
@@ -13922,13 +13928,17 @@
     const source = currentAssistantTurn();
     if (source) await refreshFiber({ pageTurnId: source.id, pageTurn: source.node || source.nodes?.[0] });
     await flush();
+    // Activity polling may be stalled after a transport failure. Its cached
+    // nonzero count must not hold this repair forever, and cached zero cannot
+    // prove tools have drained either. Ask the existing exact-chat owner fresh.
+    const running = current() ? await peekPendingTools(target) : null;
     const questionId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? null;
     const expected = message.expected;
     // Which part moved since the first check, and for progress what moved it, so a refused
     // repair can say why instead of only "the page changed" (#1086).
     const changed = !expected ? null : expected.turnId !== turnId ? 'turn' : expected.questionId !== questionId ? 'question'
       : expected.revision !== turnProgressRevision ? 'progress' : null;
-    return verdict([[!current(), 'page-changed'], [stopRequestedAt, 'stop-requested'], [pendingTools !== 0, 'tool-running'],
+    return verdict([[!current(), 'page-changed'], [stopRequestedAt, 'stop-requested'], [running === null, 'tool-state-unavailable'], [running !== 0, 'tool-running'],
       [desktopInputBusy, 'sending'], [nativeBusy, 'page-busy'], [job?.busy, 'compaction'], [draft(), 'draft'],
       [changed, 'changed']],
     { revision: turnProgressRevision, turnId, questionId,

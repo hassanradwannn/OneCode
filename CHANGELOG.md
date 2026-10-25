@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.4 Beta candidate] — 2026-10-25
+
+Recheck running tools when authorizing page recovery, bound connector startup including its initial lifecycle wait, let later explicit sends recover an unanswered browser startup, allow exact-question Stop before an assistant section mounts, separate desktop file-link clicks from model browser-control permissions, and center image-preview dialogs. Native acceptance and stable promotion remain gated on the Beta candidate. See [0.6.4 candidate notes](docs/release-notes/v0.6.4.md).
+
 ## [0.6.3] — 2026-10-24
 
 Ship the experimental local OneCode API in the stable application channel after native IDE acceptance. IDE chats are isolated per project/thread, JetBrains retrieval/title helper calls are handled locally, prior client transcript is no longer replayed into durable OneCode history, approved IDE projects bind to OneCode's normal direct filesystem workspace, slash controls work through ordinary chat-completion clients, and Gemini completion waits resolve against the canonical response-turn identity. The release now carries complete Windows/Linux install artifacts for new users alongside smaller runtime-compatible capsules for existing installations. See [0.6.3 release notes](docs/release-notes/v0.6.3.md).

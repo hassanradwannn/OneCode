@@ -16,6 +16,15 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.4': {
+    lead: () => t('More reliable recovery, Stop and browser startup.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Recovery checks current work'), text: () => t('Page recovery asks for the current tool state instead of waiting on an old busy snapshot after a connection failure.') },
+      { icon: 'i-chat', title: () => t('Stop during initial thinking'), text: () => t('An exact native question receipt lets Stop reach a response before its first assistant section appears.') },
+      { icon: 'i-browser', title: () => t('Browser startup recovers after idle time'), text: () => t('A completed browser launch cannot suppress later explicit messages forever, and connector startup has a bounded wait.') },
+      { icon: 'i-file-text', title: () => t('File links and centered previews'), text: () => t('Recorded file links can use their native download control without enabling model screen or control permissions. Image preview dialogs open centered.') }
+    ]
+  },
   '0.6.3': {
     lead: () => t('Use OneCode reliably from IDE chat clients such as CLion.'),
     highlights: [
