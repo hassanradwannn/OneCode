@@ -3039,6 +3039,10 @@ function inspectRequestedModels(request) {
 
 let maintenanceFlight = null;
 let maintenanceAgain = false;
+// In-flight scheduling only. Main's repair token and native document checks
+// remain the authority; a slow chat cannot own the shared outbox scan.
+const browserRepairFlights = new Map();
+let browserRepairCursor = 0;
 let wakeSocket = null;
 // MV3 service workers require static imports; import() rejects before registration.
 // Instantiate the backend only on hosts exposing Chrome's debugger API.
@@ -3665,7 +3669,7 @@ async function maintainOnce() {
     .filter((entry) => entry.conversationId && entry.token);
   // Fulfilling a due repair must not wait behind window layout, input preparation
   // or serial idle-tab probes. Keep the same single maintenance owner and receipt.
-  await performBrowserRepairs(repairs, reply.data);
+  dispatchBrowserRepairs(repairs, reply.data);
   // Reuse this maintenance scan/cadence; recorder repair must never delay owed actions.
   void restoreSilentRecorders(observedTabs, intent).catch(() => undefined);
   await applyRequestedBrowserPreferences(reply.data.browserPreferenceRequest);
@@ -3687,13 +3691,15 @@ async function maintainOnce() {
   await rememberConnectorApps(reply.data.connectorApps);
   inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
   void inspectProjectCreates(reply.data.projectCreateRequests);
-  const repairConversations = new Set(repairs.map(entry => entry.conversationId));
+  const repairConversations = new Set([...repairs.map(entry => entry.conversationId), ...browserRepairFlights.keys()]);
   // Reloading the same document races its final input offer. Repair it now; the
   // still-durable app row is offered on the next status pass after the reload.
   const inputs = Array.isArray(reply.data.inputs)
     ? reply.data.inputs.filter(input => !repairConversations.has(cleanConversationId(input?.conversationId)))
     : reply.data.inputs;
-  await deliverDesktopInputs(inputs, reply.data.background === true, reply.data.reusableConversations, reply.data.inputOpeningIds, refreshRendering);
+  await deliverDesktopInputs(inputs, reply.data.background === true,
+    Array.isArray(reply.data.reusableConversations) ? reply.data.reusableConversations.filter(id => !repairConversations.has(id)) : [],
+    reply.data.inputOpeningIds, refreshRendering);
   if (!backgroundReady) await reconcileBackgroundWindow(reply.data);
   const monitoring = reply.data.recoveryMonitoring === true;
   if (monitoring !== recoveryMonitoring) {
@@ -3874,13 +3880,47 @@ function watchReloadedRepair(token, receipt) {
     }
   }).catch(() => { receipt.checking = false; });
 }
-async function performBrowserRepairs(repairs, policy) {
+function dispatchBrowserRepairs(repairs, policy) {
+  const intent = connectionEpoch;
+  const current = () => intent === connectionEpoch && token !== null && !disconnected;
+  if (!current()) return;
+  if (pendingRepairReadiness.size) void performBrowserRepairs([], policy, current).catch(() => undefined);
+  const first = repairs.length ? browserRepairCursor % repairs.length : 0;
+  for (let offset = 0; offset < repairs.length; offset++) {
+    const index = (first + offset) % repairs.length;
+    const repair = repairs[index];
+    if (!repair.conversationId || browserRepairFlights.has(repair.conversationId)) continue;
+    if (browserRepairFlights.size >= 4) break;
+    browserRepairCursor = (index + 1) % repairs.length;
+    let advanced = false;
+    const work = performBrowserRepairs([repair], policy, current)
+      .then(result => { advanced = result === true; }).catch(() => undefined).finally(() => {
+        if (browserRepairFlights.get(repair.conversationId) === work) browserRepairFlights.delete(repair.conversationId);
+        if (token !== null && !disconnected && advanced) {
+          void maintain(true).catch(() => undefined);
+        }
+      });
+    browserRepairFlights.set(repair.conversationId, work);
+  }
+}
+
+async function performBrowserRepairs(repairs, policy, current = () => true) {
+  let advanced = false;
+  const acknowledge = async (route, expectedToken) => {
+    const receipt = await call(route);
+    // Wake a follow-up only after fresh main policy withdraws this token.
+    // An ambiguous ACK or a still-owed repair cannot authorize another action.
+    if (receipt?.ok && Array.isArray(receipt.data?.repairs) &&
+        !receipt.data.repairs.some(repair => repair?.token === expectedToken)) advanced = true;
+  };
+  if (!current()) return advanced;
   // A slow replacement may become ready after the initial wait. Keep only the
   // original spent receipt; this path never dispatches another reload or Send.
   for (const [token, receipt] of pendingRepairReadiness) {
     watchReloadedRepair(token, receipt);
   }
   for (const { conversationId, token, reason, focus, requiresClaim, continueFollows, suspended } of repairs) {
+    if (!current()) return advanced;
     let reloadDispatched = false;
     // Re-scanned per repair rather than reused from above. Earlier entries in this same batch
     // may have created a tab, and the scan has to be the state immediately before the action or
@@ -3891,6 +3931,7 @@ async function performBrowserRepairs(repairs, policy) {
     } catch {
       return;
     }
+    if (!current()) return advanced;
     const candidates = live.filter((tab) => conversationForTab(tab) === conversationId &&
       (!suspended || tab.discarded === true || tab.frozen === true));
     // One chat is one tab. Bailing out on two copies left the chat broken *and* left the
@@ -3918,6 +3959,7 @@ async function performBrowserRepairs(repairs, policy) {
       // what they are looking at (#128); only the app's background window is ours to select in.
       if (target && focus && (backgroundPlacement !== 'group' ||
           target.windowId === (await storedBackgroundWindow().catch(() => null))?.id)) {
+        if (!current()) return advanced;
         await chrome.tabs.update(target.id, { active: true });
       }
       // The tab scan can yield while attribution recovers or a final/new question
@@ -3979,7 +4021,7 @@ async function performBrowserRepairs(repairs, policy) {
         const resumed = await tabReply(target.id,
           { type: 'clf-resume-compaction', conversationId }, documentId ? { documentId } : undefined);
         if (resumed?.accepted === true) {
-          await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=resumed`);
+          await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=resumed`, token);
           continue;
         }
       }
@@ -4000,7 +4042,7 @@ async function performBrowserRepairs(repairs, policy) {
           continue;
         }
         if (reason === 'assistant-error' && status?.ok === true && status.assistantError === false) {
-          await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=preserved`);
+          await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=preserved`, token);
           continue;
         }
       }
@@ -4016,7 +4058,7 @@ async function performBrowserRepairs(repairs, policy) {
         const status = await tabReply(target.id, { type: 'clf-page-status' },
           documentId ? { documentId } : undefined);
         if (status?.ok === true && status.assistantError === true) {
-          await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=preserved`);
+          await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=preserved`, token);
           continue;
         }
       }
@@ -4030,19 +4072,25 @@ async function performBrowserRepairs(repairs, policy) {
         const status = loading ? null : await tabReply(target.id, { type: 'clf-page-status' },
           documentId ? { documentId } : undefined);
         if (loading || status?.ok === true) {
-          await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=present`);
+          await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=present`, token);
           continue;
         }
       }
       if (target) {
         const before = reason === 'assistant-error'
           ? await tabReply(target.id, { type: 'clf-page-status' }, documentId ? { documentId } : undefined) : null;
+        if (!current()) return advanced;
         // Persist custody before requesting navigation. If the worker stops at
         // that boundary, its successor reconciles the replacement, never reloads.
         if (reason === 'assistant-error') {
           const receipt = { tabId: target.id, conversationId, documentId, runId: before?.runId, dispatchedAt: Date.now() };
           pendingRepairReadiness.set(token, receipt);
           await persistLive();
+          if (!current()) {
+            if (pendingRepairReadiness.get(token) === receipt) pendingRepairReadiness.delete(token);
+            await persistLive();
+            return advanced;
+          }
           reloadDispatched = true;
           await chrome.tabs.reload(target.id);
           watchReloadedRepair(token, receipt);
@@ -4053,6 +4101,7 @@ async function performBrowserRepairs(repairs, policy) {
         await chrome.tabs.reload(target.id);
       }
       else {
+        if (!current()) return advanced;
         await createChatTab(providerConversationUrl(conversationId), policy.background === true, focus);
       }
     } catch {
@@ -4062,8 +4111,9 @@ async function performBrowserRepairs(repairs, policy) {
       await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=${repairAction}&why=${reloadDispatched ? 'unready' : 'error'}`);
       continue;
     }
-    await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=${repairAction}`);
+    await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=${repairAction}`, token);
   }
+  return advanced;
 }
 
 function conversationStillOpen(conversationId) {

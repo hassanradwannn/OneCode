@@ -10289,7 +10289,8 @@ function noteCallAttribution(
   completedFinalAt: number | null = null,
   requestId: string | null = null,
   reopenedTurnId: string | null = null,
-  filedSession: SessionSummary | null = null
+  filedSession: SessionSummary | null = null,
+  filedCall?: ToolCallRecord
 ): void {
   if (conversationId) {
     // MCP truth can grow while a Pro page emits no new observation. The just-filed
@@ -10392,6 +10393,14 @@ function noteCallAttribution(
     return;
   }
   if (requestId && requestCorrelation(requestId)) return;
+  // Successful installed-plugin enumeration is caller-independent metadata.
+  // Its unknown record remains unknown, but supplies no broken task join for
+  // which an active conversation should be reloaded. Scoped calls keep the
+  // existing exact-attribution recovery path.
+  if (filedCall?.tool === 'plugins' && filedCall.outcome === 'ok' && !filedCall.args.truncated) {
+    try { if (JSON.parse(filedCall.args.text)?.action === 'installed') return; }
+    catch { /* An incomplete argument record cannot prove metadata-only work. */ }
+  }
   retireSpentRepairs();
   const opening = repairCandidates().filter(unattributedCandidateCurrent);
   const key = requestId ?? `headerless:${opening.map(entry => `${entry.sessionId}:${entry.turnId}`).sort().join(',')}`;

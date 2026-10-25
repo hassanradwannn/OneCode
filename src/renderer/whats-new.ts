@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.14': {
+    lead: () => t('Keep ready chats moving while another chat recovers.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Independent chat delivery'), text: () => t('A slow recovery in another chat no longer holds the shared input pickup. The document being repaired keeps its own delivery fence.') },
+      { icon: 'i-plugin', title: () => t('Plugin discovery'), text: () => t('An unattributed installed-plugin inventory stays recorded without triggering a conversation reload. Scoped work keeps its existing identity checks.') },
+      { icon: 'i-terminal', title: () => t('Process cleanup and long tasks'), text: () => t('Includes the shutdown cleanup and resumed-task authorization repairs from the previous Beta candidates.') }
+    ]
+  },
   '0.6.13': {
     lead: () => t('Confirm completed process cleanup before updating.'),
     highlights: [
