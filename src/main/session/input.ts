@@ -149,6 +149,13 @@ const entrySchema = inputArgs.extend({
   queueOrder: z.number().int().nonnegative().optional()
 });
 export type InputEntry = z.infer<typeof entrySchema>;
+/** Explicit browser text, including the user's After this turn choice. Generated
+ * checkpoints, schedules, recovery and tool handouts keep their separate barriers. */
+function authoredBrowserInput(entry: InputArgs & Partial<Pick<InputEntry, 'purpose' | 'finishOwner' | 'scheduleId' | 'recovery' | 'silenceBoundary'>>): boolean {
+  return (manualInput(entry) || (entry.mode === 'after-turn' && entry.purpose !== 'decision' && entry.purpose !== 'rotation')) &&
+    !entry.finishOwner && !entry.scheduleId && !entry.recovery && !entry.silenceBoundary && !entry.stages?.length &&
+    entry.delivery !== 'tool' && entry.attachmentDelivery !== 'tool' && (entry.authoredSource ?? 'text') !== 'none';
+}
 const STATE = 'session-input';
 const TOOL_INPUT_TEXT_BYTES = 128000;
 /** A confirmed send receipt lands in seconds. This only bounds one that is never reported. */
@@ -301,8 +308,7 @@ async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
   // Silence can leave the recorder's original turn open. Its durable ticket
   // proves the exact unchanged work; the native page must still be idle for Send.
   if (entry.silenceBoundary) return await eligibleStageEnd(entry) === entry.silenceBoundary.turnId;
-  const newlyAuthored = manualInput(entry) && !entry.scheduleId && !entry.recovery && !entry.silenceBoundary &&
-    !entry.finishOwner && (entry.authoredSource ?? 'text') !== 'none';
+  const newlyAuthored = authoredBrowserInput(entry);
   const policy = await sessionInputPolicy(entry.sessionId, undefined, newlyAuthored ? entry.createdAt : undefined);
   // A saved interval wakes an idle chat independently of a newer completed turn.
   // It still waits for ordinary browser readiness and can never join an MCP result.
@@ -879,8 +885,7 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const sourceTurn = requestedSession?.activeTurnId ?? (activity?.exact ? activity.turnId : null);
     const queuedTurn = requestedSession?.conversationId && sourceTurn
       ? { conversationId: requestedSession.conversationId, turnId: sourceTurn } : undefined;
-    const authoredAt = manualInput(input) && !scheduleId && !finishOwner && !input.stages?.length &&
-      (input.authoredSource ?? 'text') !== 'none' ? Date.now() : undefined;
+    const authoredAt = authoredBrowserInput({ ...input, scheduleId, finishOwner }) ? Date.now() : undefined;
     let policy = input.sessionId ? await sessionInputPolicy(input.sessionId, undefined, authoredAt) : null;
     const previousOpening = [...current].reverse().find(row => row.opening && row.sessionId === input.sessionId);
     if (input.provider && previousOpening?.chatProvider && !requestedSession?.conversationId && previousOpening.chatProvider !== input.provider)
@@ -1402,7 +1407,9 @@ async function eligibleStageEnd(entry: InputEntry): Promise<string | null> {
   // lend this reference to another frontend, even if its turn id happens to match.
   const queuedHere = entry.queuedTurn?.conversationId === session.conversationId && entry.queuedTurn?.turnId === end.turnId;
   if (!queuedHere && end.time < entry.createdAt) return null;
-  if (!(await sessionInputPolicy(entry.sessionId)).settled) return null;
+  const authored = authoredBrowserInput(entry);
+  const policy = await sessionInputPolicy(entry.sessionId, undefined, authored ? entry.createdAt : undefined);
+  if (!(authored ? policy.browserAllowed : policy.settled)) return null;
   return end.turnId;
 }
 const INPUT_WORK_KINDS: import('../../shared/session.js').SessionEvent['kind'][] =

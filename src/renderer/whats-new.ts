@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.10': {
+    lead: () => t('Keep room for messages while local tasks run.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Messages alongside local work'), text: () => t('Send and After this turn use the confirmed native response boundary while local tasks and polls continue. Accepted messages stay queued while OneCode holds browser pickup.') },
+      { icon: 'i-retry', title: () => t('Steer delivery'), text: () => t('Steer keeps its exact native Stop, refresh and Send receipts while preserving local processes. The browser and app use the same live input policy.') }
+    ]
+  },
   '0.6.9': {
     lead: () => t('Keep room for messages while local tasks run.'),
     highlights: [
