@@ -117,6 +117,8 @@ const entrySchema = inputArgs.extend({
   requiresAuthorization: z.boolean().optional(),
   /** A browser pickup timeout is safely replayable only before Send authorization. */
   pickupFailedAt: z.number().optional(),
+  /** Main-policy hold pauses only an immediate message's unclaimed pickup clock. */
+  pickupHeldAt: z.number().optional(),
   /** One preparation attempt can yield without ending the durable instruction. */
   preparationWait: z.object({ reason: z.enum(['provider-page', 'answer-resumed', 'editor-unavailable', 'document-rebind']),
     since: z.number(), attempts: z.number().int().positive() }).optional(),
@@ -216,10 +218,10 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
     activity.model !== 'pro' && activity.model !== 'unknown' &&
     !isProModel(selection.model, selection.reasoningEffort)
     ? { id: end.turnId, startedAt: end.time } : null;
-  const canInject = !stopped && activity.exact && !directTurn;
+  let canInject = !stopped && activity.exact && !directTurn;
   // The bridge's retained exact MCP grant can outlive a native UI end. Project
   // that same turn for image custody, never invent an active recorder turn.
-  const injectionTurnId = canInject ? session.activeTurnId ?? (activity.turnId === end?.turnId ? activity.turnId ?? null : null) : null;
+  let injectionTurnId = canInject ? session.activeTurnId ?? (activity.turnId === end?.turnId ? activity.turnId ?? null : null) : null;
   const astra = session.origin?.kind !== 'worker' && session.origin?.kind !== 'helper' &&
     session.selectedModel?.conversationId === session.conversationId && isAstraModel(session.selectedModel.model, session.selectedModel.reasoningEffort);
   const completed = !session.activeTurnId
@@ -234,9 +236,19 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   const idleCandidate = !session.activeTurnId && !activity.exact && terminal &&
     ((geminiInput(session.conversationId) && end.outcome === 'completed') || authoredAfterStop) &&
     (session.lastToolCallAt ?? 0) <= end.time;
-  const [latestQuestion] = idleCandidate ? await readRecentEvents(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true }) : [];
+  // An explicit user message may start the next native turn while an exact local
+  // poll or retained MCP grant survives the previous answer. Native completion,
+  // not local process lifetime, owns that boundary. Automation keeps its existing
+  // settled/call fences. An old queued message cannot spend a later explicit Stop.
+  const authoredIdleCandidate = authoredAt !== undefined && !session.activeTurnId && terminal &&
+    (end.outcome === 'completed' || authoredAfterStop);
+  const [latestQuestion] = idleCandidate || authoredIdleCandidate
+    ? await readRecentEvents(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true }) : [];
   const explicitNativeIdle = idleCandidate && (!latestQuestion || (latestQuestion.kind === 'user_message' &&
     (latestQuestion.origin ?? latestQuestion.seq) <= end.seq));
+  const authoredNativeIdle = authoredIdleCandidate && (!latestQuestion || (latestQuestion.kind === 'user_message' &&
+    (latestQuestion.origin ?? latestQuestion.seq) <= end.seq));
+  if (authoredNativeIdle) { canInject = false; injectionTurnId = null; }
   const current = await getSession(sessionId);
   if (current?.conversationId !== session.conversationId || current?.activeTurnId !== session.activeTurnId)
     return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn: null, browserAllowed: false, settled: false };
@@ -249,7 +261,7 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   return { canInject, injectionTurnId, directTurn, queueAtFinish: astra && canInject && getConfig().ui.finishTool === true,
     // An adopted idle chat may have no recorded turn boundary. Explicit input can
     // use its native composer; queued checkpoints still require `settled` below.
-    browserAllowed: !session.activeTurnId && (!activity.possible || explicitNativeIdle) && !activity.exact && !executing,
+    browserAllowed: authoredNativeIdle || (!session.activeTurnId && (!activity.possible || explicitNativeIdle) && !activity.exact && !executing),
     // Completion already reconciles trailing same-request calls. A separate time
     // comparison would leave the composer unsettled after the activity clock stopped.
     settled: settled && !executing && (!!completed || (session.lastToolCallAt ?? 0) <= (end?.time ?? 0)) };
@@ -566,9 +578,18 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
     // failing it here lost it and blamed the browser instead.
     if (row.state === 'queued' && row.mode === 'auto' && !row.steerTurnId && !row.opening && !row.finishOwner && !row.silenceBoundary &&
         (row.transportIntent === 'browser' || (!row.transportIntent && !row.sessionId)) &&
-        !row.preparationWait && !row.error?.startsWith('Message queued. ') &&
-        Date.now() - Math.max(row.createdAt, row.dueAt) >= 60_000)
-      return { ...row, state: 'failed', pickupFailedAt: Date.now(), error: 'Not sent: the browser did not pick up this message within 60 seconds.' };
+        !row.preparationWait && !row.error?.startsWith('Message queued. ')) {
+      // A message the live owner refuses to offer is still accepted user intent.
+      // Local calls or an unresolved native boundary must not consume the browser's
+      // pickup deadline. Resume the same row's ordinary deadline when it is eligible;
+      // no claim or uncertain Send is replayed and authored time stays unchanged.
+      if (manualInput(row) && row.sessionId && row.offeredAt === undefined) {
+        if (!await browserInputAllowed(row)) return row.pickupHeldAt === undefined ? { ...row, pickupHeldAt: Date.now() } : row;
+        if (row.pickupHeldAt !== undefined) return { ...row, pickupHeldAt: undefined, dueAt: Math.max(row.dueAt, Date.now()) };
+      }
+      if (Date.now() - Math.max(row.createdAt, row.dueAt) >= 60_000)
+        return { ...row, state: 'failed', pickupFailedAt: Date.now(), error: 'Not sent: the browser did not pick up this message within 60 seconds.' };
+    }
     // Preparation can expire before Send. Once authorized, this exact claim owns
     // the uncertain outcome until receipt or explicit cancellation, regardless of
     // how long Gemini takes to assign its durable conversation identity.
@@ -858,7 +879,9 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const sourceTurn = requestedSession?.activeTurnId ?? (activity?.exact ? activity.turnId : null);
     const queuedTurn = requestedSession?.conversationId && sourceTurn
       ? { conversationId: requestedSession.conversationId, turnId: sourceTurn } : undefined;
-    let policy = input.sessionId ? await sessionInputPolicy(input.sessionId) : null;
+    const authoredAt = manualInput(input) && !scheduleId && !finishOwner && !input.stages?.length &&
+      (input.authoredSource ?? 'text') !== 'none' ? Date.now() : undefined;
+    let policy = input.sessionId ? await sessionInputPolicy(input.sessionId, undefined, authoredAt) : null;
     const previousOpening = [...current].reverse().find(row => row.opening && row.sessionId === input.sessionId);
     if (input.provider && previousOpening?.chatProvider && !requestedSession?.conversationId && previousOpening.chatProvider !== input.provider)
       throw new Error('An opening chat keeps its provider');

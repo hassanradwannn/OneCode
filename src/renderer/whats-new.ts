@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.9': {
+    lead: () => t('Keep room for messages while local tasks run.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Messages alongside local work'), text: () => t('A confirmed native response boundary can admit your next message while a local task or poll continues. Cached activity no longer holds an eligible message in the browser.') },
+      { icon: 'i-retry', title: () => t('Steer delivery'), text: () => t('Steer keeps its exact native Stop, refresh and Send receipts while preserving local processes. The browser and app use the same live input policy.') }
+    ]
+  },
   '0.6.8': {
     lead: () => t('Wait for Gemini to finish preparing a new chat.'),
     highlights: [

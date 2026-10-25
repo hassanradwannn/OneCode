@@ -2656,6 +2656,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       ...(!target && typeof input.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(input.project) ? { project: input.project } : {}),
       ...(input.recovery ? { recovery: input.recovery } : {}),
       ...(input.silenceTurnId ? { silenceTurnId: input.silenceTurnId } : {}),
+      ...(input.steerTurnId ? { steerTurnId: input.steerTurnId } : {}),
       ...(input.directTurn ? { directTurn: input.directTurn } : {}), ...(input.lifetime ? { lifetime: input.lifetime } : {}) });
   }
 }
@@ -5785,7 +5786,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 73;
+const PAGE_RECORDER_VERSION = 74;
 
 let deferredRecoveryWork = null;
 

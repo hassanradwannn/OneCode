@@ -3183,10 +3183,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
         projectCreateRequests: chatProviderCapabilities(selectedChatProvider()).nativeProjects ? await pendingProjectCreates() : [],
         inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
-        // A message for the running turn goes in while a call runs: Gemini keeps that call's result (#1231).
+        // The outbox owns native input admission, including released Steer and
+        // manual follow-ups while a local request survives native completion.
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).
-        inputs: [...pendingInputs.filter(input => (!input.conversationId || input.directTurn || input.steerTurnId || runningToolProgress(input.conversationId) === null) &&
-            (!input.conversationId || !tunnelRouteSettling()) &&
+        inputs: [...pendingInputs.filter(input => (!input.conversationId || !tunnelRouteSettling()) &&
             !inputHeldElsewhere(input, browser)),
           ...inputRows.filter(row => row.lifetime === 'temporary-planner' && ['sent', 'cancelled', 'failed'].includes(row.state))
             // After Send, Gemini moves a helper to /c/<id>?temporary-chat=true without its cos-input
@@ -3411,12 +3411,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 200, { ok: deferred }, origin);
     }
     if (body.authorize === true) return json(res, 200, { ok: await authorizeBrowserInput(body.id, body.owner, target) }, origin);
-    // A message for the running turn may go in while a call runs, exactly as /status offers it;
-    // claimBrowserInput still requires that same turn. Anonymous safety debt
-    // cannot establish which chat owns a call or block another authored send.
-    if (target && runningToolProgress(target) !== null &&
-        !(await pendingBrowserInputs()).some(row => row.id === body.id && row.conversationId === target && row.directTurn))
-      return json(res, 200, { input: null }, origin);
+    // claimBrowserInput rechecks the same outbox policy as /status and final Send.
+    // Local request lifetime alone cannot veto a released native input boundary.
     // As /status: an existing chat waits until a new tunnel-client has taken over its route (#1220).
     if (target && tunnelRouteSettling()) return json(res, 200, { input: null }, origin);
     if (staleCompanion(req)) return json(res, 200, { input: null }, origin);

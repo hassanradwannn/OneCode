@@ -6188,7 +6188,7 @@ function queuedWaitReason(entry: InputEntry): 'extension' | 'tool-call' | 'chatg
   if (!bridgePresent) return 'extension';
   const project = chatgptProjectWait(entry);
   if (project) return project;
-  if (entry.mode === 'auto' && entry.sessionId && entry.sessionId === runningToolsFor && runningTools.length > 0 && !entry.directTurn) return 'tool-call';
+  if (entry.mode === 'auto' && entry.sessionId && entry.sessionId === runningToolsFor && runningTools.length > 0 && !entry.directTurn && !entry.steerTurnId) return 'tool-call';
   return null;
 }
 

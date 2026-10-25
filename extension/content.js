@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 73;
+  const RECORDER_VERSION = 74;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2218,6 +2218,7 @@
         (!unwitnessedGeneration || stopQuestionMatches(command.userMessageId))) ||
        (latestNative()?.role === 'user' && CLF_DOM.generating() && stopQuestionMatches(command.userMessageId)));
     if (command.continuationInputId) {
+      if (!command.userMessageId || !stopQuestionMatches(command.userMessageId)) return false;
       // This Stop belongs to the user's pending continuation. Keep user Stop
       // flags clear; only native terminal evidence may release that same input.
       const alreadyClicked = stoppedAppCommands.has(commandId);
@@ -13833,6 +13834,10 @@
     if (!safe() || !questionId || !stopQuestionMatches(questionId) || CLF_DOM.generating()) return false;
     if (CLF_DOM.provider === 'gemini') return !!CLF_DOM.recoveryTerminalReceipt?.(questionId);
     const source = currentAssistantTurn();
+    // The exact native interruption marker is already terminal evidence for the
+    // recorder's endOutcome. A stopped tool exchange need not have a final
+    // assistant message in Fiber, and its local poll may legitimately survive.
+    if (source && CLF_DOM.interrupted(source) && safe() && stopQuestionMatches(questionId) && !CLF_DOM.generating()) return true;
     if (!source || !await refreshFiber({ pageTurnId: source.id, pageTurn: source.node || source.nodes?.[0] }) || !safe()) return false;
     const native = fiberTurnFor(currentAssistantTurn());
     return !!native && !native.conversationConflict && native.conversationId === conversationId &&
@@ -13958,7 +13963,10 @@
   async function acceptDesktopInput(message) {
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
-    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive || (generating && !message.directTurn && !silencePickup) || (pendingInputTools > 0 && !message.directTurn) || goalBusy || job?.busy) return false;
+    // Cached activity is a display projection. The live outbox claim and final
+    // authorization own tool/native-turn admission; stale counts cannot veto an
+    // eligible user message. Native generation and draft custody still fence Send.
+    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive || (generating && !message.directTurn && !silencePickup) || goalBusy || job?.busy) return false;
     const target = message.conversationId || null;
     const forEpoch = epoch;
     const sourceTurn = turnId;
@@ -14082,7 +14090,7 @@
       // Keep the input queued until this same document exposes its composer again.
       const composer = await waitPageView(() => (message.directTurn || !CLF_DOM.generating()) &&
         (message.directTurn ? CLF_DOM.composerVisible() && CLF_DOM.composer() : writableComposer()),
-        () => onTarget() && (message.directTurn || ((silencePickup || !generating) && pendingInputTools === 0)), 15000);
+        () => onTarget() && (message.directTurn || silencePickup || !generating), 15000);
       if (!composer && onTarget() && CLF_DOM.generating() && await confirmedProviderTerminal() && onTarget() && CLF_DOM.generating()) {
         // Only after readiness expires, re-prove the exact terminal: a Retry or
         // new user turn must never become authority to reload the page.
