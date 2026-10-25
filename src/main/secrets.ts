@@ -105,6 +105,10 @@ export function secureStorageCiphertextIsProtected(
  * prompt; keychain-notice.ts lets the window say so before it starts.
  */
 let keychainCallsInFlight = 0;
+/** An unanswered OS prompt must not prevent the first window or hold every IPC read forever. */
+export const SECURE_STORAGE_WAIT_MS = 15_000;
+const timedOutKeychainCalls = new Set<symbol>();
+const STORAGE_WAITING = 'Secure operating-system credential storage is still waiting for a response. Unlock the desktop keyring or Keychain, then try again.';
 
 /**
  * Whether a safeStorage call is still waiting on the Keychain, typically on the macOS password
@@ -116,18 +120,37 @@ export function keychainReadPending(): boolean {
 }
 
 async function keychain<T>(operation: () => Promise<T>, ok: (result: T) => boolean = () => true): Promise<T> {
+  // Do not pile up native requests behind the same unanswered prompt. This is cleared only
+  // when the real OS call settles, not when its caller's deadline expires.
+  if (timedOutKeychainCalls.size) throw new Error(STORAGE_WAITING);
   await beforeKeychainRead();
+  if (timedOutKeychainCalls.size) throw new Error(STORAGE_WAITING);
   keychainCallsInFlight += 1;
-  try {
-    const result = await operation();
-    void afterKeychainRead(ok(result));
-    return result;
-  } catch (error) {
-    void afterKeychainRead(false);
-    throw error;
-  } finally {
-    keychainCallsInFlight -= 1;
-  }
+  const id = Symbol();
+  return new Promise<T>((resolve, reject) => {
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      timedOutKeychainCalls.add(id);
+      void afterKeychainRead(false);
+      logWarn('Secure OS credential storage did not answer before the deadline; saved credentials were left untouched');
+      reject(new Error(STORAGE_WAITING));
+    }, SECURE_STORAGE_WAIT_MS);
+    const settled = (): void => {
+      clearTimeout(timer);
+      timedOutKeychainCalls.delete(id);
+      keychainCallsInFlight -= 1;
+    };
+    // Keep the real native lifetime visible to bounded app shutdown. A late encrypt/decrypt
+    // result is discarded: it cannot populate cache, rotate keys or write ciphertext.
+    void Promise.resolve().then(operation).then(result => {
+      settled();
+      if (!expired) { void afterKeychainRead(ok(result)); resolve(result); }
+    }, error => {
+      settled();
+      if (!expired) { void afterKeychainRead(false); reject(error); }
+    });
+  });
 }
 
 export async function secureStorageStatus(platform: NodeJS.Platform = process.platform): Promise<SecureStorageInfo> {
@@ -156,8 +179,9 @@ export async function secureStorageStatus(platform: NodeJS.Platform = process.pl
       }
     }
     return { available: true, detail: null };
-  } catch {
-    return { available: false, detail: 'Secure operating-system credential storage could not be initialized.' };
+  } catch (error) {
+    return { available: false, detail: error instanceof Error && error.message === STORAGE_WAITING
+      ? STORAGE_WAITING : 'Secure operating-system credential storage could not be initialized.' };
   }
 }
 

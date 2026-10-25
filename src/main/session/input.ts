@@ -198,7 +198,7 @@ const geminiInput = (conversationId: string | null | undefined): boolean =>
 /** Installed once by IPC before bridge/MCP startup; avoids a Goal/input import cycle. */
 export function configureInputDelivery(hooks: InputDeliveryHooks): void { deliveryHooks = hooks; }
 /** One delivery policy for composer presentation, admission and the final send fence. */
-export async function sessionInputPolicy(sessionId: string, observedActivity?: InputActivity): Promise<{ queueAtFinish: boolean; canInject: boolean; injectionTurnId: string | null; directTurn: InputEntry['directTurn'] | null; browserAllowed: boolean; settled: boolean }> {
+export async function sessionInputPolicy(sessionId: string, observedActivity?: InputActivity, authoredAt?: number): Promise<{ queueAtFinish: boolean; canInject: boolean; injectionTurnId: string | null; directTurn: InputEntry['directTurn'] | null; browserAllowed: boolean; settled: boolean }> {
   const [end] = await readRecentEvents(sessionId, 1, { kinds: ['turn_start', 'turn_end'] });
   const session = await getSession(sessionId);
   if (!session?.conversationId || isChatBlocked(session.conversationId)) return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn: null, browserAllowed: false, settled: false };
@@ -228,8 +228,12 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // A native completed boundary can precede final-message attribution. A soft
   // display/recovery timer alone must not strand a new explicit Gemini follow-up.
   // This does not settle automation; native Send still rechecks actual readiness.
-  const idleCandidate = geminiInput(session.conversationId) && !session.activeTurnId && !activity.exact &&
-    terminal && end.outcome === 'completed' && (session.lastToolCallAt ?? 0) <= end.time;
+  // Only a new manual message authored after native Stop may bypass the old soft
+  // timer. Stop cannot release previously queued automation or an earlier task.
+  const authoredAfterStop = authoredAt !== undefined && terminal && end.outcome === 'stopped' && authoredAt > end.time;
+  const idleCandidate = !session.activeTurnId && !activity.exact && terminal &&
+    ((geminiInput(session.conversationId) && end.outcome === 'completed') || authoredAfterStop) &&
+    (session.lastToolCallAt ?? 0) <= end.time;
   const [latestQuestion] = idleCandidate ? await readRecentEvents(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true }) : [];
   const explicitNativeIdle = idleCandidate && (!latestQuestion || (latestQuestion.kind === 'user_message' &&
     (latestQuestion.origin ?? latestQuestion.seq) <= end.seq));
@@ -285,7 +289,9 @@ async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
   // Silence can leave the recorder's original turn open. Its durable ticket
   // proves the exact unchanged work; the native page must still be idle for Send.
   if (entry.silenceBoundary) return await eligibleStageEnd(entry) === entry.silenceBoundary.turnId;
-  const policy = await sessionInputPolicy(entry.sessionId);
+  const newlyAuthored = manualInput(entry) && !entry.scheduleId && !entry.recovery && !entry.silenceBoundary &&
+    !entry.finishOwner && (entry.authoredSource ?? 'text') !== 'none';
+  const policy = await sessionInputPolicy(entry.sessionId, undefined, newlyAuthored ? entry.createdAt : undefined);
   // A saved interval wakes an idle chat independently of a newer completed turn.
   // It still waits for ordinary browser readiness and can never join an MCP result.
   if (entry.scheduleId) return policy.browserAllowed;

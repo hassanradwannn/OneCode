@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.5 Beta candidate] — 2026-10-25
+
+Let a fresh explicit message restart the chat after confirmed native Stop without waiting for the old activity timer; earlier queued work and automation remain held. Bound asynchronous OS credential-storage calls so an unanswered keyring prompt cannot prevent the first window or hold state reads indefinitely. Preserve ciphertext and installation identity, discard late results, and avoid stacking native calls behind the same prompt. Includes the 0.6.4 recovery, Stop, browser-startup, file-link and preview fixes. Native acceptance and stable promotion remain pending. See [0.6.5 candidate notes](docs/release-notes/v0.6.5.md).
+
 ## [0.6.4 Beta candidate] — 2026-10-25
 
 Recheck running tools when authorizing page recovery, bound connector startup including its initial lifecycle wait, let later explicit sends recover an unanswered browser startup, allow exact-question Stop before an assistant section mounts, separate desktop file-link clicks from model browser-control permissions, and center image-preview dialogs. Native acceptance and stable promotion remain gated on the Beta candidate. See [0.6.4 candidate notes](docs/release-notes/v0.6.4.md).

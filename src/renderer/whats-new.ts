@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.5': {
+    lead: () => t('Recovery improvements and a bounded wait for secure credential storage.'),
+    highlights: [
+      { icon: 'i-lock', title: () => t('Open the app when the keyring is waiting'), text: () => t('An unanswered operating-system credential prompt no longer holds startup indefinitely. Saved keys stay intact, and protected operations can retry after the keyring responds.') },
+      { icon: 'i-retry', title: () => t('Stop and restart the chat'), text: () => t('After the provider confirms Stop, a new message no longer waits on the old activity timer. Recovery checks current work and browser startup has a bounded wait.') },
+      { icon: 'i-file-text', title: () => t('File links and centered previews'), text: () => t('Recorded file links can use their native download control without enabling model screen or control permissions. Image preview dialogs open centered.') }
+    ]
+  },
   '0.6.4': {
     lead: () => t('More reliable recovery, Stop and browser startup.'),
     highlights: [
