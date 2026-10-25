@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 74;
+  const RECORDER_VERSION = 75;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2219,17 +2219,22 @@
        (latestNative()?.role === 'user' && CLF_DOM.generating() && stopQuestionMatches(command.userMessageId)));
     if (command.continuationInputId) {
       if (!command.userMessageId || !stopQuestionMatches(command.userMessageId)) return false;
+      // An early Stop can settle before the first assistant section mounts.
+      // Native busy owns the click, not the lifetime of its terminal proof.
+      const continuationCurrent = () => current() && generating && stopQuestionMatches(command.userMessageId) &&
+        ((latestNative()?.role === 'assistant' && mountedAnswer() && pageTurnIds.get(expected) === nativeId) ||
+          latestNative()?.role === 'user');
       // This Stop belongs to the user's pending continuation. Keep user Stop
       // flags clear; only native terminal evidence may release that same input.
       const alreadyClicked = stoppedAppCommands.has(commandId);
       if (!alreadyClicked) stoppedAppCommands.add(commandId);
-      const settled = await stopAutomationGeneration(canStop, !alreadyClicked);
-      if (settled && canStop()) {
+      const settled = await stopAutomationGeneration(continuationCurrent, !alreadyClicked);
+      if (settled && continuationCurrent()) {
         finishGeneration(currentAssistantTurn(), { outcome: 'interrupted',
           detail: 'The native response was stopped to deliver the pending continuation.' }, false);
         await flush();
-      } else if (canStop() && command.userMessageId && stopQuestionMatches(command.userMessageId)) {
-        recoveryCloseCandidate = { id: command.continuationInputId, conversationId: target, questionId: command.userMessageId, current: canStop };
+      } else if (continuationCurrent()) {
+        recoveryCloseCandidate = { id: command.continuationInputId, conversationId: target, questionId: command.userMessageId, current: continuationCurrent };
         try { await ask({ type: 'stop_close', id: commandId, inputId: command.continuationInputId, client: RUN_ID, conversationId: target }); }
         finally { recoveryCloseCandidate = null; }
       }
@@ -13833,13 +13838,14 @@
   async function recoveryTerminalEvidence(questionId, safe) {
     if (!safe() || !questionId || !stopQuestionMatches(questionId) || CLF_DOM.generating()) return false;
     if (CLF_DOM.provider === 'gemini') return !!CLF_DOM.recoveryTerminalReceipt?.(questionId);
-    const source = currentAssistantTurn();
+    const latest = CLF_DOM.turns().at(-1);
+    const source = latest?.role === 'user' && stopQuestionMatches(questionId) ? latest : currentAssistantTurn();
     // The exact native interruption marker is already terminal evidence for the
     // recorder's endOutcome. A stopped tool exchange need not have a final
     // assistant message in Fiber, and its local poll may legitimately survive.
     if (source && CLF_DOM.interrupted(source) && safe() && stopQuestionMatches(questionId) && !CLF_DOM.generating()) return true;
     if (!source || !await refreshFiber({ pageTurnId: source.id, pageTurn: source.node || source.nodes?.[0] }) || !safe()) return false;
-    const native = fiberTurnFor(currentAssistantTurn());
+    const native = fiberTurnFor(source);
     return !!native && !native.conversationConflict && native.conversationId === conversationId &&
       (native.question === questionId || !!native.endMessageId) &&
       (!!native.endMessageId || ['complete', 'interrupted'].includes(native.terminalState)) &&

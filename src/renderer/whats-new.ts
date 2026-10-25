@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.11': {
+    lead: () => t('Confirm early Steer without waiting for local work.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Early native Stop'), text: () => t('If the provider stops before an assistant section appears, Steer confirms the exact native question and terminal response while keeping local processes alive.') },
+      { icon: 'i-terminal', title: () => t('Follow-ups alongside local work'), text: () => t('Includes the Send and After this turn fixes for local polls, with retained queued messages and unchanged task ownership.') }
+    ]
+  },
   '0.6.10': {
     lead: () => t('Keep room for messages while local tasks run.'),
     highlights: [
