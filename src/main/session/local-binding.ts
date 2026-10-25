@@ -43,7 +43,13 @@ const PREFIX = /^\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})\r?
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_GRANTS = 20_000;
 let retirementCursor = 0;
-const fail = (): never => { throw new GeminiBindingError('CHATGPT_SESSION_NOT_AUTHORIZED'); };
+type AdmissionReason = 'proof-unavailable' | 'provider-mismatch' | 'credential-shape' | 'credential-unknown' |
+  'proof-invalid' | 'receipt-pending' | 'activation-changed';
+/** Fixed diagnostic vocabulary only. Never retain the credential, digest or task. */
+export class ChatgptBindingError extends GeminiBindingError {
+  constructor(readonly admissionReason: AdmissionReason) { super('CHATGPT_SESSION_NOT_AUTHORIZED'); }
+}
+const fail = (reason: AdmissionReason = 'proof-unavailable'): never => { throw new ChatgptBindingError(reason); };
 
 function validGrant(value: unknown): value is Grant {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -203,17 +209,17 @@ export async function authenticateChatgptExec(name: unknown, args: unknown): Pro
   const hasKey = Object.prototype.hasOwnProperty.call(input, 'onecode_session_key');
   if (!hasKey && !code.startsWith('// onecode-session:')) return { args };
   if (!ready) await initLocalBindings();
-  if (mcpProvider() !== 'chatgpt') fail();
+  if (mcpProvider() !== 'chatgpt') fail('provider-mismatch');
   const match = code.startsWith('// onecode-session:') ? PREFIX.exec(code) : null;
   if ((code.startsWith('// onecode-session:') && (name !== 'exec' || !match)) ||
       (hasKey && (typeof input.onecode_session_key !== 'string' || !/^sk-onecode-session-[A-Za-z0-9_-]{43}$/.test(input.onecode_session_key))) ||
-      (match && hasKey && match[1] !== input.onecode_session_key)) fail();
+      (match && hasKey && match[1] !== input.onecode_session_key)) fail('credential-shape');
   const grant = grants.get(digest((hasKey ? input.onecode_session_key : match![1]) as string));
-  if (!grant) fail();
+  if (!grant) fail('credential-unknown');
   const deadline = performance.now() + INPUT_RECEIPT_WAIT_MS;
   for (;;) {
     const current = await status(grant!);
-    if (current.state === 'invalid') { await retireInvalid(grant!); fail(); }
+    if (current.state === 'invalid') { await retireInvalid(grant!); fail('proof-invalid'); }
     if (current.state === 'ready') {
       const stripped = { ...input };
       delete stripped.onecode_session_key;
@@ -222,7 +228,7 @@ export async function authenticateChatgptExec(name: unknown, args: unknown): Pro
       bindingId: grant!.id, conversationId: current.conversationId, sessionId: current.sessionId,
       attribution: 'chatgpt_session_capability', ...(current.turn ? { inputTurn: current.turn } : {})
       };
-      if (grant!.activated && JSON.stringify(grant!.activated) !== JSON.stringify(evidence)) fail();
+      if (grant!.activated && JSON.stringify(grant!.activated) !== JSON.stringify(evidence)) fail('activation-changed');
       await serialized(async () => {
         const live = grants.get(grant!.digest);
         if (!live) fail();
@@ -232,7 +238,7 @@ export async function authenticateChatgptExec(name: unknown, args: unknown): Pro
       });
       return { args: stripped, evidence };
     }
-    if (performance.now() >= deadline) fail();
+    if (performance.now() >= deadline) fail('receipt-pending');
     await new Promise(resolve => setTimeout(resolve, 40));
   }
 }

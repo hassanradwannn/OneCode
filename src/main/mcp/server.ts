@@ -32,7 +32,7 @@ import { authenticateGeminiBinding, geminiBindingsEnabled, GeminiBindingError, s
 import { pluginManager } from '../plugins/manager.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { withMcpProvider } from './provider-context.js';
-import { authenticateChatgptExec, type LocalBindingEvidence } from '../session/local-binding.js';
+import { authenticateChatgptExec, ChatgptBindingError, type LocalBindingEvidence } from '../session/local-binding.js';
 import { sessionHistoryUnavailable } from '../session/journal-io.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -493,7 +493,8 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
             const storage = sessionHistoryUnavailable(error);
             // Never log credentials, arguments or journal contents. A failed proof
             // read preserves the grant; reporting it as revoked hides recovery.
-            logWarn(`ChatGPT MCP admission refused: ${storage ? `session storage ${error.code}` : 'task authorization unavailable'}`);
+            logWarn(`ChatGPT MCP admission refused: ${storage ? `session storage ${error.code}` :
+              error instanceof ChatgptBindingError ? `task authorization unavailable (${error.admissionReason})` : 'task authorization unavailable'}`);
             const text = storage
               ? `CHATGPT_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
               : 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.';

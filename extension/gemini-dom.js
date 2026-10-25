@@ -928,14 +928,17 @@ var CLF_DOM = (() => {
   async function settleControlledWarmup(warmup, current) {
     let changedAt = Date.now(), previous = null, edited = false;
     const noteEdit = event => { if (event.isTrusted) edited = true; };
-    const owns = () => !edited && current() && !composerAuthoredText() && !hasComposerAttachments() &&
+    // The accepted warm-up row can mount before Gemini clears its editor. Keep
+    // custody of that exact tool-free text while native cleanup catches up; an
+    // empty editor is still required before restoring or authorizing the task.
+    const owns = () => !edited && current() && (!composerAuthoredText() || compact(composerAuthoredText()) === compact(warmup)) && !hasComposerAttachments() &&
       compact(authored(all('user-query').at(-1)?.querySelector('.query-text') || all('user-query').at(-1))) === warmup;
     document.addEventListener('beforeinput', noteEdit, true);
     document.addEventListener('input', noteEdit, true);
     try {
       const outcome = await waitFor(() => {
         const output = all('model-response').filter(shown).map(text).join('\n');
-        if (!generating() && output.trim() && composerWritable()) return 'settled';
+        if (!composerAuthoredText() && !generating() && output.trim() && composerWritable()) return 'settled';
         if (output !== previous) { previous = output; changedAt = Date.now(); }
         return Date.now() - changedAt >= 45000 ? 'stalled' : null;
       }, owns, 180000);
@@ -946,7 +949,7 @@ var CLF_DOM = (() => {
       // No task Send is retried, and a refreshed document cannot inherit this closure.
       if (!generating() || !stopGeneration(owns)) return false;
       console.info('[OneCode warmup] stopped stalled tool-free preparation');
-      return Boolean(await waitFor(() => !generating() && composerWritable(), owns, 30000)) && owns();
+      return Boolean(await waitFor(() => !composerAuthoredText() && !generating() && composerWritable(), owns, 30000)) && owns();
     } finally {
       document.removeEventListener('beforeinput', noteEdit, true);
       document.removeEventListener('input', noteEdit, true);

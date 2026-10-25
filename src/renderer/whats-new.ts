@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.8': {
+    lead: () => t('Wait for Gemini to finish preparing a new chat.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('New chat preparation'), text: () => t('Gemini can publish its warm-up question before clearing the editor. OneCode waits for that native cleanup before restoring your task, while preserving changed drafts and cancelled preparation.') }
+    ]
+  },
   '0.6.7': {
     lead: () => t('Keep the browser responsive when Stable and Beta Companions share a profile.'),
     highlights: [
