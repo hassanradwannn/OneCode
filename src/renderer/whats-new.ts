@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.13': {
+    lead: () => t('Confirm completed process cleanup before updating.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Concurrent process cleanup'), text: () => t('An update can proceed when completion capture has already proved the same WSL process token gone. Unknown scans, retained tokens and unconfirmed Windows exits still block installation.') },
+      { icon: 'i-retry', title: () => t('Long resumed tasks'), text: () => t('Includes the task authorization and Steer repairs from the previous Beta candidates.') }
+    ]
+  },
   '0.6.12': {
     lead: () => t('Keep long tasks authorized after Compact & Resume.'),
     highlights: [

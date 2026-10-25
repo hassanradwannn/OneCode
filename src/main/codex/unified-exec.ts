@@ -2008,22 +2008,26 @@ export class UnifiedExecProcessManager {
       ? [result.value.processId] : []));
     const confirmedWslLeaders = new Set(results.flatMap(result => result.status === 'fulfilled' && result.value.confirmed
       ? [result.value.processId] : []));
-    const wslRows = this.wslCustody?.list() ?? [];
-    const wslResults: PromiseSettledResult<boolean>[] = [];
+    const custody = this.wslCustody;
+    const wslRows = custody?.list() ?? [];
     for (let index = 0; index < wslRows.length; index += 4) {
-      wslResults.push(...await Promise.allSettled(wslRows.slice(index, index + 4).map(async row => {
+      await Promise.allSettled(wslRows.slice(index, index + 4).map(async row => {
         if (unconfirmedWslLeaders.has(row.processId) || !row.leaderExited) {
           if (!unconfirmedWslLeaders.has(row.processId) && confirmedWslLeaders.has(row.processId))
-            await this.wslCustody?.markLeaderExited(row.processId, row.incarnation);
+            await custody?.markLeaderExited(row.processId, row.incarnation);
           else {
             await this.noteWslTerminationUnknown(row, 'Forced shutdown could not prove the Windows leader exited; WSL custody is retained.');
             return false;
           }
         }
         return this.terminateWslCustody(row);
-      })));
+      }));
     }
-    if (wslResults.some(result => result.status === 'rejected' || !result.value))
+    // Completion capture can concurrently prove the same token empty and retire
+    // it after this snapshot. Its stale termination result is not remaining
+    // work. Only the same canonical store can prove all obligations retired;
+    // failed scans and writes retain their rows and still block the handoff.
+    if (custody !== this.wslCustody || (custody?.list().length ?? 0) > 0)
       throw new Error('Tagged WSL processes could not all be proven stopped; durable cancellation records remain available.');
     if (results.some(result => result.status === 'fulfilled' && !result.value.confirmed))
       throw new Error('One or more Windows process trees could not be confirmed stopped; any exact WSL custody remains available.');
