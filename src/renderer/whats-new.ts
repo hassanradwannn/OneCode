@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.15': {
+    lead: () => t('Confirm Steer when the provider collapses a stopped response.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Steer beside local tools'), text: () => t('Recognizes a newly stopped native response even when its reasoning body has disappeared, while preserving the original local process and poll.') },
+      { icon: 'i-chat', title: () => t('Queued follow-ups'), text: () => t('Keeps the current question checks while releasing the same pending message after confirmed native Stop.') }
+    ]
+  },
   '0.6.14': {
     lead: () => t('Keep ready chats moving while another chat recovers.'),
     highlights: [

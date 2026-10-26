@@ -2252,6 +2252,14 @@ var CLF_DOM = (() => {
     }, null);
   }
 
+  /** Native cancellation can unmount the interrupted body but retain its disclosure.
+   * This is a presentation receipt only: callers must witness its fresh transition
+   * after an authorized Stop, under their exact question and idle-composer guards. */
+  function stoppedThinkingReceipt(turn) {
+    const fold = turn && activityFold(turn);
+    return fold && /^Stopped thinking$/i.test(text(fold.button, 100)) ? fold.button : null;
+  }
+
   function collapsedActivityFold(turn) {
     const fold = activityFold(turn);
     if (!fold || fold.button.getAttribute('aria-expanded') !== 'false' ||
@@ -3631,6 +3639,7 @@ var CLF_DOM = (() => {
     progressLine,
     progressItems,
     interrupted,
+    stoppedThinkingReceipt,
     markProgress,
     toolBlocks,
     activityItems,

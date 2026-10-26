@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 75;
+  const RECORDER_VERSION = 76;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -13835,9 +13835,13 @@
   }
 
   /** Both final-driven Goal/Loop and unfinished Continue settle the same native control. */
-  async function recoveryTerminalEvidence(questionId, safe) {
+  async function recoveryTerminalEvidence(questionId, safe, freshNativeStop = () => false) {
     if (!safe() || !questionId || !stopQuestionMatches(questionId) || CLF_DOM.generating()) return false;
     if (CLF_DOM.provider === 'gemini') return !!CLF_DOM.recoveryTerminalReceipt?.(questionId);
+    // A collapsed native cancellation can remove both the interrupted body and
+    // Fiber's terminal item. Only a freshly witnessed provider control after this
+    // exact authorized Stop may settle it; an old caption or a ready editor cannot.
+    if (freshNativeStop() && safe() && stopQuestionMatches(questionId) && !CLF_DOM.generating()) return true;
     const latest = CLF_DOM.turns().at(-1);
     const source = latest?.role === 'user' && stopQuestionMatches(questionId) ? latest : currentAssistantTurn();
     // The exact native interruption marker is already terminal evidence for the
@@ -13854,6 +13858,10 @@
   async function stopAutomationGeneration(safe, click = true) {
     if (!safe()) return false;
     const questionId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
+    const stopSource = currentAssistantTurn();
+    const stoppedBefore = CLF_DOM.stoppedThinkingReceipt?.(stopSource);
+    const freshNativeStop = () => !stoppedBefore && !!stopSource &&
+      currentAssistantTurn()?.id === stopSource.id && !!CLF_DOM.stoppedThinkingReceipt?.(currentAssistantTurn());
     recoveryStopping = true;
     try {
       if (click && CLF_DOM.generating() && !CLF_DOM.stopGeneration(safe)) return false;
@@ -13863,7 +13871,7 @@
       const until = Date.now() + INTERRUPT_WAIT_MS;
       let settled = false;
       for (let waited = 0; safe() && waited < INTERRUPT_WAIT_MS && Date.now() <= until; waited += 250) {
-        if (await recoveryTerminalEvidence(questionId, safe)) { settled = true; break; }
+        if (await recoveryTerminalEvidence(questionId, safe, freshNativeStop)) { settled = true; break; }
         await new Promise(resolve => setTimeout(resolve, 250));
       }
       return Boolean(settled &&
