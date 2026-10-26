@@ -10,6 +10,31 @@ display name, such as Knowledge Memory, with its upstream tool names, such as `r
 Returned schemas remain live; installation, removal and enabled-tool changes are reflected on
 the next discovery call. Execution still respects Read-only, Block, Trust and exact caller binding.
 
+`plugins` discovery is paged independently of execution. `action:"list"` returns compact
+`tools` and `built_in_tools` summaries (name and a shortened description), with counts and an
+optional `next_cursor`. `query` is a literal, case-insensitive name/description filter for both
+groups. No unrelated artifact declaration is forced into a filtered result. `action:"installed"`
+returns paged plugin names, states and tool counts plus catalog summaries; its tool counts come
+from the manager's actual installed tool arrays. Optional `query` filters installed names and
+catalog names/descriptions. Each discovery ToolResult is at most 8 KiB of UTF-8, measured after
+credential redaction and including the JSON content envelope, usage guidance and cursor.
+
+Fetch an exact live declaration with `plugins {action:"schema",name:"exact_name"}`. A small
+reply contains `tool`, `sha256`, `total_bytes` and `complete:true`. A larger declaration is sent
+as explicit `tool_json` string fragments (`encoding:"json-utf8-fragments"`), with byte `offset`,
+`total_bytes`, `sha256`, `complete` and optional `next_cursor`. Concatenate fragments in offset
+order, check their UTF-8 byte total and SHA-256, then parse the complete JSON declaration. A
+fragment is never represented as a complete inputSchema. No schema fields are silently dropped.
+Redaction precedes fragmentation so a credential cannot straddle response pages.
+
+Pass a returned cursor with the same action/query/name. Cursors contain only a content
+fingerprint and offset; they retain no grants or server state. A malformed cursor returns
+`DISCOVERY_CURSOR_INVALID`; changed live content returns `DISCOVERY_CHANGED`, requiring a
+fresh first page. Status projections exclude volatile check timestamps. These bounds apply
+only to discovery. `call`, `install`, direct tools, permissions and the code-mode 40,000-byte
+text output budget retain their existing contracts. Inside `exec`, keep catalogs/schema
+fragments private and emit only needed fields, leaving room for the batch's actual results.
+
 This does not automatically install, enable or authenticate a plugin. Provider-hosted chats
 outside OneCode's delivery path receive Core's declaration/instructions but not OneCode's
 per-turn reminders. An existing provider snapshot from before this stable discovery declaration

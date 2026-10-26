@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 83;
+  const RECORDER_VERSION = 84;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -14016,6 +14016,7 @@
     const sourceTurn = turnId;
     const sourceActivity = turnProgressRevision;
     const sourceUser = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
+    if (message.directTurn?.questionId && message.directTurn.questionId !== sourceUser) return false;
     let sendAttempted = false;
     const preparedTarget = () => !target && CLF_DOM.provider === 'gemini' ? CLF_DOM.preparedConversation?.() || null : null;
     const onTarget = () => alive && (epoch === forEpoch || (preparedTarget() && epoch === forEpoch + 1 && conversationId === preparedTarget())) &&
@@ -14217,7 +14218,8 @@
         // this message is for; a changed turn or a lost claim forbids sending it into another one.
         // ChatGPT takes a message while it works and folds it into the running turn, a call still
         // running included (measured 2026-10-09, #1231), so nothing is stopped first.
-        if (input.directTurn?.id !== message.directTurn.id) return fail(t(
+        if (input.directTurn?.id !== message.directTurn.id ||
+            (input.directTurn?.questionId ?? null) !== (message.directTurn.questionId ?? null)) return fail(t(
           'content_delivery_turn_changed',
           'The turn changed before direct delivery.'
         ));
@@ -14228,7 +14230,9 @@
         ));
       }
       // A message for the running turn keeps that turn's model: the picker belongs to the next turn.
-      const intoRunningTurn = () => !!message.directTurn && CLF_DOM.generating();
+      // The frozen source intent survives Stop -> Send presentation changes.
+      // A typed draft hiding Stop cannot turn Steer into a model-picker action.
+      const intoRunningTurn = () => !!message.directTurn;
       const temporary = input.lifetime === 'temporary-planner';
       // On the newer shell an empty temporary chat is proven only by the page-model stamp, and
       // nothing else scans a document with no conversation yet: ask for one before judging.
@@ -14414,7 +14418,7 @@
         // reclaiming it until preparation timeout. A possibly granted Send or
         // ambiguous receipt retains the existing no-replay behavior above.
         const geminiPreparationRefusals = [
-          'editor-not-ready', 'page-busy', 'send-not-ready', 'warmup-not-ready', 'warmup-editor-clear-refused',
+          'editor-not-ready', 'page-busy', 'send-not-ready', 'native-stop-unconfirmed', 'warmup-not-ready', 'warmup-editor-clear-refused',
           'warmup-empty-not-settled', 'warmup-caret-unconfirmed', 'warmup-send-not-ready', 'warmup-acceptance-unconfirmed',
           'warmup-not-settled', 'warmup-attachments-present', 'task-not-restored', 'session-binding-unavailable', 'session-context-not-inserted',
           'connector-not-selected', 'connector-preparation-revoked', 'connector-editor-unavailable',

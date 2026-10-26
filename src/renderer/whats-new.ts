@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.23': {
+    lead: () => t('Steer through the provider’s native composer.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Steer during local work'), text: () => t('Delivers your message through the native composer without waiting for a separate Stop gate. Existing tool calls and terminal output remain attached to their original task.') },
+      { icon: 'i-chat', title: () => t('Rendered diagrams'), text: () => t('Renders Mermaid diagram artifacts offline while keeping their editable source and existing exports.') },
+      { icon: 'i-retry', title: () => t('Compact tool discovery'), text: () => t('Keeps plugin inventories bounded and retrieves exact schemas separately so discovery leaves room for the results you requested.') }
+    ]
+  },
   '0.6.22': {
     lead: () => t('Confirm the selected Gemini model through native menu changes.'),
     highlights: [

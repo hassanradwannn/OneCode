@@ -1000,16 +1000,21 @@ var CLF_DOM = (() => {
     let box = composer(), id = conversationId();
     const submitted = composerAuthoredText();
     if (!box || !submitted || !composerWritable()) return refused('editor-not-ready');
-    if (generating() || whileGenerating) return refused('page-busy');
+    // An explicit, receipt-owned message may use Gemini's native Send while
+    // its previous response runs. The caller retains its exact source question
+    // and input claim; neither Stop nor a cleared editor proves acceptance.
+    if (whileGenerating ? !id || typeof acceptUserReceipt !== 'function' : generating()) return refused('page-busy');
     const current = () => stillCurrent() && composer() === box && (!id || conversationId() === id);
     const prior = new Set(messages().filter(message => message.role === 'user').map(message => message.id));
     const initialRoute = location.href, initialCommand = commandClaim, initialOpening = openingClaim, initialAttachments = attachmentRows();
-    let initialEditRevoked = false, rebound = false;
+    let initialEditRevoked = false, rebound = false, nativeStopAttempted = false, nativeStopFailed = false;
     const noteInitialEdit = event => {
       if (event.isTrusted && event.target?.closest?.(BOX)) initialEditRevoked = true;
     };
     const initialCurrent = () => {
-      if (initialEditRevoked || !stillCurrent() || location.href !== initialRoute) return false;
+      if (initialEditRevoked || nativeStopFailed || !stillCurrent() || location.href !== initialRoute) return false;
+      const attachments = attachmentRows();
+      if (attachments.length !== initialAttachments.length || attachments.some((node, index) => node !== initialAttachments[index])) return false;
       const editor = composer();
       if (editor === box) return true;
       // Gemini can replace the fresh worker's editing host after accepting the
@@ -1017,16 +1022,30 @@ var CLF_DOM = (() => {
       // command and draft lease, before either warm-up or task Send can occur.
       if (rebound || !initialDraft || !initialCommand || commandClaim !== initialCommand || box.isConnected ||
           !editor?.isConnected || !composerWritable() || compact(composerAuthoredText()) !== compact(submitted)) return false;
-      const attachments = attachmentRows();
-      if (attachments.length !== initialAttachments.length || attachments.some((node, index) => node !== initialAttachments[index]) ||
-          !initialDraft.rebind() || !initialDraft.current()) return false;
+      if (!initialDraft.rebind() || !initialDraft.current()) return false;
       box = editor; rebound = true;
       return true;
     };
     document.addEventListener('beforeinput', noteInitialEdit, true); document.addEventListener('input', noteInitialEdit, true);
     let ready;
     try {
-      ready = await waitFor(() => enabled(sendButton()) ? sendButton() : null, initialCurrent, Math.min(30000, acceptanceTimeoutMs));
+      ready = await waitFor(() => {
+        const candidate = sendButton();
+        if (enabled(candidate)) return candidate;
+        // Some Gemini layouts keep Stop in place even with a fully typed
+        // steering draft. This exact claimed input may use that native control
+        // once; it never asks Main to kill a process, close or reload the page.
+        // Send readiness shares this original deadline, and acceptance still
+        // requires the exact new user row below.
+        const stop = stopButton();
+        if (whileGenerating && !nativeStopAttempted && enabled(stop) && initialCurrent() &&
+            compact(composerAuthoredText()) === compact(submitted) && (!initialDraft || initialDraft.current())) {
+          nativeStopAttempted = true;
+          try { stop.click(); }
+          catch { nativeStopFailed = true; }
+        }
+        return null;
+      }, initialCurrent, Math.min(30000, acceptanceTimeoutMs));
     } finally {
       document.removeEventListener('beforeinput', noteInitialEdit, true); document.removeEventListener('input', noteInitialEdit, true);
     }
@@ -1040,7 +1059,7 @@ var CLF_DOM = (() => {
         editorWritable: composerWritable(), nativeGenerating: generating(), commandPresent: Boolean(commandClaim), openingPresent: Boolean(openingClaim),
         initialEditRevoked, initialEditorRebound: rebound
       }));
-      return refused('send-not-ready');
+      return refused(nativeStopFailed ? 'native-stop-unconfirmed' : 'send-not-ready');
     }
     if (!id && !localHelper) {
       // Warm-up must contain only its controlled text. Native files belong to
@@ -1115,6 +1134,7 @@ var CLF_DOM = (() => {
     if (beforeSend && await beforeSend(current) !== true) return refused('not-authorized');
     if (!await waitDraftReady('after-authorization')) return refused('draft-changed');
     const button = sendButton();
+    if (!current() || !enabled(button) || button !== sendButton() || !draftReady('before-click')) return refused('send-not-ready');
     if (connector && provenMention(box)) outgoingMention = { name: provenMention(box).name, expected: submitted, conversationId: id, priorIds: prior };
     cancelApprovalReplyProofs('new-send'); onSendAttempt?.(); button.click();
     const accepted = await waitFor(() => {

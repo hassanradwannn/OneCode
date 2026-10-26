@@ -15,6 +15,7 @@ import { INPUT_RECEIPT_WAIT_MS } from '../../shared/input.js';
 import { readDurable, writeDurableNow } from '../durable.js';
 import { authorityInstallationId } from '../secrets.js';
 import { isChatProviderConversationId } from '../../shared/chat-provider.js';
+import { hasInFlightLocalBinding } from '../mcp/call-context.js';
 
 export interface ChatgptBindingEvidence {
   bindingId: string;
@@ -127,6 +128,7 @@ async function retireInvalid(grant: Grant): Promise<void> {
   await serialized(async () => {
     const live = grants.get(grant.digest);
     if (!live || live.id !== grant.id) return;
+    if (live.activated && hasInFlightLocalBinding(live.id, live.activated.conversationId, live.activated.sessionId)) return;
     const next = new Map(grants); next.delete(grant.digest); await commit(next);
   });
 }
@@ -155,7 +157,10 @@ export async function chatgptBindingInstructions(proof: ChatgptBindingProof): Pr
     const count = Math.min(32, candidates.length);
     for (let index = 0; index < count; index++) {
       const candidate = candidates[(retirementCursor + index) % candidates.length]!;
-      try { if ((await status(candidate)).state === 'invalid') next.delete(candidate.digest); }
+      try {
+        if ((await status(candidate)).state === 'invalid' && !(candidate.activated &&
+            hasInFlightLocalBinding(candidate.id, candidate.activated.conversationId, candidate.activated.sessionId))) next.delete(candidate.digest);
+      }
       catch { /* Storage/owner readiness is uncertain, never revocation. */ }
     }
     retirementCursor = candidates.length ? (retirementCursor + count) % candidates.length : 0;
@@ -197,9 +202,11 @@ export async function validateLocalBinding(evidence: LocalBindingEvidence): Prom
 export async function validateLocalBindingReceipt(evidence: LocalBindingEvidence): Promise<void> {
   if (evidence.attribution === 'gemini_session_capability') return validateGeminiBindingReceiptEvidence(evidence);
   // Receipt settlement grants no execution, but still requires the same grant incarnation.
-  if (!localBindingIsCurrent(evidence)) fail();
+  const { isChatBlocked } = await import('./blocked-chats.js');
+  if (!localBindingIsCurrent(evidence) || isChatBlocked(evidence.conversationId)) fail();
   const { conversationAttachment } = await import('./store.js');
   if (await conversationAttachment(evidence.conversationId, evidence.sessionId) !== 'current') fail();
+  if (!localBindingIsCurrent(evidence) || isChatBlocked(evidence.conversationId)) fail();
 }
 /** Strip the credential before SDK validation, execution, recording or diagnostics. */
 export async function authenticateChatgptExec(name: unknown, args: unknown): Promise<{ args: unknown; evidence?: ChatgptBindingEvidence }> {

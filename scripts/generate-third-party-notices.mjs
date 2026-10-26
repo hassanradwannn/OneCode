@@ -70,6 +70,11 @@ for (const [relative, entry] of Object.entries(lock.packages).sort(([a], [b]) =>
     // libvips distributions publish their composite attribution in README.md.
     try { await fs.access(path.join(directory, 'README.md')); files.push(path.join(directory, 'README.md')); } catch { /* package has separate licenses */ }
   }
+  if (manifest.name === '@mermaid-js/tiny') {
+    if (manifest.version !== '12.2.0') throw new Error('Review bundled Mermaid component notices for the changed package');
+    for (const file of ['README.md', 'BUNDLED-NOTICES.txt', 'DOMPurify-LICENSE', 'DOMPurify-LICENSE-MPL', 'lodash-es-LICENSE'])
+      files.push(path.join(root, 'docs/licenses/mermaid', file));
+  }
   if (!files.length) missing.push(`${manifest.name}@${manifest.version}`);
   const license = typeof manifest.license === 'string' ? manifest.license : JSON.stringify(manifest.license ?? manifest.licenses ?? 'Not declared');
   notices.push('='.repeat(80), `${manifest.name}@${manifest.version}`, `Declared license: ${license}`, `Package: https://www.npmjs.com/package/${manifest.name}/v/${manifest.version}`, '');

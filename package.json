@@ -1,7 +1,7 @@
 {
   "name": "onecode",
-  "version": "0.6.22",
-  "shortVersionWindows": "0.6.22.0",
+  "version": "0.6.23",
+  "shortVersionWindows": "0.6.23.0",
   "description": "Desktop workspace for AI providers with local MCP tools, managed chats and parallel agents.",
   "license": "MIT",
   "author": "OneCode contributors",
@@ -67,6 +67,7 @@
     "@codemirror/state": "6.7.6",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@lezer/highlight": "^1.2.4",
+    "@mermaid-js/tiny": "12.2.0",
     "@modelcontextprotocol/client": "^2.1.0",
     "@modelcontextprotocol/node": "^2.1.0",
     "@modelcontextprotocol/server": "^2.0.0",

@@ -104,11 +104,16 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string)
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
 
-export function artifactPreviewDocument(files: ArtifactFile[], entrypoint: string | undefined, kind: ArtifactKind, channel: string): string {
+export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint: string | undefined, kind: ArtifactKind, channel: string): Promise<string> {
   if (!files.length) return previewShell('<p>Artifact has no files.</p>', '', channel);
   const entry = files.find(file => file.path === entrypoint) ?? files[0]!;
   if (kind === 'markdown' || /\.(?:md|markdown)$/i.test(entry.path)) return markdownDocument(entry, channel);
   if (/\.svg$/i.test(entry.path) || /svg/i.test(entry.mimeType ?? '')) return svgDocument(entry, channel);
+  if (kind === 'diagram' && (/\.(?:mmd|mermaid)$/i.test(entry.path) || /mermaid/i.test(entry.language ?? '') || /mermaid/i.test(entry.mimeType ?? ''))) {
+    if (entry.text.length > 50000) return previewShell('<p role="alert">Diagram source exceeds the 50,000 character preview limit. The original source remains available in the editor.</p>', '', channel);
+    const { diagramBody, diagramStyle } = await import('./artifact-mermaid-preview.js');
+    return previewShell(diagramBody(entry.text), diagramStyle, channel);
+  }
   if (kind === 'web') return webDocument(files, entry.path, channel);
   return previewShell(`<pre>${htmlEscape(entry.text)}</pre>`, '<style>pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace}</style>', channel);
 }
@@ -125,19 +130,19 @@ export function createArtifactPreview(options: {
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.title = 'Artifact preview';
-  const documentSource = artifactPreviewDocument(options.files, options.entrypoint, options.kind, channel);
   let retired = false, documentId: string | null = null;
-  if (options.createDocument) {
-    void options.createDocument(documentSource).then(value => {
-      if (!value) throw new Error('Preview document unavailable');
-      if (retired) { options.releaseDocument?.(value.id); return; }
-      documentId = value.id; frame.src = value.url;
-    }).catch(() => {
-      if (retired) return;
-      const message = document.createElement('p'); message.textContent = 'Preview unavailable. Reopen the artifact to try again.';
-      message.setAttribute('role', 'status'); shell.replaceChildren(message);
-    });
-  } else frame.srcdoc = documentSource;
+  void artifactPreviewDocument(options.files, options.entrypoint, options.kind, channel).then(async documentSource => {
+    if (retired) return;
+    if (!options.createDocument) { frame.srcdoc = documentSource; return; }
+    const value = await options.createDocument(documentSource);
+    if (!value) throw new Error('Preview document unavailable');
+    if (retired) { options.releaseDocument?.(value.id); return; }
+    documentId = value.id; frame.src = value.url;
+  }).catch(() => {
+    if (retired) return;
+    const message = document.createElement('p'); message.textContent = 'Preview unavailable. Reopen the artifact to try again.';
+    message.setAttribute('role', 'status'); shell.replaceChildren(message);
+  });
   const shell = document.createElement('div'); shell.className = 'artifact-preview-shell'; shell.append(frame); options.parent.replaceChildren(shell);
   let viewport: ArtifactViewport = 'responsive';
   const simulated = options.kind === 'web';

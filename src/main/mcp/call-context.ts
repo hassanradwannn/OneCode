@@ -222,6 +222,15 @@ export function inFlightToolCalls(conversationId: string | null = null): number 
   return countFor(seen, conversationId);
 }
 
+/** Existing admitted/settling call custody only; retained grants cannot claim it. */
+export function hasInFlightLocalBinding(bindingId: string, conversationId: string, sessionId: string): boolean {
+  for (const call of [...running, ...settling]) {
+    const proof = call.caller.geminiBinding;
+    if (proof?.bindingId === bindingId && proof.conversationId === conversationId && proof.sessionId === sessionId) return true;
+  }
+  return false;
+}
+
 /**
  * Keeps a finished call observable while its record is still being written.
  *

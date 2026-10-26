@@ -90,28 +90,17 @@ export async function cancelDesktopInput(id: string): Promise<boolean> {
 }
 async function startAcceptedInput(entry: InputEntry, controller: AbortController): Promise<void> {
   try {
-    if (entry.steerTurnId && !entry.steerReady && entry.sessionId) {
-      const { stopSessionTurn, STOP_COMMAND_TIMEOUT_MS } = await import('../bridge.js');
+    if (entry.steerTurnId && entry.sessionId) {
       const source = await getSession(entry.sessionId);
-      if (source?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId, entry.id);
-      else if (source?.activeTurnId) throw new Error('The turn selected for steering changed');
-      let deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
-      let closed = entry.steerClosedOnce === true;
-      while (!await releaseSteeringInput(entry.id)) {
-        controller.signal.throwIfAborted();
-        const session = await getSession(entry.sessionId);
-        if (session?.conversationId !== entry.conversationId || (session.activeTurnId && session.activeTurnId !== entry.steerTurnId))
-          throw new Error('The turn selected for steering changed');
-        const pending = (await listInputs()).find(row => row.id === entry.id);
-        if (!pending || pending.state !== 'queued' || pending.cancelledByUser || pending.sendAuthorizedAt !== undefined) return;
-        if (Date.now() >= deadline || (!closed && pending.steerClosedOnce)) {
-          closed = pending.steerClosedOnce === true;
-          await noteInputStartupError(entry.id, 'Message queued. Waiting for the exact native Stop to settle.');
-          if (session?.activeTurnId === entry.steerTurnId) await stopSessionTurn(entry.sessionId, entry.steerTurnId, entry.id);
-          deadline = Date.now() + STOP_COMMAND_TIMEOUT_MS;
-        }
-        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 200); timer.unref?.(); });
+      if (source?.conversationId !== entry.conversationId || (source.activeTurnId && source.activeTurnId !== entry.steerTurnId))
+        throw new Error('The turn selected for steering changed');
+      if (!entry.steerReady && !await releaseSteeringInput(entry.id)) {
+        await noteInputStartupError(entry.id, 'Message queued. The exact source response is not confirmed for native Steer.');
+        return;
       }
+      // The outbox rechecks the frozen source turn and question at claim and
+      // immediately before Send. Native busy Send is the operation being asked
+      // for; Stop, tab replacement and local tool termination are separate actions.
     }
     await ready(controller.signal);
     controller.signal.throwIfAborted();
@@ -134,7 +123,7 @@ export async function resumePendingSteeringInputs(): Promise<void> {
     void startAcceptedInput(row, controller).catch(() => undefined);
   }
 }
-/** Explicit queue steering uses the same startup and exact native Stop barrier as a fresh send. */
+/** Explicit queue steering uses ordinary startup and the exact native composer claim. */
 export async function sendQueuedDesktopInputNow(id: string, intent?: QueuedInputNowIntent): Promise<boolean> {
   if (stopped || starting.has(id) || !await sendQueuedInputNow(id, intent)) return false;
   const entry = (await listInputs()).find(row => row.id === id);
