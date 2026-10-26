@@ -674,6 +674,20 @@ export interface BridgeStatus {
  * reads the same underlying status/page projections; the desktop popover merely gives that
  * otherwise-hidden UI a native home inside the app.
  */
+export type CompanionMaintenanceStage = 'starting' | 'render-release' | 'pairing' | 'tabs-query' | 'account-routing' |
+  'login-check' | 'site-access' | 'http-status' | 'background-placement' | 'render-policy' | 'browser-preferences' |
+  'window-layout' | 'keep-awake' | 'successor-placement' | 'connector-identity' | 'input-delivery' | 'monitoring-state' |
+  'revival-discovery' | 'revival-delivery' | 'managed-tabs-query' | 'tab-pruning' | 'tab-protection';
+export interface CompanionMaintenanceDiagnostics { stage: CompanionMaintenanceStage; since: number; ageMs: number }
+export type CompanionInputIntakeStage = 'offered' | 'warmup-state' | 'desktop-busy' | 'model-busy' | 'native-preview-busy' |
+  'page-closed' | 'generation-busy' | 'goal-busy' | 'compaction-busy' | 'source-question' | 'off-target' | 'recovery' |
+  'direct-turn' | 'fresh-page' | 'composer' | 'claim' | 'claimed' | 'warmup-settle' | 'draft' | 'model' | 'inserting' |
+  'authorizing' | 'sending' | 'acknowledged' | 'finished' | 'failed';
+export interface CompanionInputIntakeDiagnostics {
+  id: string; at: number; stage: CompanionInputIntakeStage; direct: boolean; sourceRendered: boolean;
+  sourceQuestionId: string | null; expectedQuestionId: string | null;
+  desktopBusy: boolean; modelBusy: boolean; nativePreviewBusy: boolean; goalBusy: boolean; compactionBusy: boolean;
+}
 export interface CompanionDiagnostics {
   capturedAt: number;
   status: {
@@ -688,6 +702,7 @@ export interface CompanionDiagnostics {
     appProtocol: number | null;
     extensionVersion: string | null;
     extensionProtocol: number | null;
+    maintenance?: CompanionMaintenanceDiagnostics | null;
     pairError: { error: string; message: string } | null;
   };
   preferences: {
@@ -727,6 +742,7 @@ export interface GeminiApprovalAuditEntry {
 }
 
 export interface CompanionPageDiagnostics {
+  inputIntake?: CompanionInputIntakeDiagnostics | null;
   recorderVersion: number | null;
   runId: string | null;
   conversationId: string | null;

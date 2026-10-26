@@ -16,9 +16,24 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.2': {
+    lead: () => t('Keep independent chats moving when a browser rendering operation stalls.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Independent browser delivery'), text: () => t('A stalled rendering operation in one tab no longer holds the shared message pickup queue or prevents another chat from opening.') },
+      { icon: 'i-retry', title: () => t('Retained browser ownership'), text: () => t('Late browser replies retain their original tab ownership. A timeout cannot repeat an attachment or revive cancelled activity.') }
+    ]
+  },
+  '0.7.1': {
+    lead: () => t('Preserve the recorded source question while the browser redraws a running chat.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Steer through chat redraws'), text: () => t('Keeps the exact recorded question and turn when its native row leaves the rendered page. A newer question or changed chat still stops delivery.') },
+      { icon: 'i-retry', title: () => t('Delivery diagnostics'), text: () => t('Shows the current browser maintenance and message pickup stages in Companion details and diagnostic reports.') }
+    ]
+  },
   '0.7.0': {
     lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
     highlights: [
+      { icon: 'i-chat', title: () => t('Independent chats'), text: () => t('A stalled browser tab no longer holds up other chats. Steer keeps the exact recorded question when the browser redraws it, while preserving the original local process and output.') },
       { icon: 'i-chat', title: () => t('Responsive message delivery'), text: () => t('Slow transcript uploads no longer hold the browser control queue. Confirmed messages release the composer for the next message while progress continues.') },
       { icon: 'i-retry', title: () => t('Gemini opening recovery'), text: () => t('An owned tool-free preparation that stalls can refresh its page once, retain its original deadline and continue without repeating the preparation message or an uncertain task Send.') }
     ]

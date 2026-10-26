@@ -333,6 +333,23 @@ function paintDetails(status, info) {
     status ? t('popup_detail_extension_value', 'v$1 · protocol $2', [status.extensionVersion, status.extensionProtocol]) : null,
     status && status.compatible === false
   );
+  const maintenance = status?.maintenance;
+  detail(grid, t('popup_detail_maintenance', 'maintenance'),
+    maintenance && typeof maintenance.stage === 'string' && /^[a-z-]{1,32}$/.test(maintenance.stage) &&
+      Number.isFinite(maintenance.ageMs)
+      ? `${maintenance.stage} · ${Math.floor(Math.min(86_400_000, Math.max(0, maintenance.ageMs)) / 1000)}s`
+      : t('popup_status_idle', 'idle'));
+  const intake = page?.inputIntake;
+  if (intake && typeof intake.stage === 'string' && /^[a-z-]{1,40}$/.test(intake.stage) && Number.isFinite(intake.at)) {
+    detail(grid, t('popup_detail_input_intake', 'input intake'),
+      `${intake.stage} · ${ago(intake.at)} · ${shorten(intake.id, 12)}`);
+    const held = [['direct', intake.direct], ['desktop busy', intake.desktopBusy], ['model busy', intake.modelBusy],
+      ['source rendered', intake.sourceRendered], ['preview busy', intake.nativePreviewBusy], ['goal busy', intake.goalBusy], ['compaction busy', intake.compactionBusy]]
+      .filter(([, active]) => active === true).map(([label]) => label);
+    detail(grid, t('popup_detail_input_guards', 'input guards'), held.join(', ') || t('popup_status_idle', 'idle'));
+    detail(grid, t('popup_detail_input_source', 'input source'),
+      `${shorten(intake.sourceQuestionId, 12)} / ${shorten(intake.expectedQuestionId, 12)}`);
+  }
   detail(grid, t('popup_detail_chat_id', 'chat id'), (info && info.conversationId) || null);
   detail(grid, t('popup_detail_app_session', 'app session'), (page && page.session) || null, Boolean(page && !page.session));
   detail(
