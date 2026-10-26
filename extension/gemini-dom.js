@@ -1415,12 +1415,28 @@ var CLF_DOM = (() => {
     // The fresh native editor can become writable before its model control is
     // mounted/readable. Wait under the original claim and exact draft lease;
     // observing that later control grants no authority to replace either one.
-    const picker = await waitFor(() => {
+    let picker = await waitFor(() => {
       const candidate = pickerButton();
       return enabled(candidate) && visibleModelSelection()?.model ? candidate : null;
     }, () => initial.ownsDraft() && !generating(), 5000);
     if (!picker) return refuse('picker-not-ready');
-    const surface = { picker, current: () => initial.ownsDraft() && pickerButton() === picker && !generating() };
+    let choiceClicked = false, pickerRebound = false;
+    const surface = { current: () => {
+      if (!initial.ownsDraft() || generating()) return false;
+      const next = pickerButton();
+      if (next === picker) return true;
+      // Selecting a native mode can remount its header control. Follow that
+      // one replacement only after this request's own choice click, under the
+      // unchanged editor/draft/route/attachments and original caller claim.
+      // A missing/readiness-pending successor may wait within the same budget;
+      // no control is clicked until its actual native selection is re-proved.
+      if (!choiceClicked || pickerRebound || picker.isConnected) return false;
+      const candidates = all('button[aria-label^="Open mode picker"]').filter(shown);
+      if (candidates.length > 1) return false;
+      if (!next || !enabled(next) || !visibleModelSelection()?.model) return true;
+      picker = next; pickerRebound = true;
+      return true;
+    } };
     if (!surface.current()) return refuse('picker-changed', surface);
     if (model === 'gemini-current') return true;
     let owned = nativeModelRows().length === 0;
@@ -1431,10 +1447,11 @@ var CLF_DOM = (() => {
       if (options.length !== 1 || !surface.current()) return refuse('choice-unconfirmed', surface);
       const target = options[0];
       if (target.selected) return true;
-      target.node.click();
+      choiceClicked = true; target.node.click();
       // The closed trigger says only Gemini/Flash, while native choices have
       // distinct versions. Reopen and prove the actual selected mode ID.
-      const changed = await waitFor(() => nativeModelRows().length === 0 || nativeModelMenu()?.some(row => row.id === target.id && row.selected), surface.current, 5000);
+      const changed = await waitFor(() => picker.isConnected && pickerButton() === picker &&
+        (nativeModelRows().length === 0 || nativeModelMenu()?.some(row => row.id === target.id && row.selected)), surface.current, 5000);
       if (!changed || !surface.current()) return refuse('choice-did-not-change', surface);
       if (!nativeModelRows().length) { picker.click(); owned = true; }
       const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected), surface.current, 5000);

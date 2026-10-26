@@ -3046,7 +3046,7 @@ var CLF_DOM = (() => {
     }
     return false;
   }
-  function modelPickerAccess(stillCurrent) {
+  function modelPickerAccess(stillCurrent, failure = () => {}) {
     const shown = node => node && !node.closest('[hidden],[aria-hidden="true"],[inert]') && node.getClientRects().length > 0;
     const picker = () => document.querySelector(PICKER);
     const trigger = modelPickerTrigger;
@@ -3056,8 +3056,16 @@ var CLF_DOM = (() => {
       return panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : null;
     };
     const wait = (read, timeout = 3000) => new Promise(resolve => {
-      let reading = false, dirty = false, done = false;
-      const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(value); };
+      let reading = false, dirty = false, done = false, scheduled = null;
+      const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer);
+        if (scheduled !== null) clearTimeout(scheduled); resolve(value); };
+      // MAIN readback stamps native ownership attributes. Observing those writes
+      // must not recursively start another read in the same microtask checkpoint:
+      // that can starve native picker rendering, route cancellation and deadlines.
+      const schedule = () => {
+        if (done || scheduled !== null) return;
+        scheduled = setTimeout(() => { scheduled = null; void check(); }, 0);
+      };
       const check = async () => {
         if (done) return;
         if (!stillCurrent()) return finish(null);
@@ -3065,9 +3073,9 @@ var CLF_DOM = (() => {
         reading = true;
         try { let value = read(); if (value?.then) value = await value; if (stillCurrent() && value) finish(value); }
         catch { finish(null); }
-        finally { reading = false; if (dirty && !done) { dirty = false; void check(); } }
+        finally { reading = false; if (dirty && !done) { dirty = false; schedule(); } }
       };
-      const observer = new MutationObserver(check);
+      const observer = new MutationObserver(() => { if (reading) dirty = true; else schedule(); });
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       const timer = setTimeout(() => finish(null), timeout); void check();
     });
@@ -3079,7 +3087,7 @@ var CLF_DOM = (() => {
     return {
       state,
       async open() {
-        if (!stillCurrent()) return null;
+        if (!stillCurrent()) { failure('page-changed'); return null; }
         // Native Presence waits for the menu's exit animation. Chrome can suspend
         // that animation in a hidden window, retaining a closed picker and its
         // focus scope indefinitely. Suppress only this owned picker animation for
@@ -3093,10 +3101,16 @@ var CLF_DOM = (() => {
         // enter here directly, without the New Chat reuse/catalog preparation.
         // Wait for that surface, then use the same owned Chat transition before
         // interpreting account choices. Work's picker is not a denied Chat model.
-        if (!await readyTrigger() || !await prepareChatModelSurface(stillCurrent)) return null;
+        if (!await readyTrigger()) { failure(stillCurrent() ? 'trigger-unconfirmed' : 'page-changed'); return null; }
+        if (!await prepareChatModelSurface(stillCurrent)) { failure(stillCurrent() ? 'chat-surface-unconfirmed' : 'page-changed'); return null; }
         // A retained exit-animation node is not an open native menu.
-        if (!openPicker()) { const button = await readyTrigger(); if (!key(button, 'Enter') || !await wait(openPicker)) return null; }
-        return state();
+        if (!openPicker()) { const button = await readyTrigger();
+          if (!key(button, 'Enter')) { failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null; }
+          if (!await wait(openPicker)) { failure(stillCurrent() ? 'picker-open-unconfirmed' : 'page-changed'); return null; }
+        }
+        const observed = await state();
+        if (!observed) failure(stillCurrent() ? 'picker-state-unconfirmed' : 'page-changed');
+        return observed;
       },
       async close() {
         try {
@@ -3235,10 +3249,15 @@ var CLF_DOM = (() => {
     if (!closed) failure('picker_close_failed');
     return restored && closed && stillCurrent() && result.size ? [...result.values()] : null;
   }
-  async function selectModelSettings(model, effort, stillCurrent = () => true) {
+  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}) {
     if (!model && !effort) return true;
-    const ui = modelPickerAccess(stillCurrent), original = await ui.open();
-    if (!original) { await ui.close(); return false; }
+    let reported = false;
+    // Fixed diagnostic stages only. A caller's diagnostic callback cannot change
+    // selection authority or make a failed native proof successful.
+    const report = reason => { if (!reported) { reported = true; try { failure(reason); } catch {} } };
+    const refused = reason => { report(stillCurrent() ? reason : 'page-changed'); return false; };
+    const ui = modelPickerAccess(stillCurrent, report), original = await ui.open();
+    if (!original) { await ui.close(); return refused('picker-unavailable'); }
     // Account-evaluated exact selection is already proof; visiting unrelated
     // versions can reset it or fail unnecessarily. Captions and denied choices
     // do not qualify, and native closure still has to succeed.
@@ -3246,7 +3265,7 @@ var CLF_DOM = (() => {
     if (current?.available && (current.id === model || current.familyId === model) &&
         (!effort || current.effort === effort)) {
       const closed = await ui.close();
-      return closed && stillCurrent();
+      return closed && stillCurrent() || refused('picker-close-unconfirmed');
     }
     let selected = false, closed = false;
     try {
@@ -3259,7 +3278,7 @@ var CLF_DOM = (() => {
       // can be resolved against what the account actually offers before anything is moved.
       const offered = [];
       for (const version of [original.versions.find(v => v.id === original.version), ...original.versions.filter(v => v.id !== original.version)]) {
-        const state = await ui.version(version.id); if (!state) return false;
+        const state = await ui.version(version.id); if (!state) return refused('version-unconfirmed');
         for (const choice of state.choices) {
           const rank = choice.available ? modelRank(choice) : 0;
           if (rank) offered.push({ version: version.id, choice, rank });
@@ -3299,12 +3318,13 @@ var CLF_DOM = (() => {
       // Latest/version entries may describe the same pair; distinct families may not.
       const rank = Math.max(0, ...candidates.map(candidate => candidate.rank));
       const matches = candidates.filter(candidate => candidate.rank === rank);
-      if (!matches.length || (model && new Set(matches.map(candidate => candidate.choice.familyId)).size !== 1) ||
-          (model && wantedEffort && new Set(matches.map(candidate => `${candidate.choice.id}\u0000${candidate.choice.effort}`)).size !== 1)) return false;
+      if (!matches.length) return refused('model-unavailable');
+      if ((model && new Set(matches.map(candidate => candidate.choice.familyId)).size !== 1) ||
+          (model && wantedEffort && new Set(matches.map(candidate => `${candidate.choice.id}\u0000${candidate.choice.effort}`)).size !== 1)) return refused('model-ambiguous');
       const wanted = matches.find(candidate => candidate.version === original.version && candidate.choice.bucket === original.currentBucket) || matches[0];
       const state = await ui.version(wanted.version), choice = wanted.choice;
       // Versions can change while traversing the UI. Revalidate before moving its slider.
-      if (!state?.choices.some(next => next.bucket === choice.bucket && next.available && next.id === choice.id && next.effort === choice.effort)) return false;
+      if (!state?.choices.some(next => next.bucket === choice.bucket && next.available && next.id === choice.id && next.effort === choice.effort)) return refused('selection-unavailable');
       const after = await ui.bucket(choice.bucket);
       const confirmed = after?.choices.find(c => c.bucket === after.currentBucket);
       selected = stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort;
@@ -3312,7 +3332,7 @@ var CLF_DOM = (() => {
       if (!selected && stillCurrent() && await ui.version(original.version)) await ui.bucket(original.currentBucket);
       closed = await ui.close();
     }
-    return selected && closed && stillCurrent();
+    return selected && closed && stillCurrent() || refused(!selected ? 'selection-unconfirmed' : 'picker-close-unconfirmed');
   }
 
   function projectHomeId(pathname = location.pathname) {

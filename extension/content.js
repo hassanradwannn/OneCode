@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 80;
+  const RECORDER_VERSION = 81;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -8030,7 +8030,13 @@
    * sits there looking idle immediately after being pressed.
    */
   function controlState(input) {
-    const { job, connected, disconnected, conversationId, pressedAt, error, now, phase, summary } = input;
+    const { connected, disconnected, conversationId, pressedAt, error, now, phase, summary } = input;
+    // A terminal handoff remains in history. Its old failure cannot describe a
+    // later native question that the user has actually sent in this same chat.
+    const supersededFailure = input.job?.stage === 'failed' && !input.job.busy &&
+      input.newerQuestion === true && input.latestQuestionId && input.job.sourceSend?.messageId &&
+      input.latestQuestionId !== input.job.sourceSend.messageId;
+    const job = supersededFailure ? null : input.job;
 
     // The compaction turn has finished, but its exact brief has not crossed the app's durable
     // boundary yet. This is still one live transaction even when the activity feed has not
@@ -8783,8 +8789,13 @@
     // an empty composer, with a Cancel that would have cancelled a handoff in a conversation
     // no longer on screen. The panel already refused to paint there; the pill did not.
     const mine = composerChat().state === 'chat';
+    const latestQuestionId = mine ? CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id : null;
+    const latestQuestion = latestQuestionId && userAnchorByMessage.get(latestQuestionId);
+    const handoffQuestion = job?.sourceSend?.messageId && userAnchorByMessage.get(job.sourceSend.messageId);
     return controlState({
       job: mine ? job : null,
+      latestQuestionId,
+      newerQuestion: Boolean(latestQuestion && handoffQuestion && latestQuestion.seq > handoffQuestion.seq),
       connected: status.connected && status.paired,
       disconnected: status.disconnected === true,
       conversationId: mine ? conversationId : '',
@@ -9882,7 +9893,7 @@
       );
     }
     return input.generating
-      ? frame(t('content_waiting_current_operation', 'Still waiting for the current operation to complete'))
+      ? frame(t('content_waiting_current_operation', 'OneCode is waiting for this response to finish'))
       : null;
   }
 
@@ -12886,11 +12897,13 @@
     if (await failIfRetargeted()) return;
 
     if (boot.model || boot.reasoningEffort) step('model');
-    if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget))) {
+    let bootstrapModelFailure = '';
+    if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget,
+      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }))) {
       return void (await fail(t(
         'content_bootstrap_model_unavailable',
         "The requested model or reasoning is unavailable or could not be confirmed in the provider"
-      )));
+      ), bootstrapModelFailure ? `model:${bootstrapModelFailure}` : undefined));
     }
     // ChatGPT's Chat/Work/model transition can replace the entire home composer after
     // the picker has already confirmed the requested selection. Do not treat that

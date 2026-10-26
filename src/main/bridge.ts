@@ -5817,6 +5817,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (status === 'failed' && command.spec.type === 'resume' && projectEntryDetail) {
       logWarn(`bridge: command ${id} failed: project entry ${projectEntryDetail}`);
     }
+    if (status === 'failed' && /^model:[a-z-]{1,40}$/.test(rawDetail)) {
+      logWarn(`bridge: native model preparation failed (${rawDetail.slice('model:'.length)})`);
+    }
     logInfo(`bridge: ${specKey(command.spec)} completed with ${receipt.outcome}`);
     void deliver();
     return json(res, 200, receiptReply(receipt), origin);

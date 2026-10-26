@@ -699,7 +699,7 @@
     "message": "Waiting…"
   },
   "content_waiting_current_operation": {
-    "message": "Still waiting for the current operation to complete"
+    "message": "OneCode is waiting for this response to finish"
   },
   "content_waiting_local_tool": {
     "message": "Waiting for a local tool to finish"

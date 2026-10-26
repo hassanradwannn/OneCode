@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.20': {
+    lead: () => t('Keep handoff preparation responsive.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Native model preparation'), text: () => t('Picker readback yields to native rendering and cancellation instead of repeatedly waking itself.') },
+      { icon: 'i-chat', title: () => t('Current chat status'), text: () => t('A failed handoff stays in history, while a newly confirmed question clears that old failure from the native composer control.') }
+    ]
+  },
   '0.6.19': {
     lead: () => t('Keep approvals and queued messages working together.'),
     highlights: [
