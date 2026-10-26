@@ -610,50 +610,67 @@ type CommandCustody = {
 const geminiCommandCustody = new Map<string, CommandCustody>();
 let commandAuthorityLoaded = false;
 let commandRestoreFlight: Promise<void> | null = null;
+type CommandBindingWait = 'command-receipt' | 'resume-send' | 'resume-question' | 'resume-source-question' | 'resume-turn' | 'worker-session';
+/** Bounded diagnostic transitions only; never participates in command authority. */
+const commandBindingWaits = new Map<string, CommandBindingWait>();
+function pendingCommandBinding(id: string, stage: CommandBindingWait): LocalBindingStatus {
+  if (commandBindingWaits.get(id) !== stage) {
+    commandBindingWaits.delete(id);
+    commandBindingWaits.set(id, stage);
+    while (commandBindingWaits.size > 128) commandBindingWaits.delete(commandBindingWaits.keys().next().value!);
+    logInfo(`ChatGPT command authorization waiting: ${stage}`);
+  }
+  return { state: 'pending' };
+}
+function settledCommandBinding(id: string, result: LocalBindingStatus): LocalBindingStatus {
+  commandBindingWaits.delete(id);
+  return result;
+}
 
 /** A worker grant remains dormant until this exact leased command's Send ACK commits. */
 export async function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> {
   if (!commandAuthorityLoaded) await restoreCommands();
   const custody = geminiCommandCustody.get(proof.id);
   if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease ||
-      (!custody.resume && (!custody.worker || !swarmRunning(custody.worker.runId)))) return { state: 'invalid' };
+      (!custody.resume && (!custody.worker || !swarmRunning(custody.worker.runId)))) return settledCommandBinding(proof.id, { state: 'invalid' });
   const receipt = await commandSendReceipt(proof.id);
   if (!receipt) {
     const command = commands.find(entry => entry.id === proof.id);
     return command?.owner === proof.owner && isLeased(command) && command.claimedAt !== null
-      ? { state: 'pending' } : { state: 'invalid' };
+      ? pendingCommandBinding(proof.id, 'command-receipt') : settledCommandBinding(proof.id, { state: 'invalid' });
   }
   const conversation = receipt.conversationId;
   if (!receipt.committed || receipt.outcome !== 'committed' || receipt.client !== proof.owner || !conversation ||
-      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation)) return { state: 'invalid' };
+      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation)) return settledCommandBinding(proof.id, { state: 'invalid' });
   if (custody.resume) {
     // The original continuation and committed command receipt own this grant. The
     // source chat/new-chat selector cannot authorize the destination, nor can a
     // later question or Regenerate borrow the first successor turn's credential.
     const entry = continuationByToken(custody.resume.token);
-    if (!entry || entry.sessionId !== custody.resume.sessionId || entry.state !== 'committed' || entry.to !== conversation) return { state: 'invalid' };
-    if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return { state: 'pending' };
+    if (!entry || entry.sessionId !== custody.resume.sessionId || entry.state !== 'committed' || entry.to !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
+    if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return pendingCommandBinding(proof.id, 'resume-send');
     const session = await getSession(entry.sessionId);
-    if (session?.conversationId !== conversation) return { state: 'invalid' };
+    if (session?.conversationId !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
     const question = await readLatestUserMessage(entry.sessionId);
-    if (!question) return { state: 'pending' };
+    if (!question) return pendingCommandBinding(proof.id, 'resume-question');
     if (question.messageId !== entry.destinationSend.messageId)
-      return { state: question.messageId === entry.sourceSend.messageId ? 'pending' : 'invalid' };
+      return question.messageId === entry.sourceSend.messageId ? pendingCommandBinding(proof.id, 'resume-source-question')
+        : settledCommandBinding(proof.id, { state: 'invalid' });
     const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === question.messageId);
-    if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return { state: 'invalid' };
-    if (!session.activeTurnId || !turns.length) return { state: 'pending' };
-    if (turns[0]?.[0] !== session.activeTurnId) return { state: 'invalid' };
-    return { state: 'ready', conversationId: conversation, sessionId: entry.sessionId };
+    if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return settledCommandBinding(proof.id, { state: 'invalid' });
+    if (!session.activeTurnId || !turns.length) return pendingCommandBinding(proof.id, 'resume-turn');
+    if (turns[0]?.[0] !== session.activeTurnId) return settledCommandBinding(proof.id, { state: 'invalid' });
+    return settledCommandBinding(proof.id, { state: 'ready', conversationId: conversation, sessionId: entry.sessionId });
   }
-  if (!custody.worker || agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return { state: 'invalid' };
+  if (!custody.worker || agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
   const worker = agentInfoForOwnedConversation(conversation);
-  if (worker?.lastRevivalCommandId && worker.lastRevivalCommandId !== proof.id) return { state: 'invalid' };
+  if (worker?.lastRevivalCommandId && worker.lastRevivalCommandId !== proof.id) return settledCommandBinding(proof.id, { state: 'invalid' });
   const session = await findSessionByConversation(conversation, { requireUnique: true });
   // The ACK owns the native destination; its first observation still owns creating
   // history. Do not turn that small observation gap into a permanent refusal.
-  if (!session) return { state: 'pending' };
-  return session?.conversationId === conversation && session.origin?.kind === 'worker' && session.origin.agentId === custody.worker.agent
-    ? { state: 'ready', conversationId: conversation, sessionId: session.id } : { state: 'invalid' };
+  if (!session) return pendingCommandBinding(proof.id, 'worker-session');
+  return settledCommandBinding(proof.id, session?.conversationId === conversation && session.origin?.kind === 'worker' && session.origin.agentId === custody.worker.agent
+    ? { state: 'ready', conversationId: conversation, sessionId: session.id } : { state: 'invalid' });
 }
 
 /** Reads canonical command/receipt owners; a warmup never completes their transaction. */
@@ -3386,7 +3403,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const ok = !!command && spec?.type === 'stop' && spec.continuationInputId === body.id &&
         command.owner === body.stopClient && spec.conversationId === target && await stopCommandCurrent(spec) &&
         await permitSteeringClose(body.id, spec.sessionId, spec.turnId);
-      if (ok) { retire(command!, 'the exact hung continuation page was closed for recovery'); changed(); }
+      if (ok) { retire(command!, 'a guarded refresh of the exact continuation page was authorized'); changed(); }
       return json(res, 200, { ok }, origin);
     }
     if (body.refreshAction === 'dispatch' || body.refreshAction === 'ready') {
@@ -11893,7 +11910,7 @@ function restoredCommandCustody(value: unknown): Map<string, CommandCustody> {
         typeof row.worker.agent === 'string' && row.worker.agent.length > 0 && row.worker.agent.length <= 128)
       item.worker = { runId: row.worker.runId, agent: row.worker.agent };
     if (row.resume && typeof row.resume.sessionId === 'string' && /^[a-z0-9-]{8,64}$/i.test(row.resume.sessionId) &&
-        typeof row.resume.token === 'string' && /^[a-f0-9]{32}$/.test(row.resume.token))
+        typeof row.resume.token === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(row.resume.token))
       item.resume = { sessionId: row.resume.sessionId, token: row.resume.token };
     if ((row.worker !== undefined && !item.worker) || (row.resume !== undefined && !item.resume)) continue;
     if (!item.worker && !item.resume) continue;
@@ -12149,6 +12166,7 @@ export function workerBriefForTests(agent: string, task: string): string {
 
 export function resetBridgeForTests(): void {
   commandAuthorityLoaded = false;
+  commandBindingWaits.clear();
   resetApprovalWaits();
   clearCompanionDiagnostics();
   for (const command of commands) if (command.timer) clearTimeout(command.timer);

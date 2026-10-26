@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.19': {
+    lead: () => t('Keep approvals and queued messages working together.'),
+    highlights: [
+      { icon: 'i-check-circle', title: () => t('Native tool approvals'), text: () => t('Matches complete tool names to the configured connector and enabled permissions, including tools with spaces in their display names.') },
+      { icon: 'i-retry', title: () => t('Steer while tools wait'), text: () => t('A pending approval cannot be mistaken for a failed Stop and trigger immediate tab closure. Exact running requests also protect their page during recovery.') },
+      { icon: 'i-terminal', title: () => t('Resumed task receipts'), text: () => t('Restores the original Compact & Resume command receipt after restarting the app.') }
+    ]
+  },
   '0.6.18': {
     lead: () => t('Keep task progress and connection status separate.'),
     highlights: [

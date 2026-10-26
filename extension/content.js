@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 79;
+  const RECORDER_VERSION = 80;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2229,13 +2229,13 @@
       // This Stop belongs to the user's pending continuation. Keep user Stop
       // flags clear; only native terminal evidence may release that same input.
       const alreadyClicked = stoppedAppCommands.has(commandId);
-      if (!alreadyClicked) stoppedAppCommands.add(commandId);
-      const settled = await stopAutomationGeneration(continuationCurrent, !alreadyClicked, true);
+      const settled = await stopAutomationGeneration(continuationCurrent, !alreadyClicked, true,
+        () => stoppedAppCommands.add(commandId));
       if (settled && continuationCurrent()) {
         finishGeneration(currentAssistantTurn(), { outcome: 'interrupted',
           detail: 'The native response was stopped to deliver the pending continuation.' }, false);
         await flush();
-      } else if (continuationCurrent()) {
+      } else if (continuationCurrent() && stoppedAppCommands.has(commandId)) {
         recoveryCloseCandidate = { id: command.continuationInputId, conversationId: target, questionId: command.userMessageId, current: continuationCurrent };
         try { await ask({ type: 'stop_close', id: commandId, inputId: command.continuationInputId, client: RUN_ID, conversationId: target }); }
         finally { recoveryCloseCandidate = null; }
@@ -13865,7 +13865,7 @@
       (!!native.endMessageId || ['complete', 'interrupted'].includes(native.terminalState)) &&
       stopQuestionMatches(questionId) && !CLF_DOM.generating();
   }
-  async function stopAutomationGeneration(safe, click = true, explicitSteer = false) {
+  async function stopAutomationGeneration(safe, click = true, explicitSteer = false, onStop = () => {}) {
     if (!safe()) return false;
     const questionId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
     const stopSource = currentAssistantTurn();
@@ -13880,6 +13880,7 @@
       if (click && CLF_DOM.generating()) {
         clickedStop = CLF_DOM.stopGeneration(safe);
         if (!clickedStop) return false;
+        onStop();
       }
       // Fiber refresh stamps its observed nodes. Running it inside a MutationObserver
       // predicate makes its own stamps schedule another refresh forever. Yield
@@ -15095,6 +15096,8 @@
         const candidate = recoveryCloseCandidate;
         sendResponse({ safe: !!candidate && candidate.id === message.id && candidate.conversationId === message.conversationId &&
           candidate.current() && stopQuestionMatches(candidate.questionId) && pendingTools === 0 &&
+          !CLF_DOM.approvalWaiting() && CLF_DOM.approvalReceiptsReady?.() !== false &&
+          !CLF_DOM.errors().some(error => error.blocking === true) &&
           !composerHasDraft() && !CLF_DOM.hasComposerAttachments() });
         return false;
       }

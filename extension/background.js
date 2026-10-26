@@ -5466,21 +5466,27 @@ const HANDLERS = {
       message.conversationId, null, message.client, source, message.turnId);
   },
   async stop_close(message, _sender, source) {
-    if (!ownsDocument(source) || !/^[a-f0-9-]{36}$/i.test(String(message.inputId || ''))) return { ok: false };
+    const heldConnection = connectionEpoch, heldToken = token, heldPort = port;
+    const current = () => !disconnected && connectionEpoch === heldConnection && token === heldToken &&
+      port === heldPort && ownsDocument(source);
+    if (!current() || !/^[a-f0-9-]{36}$/i.test(String(message.inputId || ''))) return { ok: false };
     const tab = await chrome.tabs.get(source.tab);
     const conversationId = conversationForTab(tab);
     if (!conversationId || conversationId !== message.conversationId || tab.pinned || tab.pendingUrl) return { ok: false };
     const proof = await tabReply(source.tab, { type: 'clf-recovery-close-check', conversationId, id: message.inputId }, { documentId: source.documentId });
-    if (proof?.safe !== true || !ownsDocument(source)) return { ok: false };
+    if (proof?.safe !== true || !current()) return { ok: false };
     const permit = await call('/input/claim', { method: 'POST', body: JSON.stringify({
       id: message.inputId, owner: `${source.tab}:${source.documentId}:${source.navigationEpoch}`, conversationId,
       steeringCloseCommand: message.id, stopClient: message.client }) });
-    if (!permit.ok || permit.data?.ok !== true || !ownsDocument(source)) return { ok: false };
+    if (!permit.ok || permit.data?.ok !== true || !current()) return { ok: false };
     const latest = await chrome.tabs.get(source.tab);
-    if (latest.pinned || latest.pendingUrl || conversationForTab(latest) !== conversationId || !ownsDocument(source)) return { ok: false };
-    await chrome.tabs.remove(source.tab);
-    tabRemovals[String(source.tab)] = { ...source, conversationId };
-    await persistLive();
+    if (latest.pinned || latest.pendingUrl || conversationForTab(latest) !== conversationId || !current()) return { ok: false };
+    const finalProof = await tabReply(source.tab, { type: 'clf-recovery-close-check', conversationId, id: message.inputId }, { documentId: source.documentId });
+    if (finalProof?.safe !== true || !current()) return { ok: false };
+    // Keep the exact tab instead of removing it before a replacement can open.
+    // This one-shot navigation belongs to the queued Steer, independently of
+    // automatic tab recovery. Its replacement observer must still prove Stop.
+    await chrome.tabs.reload(source.tab);
     return permit;
   },
   /**
@@ -5861,7 +5867,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 79;
+const PAGE_RECORDER_VERSION = 80;
 
 let deferredRecoveryWork = null;
 

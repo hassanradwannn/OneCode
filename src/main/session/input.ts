@@ -1278,15 +1278,17 @@ export function releaseSteeringInput(id: string): Promise<boolean> {
     return true;
   });
 }
-/** A guarded hung-tab close spends once while retaining the original steering intent. */
+/** A guarded hung-page refresh spends once while retaining the original steering intent.
+ * The durable steerClosedOnce name is retained for existing receipts. */
 export function permitSteeringClose(id: string, sessionId: string, turnId: string): Promise<boolean> {
   return serial(async () => {
     const current = await load();
     const row = current.find(entry => entry.id === id && entry.sessionId === sessionId && entry.state === 'queued' &&
       entry.steerTurnId === turnId && !entry.steerReady && !entry.steerClosedOnce && entry.sendAuthorizedAt === undefined && !entry.cancelledByUser);
-    if (!row || (await getSession(sessionId))?.activeTurnId !== turnId) return false;
+    if (!row || !row.conversationId || runningToolProgress(row.conversationId) ||
+        (await getSession(sessionId))?.activeTurnId !== turnId || runningToolProgress(row.conversationId)) return false;
     await commit(current.map(entry => entry === row ? { ...entry, steerClosedOnce: true as const,
-      error: 'Waiting for the exact chat to reopen and confirm its native Stop.' } : entry));
+      error: 'Waiting for the exact chat to refresh and confirm its native Stop.' } : entry));
     return true;
   });
 }

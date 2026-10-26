@@ -1139,7 +1139,10 @@ var CLF_DOM = (() => {
         // text button. Only an enabled decision can keep this conversation waiting.
         if (!enabled(allow) && !enabled(deny[0])) continue;
         const detail = all('[data-test-id="body"],[data-test-id="collapsed-details"]', card).map(text).join('\n');
-        const machine = /(?:^|\n|\s)Tool:\s*([a-z][a-z0-9_]{0,79})(?:\s|$)/.exec(detail)?.[1] || null;
+        // A native display title such as "write stdin" is not the machine tool
+        // "write". Only a complete single-token detail can override the exact
+        // permission title; otherwise policy checks that whole title below.
+        const machine = /(?:^|\n)[ \t]*Tool:[ \t]*([a-z][a-z0-9_]{0,79})[ \t]*(?=\r?\n|$)/.exec(detail)?.[1] || null;
         cards.push({ node: card, lines: [title[0]], allow: enabled(allow), tool: title[1], machineTool: machine,
           connector: title[2], allowButton: allow, denyButton: deny[0] });
       }
