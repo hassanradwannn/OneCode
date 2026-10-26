@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.3': {
+    lead: () => t('Retain Gemini preparation while the replacement page loads.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Gemini handoff recovery'), text: () => t('Waits within the original preparation deadline for the refreshed editor to load and clear its submitted warmup text before continuing the task.') }
+    ]
+  },
   '0.7.2': {
     lead: () => t('Keep independent chats moving when a browser rendering operation stalls.'),
     highlights: [
