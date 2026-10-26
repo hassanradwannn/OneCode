@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.2': {
+    lead: () => t('Keep independent chats moving when a browser rendering operation stalls.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Independent browser delivery'), text: () => t('A stalled rendering operation in one tab no longer holds the shared message pickup queue or prevents another chat from opening.') },
+      { icon: 'i-retry', title: () => t('Retained browser ownership'), text: () => t('Late browser replies retain their original tab ownership. A timeout cannot repeat an attachment or revive cancelled activity.') }
+    ]
+  },
   '0.7.1': {
     lead: () => t('Preserve the recorded source question while the browser redraws a running chat.'),
     highlights: [

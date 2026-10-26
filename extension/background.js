@@ -2081,7 +2081,9 @@ let backgroundWindowBounds = { width: 800, height: 600 };
 /** Rendering requires the browser's actual installed debugger permission. */
 async function managedBackgroundCanRender() {
   if (!globalThis.chrome?.debugger?.attach || typeof chrome.permissions?.contains !== 'function') return false;
-  return chrome.permissions.contains({ permissions: ['debugger'] }).catch(() => false);
+  // This is an observation, not a native mutation. An unavailable permission
+  // read cannot hold the shared input scan or supply rendering authority.
+  return await browserReply(() => chrome.permissions.contains({ permissions: ['debugger'] }), 1000) === true;
 }
 async function setManagedWindowState(id, current = () => true) {
   if (!Number.isInteger(id) || !current()) return false;
@@ -2463,10 +2465,12 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
   // Only the app's complete outbox projection retires spent opening authority.
   if (Array.isArray(activeIds)) {
     const active = new Set(activeIds);
+    const releases = [];
     for (const id of Object.keys(inputOpenings)) if (!active.has(id)) {
       delete inputOpenings[id];
-      await activeTabs?.set(`input:${id}`, []).catch(() => undefined);
+      releases.push(activeTabs?.set(`input:${id}`, []).catch(() => undefined));
     }
+    await Promise.all(releases);
     await persistLive();
   }
   if (!inputs.length) return;
@@ -3692,15 +3696,19 @@ async function maintainOnce() {
     const controller = getActiveRendering();
     if (!controller) { renderingIssue = 'debugger_unavailable'; return; }
     tabs ||= await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
-    if (intent === connectionEpoch && token && !disconnected)
-      await controller.set('policy', tabs.filter(renderingWanted), renderingWanted);
+    if (intent === connectionEpoch && token && !disconnected) {
+      try { await controller.set('policy', tabs.filter(renderingWanted), renderingWanted); }
+      catch { renderingIssue = 'release_pending'; }
+    }
     // Canonical active-session policy is installed before retiring a committed
     // command projection, so warm-up -> real ACK cannot suspend native rendering.
+    const releases = [];
     for (const [id, receipt] of commandRenderingScopes) {
       if (liveCommands.has(id) && Date.now() < receipt.expiresAt) continue;
       commandRenderingScopes.delete(id);
-      await controller.set(`command:${id}`, []);
+      releases.push(controller.set(`command:${id}`, []).catch(() => { renderingIssue = 'release_pending'; }));
     }
+    await Promise.all(releases);
   };
   // Reuse the app's current work policy. Old history, pins and tab presence do not qualify.
   phase('render-policy');
