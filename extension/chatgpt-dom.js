@@ -1098,6 +1098,29 @@ var CLF_DOM = (() => {
     }, null);
   }
 
+  /** Capture one native primary Stop before its authorized click. A later idle
+   * page alone is not a receipt: this exact editor/form must replace that Stop
+   * with its enabled native Voice control, without a draft, approval or new form. */
+  function captureStopTransition() {
+    return safe(() => {
+      const box = composer(), form = box?.closest('form'), stop = stopButton();
+      const primary = () => [...new Set([...primarySlotControls(),
+        ...nativeComposerControls('button[data-testid="composer-submit-button"]')])]
+        .filter(button => button.closest('form') === form);
+      const before = primary();
+      if (!box || !form || !stop || before.length !== 1 || before[0] !== stop) return null;
+      return () => safe(() => {
+        if (!box.isConnected || composer() !== box || box.closest('form') !== form ||
+            !composerVisible() || !composerWritable() || generating() || approvalWaiting() ||
+            composerAuthoredText().trim() || hasComposerAttachments()) return false;
+        const after = primary();
+        return after.length === 1 && after[0].matches('button[aria-label="Start Voice" i]') &&
+          after[0].getClientRects().length > 0 && !after[0].disabled &&
+          after[0].getAttribute('aria-disabled') !== 'true' && !stopButton();
+      }, false);
+    }, null);
+  }
+
   /** Only a visible, enabled native Stop control may end a proven turn. */
   function stopGeneration(stillCurrent) {
     if (typeof stillCurrent !== 'function' || !stillCurrent()) return false;
@@ -3634,6 +3657,7 @@ var CLF_DOM = (() => {
     approvalCard,
     answerApprovalCard,
     stopButton,
+    captureStopTransition,
     stopGeneration,
     sendButton,
     progressLine,

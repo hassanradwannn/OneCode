@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 76;
+  const RECORDER_VERSION = 77;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2228,7 +2228,7 @@
       // flags clear; only native terminal evidence may release that same input.
       const alreadyClicked = stoppedAppCommands.has(commandId);
       if (!alreadyClicked) stoppedAppCommands.add(commandId);
-      const settled = await stopAutomationGeneration(continuationCurrent, !alreadyClicked);
+      const settled = await stopAutomationGeneration(continuationCurrent, !alreadyClicked, true);
       if (settled && continuationCurrent()) {
         finishGeneration(currentAssistantTurn(), { outcome: 'interrupted',
           detail: 'The native response was stopped to deliver the pending continuation.' }, false);
@@ -13855,16 +13855,22 @@
       (!!native.endMessageId || ['complete', 'interrupted'].includes(native.terminalState)) &&
       stopQuestionMatches(questionId) && !CLF_DOM.generating();
   }
-  async function stopAutomationGeneration(safe, click = true) {
+  async function stopAutomationGeneration(safe, click = true, explicitSteer = false) {
     if (!safe()) return false;
     const questionId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
     const stopSource = currentAssistantTurn();
     const stoppedBefore = CLF_DOM.stoppedThinkingReceipt?.(stopSource);
-    const freshNativeStop = () => !stoppedBefore && !!stopSource &&
-      currentAssistantTurn()?.id === stopSource.id && !!CLF_DOM.stoppedThinkingReceipt?.(currentAssistantTurn());
+    const stopTransition = explicitSteer ? CLF_DOM.captureStopTransition?.() : null;
+    let clickedStop = false;
+    const freshNativeStop = () => !!stopSource && currentAssistantTurn()?.id === stopSource.id &&
+      ((!stoppedBefore && !!CLF_DOM.stoppedThinkingReceipt?.(currentAssistantTurn())) ||
+       (explicitSteer && clickedStop && stopTransition?.() === true));
     recoveryStopping = true;
     try {
-      if (click && CLF_DOM.generating() && !CLF_DOM.stopGeneration(safe)) return false;
+      if (click && CLF_DOM.generating()) {
+        clickedStop = CLF_DOM.stopGeneration(safe);
+        if (!clickedStop) return false;
+      }
       // Fiber refresh stamps its observed nodes. Running it inside a MutationObserver
       // predicate makes its own stamps schedule another refresh forever. Yield
       // between bounded probes so rendering, Stop and other chats keep progressing.

@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.16': {
+    lead: () => t('Confirm explicit Steer from the native cancellation control.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Native Steer confirmation'), text: () => t('An explicit Steer can confirm the provider has stopped when its exact Stop control changes to the ready voice control. The original local process and poll remain separate.') }
+    ]
+  },
   '0.6.15': {
     lead: () => t('Confirm Steer when the provider collapses a stopped response.'),
     highlights: [
