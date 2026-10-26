@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.6.17] — 2026-10-26
+
+Keep proved Gemini approval replies attached to their original task while partial chat history loads, and wait for approval receipts before confirming refresh readiness. Includes the Steer/local-poll and queued-follow-up repairs, durable authorization for long Compact & Resume tasks, independent chat pickup, native host pairing, Companion coexistence and updater cleanup fixes. Complete Windows/Linux downloads and compatible application capsules are built from one frozen source; Stable capsules retain the verified 0.5.9 minimum complete base. Automatic approval changes remain deferred. See [0.6.17 release notes](docs/release-notes/v0.6.17.md) and [acceptance](docs/release-acceptance/v0.6.17.md).
+
 ## [0.6.6 Beta candidate] — 2026-10-25
 
 Keep Companion discovery and pairing on the browser's native OS when WSL forwards another installation's loopback listener. Refuse foreign-OS authenticated actions before processing observations or changing credentials. Preserve pairing through a transient native-platform lookup failure. Includes the 0.6.4 and 0.6.5 recovery, Stop/restart, startup, downloads and preview fixes. Native acceptance and stable promotion remain pending. See [0.6.6 candidate notes](docs/release-notes/v0.6.6.md).
