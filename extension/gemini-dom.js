@@ -889,6 +889,7 @@ var CLF_DOM = (() => {
     composerTransitions.set(box, edit);
     let performingOwnEdit = false, clicked = false, cleared = false, staged = false, rebound = false;
     const opening = openingClaim, command = commandClaim, attachments = attachmentRows();
+    const sameAttachments = () => { const rows = attachmentRows(); return rows.length === attachments.length && rows.every((node, index) => node === attachments[index]); };
     const ownEdit = operation => { performingOwnEdit = true; try { return operation(); } finally { performingOwnEdit = false; } };
     const snapshot = () => { edit.html = box.innerHTML; edit.normalizationText = blockText(box); };
     const trustedEdit = event => { if (event.isTrusted && !performingOwnEdit && event.target?.closest?.(BOX)) edit.revoked = true; };
@@ -903,13 +904,13 @@ var CLF_DOM = (() => {
           location.href === route && !conversationId() && transitionOwns(box, submitted) &&
           composerWritable() && composerAuthoredText() === (staged ? warmup : '') &&
           (staged || (!hasComposerAttachments() && !enabled(sendButton()))) &&
-          attachmentRows().length === attachments.length && attachmentRows().every((node, index) => node === attachments[index]) &&
+          sameAttachments() &&
           adoptEditor?.(replacement) === true) {
         if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
         box = replacement; rebound = true; snapshot(); composerTransitions.set(box, edit);
         if (!staged && document.activeElement === document.body) ownEdit(() => box.focus({ preventScroll: true }));
       }
-      return location.href === route && composer() === box && transitionOwns(box, submitted) && current();
+      return location.href === route && composer() === box && sameAttachments() && transitionOwns(box, submitted) && current();
     };
     const refused = reason => { explain?.(reason); return false; };
     document.addEventListener('beforeinput', trustedEdit, true); document.addEventListener('input', trustedEdit, true);
@@ -923,10 +924,23 @@ var CLF_DOM = (() => {
       if (!ownEdit(() => establishEmptyCaret(box)) || !owns()) return refused('warmup-caret-unconfirmed');
       if (!ownEdit(() => insertPrompt(warmup, true))) return refused('warmup-not-ready');
       snapshot(); staged = true;
+      const readyDeadline = Date.now() + 30000;
       const ready = await waitFor(() => enabled(sendButton()) && composerAuthoredText() === warmup && sendButton(), owns, 30000);
-      if (!ready || !owns() || composerAuthoredText() !== warmup) {
+      if (ready) await waitFor(() => {
+        if (clicked) return true;
+        const button = sendButton();
+        if (Date.now() >= readyDeadline || !enabled(button) || button !== sendButton() ||
+            composerAuthoredText() !== warmup || !owns()) return null;
+        // The readiness await may have outlived its native Send control. Commit
+        // the first click only inside this current-control check, within the
+        // original budget and draft lease. Once dispatch starts, a missing
+        // receipt or a native-handler error cannot earn another click.
+        cancelApprovalReplyProofs('new-send'); clicked = true; button.click();
+        return true;
+      }, owns, Math.max(0, readyDeadline - Date.now()));
+      if (!clicked) {
         const reason = composer() !== box ? 'warmup-editor-replaced' : location.href !== route ? 'warmup-route-changed' :
-          !current() ? 'warmup-lifetime-changed' : composerAuthoredText() !== warmup ? 'warmup-text-changed' :
+          !current() ? 'warmup-lifetime-changed' : !sameAttachments() ? 'warmup-attachments-present' : composerAuthoredText() !== warmup ? 'warmup-text-changed' :
           !transitionOwns(box, submitted) ? 'warmup-draft-lease-changed' : 'warmup-send-not-ready';
         console.info('[OneCode warmup] ' + JSON.stringify({ reason, editorSame: composer() === box,
           editorConnected: box.isConnected, routeMatches: location.href === route, callerCurrent: current(),
@@ -934,7 +948,6 @@ var CLF_DOM = (() => {
           readyObserved: Boolean(ready), sendEnabled: enabled(sendButton()) }));
         return refused(reason);
       }
-      cancelApprovalReplyProofs('new-send'); ready.click(); clicked = true;
       return warmup;
     } finally {
       // A failed preparation never restores over a foreign edit or a changed

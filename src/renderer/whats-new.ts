@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.21': {
+    lead: () => t('Finish fresh-chat preparation with the current native control.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Gemini chat preparation'), text: () => t('Handles a Send button replaced during preparation while preserving the original draft and attachments. A dispatched message is never clicked again because its receipt is late.') }
+    ]
+  },
   '0.6.20': {
     lead: () => t('Keep handoff preparation responsive.'),
     highlights: [
