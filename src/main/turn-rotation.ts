@@ -4,7 +4,7 @@
  * Measured over a 24-hour run and reproduced on another account: turns up to about 35 minutes
  * ended cleanly, turns that ran 37–64 minutes almost always broke (stream lost, "Message delivery
  * timed out", stalls), and every break then cost reloads and history limits. What worked by hand
- * every time was Stop and "continue". So once a turn has run `ui.rotateTurnMinutes` (default 30),
+ * every time was Stop and "continue". If enabled, once a turn has run `ui.rotateTurnMinutes` (default off),
  * the next attributed tool result files one automatic continue into that turn: a native send there
  * ends it as interrupted and carries on in a fresh one, the call in flight keeping its result.
  *

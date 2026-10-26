@@ -48,7 +48,8 @@ export function chatErrorPresentation(error: ChatError, history: readonly Sessio
   const thinking = text === 'Thinking failed';
   const stalled = text.startsWith('No visible progress for ten minutes.');
   const historyWait = neutralChatErrorCopy(text) === HISTORY_RATE_LIMIT_TEXT;
-  const title = historyWait ? t('Chat history reload paused') : thinking ? t('Thinking failed') : stalled ? t('Response stalled') : providerText('Gemini reported a problem');
+  const title = historyWait ? t('Chat history reload paused') : thinking ? t('Thinking failed') : stalled ? t('Response stalled')
+    : error.recoverable === true ? t('Connection interrupted') : providerText('Gemini reported a problem');
   // Older recordings described our open-turn bookkeeping as native generation.
   const message = thinking ? providerText('Gemini’s page reported a failure. This does not prove the work stopped.')
     : stalled ? t('No visible progress for ten minutes. The app could not confirm that this turn finished.') : neutralChatErrorCopy(error.message.text);
@@ -101,7 +102,8 @@ export function chatErrorPresentation(error: ChatError, history: readonly Sessio
   if (completed > continued || (!completed && resolvedNotices.has(noticeKey(error)))) {
     if (resolvedNotices.size >= RESOLVED_NOTICES_LIMIT) resolvedNotices.delete(resolvedNotices.values().next().value!);
     resolvedNotices.add(noticeKey(error));
-    return { title: t('Recovered after interruption'), message, resolved: true, reloaded: false, next: t('This turn later completed. You can continue with a new message.') };
+    return { title: t('Response completed'), message, resolved: true, reloaded: false,
+      next: t('OneCode observed the completed response after this notice. This does not confirm that every task step succeeded.') };
   }
   const reloaded = error.blocking !== true && !!repair && /^(?:Reloaded|Reopened) chat\b/.test(repair.message.text);
   const errorReloaded = earlierReload || (reloaded && repair?.message.text.endsWith('an interrupted response.'));

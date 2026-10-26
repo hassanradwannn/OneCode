@@ -43,3 +43,17 @@ export interface QueuedInputNowIntent {
 /** Match the Companion's bounded native Send-receipt window. Tool admission may
  * wait for that exact receipt; a short local timer cannot declare it revoked. */
 export const INPUT_RECEIPT_WAIT_MS = 120_000;
+
+type InputNotice = { recovery?: unknown; finishOwner?: { userRequested?: boolean }; purpose?: string; scheduleId?: string;
+  state: string; error?: string | null; createdAt: number; failedAt?: number; noticeDismissedAt?: number };
+export const AUTOMATIC_INPUT_NOTICE_MS = 30 * 60_000;
+export function automaticInput(row: Pick<InputNotice, 'recovery' | 'finishOwner' | 'purpose' | 'scheduleId'>): boolean {
+  return !!row.recovery || (!!row.finishOwner && !row.finishOwner.userRequested) || row.purpose === 'rotation' || !!row.scheduleId;
+}
+/** Hide failed automatic drafts, retaining the original outbox receipt for late
+ * ACKs and task proof. Presentation expiry can never refund a Send. */
+export function inputNoticeVisible(row: InputNotice, now = Date.now()): boolean {
+  if (row.noticeDismissedAt !== undefined) return false;
+  return !automaticInput(row) || !['failed', 'cancelled'].includes(row.state) || !row.error ||
+    now - (row.failedAt ?? row.createdAt) < AUTOMATIC_INPUT_NOTICE_MS;
+}

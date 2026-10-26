@@ -48,7 +48,7 @@ import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConv
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
-import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES } from '../shared/input.js';
+import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES, automaticInput, inputNoticeVisible, AUTOMATIC_INPUT_NOTICE_MS } from '../shared/input.js';
 import type { InputArgs, InputEntry } from '../main/session/input.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import { PROJECT_COLORS, type LocalProject, type ProjectColor } from '../shared/projects.js';
@@ -4669,7 +4669,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   paintRecoveryStatus();
   const oldest = shown.length ? Math.min(...shown.map(event => event.time)) : 0;
   const newest = shown.length ? Math.max(...shown.map(event => event.time)) : 0;
-  const retiredInputs = pendingComposerInputs.filter(entry => historicalAutomaticInput(entry) &&
+  const retiredInputs = pendingComposerInputs.filter(entry => historicalAutomaticInput(entry) && inputNoticeVisible(entry) &&
     (entry.sessionId ?? entry.deliveredSessionId) === selectedId && !dismissedInputNotices.has(entry.id) &&
     agentFilter === null && entry.createdAt >= oldest && (historyBefore === null || entry.createdAt <= newest))
     .sort((a, b) => a.createdAt - b.createdAt);
@@ -6342,8 +6342,7 @@ function scheduleReload(change?: SessionChange): void {
  * fresh-turn continue (#1402) is one too: the app files it again by itself.
  */
 function historicalAutomaticInput(entry: InputEntry): boolean {
-  return (!!entry.recovery || (!!entry.finishOwner && !entry.finishOwner.userRequested) || entry.purpose === 'rotation') &&
-    entry.state === 'cancelled' && !!entry.error;
+  return automaticInput(entry) && ['failed', 'cancelled'].includes(entry.state) && !!entry.error;
 }
 
 function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
@@ -6446,7 +6445,14 @@ async function adoptAcceptedOpening(entry: InputEntry): Promise<boolean> {
   inputDrafts.delete(from); imageDrafts.delete(from); newChatTasks.delete(from); newChatProviders.delete(from);
   return true;
 }
+let inputNoticeClock: ReturnType<typeof setTimeout> | undefined;
 function paintPendingInputs(): void {
+  clearTimeout(inputNoticeClock);
+  const expires = pendingComposerInputs.filter(entry => automaticInput(entry) &&
+    ['failed', 'cancelled'].includes(entry.state) && entry.error && inputNoticeVisible(entry) &&
+    (entry.sessionId ?? entry.deliveredSessionId) === selectedId && !dismissedInputNotices.has(entry.id))
+    .map(entry => (entry.failedAt ?? entry.createdAt) + AUTOMATIC_INPUT_NOTICE_MS);
+  if (expires.length) inputNoticeClock = setTimeout(() => paintDetail(false), Math.max(1, Math.min(...expires) - Date.now()));
   const all = pendingComposerInputs;
   const belongsToSelection = (entry: InputEntry): boolean => selectedId === null
     ? pendingNewInput?.generation === selectionGeneration && entry.id === pendingNewInput.id
@@ -6454,7 +6460,7 @@ function paintPendingInputs(): void {
   // A pre-acceptance or failed-materialization row belongs only to its exact draft.
   // A fresh New Chat never inherits another opening.
   const unbound = (entry: InputEntry) => selectedId === null && pendingNewInput?.id === entry.id && pendingNewInput.generation === selectionGeneration && !entry.deliveredSessionId && entry.purpose !== 'decision' && ['queued', 'browser'].includes(entry.state);
-  const notice = (entry: InputEntry) => belongsToSelection(entry) && entry.purpose !== 'decision' && entry.purpose !== 'rotation' &&
+  const notice = (entry: InputEntry) => belongsToSelection(entry) && entry.purpose !== 'decision' &&
     ['failed', 'cancelled'].includes(entry.state) && !!entry.error && !dismissedInputNotices.has(entry.id);
   const anchored = (entry: InputEntry) => detailFor === selectedId && (events.some(event =>
     event.kind === 'user_message' && (event.inputId === entry.id ||
@@ -6465,7 +6471,7 @@ function paintPendingInputs(): void {
       (historyBefore !== null || (entry.historySeq !== undefined
         ? (detailCursor ?? 0) > entry.historySeq
         : events.length > 0))));
-  const rows = all.filter((entry) => !dismissedInputNotices.has(entry.id) && !(!notice(entry) && anchored(entry)) && !(queuedFollowup(entry) && ['queued', 'tool', 'browser'].includes(entry.state)) && (belongsToSelection(entry) || unbound(entry) || notice(entry)) &&
+  const rows = all.filter((entry) => inputNoticeVisible(entry) && !dismissedInputNotices.has(entry.id) && !(!notice(entry) && anchored(entry)) && !(queuedFollowup(entry) && ['queued', 'tool', 'browser'].includes(entry.state)) && (belongsToSelection(entry) || unbound(entry) || notice(entry)) &&
     (notice(entry) || unbound(entry) || selectedId !== null || projectGroup(entry.projectId) === selectedProjectId) &&
     (notice(entry) || !['sent', 'cancelled'].includes(entry.state) || (entry.state === 'sent' && entry.messageId && !anchored(entry))));
   for (const entry of startingInputs.values()) if (belongsToSelection(entry) && !all.some(row => row.id === entry.id)) rows.push(entry);

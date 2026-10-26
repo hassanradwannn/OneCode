@@ -24,6 +24,7 @@ import type { SessionControlsView } from './bridge.js';
 import { getLog, logWarn } from './logger.js';
 import { redactSecretText } from './redaction.js';
 import { deliveryProof, listInputs } from './session/input.js';
+import { automaticInput, inputNoticeVisible } from '../shared/input.js';
 import type { InputEntry } from './session/input.js';
 import { readSession, readSessionEvents, readSessionList, sessionListCursorSchema } from './session/read-model.js';
 
@@ -441,7 +442,7 @@ export function projectInput(entry: InputEntry): ControlApiInput {
     transportIntent: entry.transportIntent ?? null,
     // Filed by the app itself (a saved interval, recovery pickup or automatic follow-up).
     // A silence boundary alone is not that: it can ride a message a person typed.
-    automatic: !!(entry.scheduleId || entry.recovery || entry.finishOwner),
+    automatic: automaticInput(entry),
     purpose: entry.purpose ?? null,
     createdAt: entry.createdAt,
     dueAt: entry.dueAt,
@@ -468,7 +469,7 @@ export function projectInput(entry: InputEntry): ControlApiInput {
  */
 export function selectInputs(rows: readonly InputEntry[], query: { state?: readonly string[]; limit: number }) {
   const matching = rows
-    .filter((row) => row.purpose !== 'decision' && (!query.state || query.state.includes(row.state)))
+    .filter((row) => row.purpose !== 'decision' && inputNoticeVisible(row) && (!query.state || query.state.includes(row.state)))
     .sort((a, b) => a.createdAt - b.createdAt);
   return { rows: matching.slice(-query.limit), total: matching.length };
 }

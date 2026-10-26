@@ -2403,7 +2403,7 @@ var CLF_DOM = (() => {
     };
     try {
       if (!box) return reject('composer_missing');
-      const existing = (box.textContent || '').trim();
+      const existing = authoredText(box);
       if (value === '' && mode !== true) return false;
       // Text this same value already put there is not a draft to protect: inserting it again would
       // produce exactly what is on screen. The residue of an attempt whose Send never landed used to
@@ -2421,7 +2421,12 @@ var CLF_DOM = (() => {
           selection.collapseToEnd();
           value = `\n${value}`;
         }
-      } else selection.selectAllChildren(box);
+      } else {
+        selection.selectAllChildren(box);
+        // An empty authored editor may still hold native connector chips.
+        // Insert after that context without clearing it or calling it a draft.
+        if (box.querySelector(APP_MENTION_CHIP)) selection.collapseToEnd();
+      }
       if (!box.isConnected || composer() !== box) return reject('editor_replaced');
       if (document.activeElement !== box) return reject('composer_not_focused');
       if (!selection.rangeCount || !box.contains(selection.anchorNode) || !box.contains(selection.focusNode)) return reject('selection_changed');
@@ -2448,7 +2453,7 @@ var CLF_DOM = (() => {
       const compact = text => String(text || '').replace(/\s+/g, '');
       const expected = mode === 'append' ? existing + value : value;
       if (!box.isConnected || composer() !== box) return reject('editor_replaced');
-      if (compact(box.textContent) !== compact(expected)) return reject('text_mismatch');
+      if (compact(authoredText(box)) !== compact(expected)) return reject('text_mismatch');
       return true;
     } catch {
       return reject('insertion_exception');
@@ -2549,8 +2554,12 @@ var CLF_DOM = (() => {
       if (box.getAttribute('aria-disabled') === 'true' || box.getAttribute('contenteditable') === 'false') return refused('editor-disabled');
       // Rich editors use adjacent paragraphs for newlines; textContent concatenates
       // their words. Preserve those boundaries when matching the rendered user message.
-      const draftText = () => (typeof box.innerText === 'string' ? box.innerText : [...box.childNodes]
-        .map((node) => (node.textContent || '') + (/^(P|DIV|BR)$/.test(node.nodeName) ? '\n' : '')).join('')).trim();
+      const draftText = () => {
+        const source = box.querySelector(APP_MENTION_CHIP) ? box.cloneNode(true) : box;
+        if (source !== box) for (const chip of source.querySelectorAll(APP_MENTION_CHIP)) chip.remove();
+        return (typeof source.innerText === 'string' ? source.innerText : [...source.childNodes]
+          .map((node) => (node.textContent || '') + (/^(P|DIV|BR)$/.test(node.nodeName) ? '\n' : '')).join('')).trim();
+      };
       const submitted = draftText();
       if (!submitted) return refused('draft-empty');
       const compact = (value) => String(value || '').replace(/\s+/g, ' ').trim();

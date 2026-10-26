@@ -1018,7 +1018,7 @@ async function takeSelectedChatReadiness(browser: string | null): Promise<Array<
         (request.browser && request.browser !== browser) || chatHeldElsewhere(request.conversationId, browser)) continue;
     const session = await getSession(sessionId);
     if (session?.conversationId !== request.conversationId) { selectedChatReadiness.delete(sessionId); continue; }
-    if (session.browserRecoveryDismissedAt !== request.dismissedAt) {
+    if (session.browserRecoveryDismissedAt !== undefined && session.browserRecoveryDismissedAt !== request.dismissedAt) {
       request.state = { phase: 'refused', reason: 'The browser tab was closed. Select this chat to reopen it.' };
       continue;
     }

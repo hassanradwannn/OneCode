@@ -139,6 +139,8 @@ const entrySchema = inputArgs.extend({
   deliveredSessionId: z.string().min(8).max(64).nullable().optional(),
   messageId: z.string().min(1).max(256).optional(),
   deliveredAt: z.number().optional(),
+  failedAt: z.number().optional(),
+  noticeDismissedAt: z.number().optional(),
   stagesApplied: z.boolean().optional(),
   historyRecorded: z.boolean().optional(),
   /** Canonical message exists even when optional image assets could not be saved. */
@@ -240,6 +242,10 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // Only a new manual message authored after native Stop may bypass the old soft
   // timer. Stop cannot release previously queued automation or an earlier task.
   const authoredAfterStop = authoredAt !== undefined && terminal && end.outcome === 'stopped' && authoredAt > end.time;
+  // A new explicit instruction after a recorded failure owns a new native Send.
+  // A surviving old poll is not its recipient. Native readiness and the exact
+  // new question still guard delivery; earlier queues/automation cannot use it.
+  const authoredAfterFailure = authoredAt !== undefined && terminal && end.outcome === 'failed' && authoredAt > end.time;
   const idleCandidate = !session.activeTurnId && !activity.exact && terminal &&
     ((geminiInput(session.conversationId) && end.outcome === 'completed') || authoredAfterStop) &&
     (session.lastToolCallAt ?? 0) <= end.time;
@@ -248,7 +254,7 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   // not local process lifetime, owns that boundary. Automation keeps its existing
   // settled/call fences. An old queued message cannot spend a later explicit Stop.
   const authoredIdleCandidate = authoredAt !== undefined && !session.activeTurnId && terminal &&
-    (end.outcome === 'completed' || authoredAfterStop);
+    (end.outcome === 'completed' || authoredAfterStop || authoredAfterFailure);
   const [latestQuestion] = idleCandidate || authoredIdleCandidate
     ? await readRecentEvents(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true }) : [];
   const explicitNativeIdle = idleCandidate && (!latestQuestion || (latestQuestion.kind === 'user_message' &&
@@ -675,6 +681,10 @@ export function retryUnclaimedInput(id: string): Promise<InputEntry | null> {
   });
 }
 async function commit(next: InputEntry[]): Promise<void> {
+  const previous = new Map((entries ?? []).map(row => [row.id, row]));
+  next = next.map(row => ['failed', 'cancelled'].includes(row.state) && row.error && row.failedAt === undefined
+    ? { ...row, failedAt: ['failed', 'cancelled'].includes(previous.get(row.id)?.state ?? '')
+      ? row.createdAt : Date.now() } : row);
   // A temporary planner keeps only ownership metadata across restart, never its task or answer.
   const durableRows = (rows: InputEntry[]) => rows.map(row => row.lifetime === 'temporary-planner'
     ? { ...row, text: '[Temporary planner]', deliveryText: undefined, response: undefined } : row);
@@ -1113,6 +1123,12 @@ export function cancelInput(id: string): Promise<boolean> {
     const selected = current.find((entry) => entry.id === id);
     const found = selected && (companionOf(current, selected) ?? selected);
     if (!found || !['queued', 'browser', 'failed', 'cancelled'].includes(found.state)) return false;
+    if (['failed', 'cancelled'].includes(found.state)) {
+      // Dismissing a terminal notice is not Stop or withdrawal of an uncertain
+      // Send. Preserve its lifecycle, revocation flags and late-ACK custody.
+      await commit(current.map(entry => sameDelivery(found, entry) ? { ...entry, noticeDismissedAt: Date.now() } : entry));
+      return true;
+    }
     await commit(current.map((entry) => sameDelivery(found, entry) ? { ...entry, state: 'cancelled', cancelledByUser: true,
       error: found.state === 'browser' ? found.requiresAuthorization && found.sendAuthorizedAt === undefined
         ? 'Not sent: this delivery was cancelled before Send was authorized.'

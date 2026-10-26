@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 78;
+  const RECORDER_VERSION = 79;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -828,6 +828,8 @@
   let userSendReceipt = null;
   const pageViewChecks = new Set(); // Existing readiness waits also observe accepted MAIN-world snapshots.
   const sendText = (value) => String(value || '').replace(/\s+/g, '');
+  // Connector chips are native composer context, not an authored unsent draft.
+  const composerHasDraft = () => Boolean(sendText(CLF_DOM.composerAuthoredText()));
   /** Undo page-readback punctuation escapes only; never rewrite authored Send text. */
   // Two escapes, both measured: ASCII punctuation (2026-09-11), and a backslash before a line
   // break — ChatGPT stores the composer's hard breaks as Markdown `\<newline>`. The second made a
@@ -2436,7 +2438,7 @@
     // turn began — neither says anything about how this one ended.
     const failures = CLF_DOM.errors().filter(
       (error) => !isStale(error.node) && Boolean(turnId) && localErrorGeneration(error) === turnId &&
-        (!nativeFinal || error.recoverable !== true) &&
+        error.recoverable !== true &&
         (error.reason !== 'thinking_failed' || unreportedError(error, turnId))
     );
     if (failures.length > 0) {
@@ -2444,6 +2446,10 @@
       return { outcome: 'failed', detail: failure.text,
         ...(failure.reason === 'thinking_failed' ? { reason: 'thinking_failed' } : {}) };
     }
+    // A transport notice cannot also become a degraded prose-completion proof.
+    // Native end_turn remains independent and can complete this same response.
+    if (!nativeFinal && (currentStreamGone() || CLF_DOM.errors().some(error =>
+        error.recoverable === true && !isStale(error.node) && localErrorGeneration(error) === turnId))) return { outcome: 'unknown' };
     if (turn && CLF_DOM.interrupted(turn)) {
       return {
         outcome: 'interrupted',
@@ -3387,7 +3393,7 @@
       const markerOnlyInterrupted = result.outcome === 'interrupted' && !stopRequestedAt;
       if (
         stopRequestedAt ||
-        (result.outcome !== 'unknown' && !markerOnlyInterrupted && settled)
+        (result.outcome !== 'unknown' && result.outcome !== 'stalled' && !markerOnlyInterrupted && settled)
       ) {
         // The turn the end is about is the one that was on screen when it went quiet.
         // Re-reading it here would pick up whatever ChatGPT has rendered since, which during
@@ -7922,6 +7928,10 @@
       // still restore it through this same feed, even after native completion.
       appActiveTurnId = typeof data.activeTurnId === 'string' && data.activeTurnId ? data.activeTurnId : null;
       appSettledQuestionId = typeof data.settledQuestionId === 'string' && data.settledQuestionId ? data.settledQuestionId : null;
+      // Only a fresh feed for this durable turn advances the watchdog. Cached
+      // counts never prove completion, authorize input or renew task authority.
+      const toolTurnId = data.recordedTurnId ?? appActiveTurnId;
+      if (generating && turnId && toolTurnId === turnId && pendingTools > 0) noteTurnProgress(turnId, 'local-tool');
       if (!generating && pendingTools > 0 && appActiveTurnId === turnId && fiberSettled?.reason === 'thinking_failed') noteTurnProgress(turnId, 'tool-resumed');
       const recordedQuestionId = typeof data.recordedQuestionId === 'string' ? data.recordedQuestionId : null;
       if (resumedStoppedTurn && !generating && appActiveTurnId === turnId) resumeStoppedTurn(recordedQuestionId);
@@ -11632,7 +11642,7 @@
         turnProgressRevision === revision && goalConfig?.pending?.replyId === pending.replyId &&
         goalConfig?.pending?.acceptedAt === pending.acceptedAt && goalUsable() &&
         !stopRequestedAt && pendingTools === 0 && !nativeBusy && !job?.busy &&
-        CLF_DOM.composerVisible() && !(CLF_DOM.composer()?.textContent || '').trim() && !CLF_DOM.hasComposerAttachments() &&
+        CLF_DOM.composerVisible() && !composerHasDraft() && !CLF_DOM.hasComposerAttachments() &&
         !CLF_DOM.errors().some(error => error.blocking === true);
       void (async () => {
         if (!safe() || !await confirmedProviderTerminal(true) || !safe()) return;
@@ -13947,7 +13957,7 @@
     if (CLF_DOM.approvalReceiptsReady?.() === false || await CLF_DOM.flushApprovalReceipts?.() === false)
       return { safe: false, why: 'journal-pending' };
     const draft = () => !handoffMarked(CLF_DOM.composer()) &&
-      Boolean((CLF_DOM.composer()?.textContent || '').trim() || CLF_DOM.hasComposerAttachments());
+      Boolean(composerHasDraft() || CLF_DOM.hasComposerAttachments());
     const verdict = (holds, extra) => {
       const why = holds.find(([held]) => held)?.[1];
       return { safe: !why, ...(why ? { why } : {}), ...extra };
@@ -14031,7 +14041,7 @@
         let input = null;
         try {
           const safe = () => onTarget() && !stopRequestedAt && pendingTools === 0 &&
-            CLF_DOM.composerVisible() && !(CLF_DOM.composer()?.textContent || '').trim() &&
+            CLF_DOM.composerVisible() && !composerHasDraft() &&
             !CLF_DOM.hasComposerAttachments() && !CLF_DOM.errors().some(error => error.blocking === true);
           if (!safe()) return false;
           // Flush newly visible native progress before requesting destructive
@@ -14184,7 +14194,7 @@
        * something this delivery could have produced.
        */
       const ownResidue = sendText(CLF_DOM.composerAuthoredText()) === sendText(input.text);
-      if ((!ownsFreshPage() && (composer.textContent || '').trim() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
+      if ((!ownsFreshPage() && composerHasDraft() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_existing_draft',
         "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
       ));
@@ -14244,7 +14254,7 @@
       // behind is not a composer that "changed". Re-read rather than reusing `ownResidue`, because
       // model selection and the writability wait sit between the two and can replace the editor.
       if (!onTarget() || (CLF_DOM.generating() && !message.directTurn) ||
-          (!ownsFreshPage() && (CLF_DOM.composer()?.textContent || '').trim() &&
+          (!ownsFreshPage() && composerHasDraft() &&
             sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text)) ||
           CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_composer_changed',
@@ -14839,7 +14849,7 @@
     return alive && !generating && !CLF_DOM.generating() && pendingInputTools === 0 && !desktopInputBusy &&
       !modelCatalogBusy && !pluginRefreshBusy && !nativeFilePreviewBusy && !desktopDecision && !commandAttempt && !commandJournalGate && !commandMarked &&
       queue.length === 0 && !flushWork && CLF_DOM.composerVisible() && !CLF_DOM.hasComposerAttachments() &&
-      !(CLF_DOM.composer()?.textContent || '').trim() &&
+      !composerHasDraft() &&
       (home ? !rows.length && !marker.has('cos-input') && !hashMarker.has('cos-input') && !marker.has('temporary-chat') :
         !!CLF_DOM.conversationId() && rows.at(-1)?.role === 'assistant');
   }
@@ -14853,7 +14863,7 @@
     const current = () => alive && !interrupted && epoch >= startEpoch && epoch <= startEpoch + (startConversation ? 1 : 0) &&
       (!CLF_DOM.conversationId() || CLF_DOM.conversationId() === startConversation) &&
       !generating && !CLF_DOM.generating() && pendingInputTools === 0 &&
-      !(CLF_DOM.composer()?.textContent || '').trim() && !CLF_DOM.hasComposerAttachments();
+      !composerHasDraft() && !CLF_DOM.hasComposerAttachments();
     const failure = () => ({ ready: false, fallback: current(), preSend: true, url: location.href });
     desktopInputBusy = true;
     try {
@@ -14893,7 +14903,7 @@
     if (!CLF_DOM.composer()) return 'composer_missing';
     if (!CLF_DOM.composerVisible()) return 'composer_hidden';
     if (CLF_DOM.hasComposerAttachments()) return 'attachments';
-    if (CLF_DOM.composer().textContent?.trim()) return 'draft';
+    if (composerHasDraft()) return 'draft';
     return null;
   }
   function catalogHelper() {
@@ -14917,7 +14927,7 @@
     // Work swaps the composer as well as its picker. Complete that owned transition
     // before binding the exact Chat composer used by the remaining inspection.
     const switchCurrent = () => current() && !generating && !CLF_DOM.generating() && !desktopInputBusy &&
-      !CLF_DOM.hasComposerAttachments() && !CLF_DOM.composer()?.textContent?.trim();
+      !CLF_DOM.hasComposerAttachments() && !composerHasDraft();
     if (!await CLF_DOM.prepareChatModelSurface(switchCurrent) || !switchCurrent()) {
       if (switchCurrent()) await ask({ type: 'model_catalog', nonce: message.nonce, models: null, error: 'picker_unavailable' });
       return false;
@@ -15085,7 +15095,7 @@
         const candidate = recoveryCloseCandidate;
         sendResponse({ safe: !!candidate && candidate.id === message.id && candidate.conversationId === message.conversationId &&
           candidate.current() && stopQuestionMatches(candidate.questionId) && pendingTools === 0 &&
-          !(CLF_DOM.composer()?.textContent || '').trim() && !CLF_DOM.hasComposerAttachments() });
+          !composerHasDraft() && !CLF_DOM.hasComposerAttachments() });
         return false;
       }
       if (message.type === 'clf-repair-ready' || message.type === 'clf-selection-ready') {
@@ -15181,7 +15191,7 @@
                 (terminal && expectedTerminal === fiberTerminalMessageId && fiberTurnFor(currentAssistantTurn())?.endMessageId === expectedTerminal)) && !desktopInputBusy && !modelCatalogBusy && !pluginRefreshBusy && !desktopDecision &&
               ((!commandAttempt && !commandJournalGate) || failedBootstrap) && (!message.failedCommand || failedBootstrap) &&
               queue.length === 0 && !flushWork && !!CLF_DOM.composer() &&
-              !(CLF_DOM.composer().textContent || '').trim() && !CLF_DOM.hasComposerAttachments() });
+              !composerHasDraft() && !CLF_DOM.hasComposerAttachments() });
         })().catch(() => sendResponse({ safe: false }));
         return true;
       }
@@ -15196,7 +15206,7 @@
             /^\/c\/[0-9a-f-]{36}$/i.test(location.pathname) && new URL(location.href).searchParams.get('temporary-chat') === 'true');
         sendResponse({ safe: temporaryPlannerPage() && (location.href.includes(`cos-input=${message.id}`) || routedHelper) &&
           !generating && !CLF_DOM.generating() && pendingTools === 0 && !CLF_DOM.hasComposerAttachments() &&
-          !(CLF_DOM.composer()?.textContent || '').trim() &&
+          !composerHasDraft() &&
           // A remembered helper whose decision is gone may still show its own one prompt. The app
           // inserted that prompt, so ChatGPT may store it Markdown-escaped, as its receipt allows.
           (users.length === 0 || (exact && users.length === 1 && (desktopDecision ? matchesSubmittedBootstrap(users[0], desktopDecision.text) : !!servedPlanner))) });

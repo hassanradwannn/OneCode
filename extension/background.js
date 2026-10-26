@@ -2411,15 +2411,36 @@ async function renderElectedInput(id, source) {
   return current() && visibleTab?.id === tab.id && !visibleTab.pendingUrl && visibleTab.url === tab.url;
 }
 
+const desktopInputOffers = new Map();
 function offerDesktopInput(tabId, message) {
   // The reply is not a delivery receipt: the content script synchronously owns
   // one desktopInputBusy slot, then the app's durable browser claim and one-time
   // sendAuthorizedAt fence every later offer. Waiting here only starves repairs.
-  const source = { tab: tabId, documentId: tabDocuments[String(tabId)], navigationEpoch: tabEpochs[String(tabId)] };
-  void renderElectedInput(message.id, source).then(ready => {
-    if (ready && ownsDocument(source) && inputOpenings[message.id]?.tab === tabId)
-      return chrome.tabs.sendMessage(tabId, message, { documentId: source.documentId });
-  }).catch(() => undefined);
+  if (desktopInputOffers.has(message.id)) return;
+  const intent = connectionEpoch, epoch = tabEpochs[String(tabId)];
+  const current = () => intent === connectionEpoch && Boolean(token) && !disconnected &&
+    inputOpenings[message.id]?.tab === tabId && tabEpochs[String(tabId)] === epoch;
+  const work = (async () => {
+    // Extension reload can leave an exact live tab without a registered document.
+    // Restore its observer now, rather than racing the 60s pickup deadline with
+    // the 60s background sweep. Registration owns the next offer; no tab opens.
+    const documentId = tabDocuments[String(tabId)];
+    if (typeof documentId !== 'string') { await restoreChatgptTab(tabId, current); return; }
+    const source = { tab: tabId, documentId, navigationEpoch: epoch };
+    if (!ownsDocument(source)) { await restoreChatgptTab(tabId, current); return; }
+    const ready = await renderElectedInput(message.id, source);
+    if (!ready || !current() || !ownsDocument(source)) return;
+    try { await chrome.tabs.sendMessage(tabId, message, { documentId }); }
+    catch {
+      // A lost isolated world is distinct from an absent provider page. The
+      // existing restoration owner preserves a healthy/busy recorder and all
+      // exclusive claim/Send receipts. A failed offer never authorizes replay.
+      if (current()) await restoreChatgptTab(tabId, current);
+    }
+  })().catch(() => undefined).finally(() => {
+    if (desktopInputOffers.get(message.id) === work) desktopInputOffers.delete(message.id);
+  });
+  desktopInputOffers.set(message.id, work);
 }
 
 /** A retained worker/continuation marker belongs to that opening's lifecycle,
@@ -3130,7 +3151,7 @@ async function applyRequestedBrowserPreferences(request) {
 
 /** Retire idle app-owned documents and redundant copies, preserving exact unsent drafts. */
 
-async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
+async function pruneManagedTabs(tabs, policy, protectedChats, closable, current = () => true) {
   const retired = new Set((Array.isArray(policy.retiredConversations) ? policy.retiredConversations : []).map(cleanConversationId).filter(Boolean));
   const managed = new Set((Array.isArray(policy.managedConversations) ? policy.managedConversations : []).map(cleanConversationId).filter(Boolean));
   for (const id of closable) managed.add(id);
@@ -3153,6 +3174,7 @@ async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
     (activity[conversationForTab(a)] || 0) - (activity[conversationForTab(b)] || 0) || a.id - b.id);
   let remaining = [...tabs];
   for (const tab of candidates) {
+    if (!current()) return remaining;
     const conversationId = conversationForTab(tab);
     if (!Number.isInteger(tab.id) || tab.pinned) continue;
     const duplicate = keeper.get(conversationId) !== tab.id && remaining.some(other => other.id !== tab.id && conversationForTab(other) === conversationId);
@@ -3170,11 +3192,13 @@ async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
     // Cancellation names a document, not every future tab that happens to reopen its chat.
     if (cancelledClaims.length && !cancelledDecisions.length) continue;
     try {
-      const current = await chrome.tabs.get(tab.id);
-      if (current.pinned || (idlePage && reading(current)) || conversationFromUrl(current.url) !== conversationId || current.pendingUrl) continue;
+      const observed = await chrome.tabs.get(tab.id);
+      if (!current()) return remaining;
+      if (observed.pinned || (idlePage && reading(observed)) || conversationFromUrl(observed.url) !== conversationId || observed.pendingUrl) continue;
 
       const proof = await tabReply(tab.id, { type: 'clf-tab-close-check', conversationId,
         ...(cancelledDecisions.length ? { cancelledDecisions } : {}) }, { documentId: source.documentId });
+      if (!current()) return remaining;
       if (proof?.safe !== true || proof.conversationId !== conversationId || proof.navigationEpoch !== source.navigationEpoch || !ownsDocument(source)) continue;
       // Tidying is this extension's decision, not the user's: report it as such, so the app does
       // not pause the chat's recovery as if its owner had closed it (2026-09-26: a stopped prime
@@ -3184,7 +3208,7 @@ async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
       // before remove resolves). An attempted/rejected removal is not origin proof.
       const removed = await serializeTab(tab.id, async () => {
         const latest = await chrome.tabs.get(tab.id);
-        if (latest.pinned || (idlePage && reading(latest)) || latest.pendingUrl || conversationFromUrl(latest.url) !== conversationId || !ownsDocument(source) || journalCountForConversation(conversationId) > 0) return false;
+        if (!current() || latest.pinned || (idlePage && reading(latest)) || latest.pendingUrl || conversationFromUrl(latest.url) !== conversationId || !ownsDocument(source) || journalCountForConversation(conversationId) > 0) return false;
         await chrome.tabs.remove(tab.id);
         tabRemovals[String(tab.id)] = { ...source, conversationId };
         tabRemovals = Object.fromEntries(Object.entries(tabRemovals).slice(-1000));
@@ -3731,7 +3755,8 @@ async function maintainOnce() {
   // Include this pass's newly elected input tab. The outbox projection, not its old marker,
   // keeps the opening eligible until the conversation's normal activity grant takes over.
   await refreshRendering(tabs);
-  tabs = await pruneManagedTabs(tabs, reply.data, nonDiscardable, closable);
+  tabs = await pruneManagedTabs(tabs, reply.data, nonDiscardable, closable,
+    () => intent === connectionEpoch && Boolean(token) && !disconnected && !maintenanceAgain);
   if (protectionWork) {
     let changed = false;
     for (const tab of tabs) {
@@ -5836,7 +5861,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 78;
+const PAGE_RECORDER_VERSION = 79;
 
 let deferredRecoveryWork = null;
 

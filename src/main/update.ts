@@ -636,11 +636,26 @@ function assetUrl(version: string, name: string, tag = releaseTagFor(version)): 
 }
 
 async function get(url: string, timeout: number | AbortSignal, headers: Record<string, string> = {}): Promise<Response> {
-  const response = await fetch(url, {
+  const options: RequestInit = {
     signal: typeof timeout === 'number' ? AbortSignal.timeout(timeout) : timeout,
     redirect: 'follow',
     headers: { 'user-agent': `onecode/${APP_VERSION}`, ...headers }
-  });
+  };
+  let response: Response;
+  try { response = await fetch(url, options); }
+  catch (error) {
+    if (!(error instanceof TypeError) || error.message !== 'fetch failed' || options.signal?.aborted) throw error;
+    // Public read only. Chromium uses the host's normal proxy/certificate
+    // integration when Node's transport cannot connect. Keep the same total
+    // deadline, ordinary TLS validation and all release/digest checks.
+    let network: typeof import('electron')['net'] | undefined;
+    try { network = (await import('electron')).net; } catch { /* Non-Electron fixtures have no native transport. */ }
+    if (!network?.fetch) throw error;
+    try {
+      response = await network.fetch(url, { ...options, credentials: 'omit', bypassCustomProtocolHandlers: true });
+      logInfo('update: public read recovered through the native network transport');
+    } catch { throw error; }
+  }
   if (!response.ok) throw Object.assign(new Error(`${new URL(url).pathname.split('/').pop()} answered ${response.status}`), { status: response.status });
   return response;
 }

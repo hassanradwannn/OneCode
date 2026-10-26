@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.18': {
+    lead: () => t('Keep task progress and connection status separate.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Long-running tasks'), text: () => t('Running local tools count as progress. A connection notice or silence warning alone no longer ends the current task.') },
+      { icon: 'i-retry', title: () => t('Companion delivery'), text: () => t('Restores a missing observer in an already open chat promptly. Native connector chips no longer look like an unsent text draft or prevent Send confirmation.') },
+      { icon: 'i-chat', title: () => t('Less chat clutter'), text: () => t('Failed automatic messages disappear after thirty minutes. Use their × button to dismiss them earlier.') }
+    ]
+  },
   '0.6.17': {
     lead: () => t('Keep long tasks and follow-ups connected.'),
     highlights: [
