@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.17': {
+    lead: () => t('Keep long tasks and follow-ups connected.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Reliable Gemini reloads'), text: () => t('Earlier approval replies stay separate from your instructions while chat history loads, so they cannot interrupt a pending Steer or change the current task.') },
+      { icon: 'i-terminal', title: () => t('Long tasks and background work'), text: () => t('Includes the resumed-task authorization and background-process fixes from the previous candidates. Steer preserves the original local process and its retained output.') },
+      { icon: 'i-retry', title: () => t('Smaller internal updates'), text: () => t('Compatible Windows and Linux installations receive a verified application capsule while keeping their existing profile and saved chats.') }
+    ]
+  },
   '0.6.16': {
     lead: () => t('Confirm explicit Steer from the native cancellation control.'),
     highlights: [

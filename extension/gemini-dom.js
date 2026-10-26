@@ -248,10 +248,26 @@ var CLF_DOM = (() => {
     for (const row of durableApprovalReplies.values()) {
       const source = document.getElementById(row.sourceId), reply = document.getElementById(row.replyId);
       const user = reply?.matches('.conversation-container') ? reply.querySelector('user-query') : null;
-      if (!source?.matches('.conversation-container') || !user ||
-          !(source.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING) ||
-          authored(user.querySelector('.query-text') || user) !== row.decision) continue;
-      approvalReplyIds.add(nativeId(user, 'user'));
+      if (!user) continue;
+      const key = nativeId(user, 'user');
+      if (!key) continue;
+      if (authored(user.querySelector('.query-text') || user) !== row.decision) {
+        // Editing a formerly proved control into a real instruction must not
+        // inherit its old presentation classification.
+        approvalReplyIds.delete(key);
+        continue;
+      }
+      if (!source?.matches('.conversation-container') ||
+          !(source.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+        // Native history may mount an old reply before its source exchange.
+        // Its exact scoped click receipt and unchanged decision are already
+        // known; quarantine that ID until the source hydrates rather than
+        // publishing it as a newly authored task. No text-only match qualifies.
+        approvalReplyIds.delete(key);
+        provisionalApprovalReplyIds.add(key);
+        continue;
+      }
+      approvalReplyIds.add(key);
     }
   }
   let approvalReplyTimer = null;
@@ -276,6 +292,9 @@ var CLF_DOM = (() => {
     for (const proof of pendingApprovalReplies) proof.observer?.disconnect();
     pendingApprovalReplies.length = 0;
     provisionalApprovalReplyIds.clear();
+    // Retiring transient click observers cannot make a separately restored
+    // historical decision become an authored message while its source loads.
+    restoreApprovalReplyIds();
     clearTimeout(approvalReplyTimer); approvalReplyTimer = null;
     for (const type of ['beforeinput', 'input', 'keydown', 'click']) document.removeEventListener(type, noteApprovalReplyEdit, true);
   }
@@ -309,8 +328,8 @@ var CLF_DOM = (() => {
     }
   }
   function observeApprovalReplies() {
-    restoreApprovalReplyIds();
     provisionalApprovalReplyIds.clear();
+    restoreApprovalReplyIds();
     const ended = button => button?.disabled === true || button?.getAttribute('aria-disabled') === 'true' || Boolean(button?.closest('[inert]'));
     for (const proof of [...pendingApprovalReplies]) {
       const mutations = [...proof.mutations, ...proof.observer.takeRecords()];

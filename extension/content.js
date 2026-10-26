@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 77;
+  const RECORDER_VERSION = 78;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -15101,7 +15101,7 @@
               recorderVersion: RECORDER_VERSION, conversationId: target, runId: RUN_ID,
               ...(historyLedgerNextAt > Date.now() ? { retryAt: historyLedgerNextAt } : {}) });
           }
-          if (!current() || !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() ||
+          if (!current() || CLF_DOM.approvalReceiptsReady?.() === false || !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() ||
             CLF_DOM.generating() || CLF_DOM.approvalWaiting() || CLF_DOM.errors().some(error => error.blocking === true))
           return sendResponse({ ok: false });
           await observe();
