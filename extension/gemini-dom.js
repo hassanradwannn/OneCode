@@ -1001,13 +1001,22 @@ var CLF_DOM = (() => {
     const route = location.href, kind = commandClaim ? 'command' : 'input';
     const held = { kind, claim, route, warmup: null, deadline: projection.expiresAt, edited: false, current: stillCurrent };
     warmupRecovery = held;
-    const hydrationCurrent = () => !held.edited && stillCurrent() && (commandClaim || openingClaim) === claim &&
-      Date.now() < projection.expiresAt && warmupRouteCurrent(route) && composerWritable() &&
-      !composerAuthoredText() && !hasComposerAttachments() && !approvalWaiting() &&
-      !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown);
+    // A refreshed document can claim its spent preparation before Gemini mounts
+    // an editable composer or clears the already-submitted tool-free text.
+    // Those are settlement conditions, not evidence that this owner changed.
+    const hydrationCurrent = () => {
+      const draft = compact(composerAuthoredText());
+      return !held.edited && stillCurrent() && (commandClaim || openingClaim) === claim &&
+        Date.now() < projection.expiresAt && warmupRouteCurrent(route) &&
+        (!draft || draft === held.warmup || !held.warmup && [WARMUP, SKILL_WARMUP].includes(draft)) &&
+        !hasComposerAttachments() && !approvalWaiting() &&
+        !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown);
+    };
     const hydrationRowsCurrent = () => {
       const rows = all('user-query').filter(shown);
-      return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(compact(authored(rows[0].querySelector('.query-text') || rows[0]))));
+      const value = rows.length === 1 ? compact(authored(rows[0].querySelector('.query-text') || rows[0])) : '';
+      return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(value)) &&
+        (!held.row || rows[0] === held.row && value === held.warmup && (!warmupOutput() || compact(warmupOutput()) === 'READY'));
     };
     const noteEdit = event => { if (event.isTrusted) held.edited = true; };
     document.addEventListener('beforeinput', noteEdit, true); document.addEventListener('input', noteEdit, true);
@@ -1019,7 +1028,7 @@ var CLF_DOM = (() => {
         const proof = warmupRecoveryState();
         return proof.safe && proof.conversationId && !composerAuthoredText() && !generating() &&
           compact(warmupOutput()) === 'READY' && proof.conversationId;
-      }, () => held.row ? warmupRecoveryState().safe : hydrationCurrent() && hydrationRowsCurrent(),
+      }, () => hydrationCurrent() && hydrationRowsCurrent(),
         Math.max(0, projection.expiresAt - Date.now()));
       if (!settled || !warmupRecoveryState().safe) return false;
       preparedOpening = settled; return true;
