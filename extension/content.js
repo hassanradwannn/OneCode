@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 85;
+  const RECORDER_VERSION = 86;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -249,7 +249,8 @@
      * the app has not opened a session for this chat yet". Everything was in fact still in
      * this script's own queue, and the one layer that knew said nothing.
      */
-    blocked: null
+    blocked: null,
+    inputIntake: null
   };
 
   /**
@@ -14071,28 +14072,55 @@
   }
 
   async function acceptDesktopInput(message) {
+    // Observational only: identify the existing intake stage without retaining
+    // authored text, credentials or granting another claim/Send attempt.
+    const intake = { id: String(message.id || '').slice(0, 255), at: Date.now(), stage: 'offered',
+      direct: !!message.directTurn, sourceQuestionId: null, expectedQuestionId: message.directTurn?.questionId || null,
+      sourceRendered: !!CLF_DOM.messages().findLast(row => row.role === 'user'),
+      desktopBusy: desktopInputBusy, modelBusy: modelCatalogBusy, nativePreviewBusy: nativeFilePreviewBusy,
+      goalBusy: !!goalBusy, compactionBusy: !!job?.busy };
+    observed.inputIntake = intake;
+    const intakeStage = stage => { if (observed.inputIntake === intake) { intake.stage = stage; intake.at = Date.now(); } };
+    if (CLF_DOM.provider === 'gemini') intakeStage('warmup-state');
     const warmupRecovery = CLF_DOM.provider === 'gemini' ? await retainedWarmupRecovery('input', message.id) : null;
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
     // Cached activity is a display projection. The live outbox claim and final
     // authorization own tool/native-turn admission; stale counts cannot veto an
     // eligible user message. Native generation and draft custody still fence Send.
-    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive ||
-        (generating && !warmupRecovery && !message.directTurn && !silencePickup) || goalBusy || job?.busy) return false;
+    const busy = desktopInputBusy ? 'desktop-busy' : modelCatalogBusy ? 'model-busy' : nativeFilePreviewBusy ? 'native-preview-busy'
+      : !alive ? 'page-closed' : generating && !warmupRecovery && !message.directTurn && !silencePickup ? 'generation-busy'
+      : goalBusy ? 'goal-busy' : job?.busy ? 'compaction-busy' : null;
+    if (busy) { intakeStage(busy); return false; }
     const target = message.conversationId || (warmupRecovery ? CLF_DOM.conversationId() : null) || null;
     const forEpoch = epoch;
     const sourceTurn = turnId;
     const sourceActivity = turnProgressRevision;
-    const sourceUser = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
-    if (message.directTurn?.questionId && message.directTurn.questionId !== sourceUser) return false;
+    const sourceQuestion = () => {
+      const rendered = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
+      if (rendered) return rendered.id;
+      const expected = message.directTurn?.questionId;
+      // Virtualizing a native question cannot revoke the exact recorded turn.
+      // Only explicit Steer can retain this already-published same-document
+      // anchor. A visible different question, pending adoption, changed turn or
+      // route supplies no fallback; Stop and automatic recovery still require
+      // their own fresh native evidence.
+      return expected && alive && generating && !resumeIdentityPending &&
+        turnId === message.directTurn.id && openedUserMessageId === expected &&
+        conversationId === target && CLF_DOM.conversationId() === target &&
+        reportedUserMessages.get(expected)?.conversationId === target ? expected : null;
+    };
+    const sourceUser = sourceQuestion();
+    intake.sourceQuestionId = sourceUser || null;
+    if (message.directTurn?.questionId && message.directTurn.questionId !== sourceUser) { intakeStage('source-question'); return false; }
     let sendAttempted = false;
     const preparedTarget = () => !target && CLF_DOM.provider === 'gemini' ? CLF_DOM.preparedConversation?.() || null : null;
     const onTarget = () => alive && (epoch === forEpoch || (preparedTarget() && epoch === forEpoch + 1 && conversationId === preparedTarget())) &&
       CLF_DOM.conversationId() === (target || preparedTarget()) &&
       (!message.recovery || sendAttempted || !stopRequestedAt) &&
       (!sourceQuiet || sendAttempted || (turnProgressRevision === sourceActivity && turnId === sourceTurn &&
-        CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id === sourceUser)) &&
-      (!message.directTurn || sendAttempted || (CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id === sourceUser &&
+        sourceQuestion() === sourceUser)) &&
+      (!message.directTurn || sendAttempted || (sourceQuestion() === sourceUser &&
         (!turnId || turnId === sourceTurn)));
     // Which onTarget condition failed, in its order, for the release report (#820). A pickup that
     // kept being withdrawn for 17 minutes could not say whether its page moved or its chat changed (#882).
@@ -14100,13 +14128,13 @@
       if (!alive) return 'page-closed';
       if (epoch !== forEpoch || CLF_DOM.conversationId() !== target) return 'left-chat';
       if (message.recovery && !sendAttempted && stopRequestedAt) return 'stop-requested';
-      const newUser = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id !== sourceUser;
+      const newUser = sourceQuestion() !== sourceUser;
       if ((sourceQuiet || message.directTurn) && !sendAttempted && newUser) return 'new-user-message';
       if ((sourceQuiet || message.directTurn) && !sendAttempted && turnId && turnId !== sourceTurn) return 'turn-changed';
       if (sourceQuiet && !sendAttempted && turnProgressRevision !== sourceActivity) return 'turn-progressed';
       return 'off-target';
     };
-    if (!onTarget()) return false;
+    if (!onTarget()) { intakeStage('off-target'); return false; }
     if (message.recovery && (!sourceUser || sourceUser !== message.recovery.questionId || stopRequestedAt)) return false;
     if (message.recovery) {
       let veto = '';
@@ -14180,7 +14208,7 @@
     };
     const ownsFreshPage = () => !target && onTarget() && (project ? CLF_DOM.projectHomeId() === project : onNativeAppHome()) &&
       (project ? freshMarker() : new URL(location.href).searchParams.get('cos-input') === message.id) && !CLF_DOM.turns().length;
-    if (!target && !ownsFreshPage() && !warmupRecovery) return false;
+    if (!target && !ownsFreshPage() && !warmupRecovery) { intakeStage('fresh-page'); return false; }
     desktopInputBusy = true;
     let decision = null;
     let sent = false;
@@ -14201,6 +14229,7 @@
       // Settings/plan dialogs retain the editor behind aria-hidden/inert. Claiming
       // that editor turns ordinary page unavailability into a false model failure.
       // Keep the input queued until this same document exposes its composer again.
+      intakeStage('composer');
       const composer = await waitPageView(() => (warmupRecovery || message.directTurn || !CLF_DOM.generating()) &&
         (message.directTurn ? CLF_DOM.composerVisible() && CLF_DOM.composer() : writableComposer()),
         () => onTarget() && (warmupRecovery || message.directTurn || silencePickup || !generating), 15000);
@@ -14220,11 +14249,13 @@
         return false; // No claim, insertion or Send: queued input survives recovery.
       }
       if (!composer || !onTarget() || (!warmupRecovery && !message.directTurn && ((!silencePickup && generating) || CLF_DOM.generating())) || !CLF_DOM.composerVisible()) return false;
+      intakeStage('claim');
       const reply = await ask({ type: 'desktop_input', id: message.id, conversationId: target, requiresAuthorization: true,
         ...(project ? { project: CLF_DOM.projectHomeId() } : {}) });
       const input = reply?.data?.input;
       if (input?.silenceBoundary || input?.completedTurnId) { claimedSilence = input; sourceQuiet = true; }
       if (!input) return false;
+      intakeStage('claimed');
       if (input.warmupRecovery?.spent === true && !sameWarmupRecovery(warmupRecovery, input.warmupRecovery)) {
         await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true,
           error: 'Gemini retained preparation could not be verified after browser recovery. Nothing was submitted for this task.',
@@ -14260,6 +14291,7 @@
       if ((!target || warmupRecovery) && CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setOpeningClaim?.({ id: input.id, owner: input.owner,
         ...(warmupRecovery ? { warmupRecovery: input.warmupRecovery } : {}) });
       if (warmupRecovery) {
+        intakeStage('warmup-settle');
         const recoveryRoute = location.href;
         const recoveryCurrent = () => alive && (epoch === forEpoch || epoch === forEpoch + 1) &&
           retainedWarmupRoute(recoveryRoute, 'input', input.id);
@@ -14268,6 +14300,7 @@
       withdrawableRecoveryDraft = Boolean(input.recovery) && !(input.images || []).length && !(input.attachments || []).length;
       // A chat ChatGPT deleted fails every check after it (its tab moves home); say why instead.
       const fail = async (error, detail) => {
+        intakeStage('failed');
         const why = target && deletedConversations.has(target.toLowerCase()) ? CONVERSATION_DELETED :
           detail && /^[a-z-]{1,40}$/.test(detail) ? `${error} (${detail})` : error;
         await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true, error: why, ...(detail ? { detail } : {}) }); return false;
@@ -14293,11 +14326,13 @@
        * something this delivery could have produced.
        */
       const ownResidue = sendText(CLF_DOM.composerAuthoredText()) === sendText(input.text);
+      intakeStage('draft');
       if ((!ownsFreshPage() && composerHasDraft() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
         'content_delivery_existing_draft',
         "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
       ));
       if (message.directTurn) {
+        intakeStage('direct-turn');
         // The offer only wakes this document. The just-committed outbox claim names the exact turn
         // this message is for; a changed turn or a lost claim forbids sending it into another one.
         // ChatGPT takes a message while it works and folds it into the running turn, a call still
@@ -14336,6 +14371,7 @@
       const limitation = providerLimitation();
       if (limitation) return fail(limitation);
       let modelFailure = '';
+      intakeStage('model');
       if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }))) return fail(
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
@@ -14363,6 +14399,7 @@
         "The provider composer changed before sending"
       ));
       let insertionFailure = '';
+      intakeStage('inserting');
       if (!CLF_DOM.insertPrompt(input.text, ownsFreshPage(), reason => { insertionFailure = reason; }))
         return fail(t(
           'content_delivery_text_not_accepted',
@@ -14446,10 +14483,12 @@
         // Preserve the outbox's revocable claim until the actual native Send is ready.
         if (input.recovery && !await recoveryPageUnfinished(() => sendCurrent() && onTarget() && draft.current(), withdrawWhy)) return false;
         authorizing = true;
+        intakeStage('authorizing');
         const authorized = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target || preparedTarget(), authorize: true });
         if (authorized?.data?.ok !== true) noteWithdraw('app-refused');
         if (!sendCurrent() || authorized?.data?.ok !== true || !onTarget() || !draft.current()) { noteWithdraw(onTarget() ? 'lease-lost' : offTarget()); return false; }
         if (input.recovery && !await recoveryPageUnfinished(() => sendCurrent() && onTarget() && draft.current(), withdrawWhy)) return false;
+        intakeStage('sending');
         return true;
       }, (user, conversation) => {
         if ((!conversation && !temporary) || (target && !onTarget())) return false;
@@ -14477,6 +14516,7 @@
       input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
         Boolean(input.recovery || agent || mentionCore));
       // #744: one retry when the editor was replaced before anything asked to send it.
+      intakeStage('sending');
       if (!(await nativeSend()) &&
           !(!CLF_DOM.warmupRecoveryPending?.() && !authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
         if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return false;
@@ -14579,6 +14619,7 @@
       // The claim remains inert if this ACK is lost; no duplicate send after a reload.
       const acknowledged = await ask({ type: 'desktop_input', id: message.id, conversationId: deliveredConversation, messageId: receipt.user?.id, owner: input.owner, lifetime: input.lifetime, ack: true });
       const accepted = acknowledged?.data?.ok === true;
+      if (accepted) intakeStage('acknowledged');
       try {
         const latest = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
         console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'native-ack', accepted,

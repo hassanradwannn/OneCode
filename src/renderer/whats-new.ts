@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.1': {
+    lead: () => t('Preserve the recorded source question while the browser redraws a running chat.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Steer through chat redraws'), text: () => t('Keeps the exact recorded question and turn when its native row leaves the rendered page. A newer question or changed chat still stops delivery.') },
+      { icon: 'i-retry', title: () => t('Delivery diagnostics'), text: () => t('Shows the current browser maintenance and message pickup stages in Companion details and diagnostic reports.') }
+    ]
+  },
   '0.7.0': {
     lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
     highlights: [

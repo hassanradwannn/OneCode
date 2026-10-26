@@ -3065,6 +3065,14 @@ function inspectRequestedModels(request) {
 
 let maintenanceFlight = null;
 let maintenanceAgain = false;
+// In-memory observation of the existing flight only. It cannot authorize,
+// cancel, resume or replay browser work and carries no page/task data.
+let maintenancePhase = null, maintenancePhaseSequence = 0;
+function maintenanceSnapshot() {
+  const phase = maintenancePhase;
+  return phase ? { stage: phase.stage, since: phase.since,
+    ageMs: Math.min(86_400_000, Math.max(0, Date.now() - phase.since)) } : null;
+}
 // In-flight scheduling only. Main's repair token and native document checks
 // remain the authority; a slow chat cannot own the shared outbox scan.
 const browserRepairFlights = new Map();
@@ -3113,6 +3121,9 @@ function connectWakeSocket() {
     else if (event.data === 'browser-control') void pumpBrowserControl().catch(() => undefined);
     else if (event.data === 'wake') {
       void pumpBrowserControl().catch(() => undefined);
+      // Diagnostics observes the current maintenance wait independently. Waiting
+      // until that flight reaches rendering would hide the very stall being read.
+      void publishCompanionDiagnostics();
       void maintain(true).catch(() => undefined);
     }
   };
@@ -3565,15 +3576,26 @@ async function reloadForExtensionUpdate(offer, liveOpenings, liveCommands) {
 }
 
 async function maintainOnce() {
+  const observation = ++maintenancePhaseSequence;
+  const phase = stage => {
+    if (maintenancePhase?.observation === observation)
+      maintenancePhase = { observation, stage, since: Date.now() };
+  };
+  maintenancePhase = { observation, stage: 'starting', since: Date.now() };
+  try {
   // The app decides whether there is recovery work; a worker holding no tabs is not a worker
   // with nothing to do, it is the one that has to open the chat the app is owed.
   if (token === null) {
+    phase('render-release');
     await activeTabs?.revoke();
+    phase('pairing');
     if (!(await ensurePaired().catch(() => false)) || token === null) return;
   }
   const intent = connectionEpoch;
   let observedTabs = [];
+  phase('tabs-query');
   try { observedTabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS }); } catch { /* Status/recovery still runs; no unobserved tab is pruned. */ }
+  phase('account-routing');
   await geminiRouting.observe(observedTabs.filter(tab => providerForUrl(tab.url) === 'gemini'));
   const openConversations = [...new Set(observedTabs.map(conversationForTab).filter(Boolean))];
   // Observe login in an existing regular-profile page; extension pairing alone is not login.
@@ -3581,6 +3603,7 @@ async function maintainOnce() {
     typeof tab.id === 'number' && typeof tabDocuments[String(tab.id)] === 'string' && signInStage(tab.url) === 'done');
   const loginEpoch = loginTab ? tabEpochs[String(loginTab.id)] : undefined;
   const loginDocument = loginTab ? tabDocuments[String(loginTab.id)] : undefined;
+  phase('login-check');
   const loginResult = loginTab
     ? await chatGptSignedIn(loginTab.id).catch(() => null) : null;
   const chatGptSignedInState = loginTab && loginDocument && tabDocuments[String(loginTab.id)] === loginDocument &&
@@ -3598,22 +3621,25 @@ async function maintainOnce() {
   // Without access to chatgpt.com no content script runs, so nothing on a page could ever answer:
   // a revoked Firefox permission, or Chrome's site access "On click". The app says so in Setup.
   const selectedOrigin = selectedProvider === 'chatgpt' ? 'https://chatgpt.com/*' : 'https://gemini.google.com/*';
+  phase('site-access');
   const chatgptAccess = typeof chrome.permissions?.contains === 'function'
     ? await chrome.permissions.contains({ origins: [selectedOrigin] }).catch(() => undefined) : undefined;
   if (intent !== connectionEpoch || !token || disconnected) return;
   // Transport support is independent of the preference for NEW chats. The app's native-output
   // registry gates each provider exporter; switching that preference cannot disable old media.
+  phase('http-status');
   const reply = await call('/status', { method: 'POST', body: JSON.stringify({ openConversations, stalledConversations, canReveal: true, canExportImages: true, canExportVideos: true,
     provider: selectedProvider, chatGptSignedIn: chatGptSignedInState, ...(typeof chatgptAccess === 'boolean' ? { chatgptAccess } : {}),
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
-  if (!reply.ok || !reply.data) { await activeTabs?.revoke(); return; }
+  if (!reply.ok || !reply.data) { phase('render-release'); await activeTabs?.revoke(); return; }
   const nextProvider = reply.data.provider === 'chatgpt' ? 'chatgpt' : 'gemini';
   if (nextProvider !== selectedProvider) {
     selectedProvider = nextProvider;
     // Re-run this same owner with the newly selected provider; no app or extension restart.
     void maintain(true);
   }
+  phase('background-placement');
   await rememberBackgroundPlacement(reply.data.backgroundPlacement);
   const liveChats = new Set(Array.isArray(reply.data.nonDiscardableConversations) ? reply.data.nonDiscardableConversations : []);
   const liveOpenings = new Set(Array.isArray(reply.data.inputOpeningIds) ? reply.data.inputOpeningIds : []);
@@ -3677,6 +3703,7 @@ async function maintainOnce() {
     }
   };
   // Reuse the app's current work policy. Old history, pins and tab presence do not qualify.
+  phase('render-policy');
   await refreshRendering(observedTabs);
   // Diagnostic page reads share one bounded flight and never delay recovery or input.
   publishCompanionDiagnostics();
@@ -3701,6 +3728,7 @@ async function maintainOnce() {
   dispatchBrowserRepairs(repairs, reply.data);
   // Reuse this maintenance scan/cadence; recorder repair must never delay owed actions.
   void restoreSilentRecorders(observedTabs, intent).catch(() => undefined);
+  phase('browser-preferences');
   await applyRequestedBrowserPreferences(reply.data.browserPreferenceRequest);
   void offerStopTurns(reply.data.stopTurns, reply.data.background === true);
   const bounds = reply.data.browserWindowBounds;
@@ -3709,14 +3737,20 @@ async function maintainOnce() {
     backgroundWindowBounds = { width: bounds.width, height: bounds.height,
       ...(Number.isInteger(bounds.left) && Number.isInteger(bounds.top) ? { left: bounds.left, top: bounds.top } : {}) };
   }
+  phase('window-layout');
   const backgroundReady = await reconcileBackgroundWindow(reply.data);
+  phase('keep-awake');
   await syncKeepAwake(observedTabs).catch(() => undefined);
   if (reply.data.placement) {
+    phase('successor-placement');
     await placeSuccessorChat(reply.data.placement, null);
+    phase('render-policy');
     await refreshRendering();
   }
   inspectRequestedModels(reply.data.modelCatalogRequest);
+  phase('connector-identity');
   await rememberConnectorNames(reply.data.connectorNames);
+  phase('connector-identity');
   await rememberConnectorApps(reply.data.connectorApps);
   inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
   void inspectProjectCreates(reply.data.projectCreateRequests);
@@ -3726,16 +3760,19 @@ async function maintainOnce() {
   const inputs = Array.isArray(reply.data.inputs)
     ? reply.data.inputs.filter(input => !repairConversations.has(cleanConversationId(input?.conversationId)))
     : reply.data.inputs;
+  phase('input-delivery');
   await deliverDesktopInputs(inputs, reply.data.background === true,
     Array.isArray(reply.data.reusableConversations) ? reply.data.reusableConversations.filter(id => !repairConversations.has(id)) : [],
     reply.data.inputOpeningIds, refreshRendering);
-  if (!backgroundReady) await reconcileBackgroundWindow(reply.data);
+  if (!backgroundReady) { phase('window-layout'); await reconcileBackgroundWindow(reply.data); }
   const monitoring = reply.data.recoveryMonitoring === true;
   if (monitoring !== recoveryMonitoring) {
     recoveryMonitoring = monitoring;
+    phase('monitoring-state');
     await persistLive().catch(() => undefined);
   }
-  if (await acceptBrowserRevivals(reply.data)) await recoverDeferredRevivals();
+  phase('revival-discovery');
+  if (await acceptBrowserRevivals(reply.data)) { phase('revival-delivery'); await recoverDeferredRevivals(); }
   const nonDiscardable = new Set(
     (Array.isArray(reply.data.nonDiscardableConversations) ? reply.data.nonDiscardableConversations : [])
       .map(cleanConversationId)
@@ -3752,6 +3789,7 @@ async function maintainOnce() {
   const managedWork = Array.isArray(reply.data.managedConversations) && reply.data.managedConversations.length > 0;
   if (!protectionWork && !managedWork && closable.size === 0 && repairs.length === 0) return clearRetryIfIdle();
   let tabs = [];
+  phase('managed-tabs-query');
   try {
     tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
   } catch {
@@ -3759,10 +3797,13 @@ async function maintainOnce() {
   }
   // Include this pass's newly elected input tab. The outbox projection, not its old marker,
   // keeps the opening eligible until the conversation's normal activity grant takes over.
+  phase('render-policy');
   await refreshRendering(tabs);
+  phase('tab-pruning');
   tabs = await pruneManagedTabs(tabs, reply.data, nonDiscardable, closable,
     () => intent === connectionEpoch && Boolean(token) && !disconnected && !maintenanceAgain);
   if (protectionWork) {
+    phase('tab-protection');
     let changed = false;
     for (const tab of tabs) {
       if (!Number.isInteger(tab && tab.id)) continue;
@@ -3810,6 +3851,10 @@ async function maintainOnce() {
     if (changed) await persistLive().catch(() => undefined);
   }
   if (repairs.length === 0) return clearRetryIfIdle();
+  } finally {
+    // A late completion must never clear a newer pass's diagnostic projection.
+    if (maintenancePhase?.observation === observation) maintenancePhase = null;
+  }
 }
 
 /** "changed-progress:app-progress" from a second repair check that saw the page move. */
@@ -4974,6 +5019,7 @@ const HANDLERS = {
       provider: selectedProvider,
       extensionVersion: chrome.runtime.getManifest().version,
       extensionProtocol: BRIDGE_PROTOCOL,
+      maintenance: maintenanceSnapshot(),
       signInOffer: ready ? offer : null,
       ...(pairingError ? { pairError: pairingError } : {})
     };
@@ -5696,6 +5742,7 @@ async function companionDiagnosticSnapshot(found) {
       appProtocol: found ? found.bridge : null,
       extensionVersion: chrome.runtime.getManifest().version,
       extensionProtocol: BRIDGE_PROTOCOL,
+      maintenance: maintenanceSnapshot(),
       pairError: pairingError
         ? { error: String(pairingError.error || ''), message: String(pairingError.message || '') }
         : null
@@ -5983,7 +6030,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 85;
+const PAGE_RECORDER_VERSION = 86;
 
 let deferredRecoveryWork = null;
 

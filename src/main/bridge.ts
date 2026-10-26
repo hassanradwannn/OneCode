@@ -67,7 +67,7 @@ import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindB
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
-import type { BridgeStatus, CompanionDiagnostics, CompanionPageDiagnostics, CompanionTabDiagnostics, CompanionTraceEntry, GeminiApprovalAuditEntry } from '../shared/types.js';
+import type { BridgeStatus, CompanionDiagnostics, CompanionPageDiagnostics, CompanionTabDiagnostics, CompanionTraceEntry, GeminiApprovalAuditEntry, CompanionMaintenanceStage, CompanionMaintenanceDiagnostics, CompanionInputIntakeDiagnostics, CompanionInputIntakeStage } from '../shared/types.js';
 import { BROWSER_PICKUP_BACKOFF_MS, BROWSER_PICKUP_MAX_ATTEMPTS, recoveryBusyMs } from '../shared/recovery.js';
 import { CHAT_ACTIVE_MS, CHAT_SILENCE_MS, continuationMarkerOf, isReasoningEffort, normalizedToolOutcome, toolCallSummary, unescapeMarkdown,
   type ReasoningEffort, type SessionEvent, type SessionOrigin, type StoredText, type ToolCallRecord } from '../shared/session.js';
@@ -1093,6 +1093,33 @@ function diagnosticNullableNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+const maintenanceDiagnosticStages: readonly CompanionMaintenanceStage[] = ['starting', 'render-release', 'pairing', 'tabs-query',
+  'account-routing', 'login-check', 'site-access', 'http-status', 'background-placement', 'render-policy', 'browser-preferences',
+  'window-layout', 'keep-awake', 'successor-placement', 'connector-identity', 'input-delivery', 'monitoring-state',
+  'revival-discovery', 'revival-delivery', 'managed-tabs-query', 'tab-pruning', 'tab-protection'];
+function diagnosticMaintenance(value: unknown): CompanionMaintenanceDiagnostics | null {
+  const row = diagnosticObject(value), stage = maintenanceDiagnosticStages.find(stage => stage === row?.stage);
+  if (!row || !stage || !Number.isSafeInteger(row.since) || Number(row.since) < 0 ||
+      typeof row.ageMs !== 'number' || !Number.isFinite(row.ageMs) || row.ageMs < 0) return null;
+  return { stage, since: Number(row.since), ageMs: Math.min(86_400_000, row.ageMs) };
+}
+function diagnosticInputIntake(value: unknown): CompanionInputIntakeDiagnostics | null {
+  const row = diagnosticObject(value);
+  const stages: readonly CompanionInputIntakeStage[] = ['offered', 'warmup-state', 'desktop-busy', 'model-busy', 'native-preview-busy',
+    'page-closed', 'generation-busy', 'goal-busy', 'compaction-busy', 'source-question', 'off-target', 'recovery', 'direct-turn',
+    'fresh-page', 'composer', 'claim', 'claimed', 'warmup-settle', 'draft', 'model', 'inserting', 'authorizing', 'sending',
+    'acknowledged', 'finished', 'failed'];
+  const stage = stages.find(stage => stage === row?.stage);
+  const identity = (value: unknown): string | null => typeof value === 'string' && /^[A-Za-z0-9:_-]{1,255}$/.test(value) ? value : null;
+  const id = identity(row?.id);
+  if (!row || !id || !stage ||
+      !Number.isSafeInteger(row.at) || Number(row.at) < 0) return null;
+  return { id, at: Number(row.at), stage, direct: row.direct === true, sourceRendered: row.sourceRendered === true,
+    sourceQuestionId: identity(row.sourceQuestionId), expectedQuestionId: identity(row.expectedQuestionId),
+    desktopBusy: row.desktopBusy === true, modelBusy: row.modelBusy === true, nativePreviewBusy: row.nativePreviewBusy === true,
+    goalBusy: row.goalBusy === true, compactionBusy: row.compactionBusy === true };
+}
+
 function diagnosticTrace(value: unknown): CompanionTraceEntry[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 16).flatMap((entry) => {
@@ -1115,6 +1142,7 @@ function diagnosticPage(value: unknown): CompanionPageDiagnostics | null {
   if (!page) return null;
   const lastError = diagnosticObject(page.lastError);
   return {
+    ...(page.inputIntake !== undefined ? { inputIntake: diagnosticInputIntake(page.inputIntake) } : {}),
     recorderVersion: diagnosticNullableNumber(page.recorderVersion),
     runId: diagnosticString(page.runId, 160),
     conversationId: diagnosticString(page.conversationId, 200),
@@ -1220,6 +1248,7 @@ function sanitiseCompanionDiagnostics(value: unknown): CompanionDiagnostics | nu
       appProtocol: diagnosticNullableNumber(status.appProtocol),
       extensionVersion: diagnosticString(status.extensionVersion, 32),
       extensionProtocol: diagnosticNullableNumber(status.extensionProtocol),
+      ...(status.maintenance !== undefined ? { maintenance: diagnosticMaintenance(status.maintenance) } : {}),
       pairError: pairError
         ? { error: diagnosticString(pairError.error, 160) ?? '', message: diagnosticString(pairError.message, 500) ?? '' }
         : null
