@@ -81,6 +81,20 @@ var CLF_DOM = (() => {
   let commandClaim = null;
   let goalClaim = null;
   let preparedOpening = null;
+  let warmupRecoveryResolver = null, warmupRecovery = null, warmupRefreshPending = false;
+  const recoveryProjection = value => value?.spent === true && Number.isFinite(value.expiresAt) && Number.isFinite(value.at)
+    ? { spent: true, questionId: typeof value.questionId === 'string' ? value.questionId : null,
+      at: value.at, expiresAt: value.expiresAt } : null;
+  const setWarmupRecoveryResolver = handler => { warmupRecoveryResolver = typeof handler === 'function' ? handler : null; };
+  const warmupRecoveryPending = () => warmupRefreshPending;
+  const warmupRouteCurrent = original => {
+    if (!original) return false;
+    const start = new URL(original), now = new URL(location.href);
+    return start.origin === now.origin && (now.href === start.href || Boolean(conversationId() &&
+      (now.pathname === start.pathname || now.pathname.replace(/\/[0-9a-f]{16}\/?$/i, '') === start.pathname.replace(/\/$/, ''))));
+  };
+  const warmupOutput = () => all('model-response').filter(shown).map(node =>
+    text(messageNode({ node, role: 'assistant' }))).join(' ').trim();
   function openingWarmup(value) {
     // Only the validated app opening frame opts into the saved native Skill.
     // Authored mentions and unowned text cannot change this tool-free bootstrap.
@@ -91,12 +105,14 @@ var CLF_DOM = (() => {
     return context.split('\n', 1)[0] === '@onecode-gemini' ? SKILL_WARMUP : WARMUP;
   }
   function setOpeningClaim(value) {
-    openingClaim = value && typeof value.id === 'string' && typeof value.owner === 'string' ? { id: value.id, owner: value.owner } : null;
+    openingClaim = value && typeof value.id === 'string' && typeof value.owner === 'string'
+      ? { id: value.id, owner: value.owner, ...(recoveryProjection(value.warmupRecovery) && { warmupRecovery: recoveryProjection(value.warmupRecovery) }) } : null;
     if (openingClaim) { commandClaim = null; goalClaim = null; }
     preparedOpening = null;
   }
   function setCommandClaim(value) {
-    commandClaim = value && typeof value.id === 'string' && typeof value.client === 'string' ? { id: value.id, client: value.client } : null;
+    commandClaim = value && typeof value.id === 'string' && typeof value.client === 'string'
+      ? { id: value.id, client: value.client, ...(recoveryProjection(value.warmupRecovery) && { warmupRecovery: recoveryProjection(value.warmupRecovery) }) } : null;
     if (commandClaim) { openingClaim = null; inputClaim = null; goalClaim = null; }
     preparedOpening = null;
   }
@@ -957,7 +973,62 @@ var CLF_DOM = (() => {
       if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
     }
   }
-  async function settleControlledWarmup(warmup, current) {
+  function warmupRecoveryState() {
+    const held = warmupRecovery;
+    const claim = held?.kind === 'command' ? commandClaim : openingClaim;
+    const users = all('user-query').filter(shown), row = users[0];
+    if (held && !held.row && users.length === 1 && compact(authored(row.querySelector('.query-text') || row)) === held.warmup) {
+      held.row = row; held.questionId = nativeId(row, 'user');
+    }
+    const exactWarmup = Boolean(held && users.length === 1 && held.row === row &&
+      compact(authored(row.querySelector('.query-text') || row)) === held.warmup);
+    const draft = compact(composerAuthoredText());
+    const id = conversationId(), sameRoute = warmupRouteCurrent(held?.route);
+    const output = warmupOutput();
+    const safeState = Boolean(held && !held.edited && held.current() && claim === held.claim &&
+      Date.now() < held.deadline && sameRoute && exactWarmup && composerWritable() &&
+      (!draft || draft === held.warmup) && !hasComposerAttachments() && !approvalWaiting() &&
+      !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown) && (!output || compact(output) === 'READY'));
+    return { safe: safeState, kind: held?.kind || null, id: claim?.id || null,
+      owner: claim?.client || claim?.owner || null, questionId: exactWarmup ? held.questionId : null,
+      deadline: held?.deadline || null, conversationId: id };
+  }
+  // Settle a retained preparation before content inserts its original task.
+  // The spent Main receipt supplies a frozen budget, never another warm-up Send.
+  async function resumeWarmupRecovery(stillCurrent = () => true) {
+    const claim = commandClaim || openingClaim, projection = claim?.warmupRecovery;
+    if (!projection || Date.now() >= projection.expiresAt) return false;
+    const route = location.href, kind = commandClaim ? 'command' : 'input';
+    const held = { kind, claim, route, warmup: null, deadline: projection.expiresAt, edited: false, current: stillCurrent };
+    warmupRecovery = held;
+    const hydrationCurrent = () => !held.edited && stillCurrent() && (commandClaim || openingClaim) === claim &&
+      Date.now() < projection.expiresAt && warmupRouteCurrent(route) && composerWritable() &&
+      !composerAuthoredText() && !hasComposerAttachments() && !approvalWaiting() &&
+      !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown);
+    const hydrationRowsCurrent = () => {
+      const rows = all('user-query').filter(shown);
+      return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(compact(authored(rows[0].querySelector('.query-text') || rows[0]))));
+    };
+    const noteEdit = event => { if (event.isTrusted) held.edited = true; };
+    document.addEventListener('beforeinput', noteEdit, true); document.addEventListener('input', noteEdit, true);
+    try {
+      const settled = await waitFor(() => {
+        const warm = all('user-query').filter(shown);
+        const value = warm.length === 1 ? compact(authored(warm[0].querySelector('.query-text') || warm[0])) : '';
+        if (!held.warmup && [WARMUP, SKILL_WARMUP].includes(value)) held.warmup = value;
+        const proof = warmupRecoveryState();
+        return proof.safe && proof.conversationId && !composerAuthoredText() && !generating() &&
+          compact(warmupOutput()) === 'READY' && proof.conversationId;
+      }, () => held.row ? warmupRecoveryState().safe : hydrationCurrent() && hydrationRowsCurrent(),
+        Math.max(0, projection.expiresAt - Date.now()));
+      if (!settled || !warmupRecoveryState().safe) return false;
+      preparedOpening = settled; return true;
+    } finally {
+      document.removeEventListener('beforeinput', noteEdit, true); document.removeEventListener('input', noteEdit, true);
+      if (warmupRecovery === held) warmupRecovery = null;
+    }
+  }
+  async function settleControlledWarmup(warmup, current, deadline = Date.now() + 180000) {
     let changedAt = Date.now(), previous = null, edited = false;
     const noteEdit = event => { if (event.isTrusted) edited = true; };
     // The accepted warm-up row can mount before Gemini clears its editor. Keep
@@ -973,7 +1044,7 @@ var CLF_DOM = (() => {
         if (!composerAuthoredText() && !generating() && output.trim() && composerWritable()) return 'settled';
         if (output !== previous) { previous = output; changedAt = Date.now(); }
         return Date.now() - changedAt >= 45000 ? 'stalled' : null;
-      }, owns, 180000);
+      }, owns, Math.max(0, deadline - Date.now()));
       if (!owns()) return false;
       if (outcome === 'settled') return true;
       // The only submitted input is our exact tool-free warm-up. Stop it once,
@@ -981,7 +1052,7 @@ var CLF_DOM = (() => {
       // No task Send is retried, and a refreshed document cannot inherit this closure.
       if (!generating() || !stopGeneration(owns)) return false;
       console.info('[OneCode warmup] stopped stalled tool-free preparation');
-      return Boolean(await waitFor(() => !composerAuthoredText() && !generating() && composerWritable(), owns, 30000)) && owns();
+      return Boolean(await waitFor(() => !composerAuthoredText() && !generating() && composerWritable(), owns, Math.max(0, Math.min(30000, deadline - Date.now())))) && owns();
     } finally {
       document.removeEventListener('beforeinput', noteEdit, true);
       document.removeEventListener('input', noteEdit, true);
@@ -1000,6 +1071,8 @@ var CLF_DOM = (() => {
     let box = composer(), id = conversationId();
     const submitted = composerAuthoredText();
     if (!box || !submitted || !composerWritable()) return refused('editor-not-ready');
+    if ((commandClaim || openingClaim)?.warmupRecovery && (!id || preparedConversation() !== id))
+      return refused('warmup-recovery-not-settled');
     // An explicit, receipt-owned message may use Gemini's native Send while
     // its previous response runs. The caller retains its exact source question
     // and input claim; neither Stop nor a cleared editor proves acceptance.
@@ -1072,14 +1145,46 @@ var CLF_DOM = (() => {
         box = replacement; return current();
       });
       if (!warmup) return false;
-      const warmId = await waitFor(() => conversationId() && all('user-query').some(node =>
-        compact(authored(node.querySelector('.query-text') || node)) === warmup) && conversationId(),
-        () => stillCurrent(), 180000);
-      if (!warmId) return refused('warmup-acceptance-unconfirmed');
+      const claim = initialCommand || initialOpening;
+      const deadline = Date.now() + 180000, refreshAfter = Date.now() + 15000;
+      const held = { kind: initialCommand ? 'command' : 'input', claim, route: initialRoute, warmup,
+        deadline, edited: false, current: stillCurrent };
+      warmupRecovery = held;
+      const noteWarmupEdit = event => { if (event.isTrusted) held.edited = true; };
+      document.addEventListener('beforeinput', noteWarmupEdit, true); document.addEventListener('input', noteWarmupEdit, true);
+      let refreshRequested = false, refreshResult = null;
+      const refreshTimer = setInterval(() => {
+        const proof = warmupRecoveryState();
+        if (Date.now() < refreshAfter || !claim || !warmupRecoveryResolver || !proof.safe || proof.conversationId || refreshRequested) return;
+        refreshRequested = true;
+        Promise.resolve(warmupRecoveryResolver({ kind: proof.kind, id: proof.id, owner: proof.owner,
+          questionId: proof.questionId, deadline })).then(result => {
+          refreshResult = result;
+          if (result?.ok === true && result.dispatched === true) warmupRefreshPending = true;
+        }).catch(() => { refreshResult = { ok: false }; });
+      }, 200);
+      let warmId;
+      try {
+        warmId = await waitFor(() => {
+          if (warmupRefreshPending) return 'refresh-dispatched';
+          // A permit racing READY has spent preparation custody. Await the exact
+          // original-document adoption before continuing to the real task.
+          if (refreshRequested && !refreshResult) return null;
+          if (refreshRequested && refreshResult?.spent && refreshResult?.recovered !== true) return 'refresh-refused';
+          return conversationId() && all('user-query').some(node =>
+            compact(authored(node.querySelector('.query-text') || node)) === warmup) && conversationId();
+        }, () => !held.edited && stillCurrent(), Math.max(0, deadline - Date.now()));
+      } finally {
+        clearInterval(refreshTimer);
+        document.removeEventListener('beforeinput', noteWarmupEdit, true); document.removeEventListener('input', noteWarmupEdit, true);
+        if (warmupRecovery === held) warmupRecovery = null;
+      }
+      if (warmId === 'refresh-dispatched') return false;
+      if (!warmId || warmId === 'refresh-refused') return refused('warmup-acceptance-unconfirmed');
       id = warmId;
       preparedOpening = warmId;
       const settled = await settleControlledWarmup(warmup, () => stillCurrent() && conversationId() === id &&
-        (initialCommand ? commandClaim === initialCommand : openingClaim === initialOpening));
+        (initialCommand ? commandClaim === initialCommand : openingClaim === initialOpening), deadline);
       if (!settled || composerAuthoredText()) return refused('warmup-not-settled');
       box = composer();
       if (!insertPrompt(submitted, true)) return refused('task-not-restored');
@@ -1537,7 +1642,8 @@ var CLF_DOM = (() => {
     userPromptText, presentUserPrompts: () => {}, userMessageReaction: () => undefined,
     firstUserMessage: () => turns().find(turn => turn.role === 'user')?.node || null,
     insertPrompt, clearPromptExact, captureComposerDraft, send, sendButton, stopButton, stopGeneration, generating,
-    setConnectorNames, connectorNames, setConnectorApps, connectorApps, setBindingResolver, setOpeningClaim, setInputClaim, setCommandClaim, setGoalClaim, preparedConversation, selectConnector, confirmedMention,
+    setConnectorNames, connectorNames, setConnectorApps, connectorApps, setBindingResolver, setOpeningClaim, setInputClaim, setCommandClaim, setGoalClaim, preparedConversation,
+    setWarmupRecoveryResolver, warmupRecoveryState, warmupRecoveryPending, resumeWarmupRecovery, selectConnector, confirmedMention,
     approvalCard, answerApprovalCard, approvalWaiting, maybeAutoApprove, approvalIssue, approvalObservations: () => [...approvalObservations],
     setApprovalReceiptStore: (store, restored) => { approvalReceiptStore = store; approvalReceiptsRestored = restored; approvalReceiptRoute = null; },
     approvalReceiptsReady, flushApprovalReceipts,

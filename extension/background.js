@@ -1526,10 +1526,14 @@ async function pairOnce(intent = connectionEpoch, reconnect = false) {
  * The app answers 404 for a command that has been cancelled, superseded, or already
  * sent, so a stale marker types nothing.
  */
-async function redeemCommand(id, client, conversationId = null, projectEntry = false) {
+async function redeemCommand(id, client, conversationId = null, projectEntry = false, source = null) {
   await load();
   if (!id || settled.includes(id)) return { ok: true, command: null };
   const body = { id, client };
+  if (source && ownsDocument(source)) {
+    body.tab_id = source.tab;
+    body.document_id = source.documentId;
+  }
   if (projectEntry === true) body.projectEntry = true;
   if (typeof conversationId === 'string' && conversationId) body.conversationId = conversationId;
   const result = await call('/commands/redeem', { method: 'POST', body: JSON.stringify(body) });
@@ -2674,6 +2678,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       continue;
     }
     offerDesktopInput(tab.id, { type: 'clf-desktop-input', id: input.id, conversationId: target,
+      ...(input.warmupRecovery ? { warmupRecovery: input.warmupRecovery } : {}),
       ...(!target && typeof input.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(input.project) ? { project: input.project } : {}),
       ...(input.recovery ? { recovery: input.recovery } : {}),
       ...(input.silenceTurnId ? { silenceTurnId: input.silenceTurnId } : {}),
@@ -4420,12 +4425,20 @@ function approvalQuery(message) {
 }
 
 let geminiCommandWrites = Promise.resolve();
+function warmupMarker(value, kind, id) {
+  if (typeof id !== 'string' || !(kind === 'command' ? /^[a-f0-9]{16}$/i : /^[a-f0-9-]{36}$/i).test(id)) return false;
+  try {
+    const url = new URL(value), key = kind === 'command' ? 'clf' : 'cos-input';
+    return url.origin === 'https://gemini.google.com' &&
+      (url.searchParams.get(key) === id || new URLSearchParams(url.hash.slice(1)).get(key) === id);
+  } catch { return false; }
+}
 function rememberGeminiCommandDocument(id, client, source) {
   const operation = geminiCommandWrites.catch(() => undefined).then(async () => {
     if (!ownsDocument(source)) return false;
     const owners = (await chrome.storage.session.get('geminiCommandDocuments')).geminiCommandDocuments || {};
     if (!ownsDocument(source)) return false;
-    owners[id] = { client, tab: source.tab, documentId: source.documentId };
+    owners[id] = { ...(owners[id]?.tab === source.tab ? owners[id] : {}), client, tab: source.tab, documentId: source.documentId };
     await chrome.storage.session.set({ geminiCommandDocuments: Object.fromEntries(Object.entries(owners).slice(-200)) });
     return ownsDocument(source);
   });
@@ -4499,7 +4512,93 @@ async function geminiApprovalReceipts(message, _sender, source) {
   return operation;
 }
 
+// A durable journal handoff releases tab custody before waiting on transport,
+// while retaining the caller's original reply and error semantics.
+const DEFERRED_REPLY = Symbol('deferred-reply');
 const HANDLERS = {
+  async gemini_warmup_state(message, _sender, source) {
+    if (!ownsDocument(source) || !['command', 'input'].includes(message.kind)) return { ok: false };
+    const tab = await chrome.tabs.get(source.tab).catch(() => null);
+    if (!tab || tab.pendingUrl || providerForUrl(tab.url) !== 'gemini' || !warmupMarker(tab.url, message.kind, message.id)) return { ok: false };
+    const held = message.kind === 'command'
+      ? ((await chrome.storage.session.get('geminiCommandDocuments')).geminiCommandDocuments || {})[message.id]
+      : inputOpenings[message.id];
+    const recovery = held?.warmupRecovery;
+    if (!ownsDocument(source) || held?.tab !== source.tab || recovery?.spent !== true ||
+        Date.now() >= recovery.expiresAt || !geminiRouting.sameAccount(recovery.sourceUrl, tab.url)) return { ok: false };
+    return { ok: true, warmupRecovery: recovery };
+  },
+  async gemini_warmup_refresh(message, _sender, source) {
+    if (!ownsDocument(source) || !['command', 'input'].includes(message.kind) || typeof message.owner !== 'string') return { ok: false };
+    const tab = await chrome.tabs.get(source.tab).catch(() => null);
+    if (!tab || tab.pinned || tab.pendingUrl || providerForUrl(tab.url) !== 'gemini' || conversationFromUrl(tab.url) ||
+        !warmupMarker(tab.url, message.kind, message.id)) return { ok: false };
+    await geminiCommandWrites.catch(() => undefined);
+    const commands = (await chrome.storage.session.get('geminiCommandDocuments')).geminiCommandDocuments || {};
+    const held = message.kind === 'command' ? commands[message.id] : inputOpenings[message.id];
+    if (!held || held.tab !== source.tab || held.warmupRecovery?.spent ||
+        (message.kind === 'command' ? held.client !== message.owner || held.documentId !== source.documentId
+          : held.inputOwner !== message.owner || held.inputDocumentId !== source.documentId)) return { ok: false };
+    const current = async () => {
+      const latest = await chrome.tabs.get(source.tab).catch(() => null);
+      return ownsDocument(source) && latest && !latest.pinned && !latest.pendingUrl && latest.url === tab.url;
+    };
+    const proof = await tabReply(source.tab, { type: 'clf-gemini-warmup-refresh-check',
+      kind: message.kind, id: message.id, owner: message.owner, questionId: message.questionId ?? null,
+      deadline: message.deadline }, { documentId: source.documentId });
+    if (proof?.safe !== true || proof.kind !== message.kind || proof.id !== message.id || proof.owner !== message.owner ||
+        (proof.questionId ?? null) !== (message.questionId ?? null) || !Number.isFinite(proof.deadline) ||
+        proof.deadline !== message.deadline || Date.now() >= proof.deadline || !await current()) return { ok: false };
+    const permit = await call('/gemini/warmup-refresh', { method: 'POST', body: JSON.stringify({
+      kind: message.kind, id: message.id, owner: message.owner, questionId: message.questionId ?? null,
+      deadline: proof.deadline, tab_id: source.tab, document_id: source.documentId }) });
+    const recovery = permit?.data?.warmupRecovery;
+    if (!permit.ok || permit.data?.ok !== true || recovery?.spent !== true || !Number.isFinite(recovery.expiresAt)) return { ok: false };
+    const projected = { ...recovery, sourceUrl: tab.url, sourceDocumentId: source.documentId };
+    // This is a projection of Main's spent preparation, persisted before navigation.
+    // A lost reply, worker restart or failed reload cannot buy another refresh.
+    if (message.kind === 'command') {
+      commands[message.id] = { ...held, warmupRecovery: projected };
+      await chrome.storage.session.set({ geminiCommandDocuments: commands });
+    } else {
+      inputOpenings[message.id] = { ...held, warmupRecovery: projected };
+      await persistLive();
+    }
+    const finalProof = await tabReply(source.tab, { type: 'clf-gemini-warmup-refresh-check',
+      kind: message.kind, id: message.id, owner: message.owner, questionId: message.questionId ?? null,
+      deadline: message.deadline }, { documentId: source.documentId });
+    if (finalProof?.safe !== true || finalProof.kind !== message.kind || finalProof.id !== message.id ||
+        finalProof.owner !== message.owner || finalProof.deadline !== proof.deadline ||
+        (finalProof.questionId ?? null) !== (message.questionId ?? null) || Date.now() >= recovery.expiresAt)
+      return { ok: false, spent: true };
+    // Gemini can finish creating its route while the permit is in flight. Adopt
+    // that exact original document through Main's spent receipt before allowing
+    // the task to proceed; READY text alone supplies no conversation authority.
+    if (finalProof.conversationId) {
+      const latest = await chrome.tabs.get(source.tab).catch(() => null);
+      const conversationId = conversationFromUrl(latest?.url);
+      if (!ownsDocument(source) || !latest || latest.pinned || latest.pendingUrl ||
+          !geminiRouting.sameAccount(tab.url, latest.url) ||
+          conversationId !== finalProof.conversationId || !/^[a-f0-9]{16}$/i.test(conversationId || ''))
+        return { ok: false, spent: true };
+      const adopted = message.kind === 'command'
+        ? await redeemCommand(message.id, message.owner, conversationId, false, source)
+        : await call('/input/claim', { method: 'POST', body: JSON.stringify({
+          id: message.id, owner: message.owner, conversationId, requiresAuthorization: true,
+          tab_id: source.tab, document_id: source.documentId }) });
+      const accepted = message.kind === 'command' ? adopted?.command : adopted?.data?.input;
+      const after = await chrome.tabs.get(source.tab).catch(() => null);
+      if (!ownsDocument(source) || after?.pendingUrl || after?.url !== latest.url ||
+          !adopted?.ok || accepted?.id !== message.id || accepted?.warmupRecovery?.spent !== true ||
+          (message.kind === 'input' && !(accepted.opening === true &&
+            (accepted.conversationId === null || accepted.conversationId === conversationId))))
+        return { ok: false, spent: true };
+      return { ok: true, recovered: true, warmupRecovery: projected };
+    }
+    if (!await current()) return { ok: false, spent: true };
+    await chrome.tabs.reload(source.tab);
+    return { ok: true, dispatched: true, warmupRecovery: projected };
+  },
   async native_video_export(message, sender, source) {
     const claim=videoExportClaims.get(message.nonce);
     if(!claim||claim.provider!=='gemini'||claim.tab!==source?.tab||claim.documentId!==source?.documentId||claim.conversationId!==message.conversationId||claim.messageId!==message.messageId||claim.assetId!==message.assetId||claim.mimeType!==message.mimeType)return{error:'identity_changed'};
@@ -4761,7 +4860,7 @@ const HANDLERS = {
       return permit;
     }
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
-      method: 'POST', body: JSON.stringify({ id, owner, conversationId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
+      method: 'POST', body: JSON.stringify({ id, owner, conversationId, tab_id: source.tab, document_id: source.documentId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
     });
     const claimed = result.ok && result.data?.input;
     if (!completed && message.authorize !== true && message.requiresAuthorization === true && claimed?.id === id &&
@@ -5048,6 +5147,20 @@ const HANDLERS = {
     if (ackBound > 0) await persistLive();
     if (!ownsDocument(source) || (binding.projectBound && !await currentConversationDocument(source, conversationId)))
       return { ok: false, error: 'stale_document' };
+    if (stored) {
+      // Browser journal custody is already durable. Its HTTP delivery must not
+      // hold this document's mutation queue: a slow event response otherwise
+      // blocks the next input claim, Send authorization and native ACK behind it.
+      // Preserve command-before-transcript ordering and await the same initial
+      // drain for the runtime reply, outside the document's mutation queue.
+      return { [DEFERRED_REPLY]: async () => {
+        if (ackBound > 0) await drainCommandAcks();
+        const result = await drain();
+        if (!ownsDocument(source) || (binding.projectBound && !await currentConversationDocument(source, conversationId)))
+          return { ok: false, error: 'stale_document' };
+        return { ok: true, pending: result.pending, durable: true, projectBound: binding.projectBound };
+      } };
+    }
     if (ackBound > 0) await drainCommandAcks();
     const result = await drain();
     if (!ownsDocument(source) || (binding.projectBound && !await currentConversationDocument(source, conversationId)))
@@ -5508,7 +5621,8 @@ const HANDLERS = {
       String(message.id || ''),
       String(message.client || ''),
       typeof message.conversationId === 'string' ? message.conversationId : null,
-      message.projectEntry === true
+      message.projectEntry === true,
+      source
     );
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     if (result.ok === true && result.command && /^[a-f0-9]{16}$/i.test(String(result.command.id || '')) &&
@@ -5616,6 +5730,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   const owned = new Set([
+    'gemini_warmup_state',
+    'gemini_warmup_refresh',
     'gemini_approval_receipts',
     'gemini_binding',
     'stop_redeem',
@@ -5665,7 +5781,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // A bounded media stream revalidates its document/claim at every chunk. Holding the ordinary
   // per-tab mutation queue for its lifetime would delay Stop, steering ACKs and observations.
   const operation = (owned.has(message.type) || message.type === 'register_document') && message.type !== 'native_video_export' ? serializeTab(id, run) : run();
-  operation.then(sendResponse, (err) =>
+  operation.then(result => typeof result?.[DEFERRED_REPLY] === 'function' ? result[DEFERRED_REPLY]() : result).then(sendResponse, (err) =>
     sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
   );
   return true;
@@ -5867,7 +5983,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 84;
+const PAGE_RECORDER_VERSION = 85;
 
 let deferredRecoveryWork = null;
 

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 84;
+  const RECORDER_VERSION = 85;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -318,6 +318,8 @@
    * to the same id — so the counter is what makes "still the same conversation" exact.
    */
   let epoch = 0;
+  let warmupStartupPending = false;
+  let warmupOpeningStartup = null;
 
   /**
    * Messages already reported from this page load — each as an id *and what it said*.
@@ -1618,6 +1620,7 @@
    * renames them when bindConversation() reports the real id.
    */
   async function flush() {
+    if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return false;
     if (temporaryPlannerPage()) { while (queue.length) removeQueueEntry(0); return true; }
     if (commandJournalGate) return false;
     if (queue.length === 0) return true;
@@ -1688,6 +1691,7 @@
   let boundId = null;
   let bindRetryAt = 0;
   async function bindConversation(id) {
+    if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return;
     if (!id || boundId === id) return;
     // Latch on the worker's answer, never on the attempt. Marking the id bound up front made
     // a single refused `bind` permanent: the worker kept the tab pointed at the *previous*
@@ -1862,6 +1866,7 @@
   }
 
   async function resumeOpenTurn() {
+    if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return;
     const id = CLF_DOM.conversationId();
     // A chat with no id yet has no app-side record to resume: ChatGPT assigns the id when it
     // accepts the first message, so this is a fresh composer, not a reload into a live turn.
@@ -2867,6 +2872,12 @@
 
   let observedRoute = null;
   function observe() {
+    if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return;
+    if (warmupOpeningStartup && Date.now() >= warmupOpeningStartup.recovery.expiresAt) {
+      warmupOpeningStartup = null; warmupStartupPending = false;
+      if (!commandAttempt) commandJournalGate = false;
+    }
+    if (warmupStartupPending) return;
     if (CLF_DOM.provider === 'gemini') {
       // Restore exact native control receipts before publishing any question
       // from a reloaded page. Otherwise old Allow rows split a live task in two.
@@ -8139,7 +8150,7 @@
       return {
         mode: 'off',
         label: t('content_compact', 'Compact'),
-        hint: t('content_app_not_running', 'OneCode is not running on this PC.'),
+        hint: t('content_app_not_running', 'OneCode Companion cannot reach the app on this PC.'),
         action: 'none'
       };
     }
@@ -12203,7 +12214,7 @@
     if (data.error) return String(data.error).slice(0, 160);
     if (reply.error === 'app_not_found') return t(
       'content_app_not_running',
-      'OneCode is not running on this PC.'
+      'OneCode Companion cannot reach the app on this PC.'
     );
     return reply.error ? String(reply.error).slice(0, 160) : '';
   }
@@ -12218,11 +12229,37 @@
   if (CLF_DOM.provider === 'gemini') CLF_DOM.setBindingResolver(async (id, opening, command, input, goal) => {
     const reply = await ask({ type: 'gemini_binding', conversation_id: id,
       ...(opening ? { opening } : {}), ...(command ? { command } : {}), ...(input ? { input } : {}), ...(goal ? { goal } : {}) });
-    if (reply?.ok === true) return reply.data;
+    if (reply?.ok === true) {
+      if (warmupOpeningStartup && warmupOpeningStartup.id === opening?.id && warmupOpeningStartup.owner === opening?.owner &&
+          sameWarmupRecovery(warmupOpeningStartup.recovery, opening.warmupRecovery)) {
+        warmupOpeningStartup = null; warmupStartupPending = false;
+        if (!commandAttempt) commandJournalGate = false;
+      }
+      return reply.data;
+    }
     const safeCode = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value) ? value : null;
     return { unavailable: true, diagnostic: { status: Number.isInteger(reply?.status) ? reply.status : null,
       workerError: safeCode(reply?.error), httpError: safeCode(reply?.data?.error) } };
   });
+  if (CLF_DOM.provider === 'gemini') CLF_DOM.setWarmupRecoveryResolver?.(value =>
+    ask({ type: 'gemini_warmup_refresh', ...value }));
+  const sameWarmupRecovery = (left, right) => left?.spent === true && right?.spent === true &&
+    Number.isFinite(left.expiresAt) && Date.now() < left.expiresAt && left.expiresAt === right.expiresAt &&
+    left.at === right.at && (left.questionId ?? null) === (right.questionId ?? null);
+  async function retainedWarmupRecovery(kind, id) {
+    if (CLF_DOM.provider !== 'gemini') return null;
+    const reply = await ask({ type: 'gemini_warmup_state', kind, id });
+    const value = reply?.ok === true ? reply.warmupRecovery : null;
+    return sameWarmupRecovery(value, value) ? value : null;
+  }
+  function retainedWarmupRoute(original, kind, id) {
+    const start = new URL(original), now = new URL(location.href), key = kind === 'command' ? 'clf' : 'cos-input';
+    const marker = now.searchParams.get(key) || new URLSearchParams(now.hash.slice(1)).get(key);
+    const startMarker = start.searchParams.get(key) || new URLSearchParams(start.hash.slice(1)).get(key);
+    return startMarker === id && now.origin === start.origin && (!marker || marker === id) &&
+      (now.href === start.href || Boolean(CLF_DOM.conversationId() &&
+        (now.pathname === start.pathname || now.pathname.replace(/\/[0-9a-f]{16}\/?$/i, '') === start.pathname.replace(/\/$/, ''))));
+  }
 
   // -------------------------------------------------------------- commands
 
@@ -12636,12 +12673,14 @@
       cancelled: false
     };
     commandAttempt = attempt;
+    if (fromUrl && (!OPENED_CONVERSATION || OPENED_PROJECT_ENTRY || options.warmupRecovery)) commandJournalGate = true;
+    attempt.warmupRecovery = options.warmupRecovery || (fromUrl && CLF_DOM.provider === 'gemini' ? await retainedWarmupRecovery('command', id) : null);
     // Only a fresh worker/resume page needs the no-shadow-session journal gate: its first user
     // message creates/binds a brand-new conversation. A revival stays in the existing worker
     // session, and its *previous* assistant turn may still be finishing while this command waits.
     // Gating that existing chat would suppress exactly the final /events we need to durably close
     // the turn before the new user message is allowed through.
-    const gateJournal = fromUrl && (!OPENED_CONVERSATION || OPENED_PROJECT_ENTRY);
+    const gateJournal = fromUrl && (!OPENED_CONVERSATION || OPENED_PROJECT_ENTRY || attempt.warmupRecovery);
     attempt.projectEntry = fromUrl && OPENED_PROJECT_ENTRY;
     if (gateJournal) commandJournalGate = true;
     let claimReported = false;
@@ -12664,6 +12703,7 @@
   const REDEEM_RETRY_WINDOW_MS = 45_000;
 
   async function deliverCommand(id, fromUrl = true, reportClaim = () => undefined, attempt = null) {
+    const warmupRecovery = attempt?.warmupRecovery || null;
     // Which conversation, if any, this delivery is entitled to type into.
     //
     // For a marker in this document's own URL it is the one the app opened the page at, read
@@ -12687,7 +12727,7 @@
     // because its composer exists: ChatGPT keeps that composer mounted while the worker's final
     // assistant answer is still streaming. Busy is a waiting state, not a failed revival, and
     // waiting must leave both the durable command and the user's composer untouched.
-    if (openedConversation && !OPENED_PROJECT_ENTRY) {
+    if (openedConversation && !OPENED_PROJECT_ENTRY && !warmupRecovery) {
       // Persist only the inert marker/conversation correlation before waiting. If this document,
       // its MV3 service worker, or the whole browser disappears, the replacement browser process
       // can put the same marker back in front of this exact chat. The prime's text stays solely in
@@ -12759,6 +12799,8 @@
       reportClaim(false);
       return;
     }
+    let ownsGeminiCommandClaim = false;
+    try {
     // This runs before the first status reply: the command brings this install's Core identity,
     // so the bootstrap mentions this computer's own Core (see applyCoreIdentity).
     if (reply.identity) applyCoreIdentity(reply.identity);
@@ -12826,7 +12868,16 @@
         'the command did not authorize Project entry; nothing was sent'
       )));
     }
-    if (fromUrl && openedConversation && !target && !projectEntry) {
+    const recoveredWarmup = !target && fromUrl && CLF_DOM.provider === 'gemini' &&
+      sameWarmupRecovery(warmupRecovery, boot.warmupRecovery);
+    // Main retains the spent preparation across browser restarts; MV3 session
+    // storage may not. An absent local projection cannot refund that warm-up.
+    if (boot.warmupRecovery?.spent === true && !recoveredWarmup) {
+      return void (await fail('Gemini retained preparation could not be verified after browser recovery. Nothing was submitted for this task.',
+        'warmup-recovery-unverified'));
+    }
+    if (warmupRecovery && !recoveredWarmup) return;
+    if (fromUrl && openedConversation && !target && !projectEntry && !recoveredWarmup) {
       // Current bridges reject this before leasing the command. Keep the page-side half too:
       // an older bridge (or a stale test fixture) must still never let a worker/resume marker
       // found in an existing chat terminalise the command that belongs to a fresh page.
@@ -12845,7 +12896,17 @@
         'the page that was opened for it was showing a different conversation'
       )));
     }
-    if (!target && CLF_DOM.conversationId()) {
+    if (recoveredWarmup) {
+      CLF_DOM.setCommandClaim?.({ id: boot.id, client: RUN_ID, warmupRecovery: boot.warmupRecovery });
+      ownsGeminiCommandClaim = true;
+      const recoveryEpoch = epoch, recoveryRoute = location.href;
+      const recoveryCurrent = () => commandAlive() && alive && !attempt?.cancelled &&
+        (epoch === recoveryEpoch || epoch === recoveryEpoch + 1) && retainedWarmupRoute(recoveryRoute, 'command', id);
+      if (!await CLF_DOM.resumeWarmupRecovery?.(recoveryCurrent) || !recoveryCurrent()) {
+        return void (await fail('Gemini could not settle the retained tool-free preparation. Nothing was submitted for this task.'));
+      }
+    }
+    if (!target && CLF_DOM.conversationId() && !recoveredWarmup) {
       return void (await fail(t(
         'content_bootstrap_fresh_chat_changed',
         'the marked fresh chat changed before bootstrap send; nothing was sent'
@@ -13139,7 +13200,9 @@
     // start or wake says which step it reached instead of only that it failed.
     let sendRefusal = null;
     step('sending');
-    if (CLF_DOM.provider === 'gemini') CLF_DOM.setCommandClaim?.({ id: boot.id, client: RUN_ID });
+    if (CLF_DOM.provider === 'gemini' && !recoveredWarmup) {
+      CLF_DOM.setCommandClaim?.({ id: boot.id, client: RUN_ID }); ownsGeminiCommandClaim = true;
+    }
     // ChatGPT's exact Send POST can precede the first readable question. Use
     // that same native receipt as desktop input; waiting for the question can
     // deadlock Resume behind its first tool, exhausting the recorder claim.
@@ -13161,6 +13224,7 @@
     if (!(await sendSubmittedText(() => !attempt?.cancelled && sendingBootstrap(), false, authorizeBootstrapSend, acceptBootstrapReceipt,
                                   matchesSubmittedBootstrap, DESKTOP_RECEIPT_MS, why => { sendRefusal = bootstrapAuthorizationFailure || why; }, currentCoreMention(),
                                   acceptBootstrapReceipt ? since => sentRequestSince(since) : null, false, bootstrapDraft))) {
+      if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return;
       // Once send() was invoked, a missing/cleared draft cannot prove that no click
       // happened. Only the exact pre-click check above may release the dispatch.
       if (boot.type === 'resume' && resumeDispatchRequested) {
@@ -13225,7 +13289,9 @@
     await clearAcknowledgedBootstrap(acknowledged);
     } finally {
       bootstrapDraft.dispose();
-      if (CLF_DOM.provider === 'gemini') CLF_DOM.setCommandClaim?.(null);
+    }
+    } finally {
+      if (ownsGeminiCommandClaim) CLF_DOM.setCommandClaim?.(null);
     }
   }
 
@@ -14005,13 +14071,15 @@
   }
 
   async function acceptDesktopInput(message) {
+    const warmupRecovery = CLF_DOM.provider === 'gemini' ? await retainedWarmupRecovery('input', message.id) : null;
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
     // Cached activity is a display projection. The live outbox claim and final
     // authorization own tool/native-turn admission; stale counts cannot veto an
     // eligible user message. Native generation and draft custody still fence Send.
-    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive || (generating && !message.directTurn && !silencePickup) || goalBusy || job?.busy) return false;
-    const target = message.conversationId || null;
+    if (desktopInputBusy || modelCatalogBusy || nativeFilePreviewBusy || !alive ||
+        (generating && !warmupRecovery && !message.directTurn && !silencePickup) || goalBusy || job?.busy) return false;
+    const target = message.conversationId || (warmupRecovery ? CLF_DOM.conversationId() : null) || null;
     const forEpoch = epoch;
     const sourceTurn = turnId;
     const sourceActivity = turnProgressRevision;
@@ -14112,7 +14180,7 @@
     };
     const ownsFreshPage = () => !target && onTarget() && (project ? CLF_DOM.projectHomeId() === project : onNativeAppHome()) &&
       (project ? freshMarker() : new URL(location.href).searchParams.get('cos-input') === message.id) && !CLF_DOM.turns().length;
-    if (!target && !ownsFreshPage()) return false;
+    if (!target && !ownsFreshPage() && !warmupRecovery) return false;
     desktopInputBusy = true;
     let decision = null;
     let sent = false;
@@ -14133,9 +14201,9 @@
       // Settings/plan dialogs retain the editor behind aria-hidden/inert. Claiming
       // that editor turns ordinary page unavailability into a false model failure.
       // Keep the input queued until this same document exposes its composer again.
-      const composer = await waitPageView(() => (message.directTurn || !CLF_DOM.generating()) &&
+      const composer = await waitPageView(() => (warmupRecovery || message.directTurn || !CLF_DOM.generating()) &&
         (message.directTurn ? CLF_DOM.composerVisible() && CLF_DOM.composer() : writableComposer()),
-        () => onTarget() && (message.directTurn || silencePickup || !generating), 15000);
+        () => onTarget() && (warmupRecovery || message.directTurn || silencePickup || !generating), 15000);
       if (!composer && onTarget() && CLF_DOM.generating() && await confirmedProviderTerminal() && onTarget() && CLF_DOM.generating()) {
         // Only after readiness expires, re-prove the exact terminal: a Retry or
         // new user turn must never become authority to reload the page.
@@ -14151,12 +14219,21 @@
         await flush();
         return false; // No claim, insertion or Send: queued input survives recovery.
       }
-      if (!composer || !onTarget() || (!message.directTurn && ((!silencePickup && generating) || CLF_DOM.generating())) || !CLF_DOM.composerVisible()) return false;
+      if (!composer || !onTarget() || (!warmupRecovery && !message.directTurn && ((!silencePickup && generating) || CLF_DOM.generating())) || !CLF_DOM.composerVisible()) return false;
       const reply = await ask({ type: 'desktop_input', id: message.id, conversationId: target, requiresAuthorization: true,
         ...(project ? { project: CLF_DOM.projectHomeId() } : {}) });
       const input = reply?.data?.input;
       if (input?.silenceBoundary || input?.completedTurnId) { claimedSilence = input; sourceQuiet = true; }
       if (!input) return false;
+      if (input.warmupRecovery?.spent === true && !sameWarmupRecovery(warmupRecovery, input.warmupRecovery)) {
+        await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true,
+          error: 'Gemini retained preparation could not be verified after browser recovery. Nothing was submitted for this task.',
+          detail: 'warmup-recovery-unverified' });
+        return false;
+      }
+      if (warmupRecovery && !sameWarmupRecovery(warmupRecovery, input.warmupRecovery)) return false;
+      if (warmupOpeningStartup?.id === input.id && sameWarmupRecovery(warmupOpeningStartup.recovery, input.warmupRecovery))
+        warmupOpeningStartup.owner = input.owner;
       if (input.recovery && ['ready', 'resumed'].includes(input.recovery.phase) && !input.nativeRecovery) {
         // The source was already idle. Native terminal evidence still owns the
         // checkpoint; an absent Stop icon cannot authorize the refresh.
@@ -14180,7 +14257,14 @@
       }
       if (!onTarget()) { noteWithdraw(offTarget()); return false; }
       if (CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setInputClaim?.({ id: input.id, owner: input.owner });
-      if (!target && CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setOpeningClaim?.({ id: input.id, owner: input.owner });
+      if ((!target || warmupRecovery) && CLF_DOM.provider === 'gemini' && input.purpose !== 'decision') CLF_DOM.setOpeningClaim?.({ id: input.id, owner: input.owner,
+        ...(warmupRecovery ? { warmupRecovery: input.warmupRecovery } : {}) });
+      if (warmupRecovery) {
+        const recoveryRoute = location.href;
+        const recoveryCurrent = () => alive && (epoch === forEpoch || epoch === forEpoch + 1) &&
+          retainedWarmupRoute(recoveryRoute, 'input', input.id);
+        if (!await CLF_DOM.resumeWarmupRecovery?.(recoveryCurrent) || !onTarget()) return false;
+      }
       withdrawableRecoveryDraft = Boolean(input.recovery) && !(input.images || []).length && !(input.attachments || []).length;
       // A chat ChatGPT deleted fails every check after it (its tab moves home); say why instead.
       const fail = async (error, detail) => {
@@ -14394,7 +14478,8 @@
         Boolean(input.recovery || agent || mentionCore));
       // #744: one retry when the editor was replaced before anything asked to send it.
       if (!(await nativeSend()) &&
-          !(!authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
+          !(!CLF_DOM.warmupRecoveryPending?.() && !authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
+        if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return false;
         if (!authorizing && !sendAttempted && !receipt && nativeSendRefusal === 'attachment-upload-unconfirmed') return uploadUnconfirmed();
         // Send was clicked, but no row proved it. Say so instead of keeping the claim open: the
         // app retires it as an uncertain send, never a replay, and this document takes the next
@@ -14535,7 +14620,12 @@
               CLF_DOM.conversationId() === deliveredConversation, 5000, 200);
             if (sendingTarget()) observe();
           }
-          await flush();
+          // The exact native question is already durably acknowledged above.
+          // Journal revisions that arrive while its snapshot drains remain owned
+          // by flush(); they must not keep this input's composer slot until the
+          // model stops producing progress. Finish draft cleanup and admit the
+          // next receipt-owned input while that independent journal continues.
+          void flush();
         }
       }
       // Stop/composer-clear may precede the exact user row. This receipt, not that early
@@ -14552,8 +14642,9 @@
       }
       if (draft) {
         try {
-          const cleared = !sendAttempted ? await draft.clear() : false;
-          if (!sendAttempted && !cleared) draft.withdraw();
+          const refreshing = CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.();
+          const cleared = !sendAttempted && !refreshing ? await draft.clear() : false;
+          if (!sendAttempted && !refreshing && !cleared) draft.withdraw();
         }
         catch { /* Unprovable cleanup preserves the draft; never keep the input slot busy. */ }
         finally { draft.dispose(); }
@@ -14979,6 +15070,13 @@
         void archiveWorkerChat(message.conversationId).then(outcome => sendResponse({ outcome })).catch(() => sendResponse({ outcome: 'failed' }));
         return true;
       }
+      if (message.type === 'clf-gemini-warmup-refresh-check') {
+        const proof = CLF_DOM.provider === 'gemini' ? CLF_DOM.warmupRecoveryState?.() : null;
+        sendResponse({ ...(proof || {}), safe: alive && proof?.safe === true && proof.kind === message.kind &&
+          proof.id === message.id && proof.owner === message.owner && proof.deadline === message.deadline &&
+          (proof.questionId ?? null) === (message.questionId ?? null), navigationEpoch: epoch });
+        return false;
+      }
       if (message.type === 'clf-stop-turn') {
         void stopAppTurn(message).then(ok => sendResponse({ ok })).catch(() => sendResponse({ ok: false }));
         return true;
@@ -15289,11 +15387,27 @@
   // which the established reload handshake remains unchanged: resumeOpenTurn() is still
   // awaited before the first observe() so a reloaded live turn cannot be duplicated.
   const startupCommandId = markerId();
+  const startupInputId = CLF_DOM.provider === 'gemini' ? new URL(location.href).searchParams.get('cos-input') ||
+    new URLSearchParams(location.hash.slice(1)).get('cos-input') : null;
   // Fresh worker/resume pages still deliver before status restoration: they own an empty New
   // Chat and need no prior conversation lifecycle. A revival is the opposite. Let the recorder
   // restore this existing chat's durable open turn first, otherwise a reload during a Stop-button
   // flicker could call the page idle before it has learned that the previous turn is still open.
-  const commandStartup = startupCommandId && (!OPENED_CONVERSATION || OPENED_PROJECT_ENTRY) ? runCommand(startupCommandId) : Promise.resolve();
+  let startupRecoveredWarmup = false;
+  const checkRetainedWarmup = startupCommandId && OPENED_CONVERSATION && !OPENED_PROJECT_ENTRY && CLF_DOM.provider === 'gemini';
+  if (checkRetainedWarmup || startupInputId) { warmupStartupPending = true; commandJournalGate = true; }
+  const commandStartup = startupInputId ? retainedWarmupRecovery('input', startupInputId).then(recovery => {
+    if (!recovery) { warmupStartupPending = false; commandJournalGate = false; return; }
+    // Keep observation and route binding behind the original opening's exact
+    // claim and binding. The retained warm-up cannot create a shadow session.
+    warmupOpeningStartup = { id: startupInputId, recovery, owner: null };
+  }) : checkRetainedWarmup ? retainedWarmupRecovery('command', startupCommandId).then(recovery => {
+    warmupStartupPending = false;
+    if (!recovery) { commandJournalGate = false; return; }
+    startupRecoveredWarmup = true;
+    return runCommand(startupCommandId, true, null, { warmupRecovery: recovery });
+  }).finally(() => { warmupStartupPending = false; }) :
+    startupCommandId && (!OPENED_CONVERSATION || OPENED_PROJECT_ENTRY) ? runCommand(startupCommandId) : Promise.resolve();
   // The app's language catalog before the first injected control, so it never paints in Chrome's.
   // Folded into the existing step: without a catalog to wait for, startup keeps its exact order.
   const i18nReady = globalThis.CLF_I18N?.ready;
@@ -15301,14 +15415,14 @@
     .catch(() => undefined)
     .then(i18nReady ? () => Promise.resolve(i18nReady).then(loadRenderPreference, loadRenderPreference) : loadRenderPreference)
     .then(checkStatus)
-    .then(() => resumeOpenTurn().catch(() => undefined))
+    .then(() => !warmupOpeningStartup && resumeOpenTurn().catch(() => undefined))
     .then(() => {
       observe();
       commandReadinessInitialized = true;
       notifyCommandReadiness();
       injectControl();
       injectStage();
-      if (startupCommandId && OPENED_CONVERSATION && !OPENED_PROJECT_ENTRY) void runCommand(startupCommandId);
+      if (startupCommandId && OPENED_CONVERSATION && !OPENED_PROJECT_ENTRY && !startupRecoveredWarmup) void runCommand(startupCommandId);
     });
 
   syncTheme();

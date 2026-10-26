@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.0': {
+    lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Responsive message delivery'), text: () => t('Slow transcript uploads no longer hold the browser control queue. Confirmed messages release the composer for the next message while progress continues.') },
+      { icon: 'i-retry', title: () => t('Gemini opening recovery'), text: () => t('An owned tool-free preparation that stalls can refresh its page once, retain its original deadline and continue without repeating the preparation message or an uncertain task Send.') }
+    ]
+  },
   '0.6.23': {
     lead: () => t('Steer through the provider’s native composer.'),
     highlights: [

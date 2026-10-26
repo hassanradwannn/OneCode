@@ -6,7 +6,7 @@
     "message": "the app did not answer"
   },
   "content_app_not_running": {
-    "message": "OneCode is not running on this PC."
+    "message": "OneCode Companion cannot reach the app on this PC."
   },
   "content_auto_compaction": {
     "message": "Auto-compaction"

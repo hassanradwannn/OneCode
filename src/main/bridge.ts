@@ -1,4 +1,5 @@
 import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
+import { z } from 'zod';
 import { chatgptBindingInstructions, type LocalBindingStatus } from './session/local-binding.js';
 import { continuationReceipt } from '../shared/continuation-receipt.js';
 import { handoffContinuationId, handoffMarkdownLimit } from './session/handoff.js';
@@ -41,7 +42,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -475,6 +476,8 @@ interface Command {
    */
   timer: NodeJS.Timeout | null;
   lastError: string | null;
+  /** Spent navigation budget for this exact tool-free pre-task warmup. */
+  warmupRecovery?: WarmupRecovery;
   /**
    * The page that redeemed this command, while its lease holds.
    *
@@ -539,6 +542,7 @@ interface DurableCommandRecord {
   claimedAt: number | null;
   owner: string | null;
   lastError: string | null;
+  warmupRecovery?: WarmupRecovery;
 }
 
 interface DurableCommandSnapshot {
@@ -553,6 +557,7 @@ export interface BridgeCommand {
   id: string;
   /** Absolute browser-delivery deadline for this leased command. */
   expiresAt: number;
+  warmupRecovery?: ReturnType<typeof warmupRecoveryView>;
   /** Project entry is navigation authority only; the source composer must never receive the brief. */
   projectEntry?: { id: string; sourceConversationId: string };
   kind: 'open-chat' | 'stop-turn';
@@ -722,6 +727,10 @@ async function bindingForGeminiCommand(conversation: string, proof: Record<strin
   await writeCommandTransition(command, async () => {
     const current = () => commands.includes(command) && command.owner === owner && command.claimedAt !== null && isLeased(command);
     if (!current() || command.spec.type === 'stop') throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
+    if (command.warmupRecovery && (command.warmupRecovery.successorOwner !== owner ||
+        command.warmupRecovery.successorDocument !== proof.document_id ||
+        (command.warmupRecovery.conversationId && command.warmupRecovery.conversationId !== conversation) ||
+        Date.now() >= command.warmupRecovery.expiresAt)) throw new GeminiBindingError('GEMINI_COMMAND_NOT_OWNED');
     if (command.spec.type === 'revive') {
       const session = await findSessionByConversation(conversation, { requireUnique: true });
       if (command.spec.conversationId !== conversation || !swarmRunning(command.spec.runId) ||
@@ -2860,6 +2869,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // there, without asking for work. Setup needs it from a browser that has no chat to serve yet:
   // the authenticated request above already recorded presence and version.
   // Only the paired companion can request a model-carried local session capability.
+  if (route === '/gemini/warmup-refresh' && req.method === 'POST') {
+    const parsed = z.object({ kind: z.enum(['input', 'command']), id: z.string().min(1).max(64),
+      owner: z.string().min(1).max(160), tab_id: z.number().int().nonnegative(),
+      document_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), questionId: z.string().min(1).max(256).nullable(),
+      deadline: z.number().int().positive() }).strict().safeParse(await readBody(req, 2048));
+    const browser = browserOf(req);
+    if (!parsed.success || !browser || parsed.data.deadline <= Date.now() || parsed.data.deadline > Date.now() + 180_000)
+      return json(res, 400, { ok: false, error: 'invalid_warmup_refresh' }, origin);
+    const body = parsed.data;
+    const source = { tab_id: body.tab_id, document_id: body.document_id };
+    const recovery = body.kind === 'input'
+      ? await permitGeminiWarmupRefresh(body.id, body.owner, browser, source, body.questionId, body.deadline)
+      : await permitCommandWarmupRefresh(body.id, body.owner, browser, source, body.questionId, body.deadline);
+    return json(res, recovery ? 200 : 409, recovery ? { ok: true, warmupRecovery: recovery } : { ok: false, error: 'warmup_refresh_not_owned' }, origin);
+  }
   if (route === '/gemini/binding' && req.method === 'POST') {
     const body = await readBody(req, 2048) as Record<string, unknown>;
     if (!body || typeof body.conversation_id !== 'string' || !/^[a-f0-9]{16}$/.test(body.conversation_id) ||
@@ -3441,7 +3465,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const link = chatProviderCapabilities(selectedChatProvider()).nativeProjects && entry?.projectId && entry.purpose !== 'decision' && !entry.lifetime ? (await getProject(entry.projectId))?.chatgpt : undefined;
       if (link && (link.state !== 'linked' || body.project !== link.id)) return json(res, 200, { input: null }, origin);
     }
-    const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req));
+    const source = typeof body.tab_id === 'number' && Number.isSafeInteger(body.tab_id) && typeof body.document_id === 'string'
+      ? { tab_id: body.tab_id, document_id: body.document_id } : undefined;
+    const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req), source);
     return json(res, 200, { input }, origin);
   }
 
@@ -4279,6 +4305,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!destinationCommand) return false;
       return writeCommandTransition(destinationCommand, async () => {
         if (!commands.includes(destinationCommand) || !destinationCommand.owner || destinationCommand.owner !== body['client'] ||
+            (destinationCommand.warmupRecovery && (destinationCommand.warmupRecovery.successorOwner !== body['client'] ||
+              Date.now() >= destinationCommand.warmupRecovery.expiresAt)) ||
             !continuationClaimedBy(checkpointToken, destinationCommand.id)) return false;
         return transition();
       });
@@ -5192,6 +5220,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const wanted = typeof body['id'] === 'string' ? body['id'] : '';
     const client = typeof body['client'] === 'string' ? body['client'].slice(0, 64) : '';
     const reportedConversation = body['conversationId'] === undefined ? null : conversationId(body['conversationId']);
+    const redeemSource: WarmupDocument | undefined = Number.isSafeInteger(body.tab_id) && (body.tab_id as number) >= 0 &&
+      typeof body.document_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(body.document_id)
+      ? { tab_id: body.tab_id as number, document_id: body.document_id } : undefined;
     if (body['conversationId'] !== undefined && !reportedConversation) {
       return json(res, 400, { error: 'bad_conversation_id' }, origin);
     }
@@ -5220,6 +5251,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (command.spec.type === 'resume' && !(resumeFence && sendUnattempted(resumeFence.destinationSend))) {
       return json(res, 409, { error: 'command_already_sent', final: true }, origin);
     }
+    const warmupAdoption = command.warmupRecovery
+      ? adoptWarmupRecovery(command.warmupRecovery, client, browserOf(req), redeemSource, reportedConversation) : undefined;
+    if (command.warmupRecovery && !warmupAdoption) return json(res, 409, { error: 'warmup_document_changed' }, origin);
+    if (warmupAdoption && reportedConversation === commandHomeConversation(command.spec))
+      return json(res, 409, { error: 'command_wrong_conversation' }, origin);
     if (command.spec.type === 'revive' && !revivalFor(command.spec.agent, command.spec.runId)) {
       // tidyCommands() above normally retires these. This is the fail-closed twin of that:
       // an empty revival has no message of the prime's to type, and a page must never be
@@ -5228,6 +5264,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     if (
       reportedConversation &&
+      !warmupAdoption &&
       (command.spec.type !== 'revive' || command.spec.conversationId !== reportedConversation) &&
       !(body['projectEntry'] === true && resumeFence?.project && resumeFence.from === reportedConversation)
     ) {
@@ -5250,7 +5287,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!client) return json(res, 400, { error: 'bad_client' }, origin);
     // The bootstrap has provably not been typed yet, so a fresh document may take the tab's
     // place — the page that held it is gone, or was never able to type at all.
-    const resumeTakeover = Boolean(resumeFence && sendUnattempted(resumeFence.destinationSend));
+    const resumeTakeover = Boolean(resumeFence && sendUnattempted(resumeFence.destinationSend)) || !!warmupAdoption;
     if (command.owner && command.owner !== client && !resumeTakeover) {
       return json(res, 409, { error: 'command_taken' }, origin);
     }
@@ -5262,7 +5299,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // Renew rather than count another attempt: the app already spent one opening this page,
     // and this is that same attempt arriving. The lease is durable *before* the bootstrap is
     // handed over, so an app restart cannot reopen the same command into a second tab.
-    const claimedAt = Date.now();
+    const claimedAt = command.warmupRecovery ? command.claimedAt ?? Date.now() : Date.now();
     if (command.spec.type === 'revive') {
       const claimed = await persistRevivalRedeem(command, client, claimedAt);
       if (claimed === 'stale') {
@@ -5279,7 +5316,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (claimed === 'lease-not-durable') {
         return json(res, 503, { error: 'command_lease_not_durable', retryable: true }, origin);
       }
-    } else if (!(await persistCommandLease(command, client, claimedAt, resumeTakeover))) {
+    } else if (!(await persistCommandLease(command, client, claimedAt, resumeTakeover, warmupAdoption ?? undefined))) {
       if (command.owner && command.owner !== client && !resumeTakeover) {
         return json(res, 409, { error: 'command_taken' }, origin);
       }
@@ -5356,6 +5393,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!previousCustody || previousCustody.owner !== client)
         geminiCommandCustody.set(command.id, { browser: redeemingBrowser, owner: client, lease: randomBytes(8).toString('hex') });
       const custody = geminiCommandCustody.get(command.id)!;
+      if (redeemSource) { custody.tab = redeemSource.tab_id; custody.document = redeemSource.document_id; }
+      if (warmupAdoption?.conversationId) custody.conversation = warmupAdoption.conversationId;
       if (command.spec.type === 'resume') {
         custody.resume = { sessionId: command.spec.sessionId, token: command.spec.token };
         if (liveResume && chatProviderForConversation(liveResume.from) === 'chatgpt') {
@@ -6533,7 +6572,8 @@ function durableCommand(command: Command): DurableCommandRecord {
     phase: commandPhase(command),
     claimedAt: command.claimedAt,
     owner: command.owner,
-    lastError: command.lastError
+    lastError: command.lastError,
+    ...(command.warmupRecovery ? { warmupRecovery: command.warmupRecovery } : {})
   };
 }
 
@@ -6601,16 +6641,23 @@ async function persistCommandLease(
   command: Command,
   owner: string | null,
   claimedAt: number,
-  allowOwnerTakeover = false
+  allowOwnerTakeover = false,
+  warmupRecovery?: WarmupRecovery
 ): Promise<boolean> {
   return writeCommandTransition(command, async () => {
     if (!commands.includes(command)) return false;
     if (owner !== null && command.owner !== null && command.owner !== owner && !allowOwnerTakeover) return false;
+    if (warmupRecovery) {
+      if (!command.warmupRecovery || !owner || !warmupRecovery.successorDocument ||
+          !adoptWarmupRecovery(command.warmupRecovery, owner, warmupRecovery.browser,
+            { tab_id: warmupRecovery.tab, document_id: warmupRecovery.successorDocument }, warmupRecovery.conversationId ?? null)) return false;
+    }
     const record: DurableCommandRecord = {
       ...durableCommand(command),
       phase: 'leased',
       claimedAt,
-      owner
+      owner,
+      ...(warmupRecovery ? { warmupRecovery } : {})
     };
     try {
       await writeDurableNow(COMMANDS_STATE, commandSnapshot({ commandOverride: { command, record } }));
@@ -6625,8 +6672,39 @@ async function persistCommandLease(
     if (!commands.includes(command)) return false;
     command.claimedAt = claimedAt;
     command.owner = owner;
+    if (warmupRecovery) command.warmupRecovery = warmupRecovery;
     return true;
   });
+}
+
+async function permitCommandWarmupRefresh(id: string, owner: string, browser: string, source: WarmupDocument,
+  questionId: string | null, deadline: number): Promise<ReturnType<typeof warmupRecoveryView> | null> {
+  const command = commands.find(entry => entry.id === id);
+  if (!command) return null;
+  let permitted: WarmupRecovery | null = null;
+  await writeCommandTransition(command, async () => {
+    const spec = command.spec, custody = geminiCommandCustody.get(id);
+    const home = commandHomeConversation(spec);
+    if (!commands.includes(command) || !['resume', 'worker'].includes(spec.type) || !home || chatProviderForConversation(home) !== 'gemini' ||
+        command.owner !== owner || command.claimedAt === null || command.warmupRecovery || receiptFor(id) ||
+        !custody || custody.owner !== owner || custody.browser !== browser || custody.conversation ||
+        custody.tab !== source.tab_id || custody.document !== source.document_id) return false;
+    if (spec.type === 'resume') {
+      const entry = continuationByToken(spec.token);
+      if (!entry || entry.state !== 'claimed' || !continuationClaimedBy(spec.token, id) || entry.destinationSend.state !== 'not-attempted') return false;
+    } else if (spec.type !== 'worker' || !swarmRunning(spec.runId) || agentConversation(spec.agent, spec.runId)) return false;
+    const expiresAt = Math.min(Date.now() + commandDeadlineDelay(command), deadline);
+    if (expiresAt <= Date.now()) return false;
+    const recovery: WarmupRecovery = { spent: true, questionId, at: Date.now(), expiresAt,
+      browser, tab: source.tab_id, document: source.document_id, owner };
+    try { await writeDurableNow(COMMANDS_STATE, commandSnapshot({ commandOverride: { command, record: { ...durableCommand(command), warmupRecovery: recovery } } })); }
+    catch { persistCommands(); return false; }
+    command.warmupRecovery = recovery;
+    permitted = recovery;
+    armDeadline(command);
+    return true;
+  });
+  return permitted ? warmupRecoveryView(permitted) : null;
 }
 
 type RevivalRedeemResult = 'ok' | 'stale' | 'taken' | 'broker-not-durable' | 'lease-not-durable';
@@ -6797,6 +6875,7 @@ function queue(spec: CommandSpec): Command {
       // pages echo their document client on ACK, so a late result from that old payload is
       // refused by /commands/ack rather than applied to this newer one.
       existing.owner = null;
+      delete existing.warmupRecovery;
       geminiCommandCustody.delete(existing.id);
       if (existing.timer) clearTimeout(existing.timer);
       existing.timer = null;
@@ -11221,6 +11300,9 @@ function revivalDeadlineAt(command: Command): number {
 }
 
 function commandDeadlineDelay(command: Command, now = Date.now()): number {
+  return Math.min(commandBaseDeadlineDelay(command, now), command.warmupRecovery ? command.warmupRecovery.expiresAt - now : Infinity);
+}
+function commandBaseDeadlineDelay(command: Command, now = Date.now()): number {
   if (command.spec.type === 'stop') return command.createdAt + STOP_COMMAND_TIMEOUT_MS - now;
   if (command.spec.type === 'revive') return revivalDeadlineAt(command) - now;
   if (command.spec.type === 'resume' && continuationByToken(command.spec.token)?.automatic) {
@@ -11482,6 +11564,7 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
   return {
     id: command.id,
     expiresAt,
+    ...(command.warmupRecovery ? { warmupRecovery: warmupRecoveryView(command.warmupRecovery) } : {}),
     kind: 'open-chat',
     ...(spec.type === 'resume' && commandProject(command) ? {
       projectEntry: { id: commandProject(command)!, sourceConversationId: continuationByToken(spec.token)!.from }
@@ -11974,6 +12057,8 @@ function planCommandRestore(
   let restored = 0;
 
   for (const raw of saved.commands as Array<Partial<DurableCommandRecord>>) {
+    const warmup = raw.warmupRecovery === undefined ? undefined : warmupRecoverySchema.safeParse(raw.warmupRecovery);
+    if (warmup && !warmup.success) throw new Error('Invalid durable warmup refresh custody');
     const specRaw = raw.spec as Partial<CommandSpec> | undefined;
     if (!specRaw || typeof raw.id !== 'string' || raw.id.length === 0 || raw.id.length > 64) continue;
     const spec = restoredCommandSpec(version, specRaw);
@@ -11992,6 +12077,7 @@ function planCommandRestore(
   }
 
   for (const { raw, spec, createdAt } of durableCandidates.values()) {
+    const warmup = raw.warmupRecovery === undefined ? undefined : warmupRecoverySchema.safeParse(raw.warmupRecovery);
     if (spec.type === 'resume') resumeTokens.push({ sessionId: spec.sessionId, token: spec.token });
     const persistedLeased = version !== 1 && raw.phase === 'leased';
     // The broker cannot yet say whether a restored wake was delivered, so disk rows get the
@@ -12017,9 +12103,10 @@ function planCommandRestore(
       spec,
       createdAt,
       claimedAt,
-        timer: null,
+      timer: null,
       lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
-      owner: leased && typeof raw.owner === 'string' ? raw.owner.slice(0, 64) : null
+      owner: leased && typeof raw.owner === 'string' ? raw.owner.slice(0, 64) : null,
+      ...(warmup?.success ? { warmupRecovery: warmup.data } : {})
     });
     restored += 1;
   }

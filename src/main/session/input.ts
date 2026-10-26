@@ -60,11 +60,38 @@ export const inputArgs = z.object({
   reasoningEffort: z.enum(REASONING_EFFORTS).nullable()
 });
 export type InputArgs = z.infer<typeof inputArgs>;
+/** One refresh of an already-sent tool-free Gemini warmup, never task Send authority. */
+export const warmupRecoverySchema = z.object({
+  spent: z.literal(true), questionId: z.string().min(1).max(256).nullable(), at: z.number().int().nonnegative(),
+  expiresAt: z.number().int().positive(), browser: z.string().regex(/^[a-z0-9]{16,64}$/), tab: z.number().int().nonnegative(),
+  document: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), owner: z.string().min(1).max(160),
+  successorOwner: z.string().min(1).max(160).optional(), successorDocument: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+  conversationId: z.string().regex(/^[a-f0-9]{16}$/).optional()
+}).strict().refine(r => r.expiresAt > r.at && !!r.successorOwner === !!r.successorDocument);
+export type WarmupRecovery = z.infer<typeof warmupRecoverySchema>;
+export type WarmupDocument = { tab_id: number; document_id: string };
+export function warmupRecoveryView(r: WarmupRecovery) {
+  return { spent: true as const, questionId: r.questionId, at: r.at, expiresAt: r.expiresAt };
+}
+/** Native question IDs can change on reload; only the exact paired tab/document chain transfers. */
+export function adoptWarmupRecovery(r: WarmupRecovery, owner: string, browser: string | null,
+  source: WarmupDocument | undefined, conversationId: string | null): WarmupRecovery | null {
+  if (!source || browser !== r.browser || source.tab_id !== r.tab || Date.now() >= r.expiresAt ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(source.document_id) ||
+      (conversationId !== null && !/^[a-f0-9]{16}$/.test(conversationId)) ||
+      (r.conversationId && conversationId !== null && r.conversationId !== conversationId)) return null;
+  const original = source.document_id === r.document && owner === r.owner;
+  if (original ? !conversationId : source.document_id === r.document || owner === r.owner) return null;
+  if (r.successorOwner && (r.successorOwner !== owner || r.successorDocument !== source.document_id)) return null;
+  return { ...r, successorOwner: owner, successorDocument: source.document_id,
+    ...(conversationId ? { conversationId } : {}) };
+}
 const entrySchema = inputArgs.extend({
   /** Saved interval authority; only the scheduler's internal admission supplies this. */
   scheduleId: z.string().uuid().optional(),
   steerReady: z.literal(true).optional(),
   steerClosedOnce: z.literal(true).optional(),
+  warmupRecovery: warmupRecoverySchema.optional(),
   /** Ordered recovery remains on the original input; navigation never refunds Send. */
   nativeRecovery: z.object({ turnId: z.string().min(1).max(256), questionId: z.string().min(1).max(256),
     phase: z.enum(['ready-to-refresh', 'refresh-dispatched', 'ready']), refreshOwner: z.string().optional() }).optional(),
@@ -290,6 +317,7 @@ async function steeringSource(sessionId: string, conversationId: string, turnId:
     ? { id: turnId, startedAt: boundary.time, questionId: question.messageId } : null;
 }
 async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
+  if (entry.warmupRecovery && Date.now() >= entry.warmupRecovery.expiresAt) return false;
   if (entry.recovery?.phase === 'stopping') return recoveryCurrent(entry);
   if (entry.nativeRecovery && entry.nativeRecovery.phase !== 'ready')
     return entry.nativeRecovery.phase === 'ready-to-refresh' && await inputRefreshCurrent(entry);
@@ -629,7 +657,9 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
     const preparationMs = Math.max(row.opening ? FRESH_OPENING_PREPARATION_MS : 0,
       row.attachments?.length || companion?.attachments?.length ? 720_000 : row.images?.length || companion?.images?.length ? 120_000 : 60_000);
     if (row.state === 'browser' && row.sendAuthorizedAt === undefined && row.requiresAuthorization === true &&
-        Date.now() - (row.offeredAt ?? row.createdAt) >= preparationMs) {
+        Date.now() >= Math.min((row.offeredAt ?? row.createdAt) + preparationMs, row.warmupRecovery?.expiresAt ?? Infinity)) {
+      if (row.warmupRecovery && Date.now() >= row.warmupRecovery.expiresAt)
+        return { ...row, state: 'cancelled', error: 'Not sent: browser preparation timed out. This attempt was cancelled.' };
       // Navigation was already authorized. Retain its original spent receipt
       // until the exact replacement is ready, regardless of history cooldown.
       if (row.nativeRecovery?.phase === 'refresh-dispatched') return row;
@@ -1329,12 +1359,36 @@ export function permitSteeringClose(id: string, sessionId: string, turnId: strin
   });
 }
 
+/** The same original opening owns a spent pre-task refresh across normal app/browser restart. */
+export function permitGeminiWarmupRefresh(id: string, owner: string, browser: string, source: WarmupDocument,
+  questionId: string | null, deadline?: number): Promise<ReturnType<typeof warmupRecoveryView> | null> {
+  return serial(async () => {
+    const current = await load(), row = current.find(entry => entry.id === id);
+    if (!row?.opening || row.chatProvider !== 'gemini' || !row.sessionId || row.state !== 'browser' ||
+        row.owner !== owner || row.claimedBrowser !== browser || !row.requiresAuthorization || row.conversationId !== null ||
+        row.sendAuthorizedAt !== undefined || row.deliveredAt !== undefined || row.warmupRecovery ||
+        !owner.startsWith(`${source.tab_id}:${source.document_id}:`) ||
+        !/^\d+$/.test(owner.slice(`${source.tab_id}:${source.document_id}:`.length))) return null;
+    const session = await getSession(row.sessionId);
+    if (!session || session.conversationId || session.origin?.kind !== 'desktop') return null;
+    const budget = Math.max(FRESH_OPENING_PREPARATION_MS,
+      row.attachments?.length ? 720_000 : row.images?.length ? 120_000 : 60_000);
+    const expiresAt = Math.min((row.offeredAt ?? row.createdAt) + budget, deadline ?? Infinity);
+    if (Date.now() >= expiresAt) return null;
+    const recovery: WarmupRecovery = { spent: true, questionId, at: Date.now(), expiresAt,
+      browser, tab: source.tab_id, document: source.document_id, owner };
+    await commit(current.map(entry => entry === row ? { ...entry, warmupRecovery: recovery } : entry));
+    return warmupRecoveryView(recovery);
+  });
+}
+
 /** Revalidate the same durable claim immediately before sending; never hand out text again. */
 export function authorizeBrowserInput(id: string, owner: string, conversationId: string | null): Promise<boolean> {
   return serial(async () => {
     const current = await load();
     const row = current.find(row => row.id === id && row.owner === owner && row.state === 'browser' && row.conversationId === conversationId);
     if (!row || row.sendAuthorizedAt !== undefined || companionOf(current, row) ||
+        (row.warmupRecovery && (!row.conversationId || row.owner !== row.warmupRecovery.successorOwner)) ||
         (row.recovery && row.nativeRecovery?.phase !== 'ready') ||
         (row.nativeRecovery && row.nativeRecovery.phase !== 'ready')) return false;
     if (!(await browserInputAllowed(row)) || await target(row) !== conversationId) return false;
@@ -1832,9 +1886,9 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return turnId;
 }
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
+    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
     const current = await load();
     for (const entry of ordered(current)) {
       if (companionOf(current, entry)) continue;
@@ -1858,6 +1912,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
             stop: entry.silenceBoundary?.nativeBusy === true && entry.recovery.phase === 'ready' } } : {}),
           ...(silenceTurnId ? { silenceTurnId } : {}),
           ...(entry.directTurn ? { directTurn: entry.directTurn } : {}),
+          ...(entry.warmupRecovery ? { warmupRecovery: warmupRecoveryView(entry.warmupRecovery) } : {}),
           ...(entry.steerTurnId ? { steerTurnId: entry.steerTurnId } : {}),
           ...(entry.state === 'queued' && entry.purpose !== 'decision' && entry.sessionId && entry.conversationId && entry.conversationId !== conversationId
             ? { supersededConversationId: entry.conversationId } : {}),
@@ -1868,13 +1923,32 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
     return result;
   });
 }
-export function claimBrowserInput(id: string, owner: string, conversationId: string | null, requiresAuthorization = false, browser: string | null = null): Promise<InputEntry | null> {
+export function claimBrowserInput(id: string, owner: string, conversationId: string | null, requiresAuthorization = false, browser: string | null = null,
+  warmupSource?: WarmupDocument): Promise<InputEntry | null> {
   return serial(async () => {
     if (browser && !/^[a-z0-9]{16,64}$/.test(browser)) return null;
-    const current = await load();
-    const entry = current.find((row) => row.id === id);
+    let current = await load();
+    let entry = current.find((row) => row.id === id);
     if (!entry || !preparable(entry) || (entry.state === 'browser' && !requiresAuthorization) || entry.dueAt > Date.now() || !owner) return null;
     if (entry.steerTurnId && entry.directTurn?.questionId && !requiresAuthorization) return null;
+    if (entry.warmupRecovery) {
+      if (!requiresAuthorization || !owner.startsWith(`${warmupSource?.tab_id}:${warmupSource?.document_id}:`)) return null;
+      const adopted = adoptWarmupRecovery(entry.warmupRecovery, owner, browser, warmupSource, conversationId);
+      if (!adopted || !entry.opening || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined) return null;
+      if (conversationId && entry.conversationId === null) {
+        if (isChatBlocked(conversationId) || await conversationWasSuperseded(conversationId)) return null;
+        const attached = await findSessionByConversation(conversationId);
+        if (attached && attached.id !== entry.sessionId) return null;
+      }
+      // Persist candidate document custody, not native conversation identity. The
+      // replacement adapter must prove its retained warmup before /gemini/binding
+      // attaches the reserved session. A URL marker alone cannot rebind history.
+      // A failed metadata write cannot let
+      // another reloaded document claim a second adoption or refund navigation.
+      const successor = { ...entry, owner, warmupRecovery: adopted };
+      await commit(current.map(row => row === entry ? successor : row));
+      current = entries!; entry = current.find(row => row.id === id)!;
+    }
     if (entry.recovery && entry.recovery.phase !== 'stopping' && entry.nativeRecovery?.phase !== 'ready-to-refresh' && entry.state === 'browser' && entry.owner !== owner) return null;
     if (entry.state === 'browser' && entry.claimedBrowser && entry.claimedBrowser !== browser) return null;
     if (entry.recovery?.reloadOwner === owner) return null;
@@ -1883,7 +1957,11 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     const completedTurnId = entry.state === 'browser' ? entry.completedTurnId : queuedFollowup(entry)
       ? await completedStageBoundary(entry, current) : manualInput(entry) ? await eligibleStageEnd(entry) : undefined;
     if (queuedFollowup(entry) && entry.recovery?.phase !== 'stopping' && entry.nativeRecovery?.phase !== 'ready-to-refresh' && !completedTurnId) return null;
-    if (await target(entry) !== conversationId) return null;
+    const currentTarget = await target(entry);
+    const unboundWarmup = currentTarget === null && entry.opening && entry.warmupRecovery &&
+      (conversationId === null || entry.warmupRecovery.conversationId === conversationId);
+    if (currentTarget !== conversationId && !unboundWarmup) return null;
+    const deliveryConversation = unboundWarmup ? null : conversationId;
     if (!(await browserInputAllowed(entry))) return null;
     if (entry.purpose === 'decision' && !decisionWaiters.has(id)) return null;
     if (entry.projectId) await projectWorkspace(entry.projectId);
@@ -1921,7 +1999,7 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     let claimed: InputEntry;
     const prepareClaim = (checkpoint?: InputEntry) => prepare({ ...combinedInput(entry, checkpoint), ...(checkpoint ? { companionInputId: checkpoint.id } : {}), ...(completedTurnId ? { completedTurnId } : {}),
       ...(entry.transportIntent === 'tool' ? { transportIntent: 'browser' } : {}),
-      state: 'browser', owner, conversationId, offeredAt: entry.offeredAt ?? Date.now(), requiresAuthorization,
+      state: 'browser', owner, conversationId: deliveryConversation, offeredAt: entry.offeredAt ?? Date.now(), requiresAuthorization,
       claimedBrowser: browser ?? undefined }, suffix, withoutMention && !checkpoint &&
         chatProviderForConversation(conversationId, entry.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'gemini');
     try {
@@ -2014,6 +2092,8 @@ export function bindGeminiOpeningInput(id: string, owner: string, conversationId
     const current = await load();
     const entry = current.find(row => row.id === id && row.owner === owner && row.state === 'browser');
     if (!entry?.opening || !entry.sessionId || entry.purpose === 'decision' || !entry.requiresAuthorization ||
+        (entry.warmupRecovery && (entry.warmupRecovery.successorOwner !== owner || Date.now() >= entry.warmupRecovery.expiresAt ||
+          (entry.warmupRecovery.conversationId !== undefined && entry.warmupRecovery.conversationId !== conversationId))) ||
         entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined || companionOf(current, entry) ||
         (entry.conversationId && entry.conversationId !== conversationId)) return null;
     const session = await getSession(entry.sessionId);
@@ -2022,7 +2102,8 @@ export function bindGeminiOpeningInput(id: string, owner: string, conversationId
         await conversationWasSuperseded(conversationId) || isChatBlocked(conversationId)) return null;
     const attached = await findSessionByConversation(conversationId);
     if (attached && attached.id !== session.id) return null;
-    const bound = { ...entry, conversationId };
+    const bound = { ...entry, conversationId,
+      ...(entry.warmupRecovery ? { warmupRecovery: { ...entry.warmupRecovery, conversationId } } : {}) };
     // Session metadata commits first. If the outbox write fails or the app stops
     // between them, the same exact claim repairs its row; it cannot create a peer.
     if (!await bindOpening(bound, conversationId)) return null;
