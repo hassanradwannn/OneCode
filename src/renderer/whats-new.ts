@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.6.22': {
+    lead: () => t('Confirm the selected Gemini model through native menu changes.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Gemini model preparation'), text: () => t('Rechecks the exact selected model when closing its menu replaces the header, while preserving the original draft, attachments and preparation deadline.') }
+    ]
+  },
   '0.6.21': {
     lead: () => t('Finish fresh-chat preparation with the current native control.'),
     highlights: [

@@ -1391,11 +1391,11 @@ var CLF_DOM = (() => {
       box.textContent === draft && attachmentRows().length === files.length && files.every(node => attachmentRows().includes(node));
     return { picker, ownsDraft, current: () => ownsDraft() && pickerButton() === picker };
   }
-  async function closeModelMenu(picker, current, owned) {
+  async function closeModelMenu(picker, current, owned, settled = () => true, timeout = 3000) {
     if (!owned || !nativeModelRows().length) return true;
     if (!current() || !enabled(picker)) return false;
     picker.click();
-    return Boolean(await waitFor(() => nativeModelRows().length === 0, current, 3000));
+    return Boolean(await waitFor(() => nativeModelRows().length === 0 && settled(), current, timeout));
   }
   async function inspectModelSettings(current = () => true, failure = null) {
     const surface = modelSurface(current), picker = surface.picker;
@@ -1433,17 +1433,17 @@ var CLF_DOM = (() => {
       return enabled(candidate) && visibleModelSelection()?.model ? candidate : null;
     }, () => initial.ownsDraft() && !generating(), 5000);
     if (!picker) return refuse('picker-not-ready');
-    let choiceClicked = false, pickerRebound = false;
+    let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null;
     const surface = { current: () => {
       if (!initial.ownsDraft() || generating()) return false;
       const next = pickerButton();
       if (next === picker) return true;
-      // Selecting a native mode can remount its header control. Follow that
-      // one replacement only after this request's own choice click, under the
+      // Selecting a native mode or closing its proved menu can remount its
+      // header. Follow one replacement only after our own transition, under the
       // unchanged editor/draft/route/attachments and original caller claim.
       // A missing/readiness-pending successor may wait within the same budget;
       // no control is clicked until its actual native selection is re-proved.
-      if (!choiceClicked || pickerRebound || picker.isConnected) return false;
+      if ((!choiceClicked && !closingConfirmedId) || pickerRebound || picker.isConnected) return false;
       const candidates = all('button[aria-label^="Open mode picker"]').filter(shown);
       if (candidates.length > 1) return false;
       if (!next || !enabled(next) || !visibleModelSelection()?.model) return true;
@@ -1459,7 +1459,7 @@ var CLF_DOM = (() => {
       const options = rows?.filter(row => row.id === String(model).toLowerCase() || row.label === model) || [];
       if (options.length !== 1 || !surface.current()) return refuse('choice-unconfirmed', surface);
       const target = options[0];
-      if (target.selected) return true;
+      if (target.selected) { confirmedId = target.id; return true; }
       choiceClicked = true; target.node.click();
       // The closed trigger says only Gemini/Flash, while native choices have
       // distinct versions. Reopen and prove the actual selected mode ID.
@@ -1468,9 +1468,25 @@ var CLF_DOM = (() => {
       if (!changed || !surface.current()) return refuse('choice-did-not-change', surface);
       if (!nativeModelRows().length) { picker.click(); owned = true; }
       const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected), surface.current, 5000);
+      if (selected) confirmedId = target.id;
       return selected ? true : refuse('selected-choice-unconfirmed', surface);
     } finally {
-      if (!await closeModelMenu(picker, surface.current, owned)) return refuse('picker-close-failed', surface);
+      const closeUntil = Date.now() + 3000, reboundBeforeClose = pickerRebound;
+      closingConfirmedId = confirmedId;
+      const pickerSettled = () => picker.isConnected && pickerButton() === picker;
+      if (!await closeModelMenu(picker, surface.current, owned, pickerSettled)) return refuse('picker-close-failed', surface);
+      // Closing our own menu may also replace the header when no choice click
+      // was necessary. Re-prove the exact ID on that one successor before
+      // returning success, within the original close budget and draft lease.
+      if (!reboundBeforeClose && pickerRebound) {
+        if (!closingConfirmedId || !surface.current() || !enabled(picker)) return refuse('picker-close-failed', surface);
+        picker.click();
+        const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === closingConfirmedId && row.selected),
+          surface.current, Math.max(0, closeUntil - Date.now()));
+        if (!selected) return refuse('selected-choice-unconfirmed', surface);
+        if (!await closeModelMenu(picker, surface.current, true, pickerSettled, Math.max(0, closeUntil - Date.now())))
+          return refuse('picker-close-failed', surface);
+      }
     }
   }
   const newChatControl = async (current = () => true) => current() ? unique(all('a[href][aria-label="New chat"],button[aria-label="New chat"]').filter(node => {
