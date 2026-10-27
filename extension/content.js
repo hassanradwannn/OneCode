@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 90;
+  const RECORDER_VERSION = 91;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -907,15 +907,19 @@
   /** An app-owned bootstrap may return escaped. Ordinary input authorization keeps
    * matchesSubmittedUser; native message identity and document lifetime still own the receipt. */
   function matchesSubmittedBootstrap(message, expected) {
-    if (matchesSubmittedUser(message, expected)) return true;
     if (typeof expected !== 'string' || expected.length > 240000) return false;
     const source = userMessageSource(message);
     if (source === null) return false;
-    const actualMarker = markedAs(source.text), expectedMarker = expected.match(CONTINUATION_MARKER);
+    return matchesSubmittedNativeText(source.text, expected);
+  }
+  function matchesSubmittedNativeText(actual, expected) {
+    if (typeof actual !== 'string' || actual.length > 256000 || typeof expected !== 'string' || expected.length > 240000) return false;
+    if (sendText(actual) === sendText(expected)) return true;
+    const actualMarker = markedAs(actual), expectedMarker = expected.match(CONTINUATION_MARKER);
     // A marker-only escape must not consume literal path/glob backslashes in the brief.
     if (actualMarker && expectedMarker && actualMarker[1] === expectedMarker[1] && actualMarker[2] === expectedMarker[2] &&
-        sendText(source.text.slice(actualMarker[0].length)) === sendText(expected.slice(expectedMarker[0].length))) return true;
-    return sendText(unescapeMarkdown(source.text)) === sendText(expected);
+        sendText(actual.slice(actualMarker[0].length)) === sendText(expected.slice(expectedMarker[0].length))) return true;
+    return sendText(unescapeMarkdown(actual)) === sendText(expected);
   }
   /**
    * User messages named by ChatGPT's own Send requests in this document (#942), oldest first.
@@ -2213,10 +2217,17 @@
     const nativeId = pageTurnIds.get(expected);
     const latestNative = () => CLF_DOM.turns().at(-1);
     const mountedAnswer = () => !!nativeId && native?.id === nativeId && latestNative()?.id === nativeId;
+    const acceptedStopSource = !request?.continuationInputId ? acceptedAssistantTurn() : null;
+    const acceptedStopCurrent = question => {
+      const view = acceptedAssistantTurn();
+      return Boolean(acceptedStopSource && question && question === openedUserMessageId &&
+        view?.node === acceptedStopSource.node && view.acceptedQuestionId === question &&
+        localGenerationOfSection(view.node) === expected && CLF_DOM.generating());
+    };
     // Thinking may begin before any assistant section is mounted. The redeemed
     // command's exact latest user anchor can prove that boundary too; a Stop icon
     // or an old assistant section alone cannot identify the requested response.
-    if (!generating || (!mountedAnswer() && latestNative()?.role !== 'user')) return false;
+    if (!generating || (!mountedAnswer() && latestNative()?.role !== 'user' && !acceptedStopSource)) return false;
     const reply = await ask({ type: 'stop_redeem', id: commandId, client: RUN_ID, conversationId: target });
     observe();
     const command = reply?.command;
@@ -2224,7 +2235,8 @@
     const canStop = () => current() && generating &&
       ((latestNative()?.role === 'assistant' && mountedAnswer() && pageTurnIds.get(expected) === nativeId &&
         (!unwitnessedGeneration || stopQuestionMatches(command.userMessageId))) ||
-       (latestNative()?.role === 'user' && CLF_DOM.generating() && stopQuestionMatches(command.userMessageId)));
+       (latestNative()?.role === 'user' && CLF_DOM.generating() && stopQuestionMatches(command.userMessageId)) ||
+       (!command.continuationInputId && acceptedStopCurrent(command.userMessageId)));
     if (command.continuationInputId) {
       if (!command.userMessageId || !stopQuestionMatches(command.userMessageId)) return false;
       // An early Stop can settle before the first assistant section mounts.
@@ -2262,10 +2274,63 @@
   }
 
   function currentAssistantTurn(turns = CLF_DOM.turns()) {
+    let ordinary = null;
     for (let index = turns.length - 1; index >= 0; index--) {
-      if (turns[index].role === 'assistant') return turns[index];
+      if (turns[index].role === 'assistant') { ordinary = turns[index]; break; }
     }
-    return null;
+    return preferAcceptedAssistant(ordinary, acceptedAssistantTurn());
+  }
+  function preferAcceptedAssistant(ordinary, accepted) {
+    if (!ordinary) return accepted;
+    const known = reportedUserMessages.get(openedUserMessageId), prior = known?.receiptPriorIds || [];
+    const native = fiberTurnFor(ordinary), users = orderedNativeUsers(native);
+    const older = Boolean(native && !native.conversationConflict && native.conversationId === conversationId &&
+      native.question && prior.includes(native.question) && users && users.every(row => prior.includes(row.rawMessageId || row.messageId)));
+    if (!accepted) return older && known?.receiptAccepted && known.receiptEpoch === epoch ? null : ordinary;
+    if ((ordinary.nodes || [ordinary.node]).includes(accepted.node))
+      return (orderedNativeUsers(fiberTurnFor(accepted))?.length || 0) > 1 ? accepted : ordinary;
+    if (!native) return null;
+    return older ? accepted : ordinary;
+  }
+
+  // A multi-question shell is deliberately absent from the generic DOM layout.
+  // Its exact durably ACKed native question can retain its already pinned section;
+  // history or a different remounted physical section cannot create this owner.
+  function orderedNativeUsers(native) {
+    const users = (native?.messages || []).filter(row => row.role === 'user');
+    const ids = users.map(row => row.rawMessageId || row.messageId);
+    if (!ids.length || ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length ||
+        users.some(row => row.stable !== true || !Number.isInteger(row.order)) ||
+        new Set(users.map(row => row.order)).size !== users.length) return null;
+    return users.slice().sort((a, b) => a.order - b.order);
+  }
+  function acceptedAssistantTurn() {
+    const known = reportedUserMessages.get(openedUserMessageId), node = known?.receiptSection?.deref();
+    return acceptedAssistantSection(node, fiberTurnForNode(node));
+  }
+  function acceptedAssistantSection(node, native, views = [...fiberTurns.values()]) {
+    if (CLF_DOM.provider !== 'chatgpt' || !openedUserMessageId || !turnId ||
+        conversationId !== CLF_DOM.conversationId()) return null;
+    const known = reportedUserMessages.get(openedUserMessageId);
+    if (!known?.receiptAccepted || known.receiptId !== openedUserMessageId || known.receiptEpoch !== epoch ||
+        known.conversationId !== conversationId || typeof known.receiptText !== 'string' ||
+        known.receiptSection?.deref() !== node || !node?.isConnected || isStale(node) ||
+        userSendReceipt && (userSendReceipt.accepted?.messageId !== openedUserMessageId ||
+          userSendReceipt.accepted.conversationId !== conversationId || userSendReceipt.accepted.epoch !== epoch)) return null;
+    if (!native || native.conversationConflict || native.conversationId !== conversationId ||
+        (native.question !== openedUserMessageId && !(known.receiptParents || []).some(parent =>
+          parent.section.deref() === node && parent.questionId === native.question))) return null;
+    const priorIds = new Set(known.receiptPriorIds || []); priorIds.add(openedUserMessageId);
+    if (views.some(view => view && view.conversationId === conversationId && (view.messages || []).some(row =>
+      row.role === 'user' && (row.stable !== true || !priorIds.has(row.rawMessageId || row.messageId))))) return null;
+    const users = orderedNativeUsers(native);
+    if (!users) return null;
+    const ids = users.map(row => row.rawMessageId || row.messageId);
+    if (!ids.length || ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length ||
+        ids.at(-1) !== openedUserMessageId || ids.some(id => id !== openedUserMessageId && !known.receiptPriorIds?.includes(id)) ||
+        CLF_DOM.messages().some(row => row.role === 'user' && row.id !== openedUserMessageId && !known.receiptPriorIds?.includes(row.id)) ||
+        !matchesSubmittedNativeText(users.at(-1).rawText, known.receiptText)) return null;
+    return { id: native.turnId || null, role: 'assistant', node, nodes: [node], acceptedQuestionId: openedUserMessageId };
   }
 
   /** The logical turn a given section node currently belongs to, or null once it is gone. */
@@ -2330,6 +2395,8 @@
       if (question >= 0) turns = turns.slice(question + 1);
     }
     const latest = currentAssistantTurn(turns);
+    if (latest?.acceptedQuestionId === openedUserMessageId) { genNode = latest.node; return latest; }
+    if (!latest && acceptedAssistantTurn()) return null;
     const heldTurn = genNode ? turnForNode(genNode, turns) : null;
     // One question can publish interim and final prose in different sections.
     // Keep the held section unless the exact same question proves a newer one
@@ -5255,10 +5322,10 @@
     // actually owns, and its `data-clf-fiber-turn` stamp names the descriptor exactly even
     // when the virtualized renderer published no page turn id at all. The page-id match
     // stays as the fallback for a scan whose stamps have not been applied yet.
-    const exactOwner = requestedLiveOwner && localGenerationOf(requestedLiveOwner.pageTurn) !== requestedLiveOwner.localTurnId
+    let exactOwner = requestedLiveOwner && localGenerationOf(requestedLiveOwner.pageTurn) !== requestedLiveOwner.localTurnId
       ? null
       : requestedOwner;
-    const ownedPageNode = exactOwner?.pageTurn || null;
+    let ownedPageNode = exactOwner?.pageTurn || null;
     const ownedPageTurnId = exactOwner?.pageTurnId || null;
     let ownedPageTurn = stampedFiberTurn(ownedPageNode, answer.turns, answer.scanToken);
     if (!ownedPageTurn && ownedPageTurnId &&
@@ -5269,6 +5336,23 @@
       const candidates = answer.turns.filter(turn => turn.turnId === ownedPageTurnId);
       if (candidates.length === 1) ownedPageTurn = candidates[0];
     }
+    if (ownedPageNode?.acceptedQuestionId && (exactOwner.localTurnId !== turnId ||
+        acceptedAssistantSection(ownedPageNode.node, ownedPageTurn, answer.turns)?.acceptedQuestionId !== ownedPageNode.acceptedQuestionId)) {
+      exactOwner = null; ownedPageNode = null; ownedPageTurn = null;
+    }
+    // A canonical historical owner cannot undo a positive current-task veto.
+    // It may still place old A/B rows, but cannot lend C to a newer user/frame.
+    const heldCurrent = reportedUserMessages.get(openedUserMessageId), heldNode = heldCurrent?.receiptSection?.deref();
+    const heldNative = heldNode && stampedFiberTurn({ node: heldNode }, answer.turns, answer.scanToken);
+    const priorCurrentIds = new Set(heldCurrent?.receiptPriorIds || []); priorCurrentIds.add(openedUserMessageId);
+    const refusedSettledOwner = heldCurrent?.receiptAccepted && heldCurrent.receiptId === openedUserMessageId &&
+      heldCurrent.receiptEpoch === epoch && heldCurrent.conversationId === askedConversation &&
+      ((userSendReceipt && userSendReceipt.accepted?.messageId !== openedUserMessageId) ||
+        answer.turns.some(view => view.conversationId === askedConversation && (view.messages || []).some(row => row.role === 'user' &&
+          (row.stable !== true || !priorCurrentIds.has(row.rawMessageId || row.messageId) ||
+           ((row.rawMessageId || row.messageId) === openedUserMessageId && !matchesSubmittedNativeText(row.rawText, heldCurrent.receiptText))))) ||
+        (heldNative && (heldNative.messages || []).filter(row => row.role === 'user').length > 1 &&
+          !acceptedAssistantSection(heldNode, heldNative, answer.turns))) ? turnId : null;
     // A destination Resume has a second exact owner that is even more fundamental than this
     // document's local generation: the *durably accepted* continuation marker and the answer
     // turn it opened. Resolve and commit that relation before filtering foreign Fiber ids. The
@@ -5487,6 +5571,8 @@
         pageConversation &&
         pageConversation !== askedConversation
       );
+      const scopedCallOwner = index === activeTurnIndex && (ownedPageNode?.acceptedQuestionId || activeLocalTurnId === refusedSettledOwner);
+      const callOwners = new Map();
       const fresh = turn.calls.filter((call) => {
         // A mismatched owned turn is admissible only as a provisional-first-turn candidate.
         // Its request id must have survived the app's explicit owner read-back before the
@@ -5496,7 +5582,9 @@
           provisionalOwnedTurn &&
           (!call.requestId || requestOwnersConfirmed.get(call.requestId) !== askedConversation)
         ) return false;
-        const owner = index === activeTurnIndex ? activeLocalTurnId || '' : '';
+        const owner = scopedCallOwner || index !== activeTurnIndex ? (callsReported.get(call.messageId)?.split('\u0000').at(-1) || '') :
+          index === activeTurnIndex ? activeLocalTurnId || '' : '';
+        callOwners.set(call.messageId, owner);
         const signature = `${call.tool}\u0000${call.requestId || ''}\u0000${call.answered ? '1' : '0'}\u0000${owner}`;
         if (callsReported.get(call.messageId) === signature) return false;
         callsReported.set(call.messageId, signature);
@@ -5511,17 +5599,23 @@
           ((previous.turnId && previous.turnId === turn.turnId) ||
             (previous.calls || []).some(seen => turn.calls.some(call => call.messageId === seen.messageId))));
         const witnessedSend = Boolean(newestUser?.id && openedUserMessageId === newestUser.id);
-        if (generating && index === activeTurnIndex && (knownTurn || witnessedSend)) noteTurnProgress(turnId, 'page-call');
-        emit({
+        if (generating && index === activeTurnIndex && !scopedCallOwner && (knownTurn || witnessedSend)) noteTurnProgress(turnId, 'page-call');
+        const groups = new Map();
+        for (const call of fresh) {
+          const owner = callOwners.get(call.messageId) || '';
+          if (!groups.has(owner)) groups.set(owner, []);
+          groups.get(owner).push(call);
+        }
+        for (const [owner, calls] of groups) emit({
           kind: 'tool_evidence',
-          ...(index === activeTurnIndex ? { turnId: activeLocalTurnId } : {}),
+          ...(owner ? { turnId: owner } : {}),
           ...(turn.conversationId && !(
             turn === ownedPageTurn &&
             askedConversation &&
             concreteConversation(turn.conversationId) &&
             concreteConversation(turn.conversationId) !== askedConversation
           ) ? { fiberConversationId: turn.conversationId } : {}),
-          calls: fresh
+          calls
         });
       }
     }
@@ -5576,7 +5670,7 @@
     for (let index = 0; index < answer.turns.length; index++) {
       if (index === activeTurnIndex) continue;
       const owner = settledTurnOwner(answer.turns[index]);
-      if (!owner) continue;
+      if (!owner || owner === refusedSettledOwner) continue;
       settledOwners.set(answer.turns[index], owner);
       ownerClaims.set(owner, (ownerClaims.get(owner) || 0) + 1);
     }
@@ -5587,12 +5681,19 @@
       const turn = answer.turns[index];
       // The live generation owns the turn it is writing; a settled one is claimed only by
       // ChatGPT's own request id. See settledTurnOwner().
-      const localOwner = index === activeTurnIndex ? activeLocalTurnId : settledOwners.get(turn) || null;
-      if (turn.imageGeneration && localOwner && concreteConversation(turn.conversationId) === askedConversation) {
+      const candidateOwner = index === activeTurnIndex ? activeLocalTurnId : settledOwners.get(turn) || null;
+      const frameLocalOwner = candidateOwner === refusedSettledOwner ? null : candidateOwner;
+      const acceptedQuestion = index === activeTurnIndex ? ownedPageNode?.acceptedQuestionId ||
+        (activeLocalTurnId === refusedSettledOwner ? openedUserMessageId : null) : null;
+      const boundary = acceptedQuestion ? (turn.messages || []).findIndex(row => row.role === 'user' &&
+        row.stable === true && (row.rawMessageId || row.messageId) === acceptedQuestion) : -1;
+      const currentMessages = new Set(boundary >= 0 && Number.isInteger(turn.messages[boundary].order) ?
+        turn.messages.filter(row => Number.isInteger(row.order) && row.order > turn.messages[boundary].order).map(row => row.messageId) : []);
+      if (turn.imageGeneration && frameLocalOwner && !acceptedQuestion && concreteConversation(turn.conversationId) === askedConversation) {
         const id = `native-image-generation:${turn.turnId}`;
         if (!pageToolsReported.has(id)) {
           pageToolsReported.set(id, 'Generating image');
-          emit({ kind: 'page_tool', messageId: id, turnId: localOwner, text: 'Generating image', activeNow: false });
+          emit({ kind: 'page_tool', messageId: id, turnId: frameLocalOwner, text: 'Generating image', activeNow: false });
           void flush();
         }
       }
@@ -5652,6 +5753,11 @@
       items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) || left.serial - right.serial);
 
       for (const item of items) {
+        // The shared native wrapper also contains old A/B history. Retaining C's
+        // exact section cannot relabel that history, aggregate trace or old calls.
+        const priorOwner = item.type === 'message' ? messagesReported.get(item.value.messageId)?.owner : null;
+        const localOwner = !acceptedQuestion || item.type === 'message' && currentMessages.has(item.value.messageId) &&
+          (!priorOwner || priorOwner === frameLocalOwner) ? frameLocalOwner : null;
         if (item.type === 'artifact') {
           // ChatGPT only: current Gemini adapters expose no stable provider artifact/revision id.
           // Do not synthesize one from a Gemini DOM card, filename, code block, or visible label.
@@ -5789,7 +5895,7 @@
           terminalMessageId &&
             (message.rawMessageId === terminalMessageId || message.messageId === terminalMessageId)
         );
-        const state = terminalMessageId
+        let state = terminalMessageId
           ? exactTerminal
             ? 'final'
             : 'streaming'
@@ -5806,6 +5912,7 @@
         // exact local turn id from reaching the recorder. The recorder upsert is expressly
         // able to promote the same canonical message when stronger ownership arrives.
         const priorMessage = messagesReported.get(message.messageId);
+        if (acceptedQuestion && !localOwner && priorMessage?.signature.startsWith('final\u0000')) state = 'final';
         const ownerConflict = Boolean(
           priorMessage?.conflicted || (localOwner && priorMessage?.owner && priorMessage.owner !== localOwner)
         );
@@ -5819,14 +5926,16 @@
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
         let closedFinal = priorMessage?.closedFinal || null;
-        if (!closedFinal && state === 'final' && message.stable === true && turn.terminalState === 'complete' && !ownerConflict) {
+        if (!closedFinal && refusedSettledOwner !== turnId && state === 'final' && message.stable === true && turn.terminalState === 'complete' && !ownerConflict) {
           // Stability may strengthen after the live generation closes. Its exact
           // unchanged settled section can still witness that first stable final;
           // the retained canonical owner alone cannot.
-          const page = !localOwner && priorMessage?.owner === turnId ? currentAssistantTurn() : null;
-          const proofOwner = localOwner || (page && fiberTurnFor(page) === turn && localGenerationOf(page) === turnId ? turnId : null);
+          const page = (!localOwner || index !== activeTurnIndex) && priorMessage?.owner === turnId ? currentAssistantTurn() : null;
+          const proofOwner = localOwner && index === activeTurnIndex ? localOwner :
+            page && fiberTurnFor(page) === turn && localGenerationOf(page) === turnId ? turnId : null;
           if (proofOwner) closedFinal = { signature: nativeFinalSignature(message, proofOwner), owner: proofOwner,
-            conversationId: turn.conversationId, question: turn.question, final: terminalMessageId };
+            conversationId: turn.conversationId, question: acceptedQuestion || page?.acceptedQuestionId || turn.question,
+            nativeQuestion: turn.question, final: terminalMessageId };
         }
         if (priorMessage?.signature === signature) {
           if (!priorMessage.closedFinal && closedFinal) priorMessage.closedFinal = closedFinal;
@@ -5836,7 +5945,7 @@
         if (state === 'streaming' && owner && priorMessage?.text !== message.rawText && freshPublication) noteTurnProgress(owner, 'page-text');
         const liveAssistant =
           Boolean(localOwner && index === activeTurnIndex) ||
-          (generating && (index === activeTurnIndex || (activeTurnIndex < 0 && index === answer.turns.length - 1)));
+          (!acceptedQuestion && generating && (index === activeTurnIndex || (activeTurnIndex < 0 && index === answer.turns.length - 1)));
         emit({
           kind: 'assistant_message',
           messageId: message.messageId,
@@ -5844,7 +5953,7 @@
           ...(message.resolvedModel ? { resolvedModel: message.resolvedModel } : {}),
           ...(message.references ? { references: message.references } : {}),
           ...(message.createTime ? { authoredAt: message.createTime } : {}),
-          turnId: localOwner || undefined,
+          turnId: localOwner || (acceptedQuestion ? priorMessage?.owner : undefined),
           text: message.rawText,
           renderedHtml: message.renderedHtml,
           // create_time is stamped by ChatGPT's server clock while turn/tool events use the
@@ -5872,7 +5981,8 @@
       // The provider's outline of this turn's rounds, for the timeline only. It needs a local turn
       // to be filed under, so an unowned historical section sends none; an unchanged outline sends
       // nothing, and a settled turn read after a reload refreshes the outline its recaps came late to.
-      if (localOwner && turn.trace) {
+      if (frameLocalOwner && !acceptedQuestion && turn.trace) {
+        const localOwner = frameLocalOwner;
         if (index === activeTurnIndex && generating) {
           const now = Date.now();
           for (const item of turn.trace) {
@@ -5902,6 +6012,7 @@
       generating &&
       activeTurnIndex >= 0 &&
       activeLocalTurnId === turnId &&
+      activeLocalTurnId !== refusedSettledOwner &&
       Boolean(answer.turns[activeTurnIndex]?.endMessageId) &&
       !settledFinals.has(answer.turns[activeTurnIndex].endMessageId)
     ) {
@@ -10411,6 +10522,39 @@
     }
     return null;
   }
+  function closedNativeAssistantTurn(questionId, forId) {
+    const known = reportedUserMessages.get(questionId), currentAnchor = userAnchorByMessage.get(questionId);
+    if (!known?.receiptAccepted || known.receiptId !== questionId || known.receiptEpoch !== epoch ||
+        known.conversationId !== forId || typeof known.receiptText !== 'string' || !currentAnchor) return null;
+    const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
+    if (stamped.length > 512) return null;
+    const candidates = [];
+    for (const node of stamped) {
+      if (!node.isConnected || isStale(node) || sectionOf(node) !== node) continue;
+      const native = fiberTurnForNode(node);
+      if (!native || native.conversationConflict || native.conversationId !== forId) continue;
+      const users = orderedNativeUsers(native);
+      if (!users) return null;
+      const ids = users.map(row => row.rawMessageId || row.messageId);
+      // An unknown/newer native user elsewhere in the current view is not history.
+      if (ids.some(id => id !== questionId && (reportedUserMessages.get(id)?.conversationId !== forId ||
+          !userAnchorByMessage.get(id) || userAnchorByMessage.get(id).seq >= currentAnchor.seq))) return null;
+      if (!ids.length || ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length || ids.at(-1) !== questionId ||
+          !matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) continue;
+      const final = native.endMessageId, recorded = final && messagesReported.get(final), held = recorded?.closedFinal;
+      const finals = (native.messages || []).filter(row => row.role === 'assistant' && row.stable === true &&
+        (row.rawMessageId || row.messageId) === final);
+      if (native.terminalState !== 'complete' || !held || recorded.conflicted || recorded.owner !== turnId ||
+          held.owner !== turnId || held.conversationId !== forId || held.question !== questionId || held.final !== final ||
+          (native.question !== questionId && native.question !== held.nativeQuestion) || finals.length !== 1 ||
+          !Number.isInteger(finals[0].order) || finals[0].order <= users.at(-1).order ||
+          held.signature !== nativeFinalSignature(finals[0], turnId)) continue;
+      candidates.push({ node, native });
+    }
+    if (!candidates.length || candidates.length > 8 || candidates.some(row => row.native !== candidates[0].native)) return null;
+    return { id: candidates[0].native.turnId || null, role: 'assistant', node: candidates[0].node,
+      nodes: candidates.map(row => row.node), acceptedQuestionId: questionId };
+  }
   function closedCompactionSource(questionId, forId, receipt = userSendReceipt) {
     if (CLF_DOM.provider !== 'chatgpt' || !questionId || generating || CLF_DOM.generating() ||
         pendingTools !== 0 || conversationId !== forId || CLF_DOM.conversationId() !== forId ||
@@ -10418,7 +10562,7 @@
       return refuseClosedSource('source', { idle: !generating && !CLF_DOM.generating(), toolsIdle: pendingTools === 0,
         route: conversationId === forId && CLF_DOM.conversationId() === forId,
         ownQuestion: openedUserMessageId === questionId, reported: reportedUserMessages.get(questionId)?.conversationId === forId });
-    const page = currentAssistantTurn(), native = fiberTurnFor(page);
+    const page = preferAcceptedAssistant(currentAssistantTurn(), closedNativeAssistantTurn(questionId, forId)), native = fiberTurnFor(page);
     const nodes = page?.nodes || (page?.node ? [page.node] : []);
     const final = native?.endMessageId, recorded = final && messagesReported.get(final);
     const finals = native?.messages?.filter(row => row.role === 'assistant' && row.stable === true &&
@@ -10428,7 +10572,7 @@
       heldFinal.question === questionId && heldFinal.final === final && heldFinal.signature === nativeFinalSignature(finals[0], turnId);
     const nodesCurrent = nodes.length > 0 && nodes.every(node => node?.isConnected && !isStale(node) && fiberTurnForNode(node) === native);
     if (!nodesCurrent || native?.conversationConflict || native?.conversationId !== forId ||
-        native.question !== questionId || native.terminalState !== 'complete' || !final ||
+        (native.question !== questionId && page?.acceptedQuestionId !== questionId) || native.terminalState !== 'complete' || !final ||
         !recorded || recorded.conflicted || recorded.owner !== turnId || !recorded.signature.startsWith('final\u0000') ||
         !finalMatches) return refuseClosedSource('native-final', { nodesCurrent, sameConversation: native?.conversationId === forId,
           ownQuestion: native?.question === questionId, complete: native?.terminalState === 'complete',
@@ -14626,7 +14770,15 @@
             nativeReceiptParent.receiptEpoch === forEpoch && nativeReceiptParent.conversationId === target);
           const ownSection = owned ? nativeReceiptParent.receiptSection?.deref() : null;
           const parents = owned ? nativeReceiptParent.receiptParents || [] : [];
+          const priorSourceIds = new Set(nativeReceiptParent?.receiptPriorIds || []); priorSourceIds.add(expected);
+          const sourceChanged = owned && [...fiberTurns.values()].some(frame => frame && !frame.conversationConflict && frame.conversationId === target &&
+            (frame.messages || []).some(row => row.role === 'user' && (row.stable !== true || !priorSourceIds.has(row.rawMessageId || row.messageId))));
+          if (sourceChanged) {
+            nativeReceiptDiagnostic('snapshot', { currentSource, ownAccepted: owned, sourceChanged: true, prepared: false });
+            return { refused: true };
+          }
           const parentQuestion = owned ? nativeReceiptParent.receiptParentQuestion : null;
+          const parentQuestions = new Set([parentQuestion, ...parents.map(parent => parent.questionId)].filter(Boolean));
           const ownFrame = ownSection?.isConnected ? fiberTurnForNode(ownSection) : null;
           const generation = currentGenerationOwner();
           const generationNodes = generation?.localTurnId === sourceTurn ? generation.pageTurn.nodes || [generation.pageTurn.node] : [];
@@ -14643,9 +14795,26 @@
                 !parents.some(parent => parent.section.deref() === candidate && parent.questionId === frame.question));
           });
           const previousSections = owned ? parents.map(parent => parent.section.deref()).filter(Boolean) : [];
+          // A remounted shell may hold several native questions, so the layout
+          // reader intentionally exposes no ambiguous DOM turn. Before clicking,
+          // the current accepted MAIN view can still identify this exact B source.
+          // Its latest stable native user must be B; an old parent-A section by
+          // itself cannot borrow B's receipt or become post-click authority.
+          const stamped = currentSource && owned && !foreign ? document.querySelectorAll('[data-clf-fiber-turn]') : [];
+          const discovered = stamped.length <= 512 ? [...stamped].filter(candidate => {
+            if (!candidate.isConnected || isStale(candidate) || sectionOf(candidate) !== candidate) return false;
+            const frame = fiberTurnForNode(candidate);
+            if (!frame || frame.conversationConflict || frame.conversationId !== target ||
+                (frame.question !== expected && !parentQuestions.has(frame.question))) return false;
+            const users = orderedNativeUsers(frame);
+            if (!users) return false;
+            const ids = users.map(row => row.rawMessageId || row.messageId);
+            return ids.length > 0 && ids.length <= 64 && ids.every(Boolean) &&
+              new Set(ids).size === ids.length && ids.at(-1) === expected;
+          }).slice(0, 8) : [];
           const possible = [...new Set([
             ...(ownSection?.isConnected ? [ownSection] : []), ...previousSections,
-            ...generationNodes
+            ...generationNodes, ...discovered
           ])];
           const nodes = currentSource && !foreign ? possible.filter(candidate => {
             if (!candidate?.isConnected || isStale(candidate)) return false;
@@ -14654,6 +14823,7 @@
               (generationNodes.includes(candidate) || Boolean(parent));
             if (frame.conversationConflict || frame.conversationId !== target) return false;
             return frame.question === expected || (owned && ((candidate === ownSection || generationNodes.includes(candidate)) && frame.question === parentQuestion ||
+              discovered.includes(candidate) && parentQuestions.has(frame.question) ||
               parent && frame.question === parent.questionId));
           }).slice(0, 8) : [];
           const rows = [];
@@ -14675,7 +14845,8 @@
           nativeReceiptDiagnostic('snapshot', { currentSource, ownAccepted: owned, ownSectionKnown: Boolean(ownSection),
             ownSectionConnected: Boolean(ownSection?.isConnected), parentKnown: Boolean(parentQuestion),
             frameExpected: ownFrame?.question === expected, framePrevious: Boolean(parentQuestion && ownFrame?.question === parentQuestion),
-            foreignFrame: foreign, candidateNodes: possible.length, distinctFrames: new Set(nodes.map(fiberTurnForNode)).size,
+            foreignFrame: foreign, candidateNodes: possible.length, discoveredNodes: discovered.length, discoveryOverflow: stamped.length > 512,
+            distinctFrames: new Set(nodes.map(fiberTurnForNode)).size,
             sourcePins: nativeReceiptSources.size, prepared: nativeReceiptPrepared });
           if (!nativeReceiptPrepared) return null;
           // Empty/unidentified old elements count too. Gaining a turn stamp after
@@ -14729,6 +14900,9 @@
         nativeReceiptCandidates.set(node, { id, native });
         return [user];
       } : null;
+      const receiptPriorSnapshot = new Set(reportedUserMessages.keys());
+      for (const frame of fiberTurns.values()) if (frame && !frame.conversationConflict && frame.conversationId === target)
+        for (const row of frame.messages || []) if (row.role === 'user' && row.stable === true) receiptPriorSnapshot.add(row.rawMessageId || row.messageId);
       rememberUserSend();
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
       if (input.purpose === 'decision') {
@@ -14914,7 +15088,8 @@
       }
       const directSource = message.directTurn?.id === sourceTurn && message.directTurn.questionId === sourceUser;
       const ownReceiptMetadata = accepted && CLF_DOM.provider === 'chatgpt' && deliveredConversation && receipt.user?.id && sendingTarget() ? {
-        receiptAccepted: true, receiptId: receipt.user.id, receiptEpoch: epoch,
+        receiptAccepted: true, receiptId: receipt.user.id, receiptEpoch: epoch, receiptText: input.text,
+        receiptPriorIds: [...(nativeReceiptKnownIds || receiptPriorSnapshot)].slice(0, 8192),
         receiptSection: receipt.user.section ? new WeakRef(receipt.user.section) : null,
         receiptParentQuestion: directSource ? sourceUser : null,
         receiptParents: directSource ? [...nativeReceiptSources].map(([node, source]) => ({
