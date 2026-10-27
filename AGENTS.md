@@ -6,11 +6,13 @@ OneCode is a provider-generic Electron desktop workspace for browser AI provider
 
 The tree is shared and dirty. Never reset, clean, overwrite unrelated edits or edit the reference upstream checkout. Repair the earliest wrong ownership boundary. Do not add guessed identity, a mirrored authority or automatic mutation replay. Source, package, installed app and live-browser evidence are different facts. Report actual validation and unresolved limits.
 
+The Stable release lane is `release`. Inspect Beta/platform ancestry before selecting repairs. Published tags remain immutable; later documentation commits need not match the packaged source commit. Generated `graphify-out/` is private navigation evidence: record its source revision, source hashes and parser limitations, and keep it out of public Git.
+
 User authorization in this chat controls task scope. Reversible development and scratch testing require no additional confirmation. Publication and external account actions follow the user's explicit instructions. Do not publish a candidate while requested repairs remain unfinished.
 
 ## Runtime and providers
 
-- Product/package: OneCode / `onecode`; app ID: `io.onecode.desktop`. `src/main/app-identity.ts` owns identity and profile migration. Normal Windows data is `%APPDATA%/OneCode`; an existing legacy profile or explicit environment override is preserved. Never replace the user's profile to fix a release.
+- Product/package: OneCode / `onecode`; app ID: `io.onecode.desktop`. `src/main/app-identity.ts` owns identity and profile migration. Resolve the effective profile from that owner and the running installation: normal Windows launches can use a private per-user `OneCode Data` sibling or fallback, while legacy profiles and explicit environment overrides are retained. Never replace the user's profile to fix a release.
 - `package.json`, `src/main/version.ts` and `extension/manifest.json` own current source versions and bridge compatibility. A source version does not prove publication or installation.
 - Each installation owns its connector URLs, credentials, pairing and durable state. Provider MCP endpoints are separate. Connector names include the user's configured device suffix; never hard-code a maintainer's device or another installation's URL.
 - `src/shared/chat-provider.ts` owns provider identities, conversation parsers, URLs, capabilities and trust lookup. New chats use the selected provider. Existing chats and workers retain their provider through stored conversation/family identity. Changing the selector cannot reinterpret them.
@@ -54,3 +56,7 @@ Signed-in native acceptance uses the user-requested CUA driver CLI. Do not subst
 After extension edits, use `scripts/write-extension-stamp.mjs`. Rebuild and repackage after final source changes, then run `scripts/smoke-packaged-runtime.mjs --platform win32 --arch x64`. Preserve notices/licenses, privacy guards and unrelated dirty files. Never publish an old package as containing newer source. Keep private URLs, credentials, local acceptance artifacts and user history out of the public checkout.
 
 Native output parity requires actual adapter/export acceptance. Gemini image previews and rendered PNG export have Windows acceptance; that does not prove original-file export, native video generation or native Canvas parity. Core local image/video presentations are a separate provider-independent path. Do not claim feature parity merely from provider-generic terminology.
+
+## Incomplete chat synchronization
+
+Compare the exact native public reply, canonical message shards, history/live read-model response and selected renderer separately. Record message/question/turn IDs, content digests, origin versus revision sequence and capture times. A complete saved reply does not prove that the desktop or Remote view applied it. Conversely, a stale screenshot does not prove capture loss. Include native writing/document envelopes and late revisions in parity checks. Diagnose the first mismatch without replaying the user's task, replacing history, or operating the production workload shown inside the chat.

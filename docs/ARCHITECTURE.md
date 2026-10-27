@@ -4,6 +4,8 @@ OneCode is a desktop workspace that connects browser AI providers to local proje
 
 This map describes current source ownership. It does not certify that an unreleased repair is installed or accepted in a live browser. Source versions are declared in `package.json`, `src/main/version.ts` and `extension/manifest.json`.
 
+Native capture, durable storage, history/live projection and renderer reconciliation are separate synchronization boundaries. An incomplete desktop view can coexist with a byte-identical native reply already saved in a canonical message shard. Trace exact message/question/turn identity through `extension/content.js`, `session/recorder.ts`, `store.ts`/`read-model.ts`, IPC/history cursor responses and `renderer/chat.ts` before choosing an owner to repair. Preserve authored origin separately from the latest revision sequence, including replies containing native writing/document envelopes; message presence alone is not display parity.
+
 ## Data and control flow
 
 ```mermaid
@@ -276,3 +278,5 @@ Gemini's controlled tool-free preparation can spend one refresh before obtaining
 Rendering reconciliation retains one native mutation flight per tab and runs independent tabs concurrently. A bounded caller wait cannot retire or repeat an unacknowledged attach, focus or detach. Same-tab successors wait for cleanup; readiness requires the actual focus acknowledgement under current activity, route, permission and cancellation guards. Shared maintenance and input pickup do not join an unrelated tab's unresolved browser operation. Persisted attachments remain cleanup custody, and no additional debugger domains or task authority are introduced.
 
 An explicitly authored follow-up after a recorded failure can start a new native question while an old local request finishes. It cannot revive the failed grant or release earlier queued automation. Selected-chat readiness distinguishes clearance of an old dismissal from a later closure. A fresh wake preempts idle-tab cleanup at its native read/close fences so the same maintenance owner can collect new input. Update public GETs may fall back from Node to Chromium networking after a transport failure, sharing the original abort deadline and retaining the release and digest owners.
+
+Manual compaction may recognize an older native question through the predecessor IDs frozen before the current acknowledged Send when that question has left the bounded activity window. A positively newer canonical anchor or unknown question still refuses the handoff. The exact current native question, first-owned final, receipt epoch, conversation, draft and final Send checks remain required. This predecessor evidence supplies neither a new task identity nor authority to replay an uncertain Send.
