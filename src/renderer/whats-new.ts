@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.9': {
+    lead: () => t('Keep manual handoff available when a completed answer redraws.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Completed answer handoff'), text: () => t('Manual compaction rechecks the exact completed answer after the browser redraws it. The current chat, task and saved local results remain attached.') }
+    ]
+  },
   '0.7.8': {
     lead: () => t('Keep native question ownership through page hydration and rapid follow-ups.'),
     highlights: [

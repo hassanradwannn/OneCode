@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 89;
+  const RECORDER_VERSION = 90;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -3956,6 +3956,11 @@
   const requestOwnerAttempts = new Map();
   /** Last canonical snapshot and strongest non-conflicting local owner per assistant message. */
   const messagesReported = new Map();
+  // A later native remount can refine presentation metadata, but cannot replace
+  // the authored final already witnessed under this local owner.
+  function nativeFinalSignature(message, owner) {
+    return JSON.stringify([owner, message.messageId, message.rawMessageId || '', message.rawText, message.renderedHtml || '']);
+  }
   /** ChatGPT-authored create_time already emitted for each stable user-message occurrence. */
   const userAuthoredTimesReported = new Map();
 
@@ -5813,8 +5818,21 @@
           `${state}\u0000${message.rawText}\u0000${message.renderedHtml}\u0000${owner}` +
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
-        if (priorMessage?.signature === signature) continue;
-        messagesReported.set(message.messageId, { signature, owner, conflicted: ownerConflict, text: message.rawText });
+        let closedFinal = priorMessage?.closedFinal || null;
+        if (!closedFinal && state === 'final' && message.stable === true && turn.terminalState === 'complete' && !ownerConflict) {
+          // Stability may strengthen after the live generation closes. Its exact
+          // unchanged settled section can still witness that first stable final;
+          // the retained canonical owner alone cannot.
+          const page = !localOwner && priorMessage?.owner === turnId ? currentAssistantTurn() : null;
+          const proofOwner = localOwner || (page && fiberTurnFor(page) === turn && localGenerationOf(page) === turnId ? turnId : null);
+          if (proofOwner) closedFinal = { signature: nativeFinalSignature(message, proofOwner), owner: proofOwner,
+            conversationId: turn.conversationId, question: turn.question, final: terminalMessageId };
+        }
+        if (priorMessage?.signature === signature) {
+          if (!priorMessage.closedFinal && closedFinal) priorMessage.closedFinal = closedFinal;
+          continue;
+        }
+        messagesReported.set(message.messageId, { signature, owner, conflicted: ownerConflict, text: message.rawText, closedFinal });
         if (state === 'streaming' && owner && priorMessage?.text !== message.rawText && freshPublication) noteTurnProgress(owner, 'page-text');
         const liveAssistant =
           Boolean(localOwner && index === activeTurnIndex) ||
@@ -10383,22 +10401,40 @@
   // A manual request may follow a completed native answer whose user bubble React
   // has unmounted. Keep its exact connected native section as the source; published
   // history alone cannot supply this proof, and it never grants Stop authority.
+  let closedSourceDiagnostic = { run: -1, keys: new Set() };
+  function refuseClosedSource(reason, flags = {}) {
+    if (closedSourceDiagnostic.run !== nativeRun) closedSourceDiagnostic = { run: nativeRun, keys: new Set() };
+    const key = JSON.stringify({ reason, ...flags });
+    if (closedSourceDiagnostic.keys.size < 12 && !closedSourceDiagnostic.keys.has(key)) {
+      closedSourceDiagnostic.keys.add(key);
+      try { console.info('[OneCode closed source] ' + key); } catch { /* Observational only. */ }
+    }
+    return null;
+  }
   function closedCompactionSource(questionId, forId, receipt = userSendReceipt) {
     if (CLF_DOM.provider !== 'chatgpt' || !questionId || generating || CLF_DOM.generating() ||
         pendingTools !== 0 || conversationId !== forId || CLF_DOM.conversationId() !== forId ||
-        openedUserMessageId !== questionId || reportedUserMessages.get(questionId)?.conversationId !== forId) return null;
+        openedUserMessageId !== questionId || reportedUserMessages.get(questionId)?.conversationId !== forId)
+      return refuseClosedSource('source', { idle: !generating && !CLF_DOM.generating(), toolsIdle: pendingTools === 0,
+        route: conversationId === forId && CLF_DOM.conversationId() === forId,
+        ownQuestion: openedUserMessageId === questionId, reported: reportedUserMessages.get(questionId)?.conversationId === forId });
     const page = currentAssistantTurn(), native = fiberTurnFor(page);
     const nodes = page?.nodes || (page?.node ? [page.node] : []);
     const final = native?.endMessageId, recorded = final && messagesReported.get(final);
-    if (!nodes.length || native?.conversationConflict || native?.conversationId !== forId ||
+    const finals = native?.messages?.filter(row => row.role === 'assistant' && row.stable === true &&
+      (row.rawMessageId || row.messageId) === final) || [];
+    const heldFinal = recorded?.closedFinal;
+    const finalMatches = finals.length === 1 && heldFinal?.owner === turnId && heldFinal.conversationId === forId &&
+      heldFinal.question === questionId && heldFinal.final === final && heldFinal.signature === nativeFinalSignature(finals[0], turnId);
+    const nodesCurrent = nodes.length > 0 && nodes.every(node => node?.isConnected && !isStale(node) && fiberTurnForNode(node) === native);
+    if (!nodesCurrent || native?.conversationConflict || native?.conversationId !== forId ||
         native.question !== questionId || native.terminalState !== 'complete' || !final ||
         !recorded || recorded.conflicted || recorded.owner !== turnId || !recorded.signature.startsWith('final\u0000') ||
-        !native.messages?.some(row => row.role === 'assistant' && row.stable === true &&
-          (row.rawMessageId || row.messageId) === final) ||
-        nodes.some(node => !node?.isConnected || isStale(node) || fiberTurnForNode(node) !== native ||
-          settledGenerations.get(node)?.turnId !== turnId || settledGenerations.get(node)?.mark !== sectionMark(node))) return null;
+        !finalMatches) return refuseClosedSource('native-final', { nodesCurrent, sameConversation: native?.conversationId === forId,
+          ownQuestion: native?.question === questionId, complete: native?.terminalState === 'complete',
+          recorded: Boolean(recorded), ownFinal: Boolean(recorded && !recorded.conflicted && recorded.owner === turnId), finalMatches });
     if (receipt && (receipt.accepted?.messageId !== questionId || receipt.accepted.conversationId !== forId ||
-        receipt.accepted.epoch !== epoch)) return null;
+        receipt.accepted.epoch !== epoch)) return refuseClosedSource('send-receipt');
     // Old mounted history is harmless only when its positive canonical ordering is
     // known. An unknown/newer question must not borrow the closed answer's owner.
     const currentAnchor = userAnchorByMessage.get(questionId);
@@ -10406,7 +10442,7 @@
       if (row.id === questionId) continue;
       const prior = userAnchorByMessage.get(row.id);
       if (reportedUserMessages.get(row.id)?.conversationId !== forId || !currentAnchor || !prior ||
-          prior.seq >= currentAnchor.seq) return null;
+          prior.seq >= currentAnchor.seq) return refuseClosedSource('visible-question');
     }
     return { questionId, turnId, final, nodes, marks: nodes.map(sectionMark) };
   }
@@ -10446,11 +10482,15 @@
     const initialSendReceipt = userSendReceipt;
     let closedSource = null, ownSourceReceipt;
     const closedSourceCurrent = () => {
-      if (!closedSource || (userSendReceipt !== initialSendReceipt && userSendReceipt !== ownSourceReceipt)) return false;
+      if (!closedSource || (userSendReceipt !== initialSendReceipt && userSendReceipt !== ownSourceReceipt)) {
+        refuseClosedSource('operation-receipt'); return false;
+      }
       const proof = closedCompactionSource(closedSource.questionId, forId, initialSendReceipt);
-      return proof && proof.turnId === closedSource.turnId && proof.final === closedSource.final &&
+      const retained = proof && proof.turnId === closedSource.turnId && proof.final === closedSource.final &&
         proof.nodes.length === closedSource.nodes.length && proof.nodes.every((node, index) =>
           node === closedSource.nodes[index] && proof.marks[index] === closedSource.marks[index]);
+      if (proof && !retained) refuseClosedSource('operation-section');
+      return retained;
     };
     const sameTurn = () => closedSource ? closedSourceCurrent() : turnId === stoppedTurnId &&
       (CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null) === stoppedQuestionId;
