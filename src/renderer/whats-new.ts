@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.14': {
+    lead: () => t('Recognize a rapid follow-up after the browser finishes loading its source.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Rapid Steer recovery'), text: () => t('Retains the preceding acknowledgement while its native turn details load, so the next Steer can verify the exact source before sending.') }
+    ]
+  },
   '0.7.13': {
     lead: () => t('Resume from the exact completed reply after rapid follow-ups.'),
     highlights: [

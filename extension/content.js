@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 94;
+  const RECORDER_VERSION = 95;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -14785,7 +14785,19 @@
           const parentQuestion = owned ? nativeReceiptParent.receiptParentQuestion : null;
           const parentQuestions = new Set([parentQuestion, ...parents.map(parent => parent.questionId)].filter(Boolean));
           const verifiedAlias = owned ? nativeReceiptParent.receiptAlias : null;
-          const aliasMatches = frame => Boolean(frame && verifiedAlias && verifiedAlias.question === (frame.question || null));
+          const aliasMatches = frame => {
+            if (!frame) return false;
+            if (verifiedAlias && verifiedAlias.question === (frame.question || null)) return true;
+            // The native descriptor may hydrate after the exact DOM receipt ACK.
+            // Retained pre-click headers are hints only: prove this complete B
+            // source now, before C's click, under the same durable receipt.
+            if (!currentSource || !owned || frame.conversationConflict || frame.conversationId !== target ||
+                !nativeReceiptParent.receiptQuestionHints?.includes(frame.question || null)) return false;
+            const users = orderedNativeUsers(frame), ids = users?.map(row => row.rawMessageId || row.messageId);
+            return Boolean(ids?.length && ids.length <= 64 && ids.every(id => id && priorSourceIds.has(id)) &&
+              ids.at(-1) === expected && typeof nativeReceiptParent.receiptText === 'string' &&
+              matchesSubmittedNativeText(users.at(-1).rawText, nativeReceiptParent.receiptText));
+          };
           const ownFrame = ownSection?.isConnected ? fiberTurnForNode(ownSection) : null;
           const generation = currentGenerationOwner();
           const generationNodes = generation?.localTurnId === sourceTurn ? generation.pageTurn.nodes || [generation.pageTurn.node] : [];
@@ -15131,6 +15143,7 @@
       const directSource = message.directTurn?.id === sourceTurn && message.directTurn.questionId === sourceUser;
       const ownReceiptMetadata = accepted && CLF_DOM.provider === 'chatgpt' && deliveredConversation && receipt.user?.id && sendingTarget() ? {
         receiptAccepted: true, receiptId: receipt.user.id, receiptEpoch: epoch, receiptText: input.text, receiptAlias: receipt.user.nativeAlias || null,
+        receiptQuestionHints: [...nativeQuestionHints].slice(0, 16),
         receiptPriorIds: [...(nativeReceiptKnownIds || receiptPriorSnapshot)].slice(0, 8192),
         receiptSection: receipt.user.section ? new WeakRef(receipt.user.section) : null,
         receiptParentQuestion: directSource ? sourceUser : null,
