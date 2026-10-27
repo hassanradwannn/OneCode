@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.4': {
+    lead: () => t('Recover Gemini preparation when a refresh returns an empty home page.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Bounded fresh preparation'), text: () => t('An owned empty replacement page can initialize once within the original deadline. The actual task still waits for confirmed preparation and cannot be replayed by recovery.') }
+    ]
+  },
   '0.7.3': {
     lead: () => t('Retain Gemini preparation while the replacement page loads.'),
     highlights: [

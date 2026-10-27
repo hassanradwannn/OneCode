@@ -4652,6 +4652,57 @@ const HANDLERS = {
     await chrome.tabs.reload(source.tab);
     return { ok: true, dispatched: true, warmupRecovery: projected };
   },
+  async gemini_warmup_initialize(message, _sender, source) {
+    if (!ownsDocument(source) || !['command', 'input'].includes(message.kind) || typeof message.owner !== 'string') return { ok: false };
+    const tab = await chrome.tabs.get(source.tab).catch(() => null);
+    if (!tab || tab.pinned || tab.pendingUrl || providerForUrl(tab.url) !== 'gemini' || conversationFromUrl(tab.url) ||
+        !warmupMarker(tab.url, message.kind, message.id)) return { ok: false };
+    await geminiCommandWrites.catch(() => undefined);
+    const commands = (await chrome.storage.session.get('geminiCommandDocuments')).geminiCommandDocuments || {};
+    const held = message.kind === 'command' ? commands[message.id] : inputOpenings[message.id];
+    const recovery = held?.warmupRecovery;
+    const ownerMatches = value => value?.tab === source.tab &&
+      (message.kind === 'command' ? value.client === message.owner && value.documentId === source.documentId
+        : value.inputOwner === message.owner && value.inputDocumentId === source.documentId);
+    if (!ownerMatches(held) || recovery?.spent !== true || recovery.initialization ||
+        recovery.sourceDocumentId === source.documentId || Date.now() >= recovery.expiresAt ||
+        message.deadline !== recovery.expiresAt || !geminiRouting.sameAccount(recovery.sourceUrl, tab.url)) return { ok: false };
+    const current = async () => {
+      const latest = await chrome.tabs.get(source.tab).catch(() => null);
+      return ownsDocument(source) && latest && !latest.pinned && !latest.pendingUrl && latest.url === tab.url;
+    };
+    const proofRequest = { type: 'clf-gemini-warmup-initialize-check', kind: message.kind,
+      id: message.id, owner: message.owner, deadline: recovery.expiresAt };
+    const safeProof = proof => proof?.safe === true && proof.kind === message.kind && proof.id === message.id &&
+      proof.owner === message.owner && proof.deadline === recovery.expiresAt;
+    if (!safeProof(await tabReply(source.tab, proofRequest, { documentId: source.documentId })) || !await current()) return { ok: false };
+    const permit = await call('/gemini/warmup-initialize', { method: 'POST', body: JSON.stringify({
+      kind: message.kind, id: message.id, owner: message.owner, tab_id: source.tab, document_id: source.documentId }) });
+    const granted = permit?.data?.warmupRecovery;
+    if (!permit.ok || permit.data?.ok !== true || permit.data.allowed !== true || granted?.spent !== true ||
+        granted.at !== recovery.at || granted.expiresAt !== recovery.expiresAt ||
+        (granted.questionId ?? null) !== (recovery.questionId ?? null) || !Number.isFinite(granted.initialization?.at)) return { ok: false };
+    const projected = { ...recovery, initialization: { at: granted.initialization.at } };
+    // Main has already spent this exact child attempt. Preserve its projection
+    // before replying; unknown transport/dispatch cannot buy another click.
+    if (message.kind === 'command') {
+      const write = geminiCommandWrites.catch(() => undefined).then(async () => {
+        const latest = (await chrome.storage.session.get('geminiCommandDocuments')).geminiCommandDocuments || {};
+        if (!ownerMatches(latest[message.id])) return false;
+        latest[message.id] = { ...latest[message.id], warmupRecovery: projected };
+        await chrome.storage.session.set({ geminiCommandDocuments: latest }); return true;
+      });
+      geminiCommandWrites = write;
+      if (!await write) return { ok: false, spent: true };
+    } else {
+      if (inputOpenings[message.id] !== held || !ownerMatches(held)) return { ok: false, spent: true };
+      inputOpenings[message.id] = { ...held, warmupRecovery: projected }; await persistLive();
+    }
+    const finalProof = await tabReply(source.tab, proofRequest, { documentId: source.documentId });
+    if (!safeProof(finalProof) || Date.now() >= recovery.expiresAt || !await current() ||
+        Date.now() >= recovery.expiresAt) return { ok: false, spent: true };
+    return { ok: true, allowed: true, warmupRecovery: projected };
+  },
   async native_video_export(message, sender, source) {
     const claim=videoExportClaims.get(message.nonce);
     if(!claim||claim.provider!=='gemini'||claim.tab!==source?.tab||claim.documentId!==source?.documentId||claim.conversationId!==message.conversationId||claim.messageId!==message.messageId||claim.assetId!==message.assetId||claim.mimeType!==message.mimeType)return{error:'identity_changed'};
@@ -5787,6 +5838,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const owned = new Set([
     'gemini_warmup_state',
     'gemini_warmup_refresh',
+    'gemini_warmup_initialize',
     'gemini_approval_receipts',
     'gemini_binding',
     'stop_redeem',
