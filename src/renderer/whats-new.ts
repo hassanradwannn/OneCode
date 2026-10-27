@@ -17,8 +17,10 @@ interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
   '0.7.6': {
-    lead: () => t('Keep Gemini preparation through its native Send and reply updates.'),
+    lead: () => t('Keep message delivery and handoffs attached to their exact native source.'),
     highlights: [
+      { icon: 'i-chat', title: () => t('Consecutive Steer messages'), text: () => t('Retains the preceding confirmed question when ChatGPT redraws its section, so the next accepted Steer receives its acknowledgement.') },
+      { icon: 'i-retry', title: () => t('Manual handoff'), text: () => t('Manual compaction can continue from a verified completed answer when its question scrolls out of view, while keeping the current chat and local results attached.') },
       { icon: 'i-retry', title: () => t('Preparation settlement'), text: () => t('Preparation keeps its draft lease while Gemini clears the editor and streams its reply. Your edits still stop automatic preparation.') }
     ]
   },
