@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.17': {
+    lead: () => t('Keep a running reply attached to its exact acknowledged message after a browser remount.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Completed reply recovery'), text: () => t('Rebinds a replaced browser section to the exact acknowledged question so its completed reply can finish and hand off.') }
+    ]
+  },
   '0.7.16': {
     lead: () => t('Keep handoffs attached to the exact completed reply after a browser refresh.'),
     highlights: [

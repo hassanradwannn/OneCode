@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 97;
+  const RECORDER_VERSION = 98;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2306,20 +2306,32 @@
   }
   function acceptedAssistantTurn() {
     const known = reportedUserMessages.get(openedUserMessageId), node = known?.receiptSection?.deref();
-    return acceptedAssistantSection(node, fiberTurnForNode(node));
+    const held = acceptedAssistantSection(node, fiberTurnForNode(node));
+    if (held || !generating || !known?.receiptSection || node?.isConnected) return held;
+    // The exact acknowledged live task can lose its physical section before its
+    // first final. Reprove its current native question, never an historical final.
+    const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
+    if (stamped.length > 512) return null;
+    const candidates = [...stamped].filter(candidate => sectionOf(candidate) === candidate)
+      .map(candidate => acceptedAssistantSection(candidate, fiberTurnForNode(candidate))).filter(Boolean);
+    if (!candidates.length || candidates.length > 8 || candidates.some(candidate =>
+        fiberTurnFor(candidate) !== fiberTurnFor(candidates[0]))) return null;
+    return { ...candidates[0], nodes: candidates.map(candidate => candidate.node) };
   }
   function acceptedAssistantSection(node, native, views = [...fiberTurns.values()]) {
     if (CLF_DOM.provider !== 'chatgpt' || !openedUserMessageId || !turnId ||
         conversationId !== CLF_DOM.conversationId()) return null;
     const known = reportedUserMessages.get(openedUserMessageId);
+    const remounted = Boolean(generating && known?.receiptSection && !known.receiptSection.deref()?.isConnected);
     if (!known?.receiptAccepted || known.receiptId !== openedUserMessageId || known.receiptEpoch !== epoch ||
         known.conversationId !== conversationId || typeof known.receiptText !== 'string' ||
-        known.receiptSection?.deref() !== node || !node?.isConnected || isStale(node) ||
+        known.receiptSection?.deref() !== node && !remounted || !node?.isConnected || isStale(node) ||
         userSendReceipt && (userSendReceipt.accepted?.messageId !== openedUserMessageId ||
           userSendReceipt.accepted.conversationId !== conversationId || userSendReceipt.accepted.epoch !== epoch)) return null;
     if (!native || native.conversationConflict || native.conversationId !== conversationId ||
         (native.question !== openedUserMessageId && !(known.receiptAlias && known.receiptAlias.question === (native.question || null)) && !(known.receiptParents || []).some(parent =>
-          parent.section.deref() === node && parent.questionId === native.question))) return null;
+          (parent.section.deref() === node || remounted) && parent.questionId === native.question) &&
+          !(remounted && known.receiptParentQuestion === native.question))) return null;
     const priorIds = new Set(known.receiptPriorIds || []); priorIds.add(openedUserMessageId);
     if (views.some(view => view && view.conversationId === conversationId && (view.messages || []).some(row =>
       row.role === 'user' && (row.stable !== true || !priorIds.has(row.rawMessageId || row.messageId))))) return null;
@@ -5481,12 +5493,20 @@
       ownedPageTurn && activeLocalTurnId ? answer.turns.indexOf(ownedPageTurn) : -1;
     if (generating) {
       const diagnostic = JSON.stringify({ nativeBusy: CLF_DOM.generating(), owner: !!exactOwner, activeTurnIndex,
+        ownReceiptAccepted: Boolean(heldCurrent?.receiptAccepted), receiptCurrentEpoch: heldCurrent?.receiptEpoch === epoch,
+        receiptCurrentConversation: heldCurrent?.conversationId === askedConversation, receiptSectionConnected: Boolean(heldNode?.isConnected),
+        currentNativeCproof: ownedPageNode?.acceptedQuestionId === openedUserMessageId,
         domRoles: CLF_DOM.turns().map(turn => turn.role), layout: CLF_DOM.layoutDiagnostics?.(),
-        turns: answer.turns.map(turn => ({ final: !!turn.endMessageId,
+        turns: answer.turns.map(turn => { const user = orderedNativeUsers(turn)?.at(-1); return { final: !!turn.endMessageId,
           sameConversation: turn.conversationId === askedConversation, conflict: turn.conversationConflict === true,
           ownQuestion: (turn.messages || []).some(message => message.role === 'user' && (message.rawMessageId || message.messageId) === openedUserMessageId),
+          matchedBody: Boolean(user && (user.rawMessageId || user.messageId) === openedUserMessageId &&
+            typeof heldCurrent?.receiptText === 'string' && matchesSubmittedNativeText(user.rawText, heldCurrent.receiptText)),
+          headerVerified: turn.question === openedUserMessageId || Boolean(heldCurrent?.receiptAlias && heldCurrent.receiptAlias.question === turn.question) ||
+            Boolean(heldCurrent?.receiptParentQuestion && heldCurrent.receiptParentQuestion === turn.question) ||
+            (heldCurrent?.receiptParents || []).some(parent => parent.questionId === turn.question),
           users: (turn.messages || []).filter(message => message.role === 'user').length,
-          assistants: (turn.messages || []).filter(message => message.role === 'assistant').length })) });
+          assistants: (turn.messages || []).filter(message => message.role === 'assistant').length }; }) });
       if (generationDiagnostic !== diagnostic) {
         generationDiagnostic = diagnostic;
         console.info('[OneCode generation lifecycle] ' + diagnostic);
