@@ -2617,10 +2617,9 @@ var CLF_DOM = (() => {
         const currentConversation = conversationId();
         if (beforeConversation && currentConversation !== beforeConversation) return false;
         const visible = messages();
-        if (clickedAt !== null) for (const node of nativeReceiptNodes) {
-          const rows = safe(() => nativeUserReceipts({ phase: 'receipt', node, clickedAt }), null);
-          if (!Array.isArray(rows) || rows.length > 1) continue;
-          for (const row of rows) if (row?.node === node && row.role === 'user')
+        if (clickedAt !== null && nativeReceiptNodes.size) {
+          const rows = safe(() => nativeUserReceipts({ phase: 'receipt', clickedAt }), null);
+          if (Array.isArray(rows) && rows.length <= 1) for (const row of rows) if (row?.node?.isConnected && row.role === 'user')
             visible.push({ ...row, nativeFrameReceipt: true });
         }
         for (let at = visible.length - 1; at >= 0; at--) {

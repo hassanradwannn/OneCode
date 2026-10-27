@@ -14559,6 +14559,7 @@
       // a later history scan or unidentified old section cannot become that source.
       const nativeReceiptSources = new Map(), nativeReceiptCandidates = new Map();
       const nativeReceiptParent = reportedUserMessages.get(message.directTurn?.questionId);
+      let nativeReceiptPriorElements = null, nativeReceiptKnownIds = null, nativeReceiptPriorVisible = null;
       let nativeReceiptClickedAt = null, nativeReceiptOwnSend;
       const nativeUserReceipts = CLF_DOM.provider === 'chatgpt' && message.directTurn?.questionId ? ({ phase, node, clickedAt }) => {
         if (phase === 'clicked') {
@@ -14570,7 +14571,33 @@
             fiberTurnForNode(candidate)?.question === message.directTurn.questionId);
           if (!nodes.length || nodes.length > 8 || new Set(nodes.map(fiberTurnForNode)).size !== 1) return [];
           const rows = nodes.flatMap(candidate => nativeUserReceipts({ phase: 'snapshot-node', node: candidate }));
-          return rows.length <= 64 ? rows : [];
+          if (!rows.length || rows.length > 64) return [];
+          // Empty/unidentified old elements count too. Gaining a turn stamp after
+          // this click cannot turn one into a newly created native section.
+          const elements = document.querySelectorAll('*');
+          nativeReceiptPriorElements = elements.length <= 50000 ? new WeakSet(elements) : null;
+          nativeReceiptPriorVisible = new Set(CLF_DOM.messages().filter(row => row.role === 'user').map(row => row.id));
+          nativeReceiptKnownIds = new Set([...reportedUserMessages.keys(), ...nativeReceiptPriorVisible]);
+          for (const turn of fiberTurns.values()) if (turn && !turn.conversationConflict && turn.conversationId === target)
+            for (const row of turn.messages || []) if (row.role === 'user' && row.stable === true)
+              nativeReceiptKnownIds.add(row.rawMessageId || row.messageId);
+          if (nativeReceiptKnownIds.size > 8192) nativeReceiptPriorElements = null;
+          return rows;
+        }
+        if (phase === 'receipt') {
+          nativeReceiptCandidates.clear();
+          if (!nativeReceiptSources.size || !nativeReceiptOwnSend || clickedAt !== nativeReceiptClickedAt) return [];
+          const candidates = [...nativeReceiptSources.keys()].flatMap(candidate =>
+            nativeUserReceipts({ phase: 'receipt-node', node: candidate, clickedAt }));
+          if (nativeReceiptPriorElements) {
+            const fresh = [...document.querySelectorAll('[data-clf-fiber-turn]')].filter(candidate =>
+              candidate.isConnected && sectionOf(candidate) === candidate && !nativeReceiptPriorElements.has(candidate));
+            if (fresh.length > 8) return [];
+            for (const candidate of fresh) candidates.push(...nativeUserReceipts({ phase: 'receipt-node', node: candidate, clickedAt }));
+          }
+          if (!candidates.length || !candidates.every(candidate => candidate.id === candidates[0].id &&
+              fiberTurnForNode(candidate.node) === fiberTurnForNode(candidates[0].node))) return [];
+          return [candidates[0]];
         }
         const expected = message.directTurn.questionId;
         if (!node?.isConnected || isStale(node) || !sendingTarget() || epoch !== forEpoch ||
@@ -14592,8 +14619,11 @@
           nativeReceiptSources.set(node, { ids: new Set(ids), visible: new Set(CLF_DOM.messages().filter(row => row.role === 'user').map(row => row.id)) });
           return users.map((row, index) => ({ id: ids[index], role: 'user', node, text: row.rawText }));
         }
-        const source = nativeReceiptSources.get(node), id = ids.at(-1);
-        if (phase !== 'receipt' || !sendAttempted || !source || !nativeReceiptOwnSend || clickedAt !== nativeReceiptClickedAt ||
+        const id = ids.at(-1), pinnedSource = nativeReceiptSources.get(node);
+        const fresh = !pinnedSource && nativeReceiptPriorElements && !nativeReceiptPriorElements.has(node) &&
+          native.question === id && !nativeReceiptKnownIds.has(id) && ids.filter(value => !nativeReceiptKnownIds.has(value)).length === 1;
+        const source = pinnedSource || (fresh ? { ids: nativeReceiptKnownIds, visible: nativeReceiptPriorVisible } : null);
+        if (phase !== 'receipt-node' || !sendAttempted || !source || !nativeReceiptOwnSend || clickedAt !== nativeReceiptClickedAt ||
             userSendReceipt !== nativeReceiptOwnSend || source.ids.has(id) ||
             (native.question && native.question !== id && !source.ids.has(native.question))) return [];
         if (CLF_DOM.messages().some(row => row.role === 'user' && row.id !== id &&
