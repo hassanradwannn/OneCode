@@ -2,11 +2,32 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.6.17](https://github.com/hassanradwannn/OneCode/releases/tag/v0.6.17)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.7.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Fresh installs use the complete 0.6.17 Windows/Linux artifacts. Compatible existing stable installations receive 0.6.17 through a verified application capsule of about 23.5 MB. Both platform capsules retain the verified 0.5.9 minimum complete base and require its matching runtime; a full installer or AppImage download is unnecessary on a compatible installation.
+Fresh installs use the complete 0.7.0 Windows/Linux artifacts. Compatible existing stable installations receive 0.7.0 through a verified application capsule of about 26 MB. Both platform capsules retain the verified 0.5.9 minimum complete base and require its matching runtime; a full installer or AppImage download is unnecessary on a compatible installation.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
+
+**Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.7.0
+
+This release brings together the reliability repairs developed since Stable 0.6.17:
+
+- **Steer while tools run.** Follow-ups retain the original command, its output and authorization for calls already running.
+- **Replies stay with the right question.** Rapid ChatGPT follow-ups preserve reply ownership when the native page redraws or groups several questions together.
+- **Chats can progress independently.** A slow transcript upload or a stuck tab no longer holds up message delivery in unrelated chats.
+- **Gemini preparation and recovery.** Model selection follows changing native controls, stalled initial preparation has bounded recovery, and approval matching uses the configured connector and enabled tools.
+- **Compact & Resume recovery.** A verified completed answer can supply its handoff after the native page redraws. Saved-summary recovery preserves access to the original terminal without restarting its command.
+- **Clearer task state.** Temporary connection and silence notices cannot end a running task; stale failure notices can be dismissed without deleting delivery evidence.
+- **Artifacts and plugins.** Mermaid diagrams render offline with editable source and exports, generated images retain completion, and plugin discovery returns bounded results with exact schemas available separately.
+
+See the [0.7.0 release notes](docs/release-notes/v0.7.0.md) and [acceptance record](docs/release-acceptance/v0.7.0.md) for the changes and validation scope. Windows and Linux builds and package checks passed; remaining native Linux acceptance was not completed for this release.
+
+### Current limitations
+
+- Some chats can show an older or incomplete app transcript even when the complete native reply is saved. Synchronization is still under investigation.
+- Initial model preparation can stall during Compact & Resume. Saved-summary recovery passed, while the cause of the first-attempt timeout remains unproved. For an abandoned attempt with a saved summary, expand its **Compact & Resume** row and choose **Open a new chat with this summary**.
 
 ## Experimental local OneCode API
 
@@ -15,9 +36,6 @@ OneCode 0.6.3 adds an opt-in **Experimental** loopback OpenAI-compatible API so 
 The durable OneCode session owns chat history, so IDE system/current-file context is preserved without replaying earlier assistant/tool transcript into every turn. When an IDE project already matches an approved OneCode project/root, the API binds that session to the normal project owner and OneCode can read, patch and run the project files directly; otherwise it returns the IDE-native edit/snippet format until that folder is approved once.
 
 The API remains off by default and binds no listener while disabled. Its per-device bearer key is stored in OS-encrypted credential storage and survives compatible updates; the trusted desktop can copy or rotate it without displaying it. Live capability discovery reflects new skills/plugins and permission changes without restarting the API. See [OneCode API (Experimental)](docs/ONECODE-API.md) and the [0.6.3 release notes](docs/release-notes/v0.6.3.md).
-
-Stable 0.6.17 provides complete Windows/Linux downloads and smaller compatible application capsules. Each capsule verifies its platform, Stable channel and runtime against the published 0.5.9 complete base before installation.
-**Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
 
 ## What's new in 0.6.1
 
@@ -116,7 +134,7 @@ Keep chats and projects together, delegate workers, use account-available models
 
 ## Install
 
-1. **Windows x64:** run the [0.6.17 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Setup-x64.exe). **Linux x64:** download the [0.6.17 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Linux-x64.AppImage) or [0.6.17 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.6.17/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
+1. **Windows x64:** run the [0.7.0 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Setup-x64.exe). **Linux x64:** download the [0.7.0 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.AppImage) or [0.7.0 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
@@ -154,7 +172,7 @@ Updates preserve your profile and saved chats. If an older installation cannot u
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.6.17 release notes](docs/release-notes/v0.6.17.md), the [OneCode API guide](docs/ONECODE-API.md), the [0.6.1 stable release notes](docs/release-notes/v0.6.1.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
+Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.7.0 release notes](docs/release-notes/v0.7.0.md), the [acceptance record](docs/release-acceptance/v0.7.0.md), the [OneCode API guide](docs/ONECODE-API.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
