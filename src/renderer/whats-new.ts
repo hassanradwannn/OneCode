@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.11': {
+    lead: () => t('Identify the browser checkpoint holding an input receipt.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Receipt diagnostics'), text: () => t('Records bounded source-state counts to distinguish native layout and model-readiness refusals, without task content or credentials.') }
+    ]
+  },
   '0.7.10': {
     lead: () => t('Keep rapid follow-ups and handoffs attached to the right question.'),
     highlights: [

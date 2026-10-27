@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 91;
+  const RECORDER_VERSION = 92;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -14801,14 +14801,33 @@
           // Its latest stable native user must be B; an old parent-A section by
           // itself cannot borrow B's receipt or become post-click authority.
           const stamped = currentSource && owned && !foreign ? document.querySelectorAll('[data-clf-fiber-turn]') : [];
+          const discovery = { stampedCount: stamped.length, rootCount: 0, disconnectedCount: 0, staleCount: 0,
+            nonRootCount: 0, unresolvedCount: 0, unresolvedTokenCount: 0, frameRejectCount: 0,
+            questionRejectCount: 0, noUserCount: 0, unstableUserCount: 0, orderRejectCount: 0,
+            duplicateUserCount: 0, duplicateOrderCount: 0, latestUserRejectCount: 0 };
           const discovered = stamped.length <= 512 ? [...stamped].filter(candidate => {
-            if (!candidate.isConnected || isStale(candidate) || sectionOf(candidate) !== candidate) return false;
+            if (!candidate.isConnected) { discovery.disconnectedCount++; return false; }
+            if (isStale(candidate)) { discovery.staleCount++; return false; }
+            if (sectionOf(candidate) !== candidate) { discovery.nonRootCount++; return false; }
+            discovery.rootCount++;
             const frame = fiberTurnForNode(candidate);
-            if (!frame || frame.conversationConflict || frame.conversationId !== target ||
-                (frame.question !== expected && !parentQuestions.has(frame.question))) return false;
+            if (!frame) {
+              discovery.unresolvedCount++;
+              if (!fiberScanToken || !candidate.getAttribute('data-clf-fiber-turn')?.startsWith(`${fiberScanToken}:`)) discovery.unresolvedTokenCount++;
+              return false;
+            }
+            if (frame.conversationConflict || frame.conversationId !== target) { discovery.frameRejectCount++; return false; }
+            if (frame.question !== expected && !parentQuestions.has(frame.question)) { discovery.questionRejectCount++; return false; }
+            const nativeUsers = (frame.messages || []).filter(row => row.role === 'user');
+            if (!nativeUsers.length) discovery.noUserCount++;
+            if (nativeUsers.some(row => row.stable !== true)) discovery.unstableUserCount++;
+            if (nativeUsers.some(row => !Number.isInteger(row.order))) discovery.orderRejectCount++;
+            if (new Set(nativeUsers.map(row => row.rawMessageId || row.messageId)).size !== nativeUsers.length) discovery.duplicateUserCount++;
+            if (new Set(nativeUsers.map(row => row.order)).size !== nativeUsers.length) discovery.duplicateOrderCount++;
             const users = orderedNativeUsers(frame);
             if (!users) return false;
             const ids = users.map(row => row.rawMessageId || row.messageId);
+            if (ids.at(-1) !== expected) discovery.latestUserRejectCount++;
             return ids.length > 0 && ids.length <= 64 && ids.every(Boolean) &&
               new Set(ids).size === ids.length && ids.at(-1) === expected;
           }).slice(0, 8) : [];
@@ -14846,6 +14865,7 @@
             ownSectionConnected: Boolean(ownSection?.isConnected), parentKnown: Boolean(parentQuestion),
             frameExpected: ownFrame?.question === expected, framePrevious: Boolean(parentQuestion && ownFrame?.question === parentQuestion),
             foreignFrame: foreign, candidateNodes: possible.length, discoveredNodes: discovered.length, discoveryOverflow: stamped.length > 512,
+            ...discovery,
             distinctFrames: new Set(nodes.map(fiberTurnForNode)).size,
             sourcePins: nativeReceiptSources.size, prepared: nativeReceiptPrepared });
           if (!nativeReceiptPrepared) return null;
