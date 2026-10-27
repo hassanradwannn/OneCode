@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.7': {
+    lead: () => t('Keep confirmed native messages and preparation attached to their original task.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Native Steer acknowledgement'), text: () => t('A newly accepted ChatGPT message can be confirmed through its validated native frame when its bubble is not rendered. Later controls keep that confirmed task as their source.') },
+      { icon: 'i-retry', title: () => t('Preparation reply updates'), text: () => t('An owned Gemini preparation can wait through response updates. It still needs the exact completed reply, an idle page and an empty editor before continuing.') }
+    ]
+  },
   '0.7.6': {
     lead: () => t('Keep message delivery and handoffs attached to their exact native source.'),
     highlights: [

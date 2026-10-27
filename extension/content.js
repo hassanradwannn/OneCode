@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 87;
+  const RECORDER_VERSION = 88;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1034,7 +1034,7 @@
   async function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
                              matchesUser = matchesSubmittedUser, receiptTimeoutMs = null, explain = null, mention = currentCoreMention(), sentRequest = null,
                              whileGenerating = false, initialDraft = null, prepareAttachments = null, nativeMedia = false, onSendAttempt = null,
-                             requireCore = mention !== null, priorUserIdsForNode = null) {
+                             requireCore = mention !== null, priorUserIdsForNode = null, nativeUserReceipts = null) {
     // Missing discovery is not permission to send a tools-enabled task without
     // Core. Wait only before authorization, under the existing draft lease.
     if (CLF_DOM.provider === 'chatgpt' && requireCore && !mention) {
@@ -1050,7 +1050,7 @@
       }
     }
     return CLF_DOM.send({ stillCurrent, clearAcceptedDraft, beforeSend, acceptUserReceipt, matchesUser, receiptTimeoutMs, mention, explain, sentRequest, whileGenerating, initialDraft,
-      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode,
+      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode, nativeUserReceipts,
       observeEvidence: check => { pageViewChecks.add(check); return () => pageViewChecks.delete(check); } });
   }
   const GOAL_MARKER_INSTRUCTION = '\n\nFor this Goal session only: at the end of each final reply, write exactly one separate last line: [[COS_GOAL:COMPLETE]] if the entire requested task is finished, or [[COS_GOAL:CONTINUE]] if requested work remains. Do not claim completion for partial work. If user input is required, explain it and omit both markers.';
@@ -2724,8 +2724,9 @@
           ...(sentModel ? { model: sentModel } : {}),
           ...(justAuthored ? { authoredNow: true } : {})
         });
+        const priorUser = reportedUserMessages.get(message.id);
         reportedUserMessages.delete(message.id);
-        reportedUserMessages.set(message.id, { text: shown, createTime: null, conversationId: CLF_DOM.conversationId(), model: sentModel || null });
+        reportedUserMessages.set(message.id, { ...priorUser, text: shown, createTime: null, conversationId: CLF_DOM.conversationId(), model: sentModel || null });
         if (reportedUserMessages.size > 256) reportedUserMessages.delete(reportedUserMessages.keys().next().value);
       } else if (message.role === 'assistant') {
         if (CLF_DOM.provider === 'gemini') {
@@ -2762,14 +2763,24 @@
     // must not veto this independent accepted-Send proof. Waiting for readable text opened no
     // turn at all, so the answer arrived with no turn_start/turn_end, no tool ownership and no
     // Copy or Export.
-    // Only a new answer or a live generation spends it, and never over a running turn.
-    if (!newUserMessage && !generating) {
+    // Only a new answer or a live generation spends it. A running source can be
+    // replaced only by its durably ACKed explicit Steer and exact current native row.
+    const acceptedReceipt = userSendReceipt, acceptedNative = acceptedReceipt?.accepted;
+    const nativeSteer = acceptedNative?.nativeSteer;
+    const nativeSteerNode = nativeSteer?.section?.deref(), nativeSteerTurn = fiberTurnForNode(nativeSteerNode);
+    const nativeSteerUsers = (nativeSteerTurn?.messages || []).filter(row => row.role === 'user' && row.stable === true);
+    const acceptedNativeSteer = Boolean(nativeSteer && turnId === nativeSteer.turnId && openedUserMessageId === nativeSteer.questionId &&
+      nativeSteerNode?.isConnected && !isStale(nativeSteerNode) && nativeSteerTurn && !nativeSteerTurn.conversationConflict &&
+      nativeSteerTurn.conversationId === CLF_DOM.conversationId() &&
+      (nativeSteerUsers.at(-1)?.rawMessageId || nativeSteerUsers.at(-1)?.messageId) === acceptedNative.messageId &&
+      matchesSubmittedBootstrap({ id: acceptedNative.messageId, role: 'user', node: nativeSteerNode, text: '' }, acceptedReceipt.authoredText));
+    if (!newUserMessage && (!generating || acceptedNativeSteer)) {
       const receipt = userSendReceipt, accepted = receipt?.accepted;
       const baseline = new Set(receipt?.baseline?.sections || []);
       if (accepted?.messageId && accepted.messageId !== openedUserMessageId &&
           accepted.conversationId === CLF_DOM.conversationId() && accepted.epoch === epoch &&
           Date.now() - receipt.at <= DESKTOP_RECEIPT_MS &&
-          (nowGenerating || CLF_DOM.turns().some(turn => turn.role === 'assistant' &&
+          (acceptedNativeSteer || nowGenerating || CLF_DOM.turns().some(turn => turn.role === 'assistant' &&
             !(turn.nodes || [turn.node]).some(node => baseline.has(node))))) {
         // The exact native Send POST + committed app ACK owns these frozen
         // submitted bytes even before the shell makes its question readable. Publish
@@ -2787,7 +2798,7 @@
             sameQuestion: accepted.messageId === receipt.accepted?.messageId,
             sameRoute: accepted.conversationId === CLF_DOM.conversationId(), sameEpoch: accepted.epoch === epoch })); }
           catch { /* Diagnostics cannot change delivery. Never include prompt/credential bytes. */ }
-          reportedUserMessages.set(accepted.messageId, { text: shown, createTime: null,
+          reportedUserMessages.set(accepted.messageId, { ...reportedUserMessages.get(accepted.messageId), text: shown, createTime: null,
             conversationId: accepted.conversationId, model: null });
         }
         userSendReceipt = null;
@@ -5748,8 +5759,9 @@
             ...(sentModel ? { model: sentModel } : {}),
             ...(message.createTime ? { time: message.createTime, authoredTime: true, authoredAt: message.createTime } : {})
           });
+          const priorUser = reportedUserMessages.get(message.messageId);
           reportedUserMessages.delete(message.messageId);
-          reportedUserMessages.set(message.messageId, { text: shownUserText(message.rawText, message.markdown === true, renderedUserTexts.get(message.messageId)), createTime: message.createTime || null,
+          reportedUserMessages.set(message.messageId, { ...priorUser, text: shownUserText(message.rawText, message.markdown === true, renderedUserTexts.get(message.messageId)), createTime: message.createTime || null,
             conversationId: CLF_DOM.conversationId(), model: sentModel || null });
           if (reportedUserMessages.size > 256) reportedUserMessages.delete(reportedUserMessages.keys().next().value);
           continue;
@@ -14542,6 +14554,55 @@
         }
         return ownsNode ? [expected] : [];
       } : null;
+      // Receipt-only native view for a source whose rendered user slot disappears.
+      // Pin the exact connected source section and its native ids before clicking;
+      // a later history scan or unidentified old section cannot become that source.
+      const nativeReceiptSources = new Map(), nativeReceiptCandidates = new Map();
+      const nativeReceiptParent = reportedUserMessages.get(message.directTurn?.questionId);
+      let nativeReceiptClickedAt = null, nativeReceiptOwnSend;
+      const nativeUserReceipts = CLF_DOM.provider === 'chatgpt' && message.directTurn?.questionId ? ({ phase, node, clickedAt }) => {
+        if (phase === 'clicked') {
+          nativeReceiptClickedAt = clickedAt; nativeReceiptOwnSend = userSendReceipt; return [];
+        }
+        if (phase === 'snapshot') {
+          const nodes = [...document.querySelectorAll('[data-clf-fiber-turn]')].filter(candidate =>
+            candidate.isConnected && sectionOf(candidate) === candidate && !isStale(candidate) &&
+            fiberTurnForNode(candidate)?.question === message.directTurn.questionId);
+          if (!nodes.length || nodes.length > 8 || new Set(nodes.map(fiberTurnForNode)).size !== 1) return [];
+          const rows = nodes.flatMap(candidate => nativeUserReceipts({ phase: 'snapshot-node', node: candidate }));
+          return rows.length <= 64 ? rows : [];
+        }
+        const expected = message.directTurn.questionId;
+        if (!node?.isConnected || isStale(node) || !sendingTarget() || epoch !== forEpoch ||
+            turnId !== sourceTurn || sourceTurn !== message.directTurn.id || openedUserMessageId !== expected ||
+            sourceUser !== expected || reportedUserMessages.get(expected)?.conversationId !== target) return [];
+        const native = fiberTurnForNode(node);
+        if (!native || native.conversationConflict || native.conversationId !== target) return [];
+        const users = (native.messages || []).filter(row => row.role === 'user' && row.stable === true);
+        const ids = users.map(row => row.rawMessageId || row.messageId);
+        if (!users.length || users.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length) return [];
+        if (phase === 'snapshot-node') {
+          if (sendAttempted || !onTarget() || ids.at(-1) !== expected || (native.question && native.question !== expected)) return [];
+          const generation = currentGenerationOwner();
+          const generationOwnsNode = generation?.localTurnId === sourceTurn &&
+            (generation.pageTurn.nodes || [generation.pageTurn.node]).includes(node);
+          const acceptedOwnsNode = nativeReceiptParent?.conversationId === target &&
+            nativeReceiptParent.receiptEpoch === forEpoch && nativeReceiptParent.receiptSection?.deref() === node;
+          if (!generationOwnsNode && !acceptedOwnsNode) return [];
+          nativeReceiptSources.set(node, { ids: new Set(ids), visible: new Set(CLF_DOM.messages().filter(row => row.role === 'user').map(row => row.id)) });
+          return users.map((row, index) => ({ id: ids[index], role: 'user', node, text: row.rawText }));
+        }
+        const source = nativeReceiptSources.get(node), id = ids.at(-1);
+        if (phase !== 'receipt' || !sendAttempted || !source || !nativeReceiptOwnSend || clickedAt !== nativeReceiptClickedAt ||
+            userSendReceipt !== nativeReceiptOwnSend || source.ids.has(id) ||
+            (native.question && native.question !== id && !source.ids.has(native.question))) return [];
+        if (CLF_DOM.messages().some(row => row.role === 'user' && row.id !== id &&
+            !source.ids.has(row.id) && !source.visible.has(row.id))) return [];
+        const user = { id, role: 'user', node, text: users.at(-1).rawText };
+        if (!matchesSubmittedBootstrap(user, submittedText)) return [];
+        nativeReceiptCandidates.set(node, { id, native });
+        return [user];
+      } : null;
       rememberUserSend();
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
       if (input.purpose === 'decision') {
@@ -14578,11 +14639,18 @@
           receipt = { conversation, user: { id: user.id } };
           return true;
         }
+        if (user.nativeFrameReceipt) {
+          const candidate = nativeReceiptCandidates.get(user.node);
+          if (!candidate || !nativeReceiptOwnSend || candidate.id !== user.id || candidate.native !== fiberTurnForNode(user.node) ||
+              userSendReceipt !== nativeReceiptOwnSend || !matchesSubmittedBootstrap(user, submittedText)) return false;
+          receipt = { conversation, user: { id: user.id, node: user.node, nativeFrameReceipt: true } };
+          return true;
+        }
         const users = CLF_DOM.messages().filter(row => row.role === 'user');
         if ((!target && users.length !== 1) || users.at(-1)?.id !== user.id || user.id === previousUserId || !matchesSubmittedBootstrap(user, submittedText)) return false;
-        // Freeze only identity while native Send still holds the proven row. React
-        // may replace it before this async operation resumes; do not rediscover it.
-        receipt = { conversation, user: { id: user.id } };
+        // Freeze identity and its exact section while native Send holds the row.
+        // A later explicit Steer may retain this node after its user slot unmounts.
+        receipt = { conversation, user: { id: user.id, node: user.node } };
         return true;
       }, matchesSubmittedBootstrap, DESKTOP_RECEIPT_MS, why => { nativeSendRefusal = why; noteWithdraw(why); },
       // A person's message asking for a picture goes out without the mention (the app decides:
@@ -14593,7 +14661,7 @@
       input.coreMention === false && !input.recovery && !agent,
       () => { sendAttempted = true; },
       input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
-        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode);
+        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode, nativeUserReceipts);
       // #744: one retry when the editor was replaced before anything asked to send it.
       intakeStage('sending');
       if (!(await nativeSend()) &&
@@ -14723,6 +14791,10 @@
           (witnessedSendReceipt.previousMessageId ?? null) === (previousUserId ?? null) &&
           Date.now() - witnessedSendReceipt.at <= DESKTOP_RECEIPT_MS) {
         witnessedSendReceipt.accepted = { messageId: receipt.user.id, conversationId: deliveredConversation, epoch };
+        if (receipt.user.nativeFrameReceipt && message.directTurn?.id === turnId && message.directTurn.questionId === openedUserMessageId &&
+            receipt.user.node?.isConnected) witnessedSendReceipt.accepted.nativeSteer = {
+          turnId: sourceTurn, questionId: sourceUser, section: new WeakRef(receipt.user.node)
+        };
         confirmedSendReceipt = witnessedSendReceipt;
         // Native rich editors can flatten paragraph separators in textContent.
         // The accepted exact task/claim still owns its original length-framed
@@ -14747,6 +14819,12 @@
           // next receipt-owned input while that independent journal continues.
           void flush();
         }
+      }
+      const acceptedUser = reportedUserMessages.get(receipt.user?.id);
+      const acceptedSection = sectionOf(receipt.user?.node) || receipt.user?.node;
+      if (accepted && sendingTarget() && acceptedUser?.conversationId === deliveredConversation && acceptedSection?.isConnected) {
+        acceptedUser.receiptSection = new WeakRef(acceptedSection);
+        acceptedUser.receiptEpoch = epoch;
       }
       // Stop/composer-clear may precede the exact user row. This receipt, not that early
       // native acceptance, owns retirement of the still-untouched prepared draft. A

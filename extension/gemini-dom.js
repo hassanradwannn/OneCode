@@ -1014,6 +1014,22 @@ var CLF_DOM = (() => {
     const route = location.href, kind = commandClaim ? 'command' : 'input';
     const held = { kind, claim, route, warmup: null, deadline: projection.expiresAt, edited: false, initializing: true, current: stillCurrent };
     warmupRecovery = held;
+    const refused = reason => {
+      // Bounded preparation diagnostics contain no authored text or identifiers.
+      try {
+        const users = all('user-query').filter(shown), row = users[0];
+        console.info('[OneCode warmup recovery] ' + JSON.stringify({ reason, edited: held.edited,
+        firstEdit: held.firstEdit || null,
+        callerCurrent: safe(stillCurrent, false), claimCurrent: (commandClaim || openingClaim) === claim,
+        deadlineCurrent: Date.now() < projection.expiresAt, routeCurrent: warmupRouteCurrent(route),
+        editorWritable: composerWritable(), editorEmpty: !composerAuthoredText(), nativeGenerating: generating(),
+        userRows: Math.min(3, users.length), rowCurrent: !held.row || row === held.row,
+        warmupExact: users.length === 1 && compact(authored(row.querySelector('.query-text') || row)) === held.warmup,
+        readyExact: compact(warmupOutput()) === 'READY', filesPresent: hasComposerAttachments(), approvalPresent: approvalWaiting(),
+        toolsPresent: all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown),
+        initializationSpent: Boolean(claim.warmupRecovery?.initialization) })); } catch { /* Diagnostics cannot change preparation. */ }
+      return false;
+    };
     // A refreshed document can claim its spent preparation before Gemini mounts
     // an editable composer or clears the already-submitted tool-free text.
     // Those are settlement conditions, not evidence that this owner changed.
@@ -1028,11 +1044,20 @@ var CLF_DOM = (() => {
     const hydrationRowsCurrent = () => {
       const rows = all('user-query').filter(shown);
       const value = rows.length === 1 ? compact(authored(rows[0].querySelector('.query-text') || rows[0])) : '';
+      // Streaming presentation is not a settled reply. Keep the owned question
+      // through native response updates; only the final exact READY below can
+      // complete preparation within this same deadline.
       return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(value)) &&
-        (!held.row || rows[0] === held.row && value === held.warmup && 'READY'.startsWith(compact(warmupOutput())));
+        (!held.row || rows[0] === held.row && value === held.warmup);
     };
     let performingInitializationEdit = false;
-    const noteEdit = event => { if (event.isTrusted && !performingInitializationEdit) held.edited = true; };
+    const noteEdit = event => {
+      if (event.isTrusted && !performingInitializationEdit) {
+        if (!held.edited) held.firstEdit = { beforeInput: event.type === 'beforeinput',
+          inComposer: Boolean(event.target?.closest?.(BOX)), empty: !composerAuthoredText() };
+        held.edited = true;
+      }
+    };
     document.addEventListener('beforeinput', noteEdit, true); document.addEventListener('input', noteEdit, true);
     try {
       let emptySince = null;
@@ -1044,24 +1069,24 @@ var CLF_DOM = (() => {
         } else emptySince = null;
         return null;
       }, () => hydrationCurrent() && hydrationRowsCurrent(), Math.max(0, projection.expiresAt - Date.now()));
-      if (!preparation) return false;
+      if (!preparation) return refused('preparation-ended');
       if (preparation === 'initialize') {
         const proof = warmupInitializationState();
         let permit = null;
         try { permit = await warmupInitializationResolver({ kind, id: proof.id, owner: proof.owner, deadline: held.deadline }); }
-        catch { return false; }
+        catch { return refused('initialization-permit-unavailable'); }
         const granted = permit?.warmupRecovery;
         if (!permit?.ok || permit.allowed !== true || granted?.spent !== true ||
             granted.at !== projection.at || granted.expiresAt !== projection.expiresAt ||
             (granted.questionId ?? null) !== (projection.questionId ?? null) ||
-            !Number.isFinite(granted.initialization?.at) || !warmupInitializationState().safe) return false;
+            !Number.isFinite(granted.initialization?.at) || !warmupInitializationState().safe) return refused('initialization-permit-refused');
         held.initializing = false;
         claim.warmupRecovery = recoveryProjection(granted);
         const emptyCurrent = () => hydrationCurrent() && !conversationId() && isAppHomePath(location.pathname) &&
           !all('user-query,model-response').some(shown) && !generating();
         held.warmup = WARMUP;
         const initializerBox = composer();
-        if (!emptyCurrent() || !initializerBox) return false;
+        if (!emptyCurrent() || !initializerBox) return refused('initialization-source-changed');
         initializerBox.focus({ preventScroll: true });
         const initialized = await sendControlledWarmup(initializerBox, '', WARMUP, emptyCurrent,
           reason => console.info('[OneCode warmup initialization] ' + reason),
@@ -1074,7 +1099,7 @@ var CLF_DOM = (() => {
           });
         // A dispatched preparation cannot be repeated on an unknown outcome.
         // Its native row and real route still have to pass the normal proof below.
-        if (initialized !== WARMUP) return false;
+        if (initialized !== WARMUP) return refused('initialization-send-unconfirmed');
       }
       held.initializing = false;
       const settled = await waitFor(() => {
@@ -1086,7 +1111,7 @@ var CLF_DOM = (() => {
           compact(warmupOutput()) === 'READY' && proof.conversationId;
       }, () => hydrationCurrent() && hydrationRowsCurrent(),
         Math.max(0, projection.expiresAt - Date.now()));
-      if (!settled || !warmupRecoveryState().safe) return false;
+      if (!settled || !warmupRecoveryState().safe) return refused('settlement-unconfirmed');
       preparedOpening = settled; return true;
     } finally {
       document.removeEventListener('beforeinput', noteEdit, true); document.removeEventListener('input', noteEdit, true);
