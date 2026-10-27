@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.13': {
+    lead: () => t('Resume from the exact completed reply after rapid follow-ups.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Compact and resume'), text: () => t('Preserves the logical question and native completion proof when a browser section retains an older header, while continuing to reject unrelated or changed replies.') }
+    ]
+  },
   '0.7.12': {
     lead: () => t('Keep rapid follow-up messages attached to their exact browser receipt.'),
     highlights: [

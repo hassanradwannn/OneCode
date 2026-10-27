@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 93;
+  const RECORDER_VERSION = 94;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2288,7 +2288,7 @@
       native.question && prior.includes(native.question) && users && users.every(row => prior.includes(row.rawMessageId || row.messageId)));
     if (!accepted) return older && known?.receiptAccepted && known.receiptEpoch === epoch ? null : ordinary;
     if ((ordinary.nodes || [ordinary.node]).includes(accepted.node))
-      return (orderedNativeUsers(fiberTurnFor(accepted))?.length || 0) > 1 ? accepted : ordinary;
+      return (orderedNativeUsers(fiberTurnFor(accepted))?.length || 0) > 1 || fiberTurnFor(accepted)?.question !== accepted.acceptedQuestionId ? accepted : ordinary;
     if (!native) return null;
     return older ? accepted : ordinary;
   }
@@ -4417,7 +4417,7 @@
       conversationConflict: raw.conversationConflict === true,
       requestOwnerRequired: raw.requestOwnerRequired === true,
       endMessageId,
-      ...(['complete', 'interrupted'].includes(raw.terminalState) ? { terminalState: raw.terminalState } : {}),
+      ...(raw.terminalState != null ? { terminalState: ['complete', 'interrupted'].includes(raw.terminalState) ? raw.terminalState : 'unknown' } : {}),
       calls: kept,
       codeModeCalls,
       requests,
@@ -5926,15 +5926,20 @@
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
         let closedFinal = priorMessage?.closedFinal || null;
-        if (!closedFinal && refusedSettledOwner !== turnId && state === 'final' && message.stable === true && turn.terminalState === 'complete' && !ownerConflict) {
+        if (!closedFinal && refusedSettledOwner !== turnId && state === 'final' && message.stable === true && (!turn.terminalState || turn.terminalState === 'complete') && !ownerConflict) {
           // Stability may strengthen after the live generation closes. Its exact
           // unchanged settled section can still witness that first stable final;
           // the retained canonical owner alone cannot.
           const page = (!localOwner || index !== activeTurnIndex) && priorMessage?.owner === turnId ? currentAssistantTurn() : null;
           const proofOwner = localOwner && index === activeTurnIndex ? localOwner :
             page && fiberTurnFor(page) === turn && localGenerationOf(page) === turnId ? turnId : null;
+          const ownUser = orderedNativeUsers(turn)?.at(-1), ownReceipt = reportedUserMessages.get(openedUserMessageId);
+          const logicalQuestion = proofOwner === turnId && ownReceipt?.receiptAccepted && ownReceipt.receiptId === openedUserMessageId &&
+            ownReceipt.receiptEpoch === epoch && ownReceipt.conversationId === turn.conversationId &&
+            (ownUser?.rawMessageId || ownUser?.messageId) === openedUserMessageId && matchesSubmittedNativeText(ownUser.rawText, ownReceipt.receiptText)
+            ? openedUserMessageId : null;
           if (proofOwner) closedFinal = { signature: nativeFinalSignature(message, proofOwner), owner: proofOwner,
-            conversationId: turn.conversationId, question: acceptedQuestion || page?.acceptedQuestionId || turn.question,
+            conversationId: turn.conversationId, question: logicalQuestion || acceptedQuestion || page?.acceptedQuestionId || turn.question,
             nativeQuestion: turn.question, final: terminalMessageId };
         }
         if (priorMessage?.signature === signature) {
@@ -10544,7 +10549,7 @@
       const final = native.endMessageId, recorded = final && messagesReported.get(final), held = recorded?.closedFinal;
       const finals = (native.messages || []).filter(row => row.role === 'assistant' && row.stable === true &&
         (row.rawMessageId || row.messageId) === final);
-      if (native.terminalState !== 'complete' || !held || recorded.conflicted || recorded.owner !== turnId ||
+      if ((native.terminalState && native.terminalState !== 'complete') || !held || recorded.conflicted || recorded.owner !== turnId ||
           held.owner !== turnId || held.conversationId !== forId || held.question !== questionId || held.final !== final ||
           (native.question !== questionId && native.question !== held.nativeQuestion) || finals.length !== 1 ||
           !Number.isInteger(finals[0].order) || finals[0].order <= users.at(-1).order ||
@@ -10572,7 +10577,7 @@
       heldFinal.question === questionId && heldFinal.final === final && heldFinal.signature === nativeFinalSignature(finals[0], turnId);
     const nodesCurrent = nodes.length > 0 && nodes.every(node => node?.isConnected && !isStale(node) && fiberTurnForNode(node) === native);
     if (!nodesCurrent || native?.conversationConflict || native?.conversationId !== forId ||
-        (native.question !== questionId && page?.acceptedQuestionId !== questionId) || native.terminalState !== 'complete' || !final ||
+        (native.question !== questionId && page?.acceptedQuestionId !== questionId) || (native.terminalState && native.terminalState !== 'complete') || !final ||
         !recorded || recorded.conflicted || recorded.owner !== turnId || !recorded.signature.startsWith('final\u0000') ||
         !finalMatches) return refuseClosedSource('native-final', { nodesCurrent, sameConversation: native?.conversationId === forId,
           ownQuestion: native?.question === questionId, complete: native?.terminalState === 'complete',
