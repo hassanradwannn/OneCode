@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.10': {
+    lead: () => t('Keep rapid follow-ups and handoffs attached to the right question.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('ChatGPT follow-up receipts'), text: () => t('Confirms rapid follow-ups when the page groups several questions together, while preserving the original local process and output.') },
+      { icon: 'i-retry', title: () => t('Reply and handoff ownership'), text: () => t('Keeps the confirmed reply available for manual compaction through page redraws. Earlier messages and tool calls retain their recorded owners.') }
+    ]
+  },
   '0.7.9': {
     lead: () => t('Keep manual handoff available when a completed answer redraws.'),
     highlights: [

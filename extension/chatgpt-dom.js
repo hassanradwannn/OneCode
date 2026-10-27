@@ -2596,6 +2596,7 @@ var CLF_DOM = (() => {
         }
         if (whileGenerating && matchesUser && acceptUserReceipt && nativeUserReceipts) {
           const snapshot = safe(() => nativeUserReceipts({ phase: 'snapshot' }), null);
+          if (snapshot?.refused === true) return false;
           const rows = snapshot?.rows, ids = snapshot?.ids;
           if (snapshot?.prepared !== true || !Array.isArray(ids) || !ids.length || ids.length > 8192 ||
               ids.some(id => typeof id !== 'string' || !id || id.length > 256) ||
@@ -2766,7 +2767,7 @@ var CLF_DOM = (() => {
             // A validated MAIN reply can arrive during readiness/authorization.
             // Retain it while still pre-click; never learn prior identity from
             // the question this Send is about to create.
-            retainPriorUserIds();
+            if (retainPriorUserIds() === false) return finish(false, 'source-changed');
             attempted = true;
             // The deadline bounds readiness, not an already-dispatched receipt.
             // Keep this same observer and exact send lifetime until the provider
