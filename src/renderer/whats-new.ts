@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.8': {
+    lead: () => t('Keep native question ownership through page hydration and rapid follow-ups.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Native Steer acknowledgement'), text: () => t('A newly accepted ChatGPT message can be confirmed through its validated native frame when its bubble is not rendered. Later controls keep that confirmed task as their source.') },
+      { icon: 'i-retry', title: () => t('Gemini question hydration'), text: () => t('Retains the same native warmup question when Gemini replaces its placeholder or redraws the page. A different question or chat still stops preparation.') }
+    ]
+  },
   '0.7.7': {
     lead: () => t('Keep confirmed native messages and preparation attached to their original task.'),
     highlights: [

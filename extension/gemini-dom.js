@@ -975,15 +975,45 @@ var CLF_DOM = (() => {
       if (composerTransitions.get(box) === edit) composerTransitions.delete(box);
     }
   }
+  function warmupQuestionKey(row) {
+    const id = row && nativeId(row, 'user');
+    if (!id || /:document-\d+$/.test(id)) return null;
+    const prefix = `gemini:${conversationId() || 'fresh'}:user:`;
+    return id.startsWith(prefix) ? id.slice(prefix.length) : null;
+  }
+  function recoveredWarmupConversationCurrent(held) {
+    const id = conversationId();
+    if (held.nativeConversation && id !== held.nativeConversation) return false;
+    if (id && !held.nativeConversation) held.nativeConversation = id;
+    return true;
+  }
+  function retainRecoveredWarmupRow(held, row, value) {
+    if (!held?.recovering || held.edited || !held.current() ||
+        (held.kind === 'command' ? commandClaim : openingClaim) !== held.claim ||
+        Date.now() >= held.deadline || !warmupRouteCurrent(held.route)) return;
+    if (!recoveredWarmupConversationCurrent(held) || !row || value !== held.warmup) return;
+    const key = warmupQuestionKey(row), id = conversationId();
+    if (!key || (held.questionKey && key !== held.questionKey) ||
+        (held.nativeConversation && id !== held.nativeConversation)) return;
+    // Native placeholders cannot pin identity. A replacement may retain only
+    // this positive native question; its first real conversation stays fixed.
+    held.questionKey = key;
+    if (!held.questionId) held.questionId = nativeId(row, 'user');
+    if (id && !held.nativeConversation) held.nativeConversation = id;
+    held.row = row;
+  }
   function warmupRecoveryState() {
     const held = warmupRecovery;
     const claim = held?.kind === 'command' ? commandClaim : openingClaim;
     const users = all('user-query').filter(shown), row = users[0];
-    if (held && !held.row && users.length === 1 && compact(authored(row.querySelector('.query-text') || row)) === held.warmup) {
+    const value = users.length === 1 ? compact(authored(row.querySelector('.query-text') || row)) : '';
+    if (held?.recovering) retainRecoveredWarmupRow(held, users.length === 1 ? row : null, value);
+    else if (held && !held.row && users.length === 1 && value === held.warmup) {
       held.row = row; held.questionId = nativeId(row, 'user');
     }
     const exactWarmup = Boolean(held && users.length === 1 && held.row === row &&
-      compact(authored(row.querySelector('.query-text') || row)) === held.warmup);
+      value === held.warmup && (!held.recovering || Boolean(held.questionKey &&
+        warmupQuestionKey(row) === held.questionKey && (!held.nativeConversation || conversationId() === held.nativeConversation))));
     const draft = compact(composerAuthoredText());
     const id = conversationId(), sameRoute = warmupRouteCurrent(held?.route);
     const output = warmupOutput();
@@ -1012,7 +1042,7 @@ var CLF_DOM = (() => {
     const claim = commandClaim || openingClaim, projection = claim?.warmupRecovery;
     if (!projection || Date.now() >= projection.expiresAt) return false;
     const route = location.href, kind = commandClaim ? 'command' : 'input';
-    const held = { kind, claim, route, warmup: null, deadline: projection.expiresAt, edited: false, initializing: true, current: stillCurrent };
+    const held = { kind, claim, route, warmup: null, deadline: projection.expiresAt, edited: false, initializing: true, recovering: true, current: stillCurrent };
     warmupRecovery = held;
     const refused = reason => {
       // Bounded preparation diagnostics contain no authored text or identifiers.
@@ -1024,6 +1054,9 @@ var CLF_DOM = (() => {
         deadlineCurrent: Date.now() < projection.expiresAt, routeCurrent: warmupRouteCurrent(route),
         editorWritable: composerWritable(), editorEmpty: !composerAuthoredText(), nativeGenerating: generating(),
         userRows: Math.min(3, users.length), rowCurrent: !held.row || row === held.row,
+        rowConnected: Boolean(held.row?.isConnected), questionPinned: Boolean(held.questionKey),
+        conversationPinned: Boolean(held.nativeConversation),
+        conversationCurrent: !held.nativeConversation || conversationId() === held.nativeConversation,
         warmupExact: users.length === 1 && compact(authored(row.querySelector('.query-text') || row)) === held.warmup,
         readyExact: compact(warmupOutput()) === 'READY', filesPresent: hasComposerAttachments(), approvalPresent: approvalWaiting(),
         toolsPresent: all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown),
@@ -1039,16 +1072,21 @@ var CLF_DOM = (() => {
         Date.now() < projection.expiresAt && warmupRouteCurrent(route) &&
         (!draft || draft === held.warmup || !held.warmup && [WARMUP, SKILL_WARMUP].includes(draft)) &&
         !hasComposerAttachments() && !approvalWaiting() &&
-        !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown);
+        !all('tool-call,[data-tool-call-id],remy-confirmation-card').some(shown) && recoveredWarmupConversationCurrent(held);
     };
     const hydrationRowsCurrent = () => {
       const rows = all('user-query').filter(shown);
       const value = rows.length === 1 ? compact(authored(rows[0].querySelector('.query-text') || rows[0])) : '';
-      // Streaming presentation is not a settled reply. Keep the owned question
-      // through native response updates; only the final exact READY below can
-      // complete preparation within this same deadline.
-      return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(value)) &&
-        (!held.row || rows[0] === held.row && value === held.warmup);
+      if (rows.length > 1 || (rows.length && ![WARMUP, SKILL_WARMUP].includes(value)) ||
+          (held.nativeConversation && conversationId() !== held.nativeConversation) ||
+          (rows.length && held.warmup && value !== held.warmup)) return false;
+      const key = rows.length ? warmupQuestionKey(rows[0]) : null;
+      if (held.questionKey && key && key !== held.questionKey) return false;
+      if (rows.length) retainRecoveredWarmupRow(held, rows[0], value);
+      // Missing/provisional rows and streaming presentation are observations,
+      // never settlement. The final proof below still needs the same positive
+      // question, exact READY, native idle and empty editor within this deadline.
+      return true;
     };
     let performingInitializationEdit = false;
     const noteEdit = event => {

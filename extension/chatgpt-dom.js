@@ -2581,6 +2581,7 @@ var CLF_DOM = (() => {
       }
       const priorUserIds = new Set(priorUsers.map((message) => message.id).filter(Boolean));
       const nativeReceiptNodes = new Set();
+      let nativeReceiptSourcePinned = false;
       // Explicit Steer may retain a published question after its native row
       // unmounts. Its recorder supplies only the exact current native owner;
       // snapshot before clicking, never infer an old identity from the new row.
@@ -2594,9 +2595,14 @@ var CLF_DOM = (() => {
           }
         }
         if (whileGenerating && matchesUser && acceptUserReceipt && nativeUserReceipts) {
-          const rows = safe(() => nativeUserReceipts({ phase: 'snapshot' }), null);
-          if (!Array.isArray(rows) || !rows.length || rows.length > 64 || rows.some(row => !row?.node?.isConnected ||
+          const snapshot = safe(() => nativeUserReceipts({ phase: 'snapshot' }), null);
+          const rows = snapshot?.rows, ids = snapshot?.ids;
+          if (snapshot?.prepared !== true || !Array.isArray(ids) || !ids.length || ids.length > 8192 ||
+              ids.some(id => typeof id !== 'string' || !id || id.length > 256) ||
+              !Array.isArray(rows) || rows.length > 64 || rows.some(row => !row?.node?.isConnected ||
               row.role !== 'user' || typeof row.id !== 'string' || !row.id || row.id.length > 256)) return;
+          nativeReceiptSourcePinned = true;
+          for (const id of ids) priorUserIds.add(id);
           for (const row of rows) {
             nativeReceiptNodes.add(row.node); priorNodes.add(row.node);
             if (!priorUserIdsByNode.has(row.node)) priorUserIdsByNode.set(row.node, new Set());
@@ -2617,7 +2623,7 @@ var CLF_DOM = (() => {
         const currentConversation = conversationId();
         if (beforeConversation && currentConversation !== beforeConversation) return false;
         const visible = messages();
-        if (clickedAt !== null && nativeReceiptNodes.size) {
+        if (clickedAt !== null && nativeReceiptSourcePinned) {
           const rows = safe(() => nativeUserReceipts({ phase: 'receipt', clickedAt }), null);
           if (Array.isArray(rows) && rows.length <= 1) for (const row of rows) if (row?.node?.isConnected && row.role === 'user')
             visible.push({ ...row, nativeFrameReceipt: true });
@@ -2776,7 +2782,7 @@ var CLF_DOM = (() => {
             clickedAt = Date.now();
             try {
               onSendAttempt?.(); control.click();
-              if (nativeReceiptNodes.size) nativeUserReceipts({ phase: 'clicked', clickedAt });
+              if (nativeReceiptSourcePinned) nativeUserReceipts({ phase: 'clicked', clickedAt });
             } catch { return finish(false); }
             check(); // Synchronous navigation/cancellation during click also re-proves ownership.
           };
