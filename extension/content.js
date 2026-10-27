@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 98;
+  const RECORDER_VERSION = 99;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2318,6 +2318,32 @@
         fiberTurnFor(candidate) !== fiberTurnFor(candidates[0]))) return null;
     return { ...candidates[0], nodes: candidates.map(candidate => candidate.node) };
   }
+  function pendingNativeSteerView() {
+    const receipt = userSendReceipt, accepted = receipt?.accepted, steer = accepted?.nativeSteer, known = accepted?.sourceReceipt;
+    if (CLF_DOM.provider !== 'chatgpt' || !steer || turnId !== steer.turnId || openedUserMessageId !== steer.questionId ||
+        accepted.epoch !== epoch || accepted.conversationId !== conversationId || CLF_DOM.conversationId() !== conversationId ||
+        Date.now() - receipt.at > DESKTOP_RECEIPT_MS || !known?.receiptAccepted || known.receiptId !== accepted.messageId ||
+        known.receiptEpoch !== epoch || typeof known.receiptText !== 'string') return null;
+    const prior = new Set(known.receiptPriorIds || []); prior.add(accepted.messageId);
+    if ([...fiberTurns.values()].some(view => view?.conversationId === conversationId && (view.messages || []).some(row =>
+        row.role === 'user' && (row.stable !== true || !prior.has(row.rawMessageId || row.messageId)))) ||
+        CLF_DOM.messages().some(row => row.role === 'user' && !prior.has(row.id))) return null;
+    const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
+    if (stamped.length > 512) return null;
+    const candidates = [...stamped].filter(node => {
+      if (!node.isConnected || isStale(node) || sectionOf(node) !== node) return false;
+      const native = fiberTurnForNode(node);
+      if (!native || native.conversationConflict || native.conversationId !== conversationId ||
+          native.question !== accepted.messageId && native.question !== known.receiptParentQuestion &&
+          !(known.receiptAlias && known.receiptAlias.question === native.question) &&
+          !(known.receiptParents || []).some(parent => parent.questionId === native.question)) return false;
+      const user = orderedNativeUsers(native)?.at(-1);
+      return Boolean(user && (user.rawMessageId || user.messageId) === accepted.messageId &&
+        matchesSubmittedNativeText(user.rawText, known.receiptText));
+    });
+    return candidates.length && candidates.length <= 8 && candidates.every(node => fiberTurnForNode(node) === fiberTurnForNode(candidates[0]))
+      ? { node: candidates[0], nodes: candidates, acceptedQuestionId: accepted.messageId } : null;
+  }
   function acceptedAssistantSection(node, native, views = [...fiberTurns.values()]) {
     if (CLF_DOM.provider !== 'chatgpt' || !openedUserMessageId || !turnId ||
         conversationId !== CLF_DOM.conversationId()) return null;
@@ -2855,7 +2881,7 @@
       rendered.filter(row => row.role === 'user').every(row => row.id === acceptedNative.messageId || nativeSteer.priorIds.includes(row.id)) &&
       nativeSteerUsers.every(row => (row.rawMessageId || row.messageId) === acceptedNative.messageId || nativeSteer.priorIds.includes(row.rawMessageId || row.messageId)));
     const acceptedNativeSteer = Boolean(nativeSteer && turnId === nativeSteer.turnId && openedUserMessageId === nativeSteer.questionId &&
-      (ownDomSteer || nativeSteerNode?.isConnected && !isStale(nativeSteerNode) && nativeSteerTurn && !nativeSteerTurn.conversationConflict &&
+      (pendingNativeSteerView() || ownDomSteer || nativeSteerNode?.isConnected && !isStale(nativeSteerNode) && nativeSteerTurn && !nativeSteerTurn.conversationConflict &&
       nativeSteerTurn.conversationId === CLF_DOM.conversationId() &&
       (nativeSteerUsers.at(-1)?.rawMessageId || nativeSteerUsers.at(-1)?.messageId) === acceptedNative.messageId &&
       matchesSubmittedBootstrap({ id: acceptedNative.messageId, role: 'user', node: nativeSteerNode, text: '' }, acceptedReceipt.authoredText)));
@@ -5465,6 +5491,21 @@
     // old final look activeNow/Goal-eligible even though no generation is open. Stop after the
     // same route/epoch-validated Fiber snapshot has updated presentation identity.
     if (presentationOnly) return true;
+    // A durable Steer's current native row may arrive after its DOM bubble was
+    // replaced. Admit that exact user through the ordinary lifecycle before this
+    // same snapshot can file its first final under the preceding generation.
+    const pendingSteer = pendingNativeSteerView();
+    const pendingAccepted = userSendReceipt?.accepted, pendingSource = pendingAccepted?.nativeSteer;
+    if (pendingAccepted?.epoch === epoch && pendingAccepted.conversationId === askedConversation &&
+        pendingAccepted.messageId !== openedUserMessageId && pendingSource?.turnId === turnId &&
+        pendingSource.questionId === openedUserMessageId && !pendingSteer) return false;
+    if (pendingSteer && pendingSteer.acceptedQuestionId !== openedUserMessageId) {
+      observe();
+      if (openedUserMessageId !== pendingSteer.acceptedQuestionId) return false;
+      exactOwner = currentGenerationOwner(); ownedPageNode = exactOwner?.pageTurn || null;
+      ownedPageTurn = stampedFiberTurn(ownedPageNode, answer.turns, answer.scanToken);
+      if (!exactOwner || !ownedPageTurn) return false;
+    }
     CLF_DOM.presentUserPrompts?.(message => userMessageSource(message)?.text ?? null);
     for (const check of pageViewChecks) void check();
     completeDesktopDecision();
@@ -5493,6 +5534,9 @@
       ownedPageTurn && activeLocalTurnId ? answer.turns.indexOf(ownedPageTurn) : -1;
     if (generating) {
       const diagnostic = JSON.stringify({ nativeBusy: CLF_DOM.generating(), owner: !!exactOwner, activeTurnIndex,
+        pendingOwnSteer: Boolean(userSendReceipt?.accepted?.messageId && userSendReceipt.accepted.messageId !== openedUserMessageId),
+        nativeSteerWitness: Boolean(userSendReceipt?.accepted?.nativeSteer), sourceReceipt: Boolean(userSendReceipt?.accepted?.sourceReceipt),
+        pendingNativeView: Boolean(pendingNativeSteerView()),
         ownReceiptAccepted: Boolean(heldCurrent?.receiptAccepted), receiptCurrentEpoch: heldCurrent?.receiptEpoch === epoch,
         receiptCurrentConversation: heldCurrent?.conversationId === askedConversation, receiptSectionConnected: Boolean(heldNode?.isConnected),
         currentNativeCproof: ownedPageNode?.acceptedQuestionId === openedUserMessageId,
@@ -15206,7 +15250,7 @@
         witnessedSendReceipt.accepted = { messageId: receipt.user.id, conversationId: deliveredConversation, epoch };
         if (ownReceiptMetadata) witnessedSendReceipt.accepted.sourceReceipt = ownReceiptMetadata;
         if ((receipt.user.nativeFrameReceipt || receipt.user.domReceipt) && message.directTurn?.id === turnId && message.directTurn.questionId === openedUserMessageId &&
-            receipt.user.section?.isConnected) witnessedSendReceipt.accepted.nativeSteer = {
+            receipt.user.section) witnessedSendReceipt.accepted.nativeSteer = {
           turnId: sourceTurn, questionId: sourceUser, section: new WeakRef(receipt.user.section),
           domReceipt: Boolean(receipt.user.domReceipt), priorIds: [...(nativeReceiptKnownIds || new Set([sourceUser]))],
           parentQuestions: [...nativeReceiptSources.values()].map(source => source.nativeQuestion || sourceUser)
