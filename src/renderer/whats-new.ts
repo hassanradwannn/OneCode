@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.22': {
+    lead: () => t('Keep generated images completing normally.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Image completion'), text: () => t('Preserves completion of generated images alongside reliable follow-up reply ownership.') }
+    ]
+  },
   '0.7.21': {
     lead: () => t('Keep completed replies with the latest follow-up.'),
     highlights: [
