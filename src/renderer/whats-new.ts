@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.19': {
+    lead: () => t('Use the verified current question when older history remains visible.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Steer source recovery'), text: () => t('Keeps older visible history from holding back an input for the already verified latest question.') }
+    ]
+  },
   '0.7.18': {
     lead: () => t('Recognize an acknowledged follow-up when the browser combines earlier questions.'),
     highlights: [

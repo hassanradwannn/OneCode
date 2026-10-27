@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 99;
+  const RECORDER_VERSION = 100;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2304,16 +2304,16 @@
         new Set(users.map(row => row.order)).size !== users.length) return null;
     return users.slice().sort((a, b) => a.order - b.order);
   }
-  function acceptedAssistantTurn() {
+  function acceptedAssistantTurn(receipt = userSendReceipt) {
     const known = reportedUserMessages.get(openedUserMessageId), node = known?.receiptSection?.deref();
-    const held = acceptedAssistantSection(node, fiberTurnForNode(node));
+    const held = acceptedAssistantSection(node, fiberTurnForNode(node), [...fiberTurns.values()], receipt);
     if (held || !generating || !known?.receiptSection || node?.isConnected) return held;
     // The exact acknowledged live task can lose its physical section before its
     // first final. Reprove its current native question, never an historical final.
     const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
     if (stamped.length > 512) return null;
     const candidates = [...stamped].filter(candidate => sectionOf(candidate) === candidate)
-      .map(candidate => acceptedAssistantSection(candidate, fiberTurnForNode(candidate))).filter(Boolean);
+      .map(candidate => acceptedAssistantSection(candidate, fiberTurnForNode(candidate), [...fiberTurns.values()], receipt)).filter(Boolean);
     if (!candidates.length || candidates.length > 8 || candidates.some(candidate =>
         fiberTurnFor(candidate) !== fiberTurnFor(candidates[0]))) return null;
     return { ...candidates[0], nodes: candidates.map(candidate => candidate.node) };
@@ -2344,7 +2344,7 @@
     return candidates.length && candidates.length <= 8 && candidates.every(node => fiberTurnForNode(node) === fiberTurnForNode(candidates[0]))
       ? { node: candidates[0], nodes: candidates, acceptedQuestionId: accepted.messageId } : null;
   }
-  function acceptedAssistantSection(node, native, views = [...fiberTurns.values()]) {
+  function acceptedAssistantSection(node, native, views = [...fiberTurns.values()], receipt = userSendReceipt) {
     if (CLF_DOM.provider !== 'chatgpt' || !openedUserMessageId || !turnId ||
         conversationId !== CLF_DOM.conversationId()) return null;
     const known = reportedUserMessages.get(openedUserMessageId);
@@ -2352,8 +2352,8 @@
     if (!known?.receiptAccepted || known.receiptId !== openedUserMessageId || known.receiptEpoch !== epoch ||
         known.conversationId !== conversationId || typeof known.receiptText !== 'string' ||
         known.receiptSection?.deref() !== node && !remounted || !node?.isConnected || isStale(node) ||
-        userSendReceipt && (userSendReceipt.accepted?.messageId !== openedUserMessageId ||
-          userSendReceipt.accepted.conversationId !== conversationId || userSendReceipt.accepted.epoch !== epoch)) return null;
+        receipt && (receipt.accepted?.messageId !== openedUserMessageId ||
+          receipt.accepted.conversationId !== conversationId || receipt.accepted.epoch !== epoch)) return null;
     if (!native || native.conversationConflict || native.conversationId !== conversationId ||
         (native.question !== openedUserMessageId && !(known.receiptAlias && known.receiptAlias.question === (native.question || null)) && !(known.receiptParents || []).some(parent =>
           (parent.section.deref() === node || remounted) && parent.questionId === native.question) &&
@@ -4023,6 +4023,7 @@
   /** Exact scan frame those two descriptor maps came from. */
   let fiberScanToken = null;
   let fiberAsking = null;
+  let fiberCommitFlights = 0;
   /** Off until the helper answers once, so a browser without it behaves exactly as before. */
   let fiberPresent = null; // Unknown until this document gets a reply or a definitive repair failure.
   /** Avoid turning a missing MAIN-world helper into one script injection per observer tick. */
@@ -5298,6 +5299,15 @@
   }
 
   async function refreshFiber(settled = null, presentationOnly = false) {
+    if (!alive || !window.document?.documentElement || CLF_DOM.provider === 'gemini') return;
+    fiberCommitFlights++;
+    try { return await refreshFiberSnapshot(settled, presentationOnly); }
+    finally {
+      fiberCommitFlights--;
+      if (alive && window.document?.documentElement && !fiberCommitFlights) for (const check of pageViewChecks) void check();
+    }
+  }
+  async function refreshFiberSnapshot(settled = null, presentationOnly = false) {
     if (CLF_DOM.provider === 'gemini') return;
     // A bound chat can briefly lose its /c/<id> route during React/router churn, and a real
     // navigation to a fresh composer has the exact same pathname until ChatGPT assigns the
@@ -5344,7 +5354,7 @@
         return false;
       }
     }
-    if (epoch !== askedEpoch || conversationId !== askedConversation) return false;
+    if (!alive || !window.document?.documentElement || epoch !== askedEpoch || conversationId !== askedConversation) return false;
     // The route can move before observe() has had a chance to update our local conversation
     // state. Epoch/conversation checks alone therefore are not enough: in that window they
     // still both say A while the Fiber tree already belongs to B.
@@ -14453,10 +14463,31 @@
     const forEpoch = epoch;
     const sourceTurn = turnId;
     const sourceActivity = turnProgressRevision;
+    const sourceReceipt = userSendReceipt;
+    let sourcePreparedReceipt = null;
+    let sourceNativeProof = null;
+    let sourceReadinessDraft = null;
     const sourceQuestion = () => {
-      const rendered = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
-      if (rendered) return rendered.id;
+      const users = CLF_DOM.messages().filter(row => row.role === 'user'), rendered = users.at(-1);
       const expected = message.directTurn?.questionId;
+      if (rendered && expected && rendered.id !== expected && alive && !resumeIdentityPending &&
+          turnId === message.directTurn.id && openedUserMessageId === expected &&
+          conversationId === target && CLF_DOM.conversationId() === target) {
+        const known = reportedUserMessages.get(expected);
+        if (known?.receiptAccepted && known.receiptId === expected && known.receiptEpoch === epoch && known.conversationId === target &&
+            users.every(row => row.id === expected || known.receiptPriorIds?.includes(row.id))) {
+          // This input's own controlled preparation must not revoke its source.
+          // A human Send replaces the object and retains the ordinary veto.
+          const receipt = userSendReceipt === sourcePreparedReceipt ? sourceReceipt : userSendReceipt;
+          const page = generating ? acceptedAssistantTurn(receipt) : !CLF_DOM.generating() ? closedCompactionSource(expected, target, receipt) : null;
+          if (page && (!generating || page.acceptedQuestionId === expected)) {
+            const nodes = page.nodes || [page.node];
+            sourceNativeProof = { nodes, marks: nodes.map(sectionMark), text: known.receiptText };
+            return expected;
+          }
+        }
+      }
+      if (rendered) return rendered.id;
       // Virtualizing a native question cannot revoke the exact recorded turn.
       // Only explicit Steer can retain this already-published same-document
       // anchor. A visible different question, pending adoption, changed turn or
@@ -14578,6 +14609,14 @@
     const noteWithdraw = (why) => { withdrawReason ??= why; };
     const withdrawWhy = (why) => noteWithdraw(why === 'lease-lost' && !onTarget() ? offTarget() : why);
     const writableComposer = () => CLF_DOM.composerVisible() && CLF_DOM.composerWritable() && CLF_DOM.composer();
+    const sourceProjectionPending = () => Boolean(sourceNativeProof && fiberCommitFlights && alive && epoch === forEpoch &&
+      conversationId === target && CLF_DOM.conversationId() === target && turnId === sourceTurn && openedUserMessageId === sourceUser &&
+      (userSendReceipt === sourceReceipt || userSendReceipt === sourcePreparedReceipt) &&
+      reportedUserMessages.get(sourceUser)?.receiptAccepted && reportedUserMessages.get(sourceUser)?.receiptEpoch === forEpoch &&
+      reportedUserMessages.get(sourceUser)?.receiptText === sourceNativeProof.text &&
+      CLF_DOM.messages().filter(row => row.role === 'user').every(row => row.id === sourceUser ||
+        reportedUserMessages.get(sourceUser)?.receiptPriorIds?.includes(row.id)) &&
+      sourceNativeProof.nodes.every((node, index) => node?.isConnected && !isStale(node) && sectionMark(node) === sourceNativeProof.marks[index]));
     try {
       // Registration may precede React mounting the composer. Observe that same document
       // instead of rejecting the offer and waiting for Chrome's next 30-second alarm.
@@ -14737,7 +14776,11 @@
       );
       // Native picker closure can precede re-enabling the same editor. Wait before
       // its one insertion; a disabled editing host is not a rejected helper prompt.
-      if (!await waitStableComposer(writableComposer, () => onTarget() && (!!message.directTurn || !CLF_DOM.generating()), 15000)) {
+      sourceReadinessDraft = CLF_DOM.composerAuthoredText();
+      if (!await waitStableComposer(() => sourceNativeProof && fiberCommitFlights ? null : writableComposer(),
+          () => (onTarget() || sourceProjectionPending()) && (!sourceNativeProof ||
+            CLF_DOM.composerAuthoredText() === sourceReadinessDraft && !CLF_DOM.hasComposerAttachments()) &&
+            (!!message.directTurn || !CLF_DOM.generating()), 15000)) {
         const changed = !onTarget() ? offTarget() : null;
         if (changed) noteWithdraw(changed);
         return fail(t(
@@ -15040,6 +15083,7 @@
       for (const frame of fiberTurns.values()) if (frame && !frame.conversationConflict && frame.conversationId === target)
         for (const row of frame.messages || []) if (row.role === 'user' && row.stable === true) receiptPriorSnapshot.add(row.rawMessageId || row.messageId);
       rememberUserSend();
+      sourcePreparedReceipt = userSendReceipt;
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
       const nativeAliasAtReceipt = (user, conversation) => {
         const section = sectionOf(user.node) || user.node, frame = fiberTurnForNode(user.node) || fiberTurnForNode(section);
