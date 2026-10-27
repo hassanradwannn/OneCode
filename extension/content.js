@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 91;
+  const RECORDER_VERSION = 93;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2318,7 +2318,7 @@
         userSendReceipt && (userSendReceipt.accepted?.messageId !== openedUserMessageId ||
           userSendReceipt.accepted.conversationId !== conversationId || userSendReceipt.accepted.epoch !== epoch)) return null;
     if (!native || native.conversationConflict || native.conversationId !== conversationId ||
-        (native.question !== openedUserMessageId && !(known.receiptParents || []).some(parent =>
+        (native.question !== openedUserMessageId && !(known.receiptAlias && known.receiptAlias.question === (native.question || null)) && !(known.receiptParents || []).some(parent =>
           parent.section.deref() === node && parent.questionId === native.question))) return null;
     const priorIds = new Set(known.receiptPriorIds || []); priorIds.add(openedUserMessageId);
     if (views.some(view => view && view.conversationId === conversationId && (view.messages || []).some(row =>
@@ -14749,7 +14749,7 @@
       // Receipt-only native view for a source whose rendered user slot disappears.
       // Pin the exact connected source section and its native ids before clicking;
       // a later history scan or unidentified old section cannot become that source.
-      const nativeReceiptSources = new Map(), nativeReceiptCandidates = new Map();
+      const nativeReceiptSources = new Map(), nativeReceiptCandidates = new Map(), nativeQuestionHints = new Set();
       const nativeReceiptParent = reportedUserMessages.get(message.directTurn?.questionId);
       let nativeReceiptPriorElements = null, nativeReceiptKnownIds = null, nativeReceiptPriorVisible = null;
       let nativeReceiptClickedAt = null, nativeReceiptOwnSend, nativeReceiptPrepared = false;
@@ -14779,11 +14779,13 @@
           }
           const parentQuestion = owned ? nativeReceiptParent.receiptParentQuestion : null;
           const parentQuestions = new Set([parentQuestion, ...parents.map(parent => parent.questionId)].filter(Boolean));
+          const verifiedAlias = owned ? nativeReceiptParent.receiptAlias : null;
+          const aliasMatches = frame => Boolean(frame && verifiedAlias && verifiedAlias.question === (frame.question || null));
           const ownFrame = ownSection?.isConnected ? fiberTurnForNode(ownSection) : null;
           const generation = currentGenerationOwner();
           const generationNodes = generation?.localTurnId === sourceTurn ? generation.pageTurn.nodes || [generation.pageTurn.node] : [];
           const foreign = Boolean(ownFrame && (ownFrame.conversationConflict || ownFrame.conversationId !== target ||
-            ownFrame.question && ownFrame.question !== expected && ownFrame.question !== parentQuestion &&
+            ownFrame.question && ownFrame.question !== expected && ownFrame.question !== parentQuestion && !aliasMatches(ownFrame) &&
               !parents.some(parent => parent.section.deref() === ownSection && parent.questionId === ownFrame.question))) || parents.some(parent => {
             const frame = fiberTurnForNode(parent.section.deref());
             return frame && (frame.conversationConflict || frame.conversationId !== target ||
@@ -14791,7 +14793,7 @@
           }) || generationNodes.some(candidate => {
             const frame = fiberTurnForNode(candidate);
             return frame && (frame.conversationConflict || frame.conversationId !== target ||
-              frame.question && frame.question !== expected && frame.question !== parentQuestion &&
+              frame.question && frame.question !== expected && frame.question !== parentQuestion && !aliasMatches(frame) &&
                 !parents.some(parent => parent.section.deref() === candidate && parent.questionId === frame.question));
           });
           const previousSections = owned ? parents.map(parent => parent.section.deref()).filter(Boolean) : [];
@@ -14800,17 +14802,43 @@
           // the current accepted MAIN view can still identify this exact B source.
           // Its latest stable native user must be B; an old parent-A section by
           // itself cannot borrow B's receipt or become post-click authority.
-          const stamped = currentSource && owned && !foreign ? document.querySelectorAll('[data-clf-fiber-turn]') : [];
-          const discovered = stamped.length <= 512 ? [...stamped].filter(candidate => {
-            if (!candidate.isConnected || isStale(candidate) || sectionOf(candidate) !== candidate) return false;
+          const hintSections = currentSource ? document.querySelectorAll('[data-clf-fiber-turn]') : [];
+          if (hintSections.length <= 512) for (const candidate of hintSections) {
+            if (!candidate.isConnected || isStale(candidate) || sectionOf(candidate) !== candidate) continue;
             const frame = fiberTurnForNode(candidate);
-            if (!frame || frame.conversationConflict || frame.conversationId !== target ||
-                (frame.question !== expected && !parentQuestions.has(frame.question))) return false;
+            if (frame && !frame.conversationConflict && frame.conversationId === target && nativeQuestionHints.size < 16)
+              nativeQuestionHints.add(frame.question || null);
+          }
+          const stamped = currentSource && owned && !foreign ? hintSections : [];
+          const discovery = { stampedCount: stamped.length, rootCount: 0, disconnectedCount: 0, staleCount: 0,
+            nonRootCount: 0, unresolvedCount: 0, unresolvedTokenCount: 0, frameRejectCount: 0,
+            questionRejectCount: 0, noUserCount: 0, unstableUserCount: 0, orderRejectCount: 0,
+            duplicateUserCount: 0, duplicateOrderCount: 0, latestUserRejectCount: 0 };
+          const discovered = stamped.length <= 512 ? [...stamped].filter(candidate => {
+            if (!candidate.isConnected) { discovery.disconnectedCount++; return false; }
+            if (isStale(candidate)) { discovery.staleCount++; return false; }
+            if (sectionOf(candidate) !== candidate) { discovery.nonRootCount++; return false; }
+            discovery.rootCount++;
+            const frame = fiberTurnForNode(candidate);
+            if (!frame) {
+              discovery.unresolvedCount++;
+              if (!fiberScanToken || !candidate.getAttribute('data-clf-fiber-turn')?.startsWith(`${fiberScanToken}:`)) discovery.unresolvedTokenCount++;
+              return false;
+            }
+            if (frame.conversationConflict || frame.conversationId !== target) { discovery.frameRejectCount++; return false; }
+            if (frame.question !== expected && !parentQuestions.has(frame.question) && !aliasMatches(frame)) { discovery.questionRejectCount++; return false; }
+            const nativeUsers = (frame.messages || []).filter(row => row.role === 'user');
+            if (!nativeUsers.length) discovery.noUserCount++;
+            if (nativeUsers.some(row => row.stable !== true)) discovery.unstableUserCount++;
+            if (nativeUsers.some(row => !Number.isInteger(row.order))) discovery.orderRejectCount++;
+            if (new Set(nativeUsers.map(row => row.rawMessageId || row.messageId)).size !== nativeUsers.length) discovery.duplicateUserCount++;
+            if (new Set(nativeUsers.map(row => row.order)).size !== nativeUsers.length) discovery.duplicateOrderCount++;
             const users = orderedNativeUsers(frame);
             if (!users) return false;
             const ids = users.map(row => row.rawMessageId || row.messageId);
-            return ids.length > 0 && ids.length <= 64 && ids.every(Boolean) &&
-              new Set(ids).size === ids.length && ids.at(-1) === expected;
+            if (ids.at(-1) !== expected) discovery.latestUserRejectCount++;
+            return ids.length > 0 && ids.length <= 64 && ids.every(Boolean) && new Set(ids).size === ids.length && ids.at(-1) === expected &&
+              typeof nativeReceiptParent.receiptText === 'string' && matchesSubmittedNativeText(users.at(-1).rawText, nativeReceiptParent.receiptText);
           }).slice(0, 8) : [];
           const possible = [...new Set([
             ...(ownSection?.isConnected ? [ownSection] : []), ...previousSections,
@@ -14823,7 +14851,7 @@
               (generationNodes.includes(candidate) || Boolean(parent));
             if (frame.conversationConflict || frame.conversationId !== target) return false;
             return frame.question === expected || (owned && ((candidate === ownSection || generationNodes.includes(candidate)) && frame.question === parentQuestion ||
-              discovered.includes(candidate) && parentQuestions.has(frame.question) ||
+              discovered.includes(candidate) && (parentQuestions.has(frame.question) || aliasMatches(frame)) ||
               parent && frame.question === parent.questionId));
           }).slice(0, 8) : [];
           const rows = [];
@@ -14843,9 +14871,10 @@
           }
           nativeReceiptPrepared = Boolean(currentSource && !foreign && (owned || rows.length));
           nativeReceiptDiagnostic('snapshot', { currentSource, ownAccepted: owned, ownSectionKnown: Boolean(ownSection),
-            ownSectionConnected: Boolean(ownSection?.isConnected), parentKnown: Boolean(parentQuestion),
+            ownSectionConnected: Boolean(ownSection?.isConnected), parentKnown: Boolean(parentQuestion), verifiedAliasKnown: Boolean(verifiedAlias),
             frameExpected: ownFrame?.question === expected, framePrevious: Boolean(parentQuestion && ownFrame?.question === parentQuestion),
             foreignFrame: foreign, candidateNodes: possible.length, discoveredNodes: discovered.length, discoveryOverflow: stamped.length > 512,
+            ...discovery,
             distinctFrames: new Set(nodes.map(fiberTurnForNode)).size,
             sourcePins: nativeReceiptSources.size, prepared: nativeReceiptPrepared });
           if (!nativeReceiptPrepared) return null;
@@ -14905,6 +14934,14 @@
         for (const row of frame.messages || []) if (row.role === 'user' && row.stable === true) receiptPriorSnapshot.add(row.rawMessageId || row.messageId);
       rememberUserSend();
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
+      const nativeAliasAtReceipt = (user, conversation) => {
+        const section = sectionOf(user.node) || user.node, frame = fiberTurnForNode(user.node) || fiberTurnForNode(section);
+        if (!section?.isConnected || isStale(section) || !frame || frame.conversationConflict || frame.conversationId !== conversation ||
+            !nativeQuestionHints.has(frame.question || null)) return null;
+        const users = orderedNativeUsers(frame), last = users?.at(-1);
+        return last && (last.rawMessageId || last.messageId) === user.id && matchesSubmittedNativeText(last.rawText, submittedText)
+          ? { question: frame.question || null } : null;
+      };
       if (input.purpose === 'decision') {
         decision = { id: input.id, owner: input.owner, messageId: null, text: input.text, temporary, onTarget: sendingTarget, conversationId: null, epoch: forEpoch, response: '', publishing: false };
         desktopDecision = decision;
@@ -14944,7 +14981,7 @@
           if (!candidate || !nativeReceiptOwnSend || candidate.id !== user.id || candidate.native !== fiberTurnForNode(user.node) ||
               userSendReceipt !== nativeReceiptOwnSend || !matchesSubmittedBootstrap(user, submittedText)) return false;
           receipt = { conversation, user: { id: user.id, node: user.node,
-            section: sectionOf(user.node) || user.node, nativeFrameReceipt: true } };
+            section: sectionOf(user.node) || user.node, nativeFrameReceipt: true, nativeAlias: nativeAliasAtReceipt(user, conversation) } };
           return true;
         }
         const users = CLF_DOM.messages().filter(row => row.role === 'user');
@@ -14952,7 +14989,7 @@
         // Freeze identity and its exact section while native Send holds the row.
         // A later explicit Steer may retain this node after its user slot unmounts.
         receipt = { conversation, user: { id: user.id, node: user.node,
-          section: sectionOf(user.node) || user.node, domReceipt: true } };
+          section: sectionOf(user.node) || user.node, domReceipt: true, nativeAlias: nativeAliasAtReceipt(user, conversation) } };
         return true;
       }, matchesSubmittedBootstrap, DESKTOP_RECEIPT_MS, why => { nativeSendRefusal = why; noteWithdraw(why); },
       // A person's message asking for a picture goes out without the mention (the app decides:
@@ -15088,7 +15125,7 @@
       }
       const directSource = message.directTurn?.id === sourceTurn && message.directTurn.questionId === sourceUser;
       const ownReceiptMetadata = accepted && CLF_DOM.provider === 'chatgpt' && deliveredConversation && receipt.user?.id && sendingTarget() ? {
-        receiptAccepted: true, receiptId: receipt.user.id, receiptEpoch: epoch, receiptText: input.text,
+        receiptAccepted: true, receiptId: receipt.user.id, receiptEpoch: epoch, receiptText: input.text, receiptAlias: receipt.user.nativeAlias || null,
         receiptPriorIds: [...(nativeReceiptKnownIds || receiptPriorSnapshot)].slice(0, 8192),
         receiptSection: receipt.user.section ? new WeakRef(receipt.user.section) : null,
         receiptParentQuestion: directSource ? sourceUser : null,
