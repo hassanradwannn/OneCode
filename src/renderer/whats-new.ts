@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.23': {
+    lead: () => t('Resume from the current completed answer.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Compact and resume'), text: () => t('Recognizes earlier questions when the native page retains more history than its activity window.') }
+    ]
+  },
   '0.7.22': {
     lead: () => t('Keep generated images completing normally.'),
     highlights: [
