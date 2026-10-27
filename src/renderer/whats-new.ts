@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.16': {
+    lead: () => t('Keep handoffs attached to the exact completed reply after a browser refresh.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Compact and resume'), text: () => t('Recognizes previously verified section headers when the browser rearranges a completed reply, so its handoff can continue.') }
+    ]
+  },
   '0.7.15': {
     lead: () => t('Identify the native proof holding handoff preparation.'),
     highlights: [
