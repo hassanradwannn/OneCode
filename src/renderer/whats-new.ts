@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.18': {
+    lead: () => t('Recognize an acknowledged follow-up when the browser combines earlier questions.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Follow-up ownership'), text: () => t('Keeps the latest acknowledged question in charge of its reply even when the browser hides its separate message row.') }
+    ]
+  },
   '0.7.17': {
     lead: () => t('Keep a running reply attached to its exact acknowledged message after a browser remount.'),
     highlights: [
