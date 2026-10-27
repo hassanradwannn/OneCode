@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 100;
+  const RECORDER_VERSION = 101;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -14467,6 +14467,7 @@
     let sourcePreparedReceipt = null;
     let sourceNativeProof = null;
     let sourceReadinessDraft = null;
+    let authorizationJoinWaiting = false;
     const sourceQuestion = () => {
       const users = CLF_DOM.messages().filter(row => row.role === 'user'), rendered = users.at(-1);
       const expected = message.directTurn?.questionId;
@@ -14807,7 +14808,8 @@
           insertionFailure ? ` (${insertionFailure})` : ''
         ));
       const sendingTarget = submittedSendLifetime(target, forEpoch);
-      draft = CLF_DOM.captureComposerDraft(input.text, () => sendAttempted ? sendingTarget() : onTarget());
+      draft = CLF_DOM.captureComposerDraft(input.text, () => sendAttempted ? sendingTarget() :
+        onTarget() || authorizationJoinWaiting && sourceProjectionPending());
       // The exact app draft may follow one native editor remount before Send
       // authorization. Stop and native preparation can replace the editor too.
       // Trusted edits, changed text or attachments revoke that lease as before.
@@ -15113,6 +15115,17 @@
         authorizing = true;
         intakeStage('authorizing');
         const authorized = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target || preparedTarget(), authorize: true });
+        try { console.info('[OneCode input authorization] ' + JSON.stringify({ stage: 'returned', allowed: authorized?.data?.ok === true,
+          sendCurrent: sendCurrent(), sourceCurrent: onTarget(), draftCurrent: draft.current(), joining: sourceProjectionPending() })); } catch { /* Fixed flags only. */ }
+        if (authorized?.data?.ok === true && sendCurrent() && sourceProjectionPending()) {
+          authorizationJoinWaiting = true;
+          try {
+            await waitPageView(() => !fiberCommitFlights && onTarget() && draft.current(),
+              () => sendCurrent() && (onTarget() || sourceProjectionPending()) && draft.current(), 15000, 50);
+          } finally { authorizationJoinWaiting = false; }
+        }
+        try { console.info('[OneCode input authorization] ' + JSON.stringify({ stage: 'checked', allowed: authorized?.data?.ok === true,
+          sendCurrent: sendCurrent(), sourceCurrent: onTarget(), draftCurrent: draft.current(), joining: sourceProjectionPending() })); } catch { /* Fixed flags only. */ }
         if (authorized?.data?.ok !== true) noteWithdraw('app-refused');
         if (!sendCurrent() || authorized?.data?.ok !== true || !onTarget() || !draft.current()) { noteWithdraw(onTarget() ? 'lease-lost' : offTarget()); return false; }
         if (input.recovery && !await recoveryPageUnfinished(() => sendCurrent() && onTarget() && draft.current(), withdrawWhy)) return false;
@@ -15350,6 +15363,12 @@
       if (!sent && decision && desktopDecision === decision) desktopDecision = null;
       if (CLF_DOM.provider === 'gemini') { CLF_DOM.setOpeningClaim?.(null); CLF_DOM.setInputClaim?.(null); }
       desktopInputBusy = false;
+      if (message.directTurn && !sendAttempted && userSendReceipt === sourcePreparedReceipt && alive && epoch === forEpoch &&
+          CLF_DOM.conversationId() === target && conversationId === target && turnId === sourceTurn && openedUserMessageId === sourceUser &&
+          reportedUserMessages.get(sourceUser)?.receiptAccepted && reportedUserMessages.get(sourceUser)?.receiptEpoch === forEpoch &&
+          reportedUserMessages.get(sourceUser)?.conversationId === target) {
+        userSendReceipt = sourceReceipt;
+      }
       // Native Send cleanup may finish mounting its readable question after
       // the synchronous ACK observation. Recheck the same receipt once the
       // input slot releases, without depending on a hidden page timer.

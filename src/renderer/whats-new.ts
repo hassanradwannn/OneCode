@@ -34,7 +34,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
     lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
     highlights: [
       { icon: 'i-chat', title: () => t('Independent chats'), text: () => t('A stalled browser tab no longer holds up other chats. Steer keeps the exact recorded question when the browser redraws it, while preserving the original local process and output.') },
-      { icon: 'i-chat', title: () => t('Responsive message delivery'), text: () => t('Acknowledged follow-ups remain the current task when their bubble disappears or older questions return to view. Completed answers and existing tool calls retain the correct task through redraws and delayed message metadata, while slow transcript uploads do not block the next input.') },
+      { icon: 'i-chat', title: () => t('Responsive message delivery'), text: () => t('Acknowledged follow-ups retain the correct task through redraws, older questions and delayed native metadata. If the next message is withdrawn before Send, the preceding task keeps its context and results. Slow transcript uploads do not block the next input.') },
       { icon: 'i-retry', title: () => t('Manual handoff'), text: () => t('Manual compaction retains a verified completed answer through redraws and changes between its verified native headers, while keeping the current question and local results attached.') },
       { icon: 'i-retry', title: () => t('Gemini opening recovery'), text: () => t('An owned preparation can refresh once and recover an empty replacement page within its original deadline. Recovery cannot replay an uncertain task Send.') }
     ]
