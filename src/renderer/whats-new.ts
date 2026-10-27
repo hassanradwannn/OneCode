@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.6': {
+    lead: () => t('Keep Gemini preparation through its native Send and reply updates.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Preparation settlement'), text: () => t('Preparation keeps its draft lease while Gemini clears the editor and streams its reply. Your edits still stop automatic preparation.') }
+    ]
+  },
   '0.7.5': {
     lead: () => t('Keep confirmed messages authorized through native page updates.'),
     highlights: [

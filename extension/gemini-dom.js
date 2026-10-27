@@ -953,7 +953,7 @@ var CLF_DOM = (() => {
         // the first click only inside this current-control check, within the
         // original budget and draft lease. Once dispatch starts, a missing
         // receipt or a native-handler error cannot earn another click.
-        cancelApprovalReplyProofs('new-send'); clicked = true; button.click();
+        cancelApprovalReplyProofs('new-send'); clicked = true; ownEdit(() => button.click());
         return true;
       }, owns, Math.max(0, readyDeadline - Date.now()));
       if (!clicked) {
@@ -1029,7 +1029,7 @@ var CLF_DOM = (() => {
       const rows = all('user-query').filter(shown);
       const value = rows.length === 1 ? compact(authored(rows[0].querySelector('.query-text') || rows[0])) : '';
       return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(value)) &&
-        (!held.row || rows[0] === held.row && value === held.warmup && (!warmupOutput() || compact(warmupOutput()) === 'READY'));
+        (!held.row || rows[0] === held.row && value === held.warmup && 'READY'.startsWith(compact(warmupOutput())));
     };
     let performingInitializationEdit = false;
     const noteEdit = event => { if (event.isTrusted && !performingInitializationEdit) held.edited = true; };
