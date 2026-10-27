@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.20': {
+    lead: () => t('Keep follow-up messages moving while the browser updates.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Steer authorization recovery'), text: () => t('Makes Steer more reliable during browser updates and preserves the previous reply when an unsent follow-up is withdrawn.') }
+    ]
+  },
   '0.7.19': {
     lead: () => t('Use the verified current question when older history remains visible.'),
     highlights: [
