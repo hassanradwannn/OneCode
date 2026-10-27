@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.15': {
+    lead: () => t('Identify the native proof holding handoff preparation.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Compact diagnostics'), text: () => t('Records bounded proof checks for receipt, native order and completed reply ownership without message content or credentials.') }
+    ]
+  },
   '0.7.14': {
     lead: () => t('Recognize a rapid follow-up after the browser finishes loading its source.'),
     highlights: [

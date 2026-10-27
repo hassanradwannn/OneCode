@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 95;
+  const RECORDER_VERSION = 96;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -10530,22 +10530,34 @@
   function closedNativeAssistantTurn(questionId, forId) {
     const known = reportedUserMessages.get(questionId), currentAnchor = userAnchorByMessage.get(questionId);
     if (!known?.receiptAccepted || known.receiptId !== questionId || known.receiptEpoch !== epoch ||
-        known.conversationId !== forId || typeof known.receiptText !== 'string' || !currentAnchor) return null;
+        known.conversationId !== forId || typeof known.receiptText !== 'string' || !currentAnchor)
+      return refuseClosedSource('native-receipt', { receiptAccepted: Boolean(known?.receiptAccepted),
+        receiptId: known?.receiptId === questionId, receiptEpoch: known?.receiptEpoch === epoch,
+        receiptConversation: known?.conversationId === forId, receiptBody: typeof known?.receiptText === 'string', currentAnchor: Boolean(currentAnchor) });
     const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
-    if (stamped.length > 512) return null;
+    const scan = { stampedCount: Math.min(stamped.length, 513), rootCount: 0, resolvedCount: 0, sameConversationCount: 0 };
+    if (stamped.length > 512) return refuseClosedSource('native-scan', { ...scan, overflow: true });
     const candidates = [];
     for (const node of stamped) {
       if (!node.isConnected || isStale(node) || sectionOf(node) !== node) continue;
+      scan.rootCount++;
       const native = fiberTurnForNode(node);
+      if (native) scan.resolvedCount++;
       if (!native || native.conversationConflict || native.conversationId !== forId) continue;
+      scan.sameConversationCount++;
       const users = orderedNativeUsers(native);
-      if (!users) return null;
+      if (!users) return refuseClosedSource('native-users', { ...scan, orderedUsersValid: false });
       const ids = users.map(row => row.rawMessageId || row.messageId);
       // An unknown/newer native user elsewhere in the current view is not history.
       if (ids.some(id => id !== questionId && (reportedUserMessages.get(id)?.conversationId !== forId ||
-          !userAnchorByMessage.get(id) || userAnchorByMessage.get(id).seq >= currentAnchor.seq))) return null;
+          !userAnchorByMessage.get(id) || userAnchorByMessage.get(id).seq >= currentAnchor.seq)))
+        return refuseClosedSource('native-users', { ...scan, orderedUsersValid: true, unknownNewer: true });
       if (!ids.length || ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length || ids.at(-1) !== questionId ||
-          !matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) continue;
+          !matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) {
+        refuseClosedSource('native-user-proof', { orderedUsersValid: true, latestQuestion: ids.at(-1) === questionId,
+          bodyMatches: Boolean(ids.length && matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) });
+        continue;
+      }
       const final = native.endMessageId, recorded = final && messagesReported.get(final), held = recorded?.closedFinal;
       const finals = (native.messages || []).filter(row => row.role === 'assistant' && row.stable === true &&
         (row.rawMessageId || row.messageId) === final);
@@ -10553,10 +10565,20 @@
           held.owner !== turnId || held.conversationId !== forId || held.question !== questionId || held.final !== final ||
           (native.question !== questionId && native.question !== held.nativeQuestion) || finals.length !== 1 ||
           !Number.isInteger(finals[0].order) || finals[0].order <= users.at(-1).order ||
-          held.signature !== nativeFinalSignature(finals[0], turnId)) continue;
+          held.signature !== nativeFinalSignature(finals[0], turnId)) {
+        refuseClosedSource('native-final-proof', { heldPresent: Boolean(held), recordedOwn: Boolean(recorded && !recorded.conflicted && recorded.owner === turnId),
+          heldOwn: held?.owner === turnId, heldConversation: held?.conversationId === forId, logicalQuestion: held?.question === questionId,
+          rawHeader: native.question === questionId || Boolean(held && native.question === held.nativeQuestion), endId: Boolean(held && held.final === final),
+          uniqueStableFinal: finals.length === 1, finalOrder: finals.length === 1 && Number.isInteger(finals[0].order) && finals[0].order > users.at(-1).order,
+          signature: Boolean(held && finals.length === 1 && held.signature === nativeFinalSignature(finals[0], turnId)),
+          terminalPresent: Boolean(native.terminalState), terminalComplete: native.terminalState === 'complete' });
+        continue;
+      }
       candidates.push({ node, native });
     }
-    if (!candidates.length || candidates.length > 8 || candidates.some(row => row.native !== candidates[0].native)) return null;
+    if (!candidates.length || candidates.length > 8 || candidates.some(row => row.native !== candidates[0].native))
+      return refuseClosedSource('native-candidates', { ...scan, candidateCount: Math.min(candidates.length, 9),
+        sameFrame: Boolean(candidates.length && candidates.every(row => row.native === candidates[0].native)) });
     return { id: candidates[0].native.turnId || null, role: 'assistant', node: candidates[0].node,
       nodes: candidates.map(row => row.node), acceptedQuestionId: questionId };
   }
