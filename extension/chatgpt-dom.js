@@ -2538,7 +2538,7 @@ var CLF_DOM = (() => {
     channel.port2.postMessage(null);
   }
 
-  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null } = {}) {
+  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null, nativeUserReceipts = null } = {}) {
     // Why a Send ended without acceptance, as one short code for the caller's diagnostics (#820).
     // It names the first refusal only and never changes what Send does.
     const refused = (why) => { try { explain?.(why); } catch { /* Diagnostics never change Send. */ } return false; };
@@ -2580,6 +2580,8 @@ var CLF_DOM = (() => {
         priorUserIdsByNode.get(message.node).add(message.id);
       }
       const priorUserIds = new Set(priorUsers.map((message) => message.id).filter(Boolean));
+      const nativeReceiptNodes = new Set();
+      let nativeReceiptSourcePinned = false;
       // Explicit Steer may retain a published question after its native row
       // unmounts. Its recorder supplies only the exact current native owner;
       // snapshot before clicking, never infer an old identity from the new row.
@@ -2590,6 +2592,21 @@ var CLF_DOM = (() => {
           for (const id of ids.slice(0, 8)) if (typeof id === 'string' && id && id.length <= 256) {
             if (!priorUserIdsByNode.has(node)) priorUserIdsByNode.set(node, new Set());
             priorUserIdsByNode.get(node).add(id); priorUserIds.add(id);
+          }
+        }
+        if (whileGenerating && matchesUser && acceptUserReceipt && nativeUserReceipts) {
+          const snapshot = safe(() => nativeUserReceipts({ phase: 'snapshot' }), null);
+          const rows = snapshot?.rows, ids = snapshot?.ids;
+          if (snapshot?.prepared !== true || !Array.isArray(ids) || !ids.length || ids.length > 8192 ||
+              ids.some(id => typeof id !== 'string' || !id || id.length > 256) ||
+              !Array.isArray(rows) || rows.length > 64 || rows.some(row => !row?.node?.isConnected ||
+              row.role !== 'user' || typeof row.id !== 'string' || !row.id || row.id.length > 256)) return;
+          nativeReceiptSourcePinned = true;
+          for (const id of ids) priorUserIds.add(id);
+          for (const row of rows) {
+            nativeReceiptNodes.add(row.node); priorNodes.add(row.node);
+            if (!priorUserIdsByNode.has(row.node)) priorUserIdsByNode.set(row.node, new Set());
+            priorUserIds.add(row.id); priorUserIdsByNode.get(row.node).add(row.id);
           }
         }
       };
@@ -2606,6 +2623,11 @@ var CLF_DOM = (() => {
         const currentConversation = conversationId();
         if (beforeConversation && currentConversation !== beforeConversation) return false;
         const visible = messages();
+        if (clickedAt !== null && nativeReceiptSourcePinned) {
+          const rows = safe(() => nativeUserReceipts({ phase: 'receipt', clickedAt }), null);
+          if (Array.isArray(rows) && rows.length <= 1) for (const row of rows) if (row?.node?.isConnected && row.role === 'user')
+            visible.push({ ...row, nativeFrameReceipt: true });
+        }
         for (let at = visible.length - 1; at >= 0; at--) {
           const message = visible[at];
           if (message.role !== 'user') continue;
@@ -2758,7 +2780,10 @@ var CLF_DOM = (() => {
                 timer = setTimeout(() => { check(); finish(false); }, receiptTimeoutMs);
             }
             clickedAt = Date.now();
-            try { onSendAttempt?.(); control.click(); } catch { return finish(false); }
+            try {
+              onSendAttempt?.(); control.click();
+              if (nativeReceiptSourcePinned) nativeUserReceipts({ phase: 'clicked', clickedAt });
+            } catch { return finish(false); }
             check(); // Synchronous navigation/cancellation during click also re-proves ownership.
           };
           if (!beforeSend) return click();
