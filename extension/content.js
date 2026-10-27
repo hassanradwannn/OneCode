@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 103;
+  const RECORDER_VERSION = 104;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -10629,6 +10629,17 @@
     }
     return null;
   }
+  function closedSourcePriorUser(id, questionId, forId) {
+    const current = userAnchorByMessage.get(questionId), prior = userAnchorByMessage.get(id);
+    if (!current || (prior && prior.seq >= current.seq)) return false;
+    if (prior && reportedUserMessages.get(id)?.conversationId === forId) return true;
+    // Activity is a bounded presentation window. A prior question can leave it
+    // while remaining on the native page. Its pre-Send receipt is still exact
+    // predecessor evidence; neither a later anchor nor an unknown user may yield.
+    const known = reportedUserMessages.get(questionId);
+    return Boolean(known?.receiptAccepted && known.receiptId === questionId && known.receiptEpoch === epoch &&
+      known.conversationId === forId && known.receiptPriorIds?.includes(id));
+  }
   function closedNativeAssistantTurn(questionId, forId) {
     const known = reportedUserMessages.get(questionId), currentAnchor = userAnchorByMessage.get(questionId);
     if (!known?.receiptAccepted || known.receiptId !== questionId || known.receiptEpoch !== epoch ||
@@ -10652,8 +10663,7 @@
       if (!users) return refuseClosedSource('native-users', { ...scan, orderedUsersValid: false });
       const ids = users.map(row => row.rawMessageId || row.messageId);
       // An unknown/newer native user elsewhere in the current view is not history.
-      if (ids.some(id => id !== questionId && (reportedUserMessages.get(id)?.conversationId !== forId ||
-          !userAnchorByMessage.get(id) || userAnchorByMessage.get(id).seq >= currentAnchor.seq)))
+      if (ids.some(id => id !== questionId && !closedSourcePriorUser(id, questionId, forId)))
         return refuseClosedSource('native-users', { ...scan, orderedUsersValid: true, unknownNewer: true });
       const currentUser = branch ? branch.user : users.at(-1);
       const currentQuestion = branch ? branch.user.messageId : ids.at(-1);
@@ -10721,12 +10731,9 @@
         receipt.accepted.epoch !== epoch)) return refuseClosedSource('send-receipt');
     // Old mounted history is harmless only when its positive canonical ordering is
     // known. An unknown/newer question must not borrow the closed answer's owner.
-    const currentAnchor = userAnchorByMessage.get(questionId);
     for (const row of CLF_DOM.messages().filter(row => row.role === 'user')) {
       if (row.id === questionId) continue;
-      const prior = userAnchorByMessage.get(row.id);
-      if (reportedUserMessages.get(row.id)?.conversationId !== forId || !currentAnchor || !prior ||
-          prior.seq >= currentAnchor.seq) return refuseClosedSource('visible-question');
+      if (!closedSourcePriorUser(row.id, questionId, forId)) return refuseClosedSource('visible-question');
     }
     return { questionId, turnId, final, nodes, marks: nodes.map(sectionMark) };
   }
