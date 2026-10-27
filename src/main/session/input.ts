@@ -66,12 +66,24 @@ export const warmupRecoverySchema = z.object({
   expiresAt: z.number().int().positive(), browser: z.string().regex(/^[a-z0-9]{16,64}$/), tab: z.number().int().nonnegative(),
   document: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), owner: z.string().min(1).max(160),
   successorOwner: z.string().min(1).max(160).optional(), successorDocument: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
-  conversationId: z.string().regex(/^[a-f0-9]{16}$/).optional()
-}).strict().refine(r => r.expiresAt > r.at && !!r.successorOwner === !!r.successorDocument);
+  conversationId: z.string().regex(/^[a-f0-9]{16}$/).optional(),
+  initialization: z.object({ at: z.number().int().nonnegative() }).strict().optional()
+}).strict().refine(r => r.expiresAt > r.at && !!r.successorOwner === !!r.successorDocument &&
+  (!r.initialization || r.initialization.at >= r.at && r.initialization.at < r.expiresAt));
 export type WarmupRecovery = z.infer<typeof warmupRecoverySchema>;
 export type WarmupDocument = { tab_id: number; document_id: string };
 export function warmupRecoveryView(r: WarmupRecovery) {
-  return { spent: true as const, questionId: r.questionId, at: r.at, expiresAt: r.expiresAt };
+  return { spent: true as const, questionId: r.questionId, at: r.at, expiresAt: r.expiresAt,
+    ...(r.initialization ? { initialization: { at: r.initialization.at } } : {}) };
+}
+/** Callers commit this reservation before allowing one tool-free successor initialization. */
+export function reserveWarmupInitialization(r: WarmupRecovery, owner: string, browser: string,
+  source: WarmupDocument): WarmupRecovery | null {
+  const now = Date.now();
+  if (r.initialization || r.conversationId || now < r.at || now >= r.expiresAt || r.browser !== browser ||
+      r.tab !== source.tab_id || r.successorOwner !== owner || r.successorDocument !== source.document_id ||
+      owner === r.owner || source.document_id === r.document) return null;
+  return { ...r, initialization: { at: now } };
 }
 /** Native question IDs can change on reload; only the exact paired tab/document chain transfers. */
 export function adoptWarmupRecovery(r: WarmupRecovery, owner: string, browser: string | null,
@@ -1379,6 +1391,27 @@ export function permitGeminiWarmupRefresh(id: string, owner: string, browser: st
       browser, tab: source.tab_id, document: source.document_id, owner };
     await commit(current.map(entry => entry === row ? { ...entry, warmupRecovery: recovery } : entry));
     return warmupRecoveryView(recovery);
+  });
+}
+
+/** The refreshed blank home may initialize once; this never authorizes the original task. */
+export function permitGeminiWarmupInitialization(id: string, owner: string, browser: string,
+  source: WarmupDocument): Promise<ReturnType<typeof warmupRecoveryView> | null> {
+  return serial(async () => {
+    const current = await load(), row = current.find(entry => entry.id === id);
+    if (!row?.warmupRecovery || !row.opening || row.chatProvider !== 'gemini' || !row.sessionId ||
+        row.state !== 'browser' || row.owner !== owner || row.claimedBrowser !== browser ||
+        !row.requiresAuthorization || row.conversationId !== null || row.cancelledByUser ||
+        row.sendAuthorizedAt !== undefined || row.deliveredAt !== undefined) return null;
+    const recovery = reserveWarmupInitialization(row.warmupRecovery, owner, browser, source);
+    if (!recovery) return null;
+    const session = await getSession(row.sessionId);
+    if (!session || session.conversationId || session.origin?.kind !== 'desktop') return null;
+    await commit(current.map(entry => entry === row ? { ...entry, warmupRecovery: recovery } : entry));
+    // A recorder metadata transition can race the durable outbox write. Keep the
+    // reservation spent, but do not return permission for a now-bound session.
+    const after = await getSession(row.sessionId);
+    return after && !after.conversationId && Date.now() < recovery.expiresAt ? warmupRecoveryView(recovery) : null;
   });
 }
 

@@ -2568,7 +2568,17 @@ var CLF_DOM = (() => {
       const beforeGenerating = generating();
       const beforeStop = stopButton();
       const priorUsers = messages().filter((message) => message.role === 'user');
-      const priorUserNodes = new Set(priorUsers.map((message) => message.node));
+      // A native section can contain several questions or be recycled by React.
+      // Remember its known identities, including sections whose old question is
+      // still unidentified; acquiring that old id is not this Send's receipt.
+      const priorNodes = new Set(turns().flatMap(turnNodes));
+      const priorUserIdsByNode = new Map();
+      for (const message of priorUsers) {
+        priorNodes.add(message.node);
+        if (!message.id) continue;
+        if (!priorUserIdsByNode.has(message.node)) priorUserIdsByNode.set(message.node, new Set());
+        priorUserIdsByNode.get(message.node).add(message.id);
+      }
       const priorUserIds = new Set(priorUsers.map((message) => message.id).filter(Boolean));
       let submittedMessageObserved = false;
       let clickedAt = null;
@@ -2586,7 +2596,9 @@ var CLF_DOM = (() => {
         for (let at = visible.length - 1; at >= 0; at--) {
           const message = visible[at];
           if (message.role !== 'user') continue;
-          if (!priorUserNodes.has(message.node) && !priorUserIds.has(message.id) && (matchesUser ? matchesUser(message, submitted) : compact(message.text) === expected)) {
+          const identifiedReuse = acceptUserReceipt && matchesUser && priorUserIdsByNode.has(message.node);
+          if (message.id && !priorUserIds.has(message.id) && (!priorNodes.has(message.node) || identifiedReuse) &&
+              (matchesUser ? matchesUser(message, submitted) : compact(message.text) === expected)) {
             if (acceptUserReceipt && !acceptUserReceipt(message, currentConversation)) continue;
             submittedMessageObserved = true;
             return true;

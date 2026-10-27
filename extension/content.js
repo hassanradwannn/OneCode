@@ -12244,6 +12244,8 @@
   });
   if (CLF_DOM.provider === 'gemini') CLF_DOM.setWarmupRecoveryResolver?.(value =>
     ask({ type: 'gemini_warmup_refresh', ...value }));
+  if (CLF_DOM.provider === 'gemini') CLF_DOM.setWarmupInitializationResolver?.(value =>
+    ask({ type: 'gemini_warmup_initialize', ...value }));
   const sameWarmupRecovery = (left, right) => left?.spent === true && right?.spent === true &&
     Number.isFinite(left.expiresAt) && Date.now() < left.expiresAt && left.expiresAt === right.expiresAt &&
     left.at === right.at && (left.questionId ?? null) === (right.questionId ?? null);
@@ -15116,6 +15118,13 @@
         sendResponse({ ...(proof || {}), safe: alive && proof?.safe === true && proof.kind === message.kind &&
           proof.id === message.id && proof.owner === message.owner && proof.deadline === message.deadline &&
           (proof.questionId ?? null) === (message.questionId ?? null), navigationEpoch: epoch });
+        return false;
+      }
+      if (message.type === 'clf-gemini-warmup-initialize-check') {
+        const proof = CLF_DOM.provider === 'gemini' ? CLF_DOM.warmupInitializationState?.() : null;
+        sendResponse({ ...(proof || {}), safe: alive && proof?.safe === true && proof.kind === message.kind &&
+          proof.id === message.id && proof.owner === message.owner && proof.deadline === message.deadline,
+          navigationEpoch: epoch });
         return false;
       }
       if (message.type === 'clf-stop-turn') {

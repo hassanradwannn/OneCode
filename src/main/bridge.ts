@@ -42,7 +42,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -2898,6 +2898,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // there, without asking for work. Setup needs it from a browser that has no chat to serve yet:
   // the authenticated request above already recorded presence and version.
   // Only the paired companion can request a model-carried local session capability.
+  if (route === '/gemini/warmup-initialize' && req.method === 'POST') {
+    const parsed = z.object({ kind: z.enum(['input', 'command']), id: z.string().min(1).max(64),
+      owner: z.string().min(1).max(160), tab_id: z.number().int().nonnegative(),
+      document_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) }).strict().safeParse(await readBody(req, 2048));
+    const browser = browserOf(req);
+    if (!parsed.success || !browser) return json(res, 400,
+      { ok: false, allowed: false, error: 'invalid_warmup_initialization' }, origin);
+    const body = parsed.data, source = { tab_id: body.tab_id, document_id: body.document_id };
+    const recovery = body.kind === 'input'
+      ? await permitGeminiWarmupInitialization(body.id, body.owner, browser, source)
+      : await permitCommandWarmupInitialization(body.id, body.owner, browser, source);
+    return json(res, recovery ? 200 : 409, recovery
+      ? { ok: true, allowed: true, warmupRecovery: recovery }
+      : { ok: false, allowed: false, error: 'warmup_initialization_not_owned' }, origin);
+  }
   if (route === '/gemini/warmup-refresh' && req.method === 'POST') {
     const parsed = z.object({ kind: z.enum(['input', 'command']), id: z.string().min(1).max(64),
       owner: z.string().min(1).max(160), tab_id: z.number().int().nonnegative(),
@@ -6731,6 +6746,45 @@ async function permitCommandWarmupRefresh(id: string, owner: string, browser: st
     command.warmupRecovery = recovery;
     permitted = recovery;
     armDeadline(command);
+    return true;
+  });
+  return permitted ? warmupRecoveryView(permitted) : null;
+}
+
+/** Spend preparation once on the exact adopted blank successor, never task dispatch. */
+async function permitCommandWarmupInitialization(id: string, owner: string, browser: string,
+  source: WarmupDocument): Promise<ReturnType<typeof warmupRecoveryView> | null> {
+  const command = commands.find(entry => entry.id === id);
+  if (!command) return null;
+  let permitted: WarmupRecovery | null = null;
+  await writeCommandTransition(command, async () => {
+    const original = command.warmupRecovery, custody = geminiCommandCustody.get(id), spec = command.spec;
+    const home = commandHomeConversation(spec);
+    const current = () => commands.includes(command) && command.owner === owner && command.claimedAt !== null &&
+      isLeased(command) && command.warmupRecovery === original && geminiCommandCustody.get(id) === custody;
+    if (!original || !current() || !['resume', 'worker'].includes(spec.type) || !home ||
+        chatProviderForConversation(home) !== 'gemini' || receiptFor(id) || !custody ||
+        custody.owner !== owner || custody.browser !== browser || custody.conversation || custody.sessionId ||
+        custody.tab !== source.tab_id || custody.document !== source.document_id) return false;
+    const recovery = reserveWarmupInitialization(original, owner, browser, source);
+    if (!recovery) return false;
+    if (spec.type === 'resume') {
+      const entry = continuationByToken(spec.token);
+      if (!entry || entry.state !== 'claimed' || !continuationClaimedBy(spec.token, id) ||
+          entry.destinationSend.state !== 'not-attempted' || entry.to) return false;
+    } else if (spec.type !== 'worker' || !swarmRunning(spec.runId) || agentConversation(spec.agent, spec.runId)) return false;
+    try { await writeDurableNow(COMMANDS_STATE, commandSnapshot({ commandOverride: { command,
+      record: { ...durableCommand(command), warmupRecovery: recovery } } })); }
+    catch { persistCommands(); return false; }
+    const resumed = spec.type === 'resume' ? continuationByToken(spec.token) : null;
+    if (!current() || Date.now() >= recovery.expiresAt || (spec.type === 'resume' &&
+        (!resumed || resumed.state !== 'claimed' || resumed.destinationSend.state !== 'not-attempted' ||
+          !continuationClaimedBy(spec.token, id) || resumed.to)) ||
+        (spec.type === 'worker' && (!swarmRunning(spec.runId) || agentConversation(spec.agent, spec.runId)))) {
+      persistCommands(); return false;
+    }
+    command.warmupRecovery = recovery;
+    permitted = recovery;
     return true;
   });
   return permitted ? warmupRecoveryView(permitted) : null;

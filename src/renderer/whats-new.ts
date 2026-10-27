@@ -35,7 +35,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
     highlights: [
       { icon: 'i-chat', title: () => t('Independent chats'), text: () => t('A stalled browser tab no longer holds up other chats. Steer keeps the exact recorded question when the browser redraws it, while preserving the original local process and output.') },
       { icon: 'i-chat', title: () => t('Responsive message delivery'), text: () => t('Slow transcript uploads no longer hold the browser control queue. Confirmed messages release the composer for the next message while progress continues.') },
-      { icon: 'i-retry', title: () => t('Gemini opening recovery'), text: () => t('An owned tool-free preparation that stalls can refresh its page once, retain its original deadline and continue without repeating the preparation message or an uncertain task Send.') }
+      { icon: 'i-retry', title: () => t('Gemini opening recovery'), text: () => t('An owned preparation can refresh once and recover an empty replacement page within its original deadline. Recovery cannot replay an uncertain task Send.') }
     ]
   },
   '0.6.23': {
