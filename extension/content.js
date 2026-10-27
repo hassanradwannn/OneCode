@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 86;
+  const RECORDER_VERSION = 87;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1034,7 +1034,7 @@
   async function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
                              matchesUser = matchesSubmittedUser, receiptTimeoutMs = null, explain = null, mention = currentCoreMention(), sentRequest = null,
                              whileGenerating = false, initialDraft = null, prepareAttachments = null, nativeMedia = false, onSendAttempt = null,
-                             requireCore = mention !== null) {
+                             requireCore = mention !== null, priorUserIdsForNode = null) {
     // Missing discovery is not permission to send a tools-enabled task without
     // Core. Wait only before authorization, under the existing draft lease.
     if (CLF_DOM.provider === 'chatgpt' && requireCore && !mention) {
@@ -1050,7 +1050,7 @@
       }
     }
     return CLF_DOM.send({ stillCurrent, clearAcceptedDraft, beforeSend, acceptUserReceipt, matchesUser, receiptTimeoutMs, mention, explain, sentRequest, whileGenerating, initialDraft,
-      prepareAttachments, nativeMedia, onSendAttempt,
+      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode,
       observeEvidence: check => { pageViewChecks.add(check); return () => pageViewChecks.delete(check); } });
   }
   const GOAL_MARKER_INSTRUCTION = '\n\nFor this Goal session only: at the end of each final reply, write exactly one separate last line: [[COS_GOAL:COMPLETE]] if the entire requested task is finished, or [[COS_GOAL:CONTINUE]] if requested work remains. Do not claim completion for partial work. If user input is required, explain it and omit both markers.';
@@ -10360,6 +10360,37 @@
     return reply?.ok === true && reply.data?.deferred === true;
   }
 
+  // A manual request may follow a completed native answer whose user bubble React
+  // has unmounted. Keep its exact connected native section as the source; published
+  // history alone cannot supply this proof, and it never grants Stop authority.
+  function closedCompactionSource(questionId, forId, receipt = userSendReceipt) {
+    if (CLF_DOM.provider !== 'chatgpt' || !questionId || generating || CLF_DOM.generating() ||
+        pendingTools !== 0 || conversationId !== forId || CLF_DOM.conversationId() !== forId ||
+        openedUserMessageId !== questionId || reportedUserMessages.get(questionId)?.conversationId !== forId) return null;
+    const page = currentAssistantTurn(), native = fiberTurnFor(page);
+    const nodes = page?.nodes || (page?.node ? [page.node] : []);
+    const final = native?.endMessageId, recorded = final && messagesReported.get(final);
+    if (!nodes.length || native?.conversationConflict || native?.conversationId !== forId ||
+        native.question !== questionId || native.terminalState !== 'complete' || !final ||
+        !recorded || recorded.conflicted || recorded.owner !== turnId || !recorded.signature.startsWith('final\u0000') ||
+        !native.messages?.some(row => row.role === 'assistant' && row.stable === true &&
+          (row.rawMessageId || row.messageId) === final) ||
+        nodes.some(node => !node?.isConnected || isStale(node) || fiberTurnForNode(node) !== native ||
+          settledGenerations.get(node)?.turnId !== turnId || settledGenerations.get(node)?.mark !== sectionMark(node))) return null;
+    if (receipt && (receipt.accepted?.messageId !== questionId || receipt.accepted.conversationId !== forId ||
+        receipt.accepted.epoch !== epoch)) return null;
+    // Old mounted history is harmless only when its positive canonical ordering is
+    // known. An unknown/newer question must not borrow the closed answer's owner.
+    const currentAnchor = userAnchorByMessage.get(questionId);
+    for (const row of CLF_DOM.messages().filter(row => row.role === 'user')) {
+      if (row.id === questionId) continue;
+      const prior = userAnchorByMessage.get(row.id);
+      if (reportedUserMessages.get(row.id)?.conversationId !== forId || !currentAnchor || !prior ||
+          prior.seq >= currentAnchor.seq) return null;
+    }
+    return { questionId, turnId, final, nodes, marks: nodes.map(sectionMark) };
+  }
+
   async function startCompact(automatic = false) {
     const forId = conversationId;
     const forEpoch = epoch;
@@ -10393,7 +10424,15 @@
     let stoppedTurnId = turnId;
     let stoppedQuestionId = CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null;
     const initialSendReceipt = userSendReceipt;
-    const sameTurn = () => turnId === stoppedTurnId &&
+    let closedSource = null, ownSourceReceipt;
+    const closedSourceCurrent = () => {
+      if (!closedSource || (userSendReceipt !== initialSendReceipt && userSendReceipt !== ownSourceReceipt)) return false;
+      const proof = closedCompactionSource(closedSource.questionId, forId, initialSendReceipt);
+      return proof && proof.turnId === closedSource.turnId && proof.final === closedSource.final &&
+        proof.nodes.length === closedSource.nodes.length && proof.nodes.every((node, index) =>
+          node === closedSource.nodes[index] && proof.marks[index] === closedSource.marks[index]);
+    };
+    const sameTurn = () => closedSource ? closedSourceCurrent() : turnId === stoppedTurnId &&
       (CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null) === stoppedQuestionId;
     localError = '';
     pressedAt = Date.now();
@@ -10484,13 +10523,23 @@
       return box?.isConnected && CLF_DOM.composerVisible() && box.getAttribute('contenteditable') !== 'false' &&
         box.getAttribute('aria-disabled') !== 'true' ? box : null;
     };
-    const expectedQuestionId = stoppedQuestionId || filed.data.job?.sourceSend?.preparation?.questionId ||
+    const filedQuestionId = filed.data.job?.sourceSend?.preparation?.questionId || policyData.recordedQuestionId || null;
+    if (!automatic && filedQuestionId && stoppedQuestionId !== filedQuestionId && userSendReceipt === initialSendReceipt &&
+        turnId === stoppedTurnId && policyData.pendingTools === 0) {
+      await refreshFiber(null, true);
+      if (!current()) return;
+      if (userSendReceipt === initialSendReceipt && turnId === stoppedTurnId)
+        closedSource = closedCompactionSource(filedQuestionId, forId, initialSendReceipt);
+      if (closedSource) stoppedQuestionId = closedSource.questionId;
+    }
+    const expectedQuestionId = (!automatic && filedQuestionId) || stoppedQuestionId || filedQuestionId ||
       policyData.recordedQuestionId || null;
-    const sourceReady = () => editableSource() && (!expectedQuestionId ||
+    const sourceReady = () => editableSource() && (closedSource ? closedSourceCurrent() : !expectedQuestionId ||
       CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id === expectedQuestionId);
     if (!sourceReady()) {
       const hydrationCurrent = () => current() && userSendReceipt === initialSendReceipt &&
-        (!stoppedQuestionId || (CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null) === stoppedQuestionId) &&
+        (closedSource ? closedSourceCurrent() : !stoppedQuestionId ||
+          (CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null) === stoppedQuestionId) &&
         (!stoppedTurnId || turnId === stoppedTurnId);
       const ready = await waitPageView(sourceReady, hydrationCurrent, INTERRUPT_WAIT_MS);
       if (!current()) return;
@@ -10521,7 +10570,7 @@
       }
       observe();
       stoppedTurnId = turnId;
-      stoppedQuestionId = CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null;
+      if (!closedSource) stoppedQuestionId = CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null;
     }
 
     // The barrier, before the request rather than after it.
@@ -10590,7 +10639,8 @@
       void pullActivity();
       return;
     }
-    await runNativeCompaction(String(data.prompt), String(data.token || ''), forId, forEpoch, forRun, sameTurn);
+    await runNativeCompaction(String(data.prompt), String(data.token || ''), forId, forEpoch, forRun, sameTurn,
+      closedSource ? receipt => { ownSourceReceipt = receipt; } : null, closedSource?.questionId || null);
   }
 
   /** Retry only a proven local, pre-forwarding loading refusal. Lost replies,
@@ -10635,7 +10685,12 @@
       if (Date.now() < source.preparationWait.retryAt || !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() ||
           generating || CLF_DOM.generating() || CLF_DOM.hasComposerAttachments()) return;
       const question = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? null;
-      if (source.preparation?.questionId && question !== source.preparation.questionId) return;
+      if (source.preparation?.questionId && question !== source.preparation.questionId) {
+        if (job.automatic === true) return;
+        await refreshFiber(null, true);
+        if (!alive || conversationId !== forId || epoch !== forEpoch || CLF_DOM.conversationId() !== forId ||
+            job?.sourceSend !== source || !closedCompactionSource(source.preparation.questionId, forId)) return;
+      }
       const draft = CLF_DOM.composerAuthoredText(), prompt = source.preparation?.prompt;
       if (draft.trim() && (!prompt || sendText(draft) !== sendText(prompt))) return;
       if (draft.trim() && CLF_DOM.provider === 'chatgpt') {
@@ -10950,7 +11005,7 @@
   }
 
   /** Submits the marked source prompt after the app durably grants this exact Send. */
-  async function runNativeCompaction(prompt, token, forId = conversationId, forEpoch = epoch, forRun = nativeRun, sameSource = () => true) {
+  async function runNativeCompaction(prompt, token, forId = conversationId, forEpoch = epoch, forRun = nativeRun, sameSource = () => true, retainSourceReceipt = null, sourceQuestionId = null) {
     const current = () =>
       alive &&
       nativeRun === forRun &&
@@ -11099,6 +11154,7 @@
         ));
       }
       rememberUserSend();
+      retainSourceReceipt?.(userSendReceipt);
       let nativeSourceReceipt = null;
       const sent = await sendSubmittedText(current, true, async stillSending => {
         if (!stillSending() || !current() || !sameSource() || CLF_DOM.hasComposerAttachments()) return false;
@@ -11106,7 +11162,7 @@
         // button timing out is still a provably unsent request. Once dispatched,
         // a missing reply retains custody rather than granting another click.
         attemptCrossed = true;
-        const before = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
+        const before = sourceQuestionId || CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
         const armed = await compactionCheckpoint({ type: 'compact', conversationId: forId, token, sourceDispatch: true,
           ...(typeof before === 'string' && before ? { before } : {}) }, () => stillSending() && current() && sameSource());
         if (!current()) return false;
@@ -14465,6 +14521,27 @@
         'The composer changed; your draft was preserved'
       ));
       const previousUserId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
+      const priorUserIdsForNode = CLF_DOM.provider === 'chatgpt' && message.directTurn?.questionId ? node => {
+        const expected = message.directTurn.questionId;
+        if (sendAttempted || !node?.isConnected || isStale(node) || !onTarget() || epoch !== forEpoch ||
+            turnId !== sourceTurn || sourceTurn !== message.directTurn.id || openedUserMessageId !== expected ||
+            sourceUser !== expected || reportedUserMessages.get(expected)?.conversationId !== target) return [];
+        const owner = currentGenerationOwner();
+        const ownsNode = owner?.localTurnId === sourceTurn &&
+          (owner.pageTurn.nodes || [owner.pageTurn.node]).includes(node);
+        const native = fiberTurnForNode(node);
+        // A known stamp must resolve in the current accepted frame. A foreign
+        // question/route cannot borrow the logical turn's published source.
+        if (node.hasAttribute('data-clf-fiber-turn') && !native) return [];
+        if (native) {
+          if (native.conversationConflict || native.conversationId !== target ||
+              (native.question && native.question !== expected)) return [];
+          const users = new Set((native.messages || []).filter(row => row.role === 'user' && row.stable === true)
+            .map(row => row.rawMessageId || row.messageId).filter(Boolean));
+          return native.question === expected || users.size === 1 && users.has(expected) ? [expected] : [];
+        }
+        return ownsNode ? [expected] : [];
+      } : null;
       rememberUserSend();
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
       if (input.purpose === 'decision') {
@@ -14516,7 +14593,7 @@
       input.coreMention === false && !input.recovery && !agent,
       () => { sendAttempted = true; },
       input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
-        Boolean(input.recovery || agent || mentionCore));
+        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode);
       // #744: one retry when the editor was replaced before anything asked to send it.
       intakeStage('sending');
       if (!(await nativeSend()) &&

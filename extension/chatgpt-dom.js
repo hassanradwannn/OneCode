@@ -2538,7 +2538,7 @@ var CLF_DOM = (() => {
     channel.port2.postMessage(null);
   }
 
-  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null } = {}) {
+  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null } = {}) {
     // Why a Send ended without acceptance, as one short code for the caller's diagnostics (#820).
     // It names the first refusal only and never changes what Send does.
     const refused = (why) => { try { explain?.(why); } catch { /* Diagnostics never change Send. */ } return false; };
@@ -2580,6 +2580,19 @@ var CLF_DOM = (() => {
         priorUserIdsByNode.get(message.node).add(message.id);
       }
       const priorUserIds = new Set(priorUsers.map((message) => message.id).filter(Boolean));
+      // Explicit Steer may retain a published question after its native row
+      // unmounts. Its recorder supplies only the exact current native owner;
+      // snapshot before clicking, never infer an old identity from the new row.
+      const retainPriorUserIds = () => {
+        if (whileGenerating && matchesUser && acceptUserReceipt && priorUserIdsForNode) for (const node of priorNodes) {
+          const ids = safe(() => priorUserIdsForNode(node), null);
+          if (!Array.isArray(ids)) continue;
+          for (const id of ids.slice(0, 8)) if (typeof id === 'string' && id && id.length <= 256) {
+            if (!priorUserIdsByNode.has(node)) priorUserIdsByNode.set(node, new Set());
+            priorUserIdsByNode.get(node).add(id); priorUserIds.add(id);
+          }
+        }
+      };
       let submittedMessageObserved = false;
       let clickedAt = null;
 
@@ -2728,6 +2741,10 @@ var CLF_DOM = (() => {
                 return;
               }
             }
+            // A validated MAIN reply can arrive during readiness/authorization.
+            // Retain it while still pre-click; never learn prior identity from
+            // the question this Send is about to create.
+            retainPriorUserIds();
             attempted = true;
             // The deadline bounds readiness, not an already-dispatched receipt.
             // Keep this same observer and exact send lifetime until the provider
