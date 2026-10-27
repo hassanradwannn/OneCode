@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 32;
+  const VERSION = 33;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2162,6 +2162,40 @@
     }
     return out;
   }
+  /** One current response, proved by the mounted live parent graph. Aggregate
+   * typed items may omit its user; neither history-cache order nor old ordinals
+   * can supply that relation. Assistant bytes still come only from typed rows. */
+  function shellCurrentBranch(fiber, shell, conversation, budget) {
+    if (conversation.conflict || !conversation.conversationId) return null;
+    let snapshot;
+    try { snapshot = shellLiveMapping(fiber, shell.entry); } catch { return null; }
+    if (!snapshot || snapshot === false || snapshot.renderedTurns.at(-1)?.turn !== shell.entry.turn) return null;
+    const graph = snapshot.renderedConversation;
+    if (graph.conversation_id && graph.conversation_id !== conversation.conversationId) return null;
+    const anchor = shell.entry.turn.items.findLast(item => item?.type === 'user-message');
+    const anchorId = str(anchor?.messageId) || str(anchor?.serverMessageId);
+    const mapping = graph.mapping, seen = new Set(), assistantIds = [];
+    const typed = new Set(shell.messages.filter(message => message.author?.role === 'assistant').map(message => message.id));
+    let id = graph.current_node, user = null, anchored = false;
+    for (let at = 0; at < MAX_ROWS && typeof id === 'string' && id.length <= MAX_TEXT && !seen.has(id); at++) {
+      const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
+      if (node?.id !== id || message?.id !== id) return null;
+      seen.add(id);
+      if (message.author?.role === 'user') {
+        if (hiddenMessage(message) || analysisMessage(message)) return null;
+        if (!user) user = message;
+        if (id === anchorId) { anchored = true; break; }
+      } else if (!user && typed.has(id) && message.author?.role === 'assistant' &&
+          !requestOf(message) && !resultOf(message) && !thoughtMessage(message) && !hiddenMessage(message) &&
+          !analysisMessage(message) && (!message.recipient || message.recipient === 'all') && message.content?.content_type === 'text') assistantIds.push(id);
+      id = node.parent;
+    }
+    if (!anchored || !user) return null;
+    const text = withoutAppMentions(authoredText(user));
+    if (!text || text.length > Math.min(MAX_RENDERED_TEXT, budget.remaining)) return null;
+    budget.remaining -= text.length;
+    return { user: { messageId: user.id, rawText: text }, assistantIds: assistantIds.reverse() };
+  }
   /** #318 identified the history cache. Both sources project only explicitly named
    * messages. Typed public items own presentation; cache text cannot supply a final. */
   function shellRequestMetadata(fiber, queries, shell, conversation, sightings = []) {
@@ -2680,6 +2714,7 @@
         const turnBudget = { remaining: Math.min(MAX_TURN_TEXT, responseBudget.remaining) };
         const before = turnBudget.remaining;
         const renderedMessages = renderedMessagesOf(group.sections, messages, turnBudget, exactAnchors, conversation.conversationId);
+        const currentBranch = shell ? shellCurrentBranch(fiber, shell, conversation, turnBudget) : null;
         const nativeActivities = shell ? shellPublicActivity(shell, metadata, renderedMessages, turnBudget, section, exactAnchors) : nativeActivitiesOf(group.sections, messages, exactThoughtRows);
         responseBudget.remaining -= before - turnBudget.remaining;
         const generatedImages = generatedImagesOf(group.sections, messages, exactImageNodes, shell?.images);
@@ -2687,7 +2722,8 @@
         const generatedVideos = generatedVideosOf(group.sections, messages, exactVideoNodes);
         const providerArtifacts = providerArtifactsOf(messages);
         const activities = nativeActivities.events;
-        const endMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
+        const nativeEndMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
+        const endMessageId = currentBranch ? currentBranch.assistantIds.includes(nativeEndMessageId) ? nativeEndMessageId : null : nativeEndMessageId;
         const nativeTurn = shell?.entry.turn || viewTurn;
         const terminalState = nativeTurn && ['complete', 'cancelled', 'canceled', 'stopped'].includes(nativeTurn.status)
           ? nativeTurn.status === 'complete' ? 'complete' : 'interrupted'
@@ -2716,7 +2752,8 @@
           conversationConflict: conversation.conflict,
           ...(shell && !conversation.conversationId ? { requestOwnerRequired: true } : {}),
           endMessageId,
-          ...(terminalState ? { terminalState } : {}),
+          ...(terminalState && (!currentBranch || endMessageId) ? { terminalState } : {}),
+          ...(currentBranch ? { currentBranch } : {}),
           calls,
           codeModeCalls,
           requests,
