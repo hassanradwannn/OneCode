@@ -91,10 +91,12 @@ export async function cancelDesktopInput(id: string): Promise<boolean> {
 async function startAcceptedInput(entry: InputEntry, controller: AbortController): Promise<void> {
   try {
     if (entry.steerTurnId && entry.sessionId) {
+      // Revalidate every Steer at startup, including ones that were ready when admitted. The
+      // durable outbox can safely downgrade a stale target to an after-turn message; throwing here
+      // used to leave the user's authored follow-up stranded with a stale-turn error.
       const source = await getSession(entry.sessionId);
-      if (source?.conversationId !== entry.conversationId || (source.activeTurnId && source.activeTurnId !== entry.steerTurnId))
-        throw new Error('The turn selected for steering changed');
-      if (!entry.steerReady && !await releaseSteeringInput(entry.id)) {
+      const exactReady = entry.steerReady && source?.conversationId === entry.conversationId && source.activeTurnId === entry.steerTurnId;
+      if (!exactReady && !await releaseSteeringInput(entry.id)) {
         await noteInputStartupError(entry.id, 'Message queued. The exact source response is not confirmed for native Steer.');
         return;
       }

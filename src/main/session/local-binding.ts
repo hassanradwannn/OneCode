@@ -26,7 +26,7 @@ export interface ChatgptBindingEvidence {
   handoff?: never;
 }
 export type LocalBindingEvidence = GeminiBindingEvidence | ChatgptBindingEvidence;
-export type LocalBindingStatus = { state: 'pending' | 'invalid' } |
+export type LocalBindingStatus = { state: 'pending' | 'invalid' | 'blocked' | 'unresolved' } |
   { state: 'ready'; conversationId: string; sessionId: string; turn?: GeminiInputTurn };
 export type ChatgptBindingProof = { kind: 'input'; input: GeminiBindingInput } |
   { kind: 'command'; id: string; owner: string; lease: string };
@@ -45,7 +45,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const MAX_GRANTS = 20_000;
 let retirementCursor = 0;
 type AdmissionReason = 'proof-unavailable' | 'provider-mismatch' | 'credential-shape' | 'credential-unknown' |
-  'proof-invalid' | 'receipt-pending' | 'activation-changed';
+  'proof-invalid' | 'blocked' | 'receipt-pending' | 'activation-changed';
 /** Fixed diagnostic vocabulary only. Never retain the credential, digest or task. */
 export class ChatgptBindingError extends GeminiBindingError {
   constructor(readonly admissionReason: AdmissionReason) { super('CHATGPT_SESSION_NOT_AUTHORIZED'); }
@@ -129,6 +129,10 @@ async function retireInvalid(grant: Grant): Promise<void> {
     const live = grants.get(grant.digest);
     if (!live || live.id !== grant.id) return;
     if (live.activated && hasInFlightLocalBinding(live.id, live.activated.conversationId, live.activated.sessionId)) return;
+    // The observation that refused this call may have raced with a reversible
+    // state transition. Recheck under the ledger owner before deleting anything.
+    if ((await status(live)).state !== 'invalid') return;
+    if (live.activated && hasInFlightLocalBinding(live.id, live.activated.conversationId, live.activated.sessionId)) return;
     const next = new Map(grants); next.delete(grant.digest); await commit(next);
   });
 }
@@ -179,9 +183,15 @@ async function status(grant: Grant): Promise<LocalBindingStatus> {
     : await (await import('../bridge.js')).chatgptCommandBindingStatus(grant.proof);
   if (result.state !== 'ready') return result;
   const { conversationAttachment, findSessionByConversation } = await import('./store.js');
-  if (await conversationAttachment(result.conversationId, result.sessionId) !== 'current' ||
-      (await findSessionByConversation(result.conversationId, { requireUnique: true }))?.id !== result.sessionId ||
-      !ready || grants.get(grant.digest)?.id !== grant.id) return { state: 'invalid' };
+  const attachment = await conversationAttachment(result.conversationId, result.sessionId);
+  if (attachment === 'superseded') return { state: 'invalid' };
+  if (attachment !== 'current') return { state: 'unresolved' };
+  // A non-unique or temporarily unavailable catalog proves no caller identity,
+  // but it does not prove the original receipt was revoked. Refuse execution
+  // while retaining the exact grant for a later unambiguous recheck.
+  if ((await findSessionByConversation(result.conversationId, { requireUnique: true }))?.id !== result.sessionId)
+    return { state: 'unresolved' };
+  if (!ready || grants.get(grant.digest)?.id !== grant.id) return { state: 'invalid' };
   return result;
 }
 const sameTurn = (a?: GeminiInputTurn, b?: GeminiInputTurn) => JSON.stringify(a) === JSON.stringify(b);
@@ -227,6 +237,10 @@ export async function authenticateChatgptExec(name: unknown, args: unknown): Pro
   for (;;) {
     const current = await status(grant!);
     if (current.state === 'invalid') { await retireInvalid(grant!); fail('proof-invalid'); }
+    // Block is a reversible policy fence, not proof that the task receipt vanished.
+    // Refuse immediately without deleting the grant or dispatching a tool.
+    if (current.state === 'blocked') fail('blocked');
+    if (current.state === 'unresolved') fail('proof-unavailable');
     if (current.state === 'ready') {
       const stripped = { ...input };
       delete stripped.onecode_session_key;

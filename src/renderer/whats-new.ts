@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.25': {
+    lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Independent chats'), text: () => t('A stalled browser tab no longer holds up other chats. Steer keeps the exact recorded question when the browser redraws it, while preserving the original local process and output.') },
+      { icon: 'i-retry', title: () => t('Manual handoff'), text: () => t('Manual compaction retains a verified completed answer through redraws and changes between its verified native headers, while keeping the current question and local results attached.') }
+    ]
+  },
   '0.7.2': {
     lead: () => t('Keep independent chats moving when a browser rendering operation stalls.'),
     highlights: [

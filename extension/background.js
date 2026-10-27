@@ -4868,7 +4868,20 @@ const HANDLERS = {
     return { ok: true };
   },
   async history_retry(message, _sender, source) {
-    return historyLedger(message, source);
+    const reply = await historyLedger(message, source);
+    if (reply?.ok === true && message.action === 'success') {
+      const conversationId = cleanConversationId(message.conversationId);
+      if (conversationId) {
+        // The ledger accepted this only from the currently elected exact document.
+        // Mirror that stronger fact to the app so an old Retry-After fence cannot
+        // keep blocking recovery after native history has visibly rendered again.
+        await call('/history-recovered', {
+          method: 'POST',
+          body: JSON.stringify({ conversationId, recoveredAt: reply.data?.ledger?.succeededAt })
+        }).catch(() => undefined);
+      }
+    }
+    return reply;
   },
   async core_plugin(message, _sender, source) {
     if (!ownsDocument(source)) return { ok: false };

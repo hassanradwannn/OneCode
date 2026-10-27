@@ -646,7 +646,8 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
   }
   const conversation = receipt.conversationId;
   if (!receipt.committed || receipt.outcome !== 'committed' || receipt.client !== proof.owner || !conversation ||
-      chatProviderForConversation(conversation) !== 'chatgpt' || isChatBlocked(conversation)) return settledCommandBinding(proof.id, { state: 'invalid' });
+      chatProviderForConversation(conversation) !== 'chatgpt') return settledCommandBinding(proof.id, { state: 'invalid' });
+  if (isChatBlocked(conversation)) return settledCommandBinding(proof.id, { state: 'blocked' });
   if (custody.resume) {
     // The original continuation and committed command receipt own this grant. The
     // source chat/new-chat selector cannot authorize the destination, nor can a
@@ -2483,7 +2484,7 @@ export async function stopSessionTurn(sessionId: string, expectedTurnId: string,
     await assertCurrent();
   } catch (error) { retire(command, 'stop request could not be saved or its turn changed'); throw error; }
   armDeadline(command);
-  await revokeSilenceInputs(sessionId);
+  await revokeSilenceInputs(sessionId, 'the user stopped the turn');
   endActivity(id);
   repairsInFlight.delete(id);
   if (!alreadyQueued) logInfo(`bridge: desktop Stop requested for session ${sessionId}, conversation ${id}, turn ${expectedTurnId}, command ${command.id}; native cancellation is unconfirmed`);
@@ -3379,6 +3380,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     logWarn(`bridge: Provider says chat ${id} was deleted${ended ? `; ${ended} waiting message(s) ended` : ''}`);
     return json(res, 200, { ok: true, ended }, origin);
   }
+  if (route === '/history-recovered' && req.method === 'POST') {
+    let body: Record<string, unknown>;
+    try {
+      body = (await readBody(req)) as Record<string, unknown>;
+    } catch (err) {
+      if ((err as Error).message === 'body_too_large') return tooLarge(res, origin);
+      return json(res, 400, { error: 'bad_request' }, origin);
+    }
+    const id = conversationId(body['conversationId']);
+    const recoveredAt = Number(body['recoveredAt']);
+    if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    if (!Number.isFinite(recoveredAt) || recoveredAt <= 0 || recoveredAt > Date.now() + 60_000)
+      return json(res, 400, { error: 'bad_recovered_at' }, origin);
+    const cleared = clearProviderHistoryBackoff(id, recoveredAt);
+    return json(res, 200, { ok: true, cleared }, origin);
+  }
 
   // Worker chats of ended runs, archived in Gemini from one of the browser's Gemini tabs (#1460).
   if (route === '/worker-archive/next' && req.method === 'POST') {
@@ -3790,7 +3807,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
       if (manual) {
         const session = await findSessionByConversation(id);
-        if (session) await revokeSilenceInputs(session.id);
+        if (session) await revokeSilenceInputs(session.id, 'the browser chat was closed');
         if (repairsInFlight.get(id)?.state !== 'done') repairsInFlight.delete(id);
         logInfo(`bridge: ${id} was closed deliberately; automatic browser recovery is paused until its page returns`);
       } else await queueMissingTab(id, working);
@@ -8640,6 +8657,8 @@ async function restoreBrowserRepairs(): Promise<void> {
 }
 /** Exact provider Retry-After deadline for conversation-history reads. It delays browser recovery; it never creates one. */
 const providerHistoryBackoffUntil = new Map<string, number>();
+/** In-process observation time for the newest live fence; prevents an older success POST racing it. */
+const providerHistoryBackoffObservedAt = new Map<string, number>();
 type ProviderDeferredColdStart = {
   repair: Repair;
   pickup: { replyId: string; dueAt: number; attempts: number; expiresAt: number; stoppedAt?: number } | null;
@@ -8653,22 +8672,51 @@ function providerHistoryBackoff(conversationId: string, now = Date.now()): numbe
   if (!until) return null;
   if (until <= now) {
     providerHistoryBackoffUntil.delete(conversationId);
+    providerHistoryBackoffObservedAt.delete(conversationId);
     return null;
   }
   return until;
 }
 
+/**
+ * Retire one provider-history Retry-After fence after the elected browser document proves
+ * that this exact conversation rendered normally again. The provider deadline is only a
+ * guard around native history loading; once that load has succeeded, keeping the deadline
+ * alive blocks otherwise-valid recovery for no remaining provider reason.
+ */
+function clearProviderHistoryBackoff(conversationId: string, recoveredAt: number, now = Date.now()): boolean {
+  const until = providerHistoryBackoffUntil.get(conversationId);
+  if (!until) return false;
+  const observedAt = providerHistoryBackoffObservedAt.get(conversationId) ?? 0;
+  if (recoveredAt < observedAt) return false;
+  providerHistoryBackoffUntil.delete(conversationId);
+  providerHistoryBackoffObservedAt.delete(conversationId);
+  const repair = repairsInFlight.get(conversationId);
+  if (repair && repair.state !== 'done' && repair.notBefore <= until) repair.notBefore = now;
+  persistBrowserRepairsSoon();
+  wakeDueProviderDeferredRecovery(now);
+  armSilenceSweep(now);
+  changed();
+  return true;
+}
+
 function noteProviderHistoryBackoff(conversationId: string, observations: readonly ChatObservation[]): void {
   const now = Date.now();
-  for (const [id, deadline] of providerHistoryBackoffUntil) if (deadline <= now) providerHistoryBackoffUntil.delete(id);
+  for (const [id, deadline] of providerHistoryBackoffUntil) if (deadline <= now) {
+    providerHistoryBackoffUntil.delete(id);
+    providerHistoryBackoffObservedAt.delete(id);
+  }
   let until = providerHistoryBackoff(conversationId, now) ?? 0;
+  let observedAt = providerHistoryBackoffObservedAt.get(conversationId) ?? 0;
   for (const item of observations) {
     if (item.kind !== 'chat_error' || item.blocking !== true || !Number.isFinite(item.retryAt) ||
         item.retryAt! <= now || item.retryAt! - item.time > 24 * 60 * 60_000) continue;
     until = Math.max(until, item.retryAt!);
+    observedAt = Math.max(observedAt, item.time);
   }
   if (!until) return;
   providerHistoryBackoffUntil.set(conversationId, until);
+  providerHistoryBackoffObservedAt.set(conversationId, observedAt);
   // Expired entries are purged above. Never evict a live rate-limit fence,
   // even if more than 500 distinct conversations were throttled.
   const repair = repairsInFlight.get(conversationId);
@@ -9580,10 +9628,12 @@ async function browserTabPolicy(openConversations: Set<string>) {
     const previous = latestDesktopReceipt.get(row.conversationId);
     if (!previous || row.deliveredAt >= previous.deliveredAt!) latestDesktopReceipt.set(row.conversationId, row);
   }
-  // A cancelled new-chat send whose late receipt proves it happened may retire. A
-  // later authored follow-up supersedes that cancellation and retains the waiting chat.
+  // A cancelled new-chat send whose late receipt proves it happened may retire. Delivery truth
+  // is now represented as state=sent after that exact late ACK, while cancelledByUser retains the
+  // earlier lifecycle intent; either representation must therefore grant the same bounded cleanup.
+  // A later independently authored follow-up has no cancelledByUser marker and supersedes it.
   for (const [id, row] of latestDesktopReceipt)
-    if ((row.opening || !row.sessionId) && row.state === 'cancelled' && managed.has(id)) terminal.add(id);
+    if ((row.opening || !row.sessionId) && (row.state === 'cancelled' || row.cancelledByUser === true) && managed.has(id)) terminal.add(id);
   for (const id of managed) {
     const agent = agentInfoForOwnedConversation(id);
     if (agent?.role === 'worker' && !agent.revivable && (agent.state === 'finished' || agent.state === 'failed')) terminal.add(id);
@@ -12356,6 +12406,7 @@ export function resetBridgeForTests(): void {
   bridgeError = null;
   clearUnattributedIncident();
   providerHistoryBackoffUntil.clear();
+  providerHistoryBackoffObservedAt.clear();
   selectedChatReadiness.clear();
   selectedChatFlights.clear();
   providerDeferredColdStarts.clear();

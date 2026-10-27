@@ -5524,18 +5524,40 @@
     if (presentationOnly) return true;
     // A durable Steer's current native row may arrive after its DOM bubble was
     // replaced. Admit that exact user through the ordinary lifecycle before this
-    // same snapshot can file its first final under the preceding generation.
+    // same snapshot can file its first final under the preceding generation. Do
+    // not discard the snapshot while that user row is unresolved, though: the
+    // provider may already be publishing new public assistant text. Record that
+    // text without a local turn owner, then let the canonical message be promoted
+    // when the exact Steer row arrives. This preserves content without lending it
+    // to the preceding generation.
     const pendingSteer = pendingNativeSteerView();
     const pendingAccepted = userSendReceipt?.accepted, pendingSource = pendingAccepted?.nativeSteer;
-    if (pendingAccepted?.epoch === epoch && pendingAccepted.conversationId === askedConversation &&
+    let pendingSteerUnresolved = Boolean(pendingAccepted?.epoch === epoch && pendingAccepted.conversationId === askedConversation &&
         pendingAccepted.messageId !== openedUserMessageId && pendingSource?.turnId === turnId &&
-        pendingSource.questionId === openedUserMessageId && !pendingSteer) return false;
+        pendingSource.questionId === openedUserMessageId && !pendingSteer);
+    let quarantinedSteerTurnId = pendingSteerUnresolved ? pendingSource.turnId : null;
+    let quarantinedTerminalMessageId = null;
+    const quarantinePendingSteer = () => {
+      exactOwner = null;
+      ownedPageNode = null;
+      ownedPageTurn = null;
+    };
+    if (pendingSteerUnresolved) quarantinePendingSteer();
     if (pendingSteer && pendingSteer.acceptedQuestionId !== openedUserMessageId) {
       observe();
-      if (openedUserMessageId !== pendingSteer.acceptedQuestionId) return false;
-      exactOwner = currentGenerationOwner(); ownedPageNode = exactOwner?.pageTurn || null;
-      ownedPageTurn = stampedFiberTurn(ownedPageNode, answer.turns, answer.scanToken);
-      if (!exactOwner || !ownedPageTurn) return false;
+      if (openedUserMessageId !== pendingSteer.acceptedQuestionId) {
+        pendingSteerUnresolved = true;
+        quarantinedSteerTurnId = pendingSource?.turnId || turnId;
+        quarantinePendingSteer();
+      } else {
+        exactOwner = currentGenerationOwner(); ownedPageNode = exactOwner?.pageTurn || null;
+        ownedPageTurn = stampedFiberTurn(ownedPageNode, answer.turns, answer.scanToken);
+        if (!exactOwner || !ownedPageTurn) {
+          pendingSteerUnresolved = true;
+          quarantinedSteerTurnId = pendingSource?.turnId || turnId;
+          quarantinePendingSteer();
+        }
+      }
     }
     CLF_DOM.presentUserPrompts?.(message => userMessageSource(message)?.text ?? null);
     for (const check of pageViewChecks) void check();
@@ -5769,7 +5791,7 @@
     for (let index = 0; index < answer.turns.length; index++) {
       if (index === activeTurnIndex) continue;
       const owner = settledTurnOwner(answer.turns[index]);
-      if (!owner || owner === refusedSettledOwner) continue;
+      if (!owner || owner === refusedSettledOwner || owner === quarantinedSteerTurnId) continue;
       settledOwners.set(answer.turns[index], owner);
       ownerClaims.set(owner, (ownerClaims.get(owner) || 0) + 1);
     }
@@ -6027,6 +6049,45 @@
           `${state}\u0000${message.rawText}\u0000${message.renderedHtml}\u0000${owner}` +
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
+        if (refusedSettledOwner === turnId && index === answer.turns.length - 1 &&
+            state === 'final' && exactTerminal && message.stable === true && turn.terminalState === 'complete' &&
+            concreteConversation(turn.conversationId) === askedConversation && turn.conversationConflict !== true &&
+            priorMessage?.signature !== signature) {
+          // A missing accepted-Steer user row may prevent transcript ownership from being proved
+          // even after ChatGPT has positively ended the response. Lifecycle closure is narrower:
+          // the durable accepted receipt must still be current, every native user that *is*
+          // visible must be one of that receipt's known predecessors/current id, the aggregate
+          // header must be one of the receipt's known native questions, and any currentBranch
+          // must name the exact accepted user/body and contain this exact terminal. This lets an
+          // aggregate shell with the C user virtualized away retire Working/Thinking, while a
+          // newer branch, changed body, unknown header or wrong final remains fail-closed. The
+          // public assistant message stays unowned until ordinary transcript proof strengthens.
+          const nativeUsers = orderedNativeUsers(turn);
+          const headerKnown = Boolean(turn.question && (
+            priorCurrentIds.has(turn.question) ||
+            heldCurrent?.receiptAlias?.question === turn.question ||
+            heldCurrent?.receiptParentQuestion === turn.question ||
+            (heldCurrent?.receiptParents || []).some(parent => parent.questionId === turn.question)
+          ));
+          const usersKnown = Boolean(nativeUsers?.length && nativeUsers.every(row => {
+            const id = row.rawMessageId || row.messageId;
+            return priorCurrentIds.has(id) && (id !== openedUserMessageId || matchesSubmittedNativeText(row.rawText, heldCurrent.receiptText));
+          }));
+          const branch = turn.currentBranch;
+          const branchKnown = !branch || Boolean(
+            branch.user?.messageId === openedUserMessageId &&
+            matchesSubmittedNativeText(branch.user.rawText, heldCurrent.receiptText) &&
+            branch.assistantIds?.includes(terminalMessageId)
+          );
+          const receiptCurrent = Boolean(
+            heldCurrent?.receiptAccepted && heldCurrent.receiptId === openedUserMessageId &&
+            heldCurrent.receiptEpoch === epoch && heldCurrent.conversationId === askedConversation &&
+            typeof heldCurrent.receiptText === 'string' &&
+            (!userSendReceipt || userSendReceipt.accepted?.messageId === openedUserMessageId)
+          );
+          if (receiptCurrent && headerKnown && usersKnown && branchKnown)
+            quarantinedTerminalMessageId = terminalMessageId;
+        }
         let closedFinal = priorMessage?.closedFinal || null;
         if (!closedFinal && refusedSettledOwner !== turnId && state === 'final' && message.stable === true && (!turn.terminalState || turn.terminalState === 'complete') && !ownerConflict) {
           // Stability may strengthen after the live generation closes. Its exact
@@ -6134,6 +6195,15 @@
         finishGeneration(ended, local.outcome === 'unknown' || local.reason === 'thinking_failed'
           ? { outcome: 'completed' } : local, false);
       }
+    }
+    if (generating && quarantinedTerminalMessageId && turnId &&
+        refusedSettledOwner === turnId &&
+        !settledFinals.has(quarantinedTerminalMessageId)) {
+      fiberTerminalMessageId = quarantinedTerminalMessageId;
+      settledFinals.add(quarantinedTerminalMessageId);
+      // Ownership remains quarantined above; this only retires the durable local generation so
+      // OneCode cannot keep showing Working/Thinking after ChatGPT has positively ended it.
+      finishGeneration(generationTurn(), { outcome: 'completed' }, false);
     }
     if (callsReported.size > 4000) callsReported.clear();
     if (messagesReported.size > 4000) messagesReported.clear();
@@ -8280,6 +8350,7 @@
     // Outside the guard, and last: startCompact runs for tens of seconds and polls this
     // same endpoint while it works, so firing it with `pulling` still set would deadlock
     // the run against the poll that started it.
+    if (current() && CLF_DOM.conversationId() === forId) armPendingCompactionReadiness(forId, forEpoch);
     if (current() && CLF_DOM.conversationId() === forId) await maybeResumePendingCompaction(forId, forEpoch);
     if (current() && CLF_DOM.conversationId() === forId) maybeRecoverResumeGoalTurn();
     if (current() && CLF_DOM.conversationId() === forId) maybeRecoverDurableGoalTurn();
@@ -10613,7 +10684,40 @@
       ? 'Waiting for the provider page to be ready. The original handoff will continue automatically.'
       : 'The handoff was not submitted. Waiting for the app to confirm the original preparation state.';
     renderControl();
+    if (reply?.ok === true && reply.data?.deferred === true) armPendingCompactionReadiness(forId, epoch);
     return reply?.ok === true && reply.data?.deferred === true;
+  }
+
+  // A durable pre-Send handoff wait must resume from provider readiness itself. Long ChatGPT
+  // sessions can spend minutes in native "Preparing" while React only toggles composer/button
+  // attributes; relying on the next activity poll made the app look permanently paused until an
+  // unrelated message or tab event happened. This observer grants no Send authority: it only
+  // wakes maybeResumePendingCompaction(), which rechecks the same token, source question, draft,
+  // writable composer and durable dispatch checkpoint before anything irreversible can happen.
+  let compactionReadinessProbeKey = '';
+  function armPendingCompactionReadiness(forId = conversationId, forEpoch = epoch) {
+    const source = job?.stage === 'handoff-pending' ? job.sourceSend : null;
+    const wait = source?.preparationWait;
+    if (!wait || !job?.token) { compactionReadinessProbeKey = ''; return; }
+    const token = job.token;
+    const key = [forId, forEpoch, token, wait.retryAt].join(':');
+    if (compactionReadinessProbeKey === key) return;
+    compactionReadinessProbeKey = key;
+    const current = () => alive && compactionReadinessProbeKey === key && conversationId === forId && epoch === forEpoch &&
+      CLF_DOM.conversationId() === forId && job?.token === token && job.stage === 'handoff-pending' &&
+      Boolean(job.sourceSend?.preparationWait);
+    void waitPageView(() => {
+      const pending = job?.sourceSend?.preparationWait;
+      if (!pending || Date.now() < pending.retryAt || nativeBusy || generating || CLF_DOM.generating() ||
+          !CLF_DOM.composerVisible() || !CLF_DOM.composerWritable() || CLF_DOM.hasComposerAttachments()) return null;
+      return true;
+    }, current, 10 * 60_000, 250).then(ready => {
+      const stillCurrent = current();
+      if (compactionReadinessProbeKey === key) compactionReadinessProbeKey = '';
+      if (!ready || !stillCurrent) return;
+      expediteActivityPull();
+      void maybeResumePendingCompaction(forId, forEpoch);
+    });
   }
 
   // A manual request may follow a completed native answer whose user bubble React
@@ -11763,14 +11867,17 @@
     // describes a machine that is still changing.
     const answer = marked.answer;
     if (!answer) return false;
+    const assistants = (answer.messages || []).filter((message) => message.role === 'assistant' && message.stable === true);
     const terminalId = answer.endMessageId;
-    if (!terminalId || (answer.calls || []).some((call) => !call || call.answered !== true)) return false;
-    const terminal = (answer.messages || []).find(
-      (message) =>
-        message.role === 'assistant' &&
-        message.stable === true &&
-        (message.rawMessageId === terminalId || message.messageId === terminalId)
-    );
+    const unambiguousAssistant = assistants.length === 1 && String(assistants[0]?.rawText || '').trim().length > 0
+      ? assistants[0] : null;
+    const completedWithoutTerminal = !terminalId && answer.terminalState === 'complete' &&
+      !CLF_DOM.generating() && !generating && !!unambiguousAssistant;
+    if ((!terminalId && !completedWithoutTerminal) ||
+        (answer.calls || []).some((call) => !call || call.answered !== true)) return false;
+    const terminal = terminalId
+      ? assistants.find((message) => message.rawMessageId === terminalId || message.messageId === terminalId)
+      : unambiguousAssistant;
     const summary = String(terminal?.rawText || '').trim();
     if (!summary) return false;
     const pending = await peekPendingTools();
