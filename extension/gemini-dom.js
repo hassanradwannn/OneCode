@@ -875,7 +875,7 @@ var CLF_DOM = (() => {
     }
   }
   const selectConnector = (name, current, explain = null) => selectNativeMention(name, current, explain);
-  async function sendControlledWarmup(box, submitted, warmup, current, explain, adoptEditor = null) {
+  async function sendControlledWarmup(box, submitted, warmup, current, explain, adoptEditor = null, withOwnEdit = null) {
     if (warmup === SKILL_WARMUP) {
       // A pasted @name does not activate Gemini's native Skill state. Select
       // its actual native option/token, then spend the same tool-free warm-up
@@ -908,7 +908,7 @@ var CLF_DOM = (() => {
     let performingOwnEdit = false, clicked = false, cleared = false, staged = false, rebound = false;
     const opening = openingClaim, command = commandClaim, attachments = attachmentRows();
     const sameAttachments = () => { const rows = attachmentRows(); return rows.length === attachments.length && rows.every((node, index) => node === attachments[index]); };
-    const ownEdit = operation => { performingOwnEdit = true; try { return operation(); } finally { performingOwnEdit = false; } };
+    const ownEdit = operation => { performingOwnEdit = true; try { return withOwnEdit ? withOwnEdit(operation) : operation(); } finally { performingOwnEdit = false; } };
     const snapshot = () => { edit.html = box.innerHTML; edit.normalizationText = blockText(box); };
     const trustedEdit = event => { if (event.isTrusted && !performingOwnEdit && event.target?.closest?.(BOX)) edit.revoked = true; };
     const owns = () => {
@@ -1031,7 +1031,8 @@ var CLF_DOM = (() => {
       return rows.length <= 1 && (!rows.length || [WARMUP, SKILL_WARMUP].includes(value)) &&
         (!held.row || rows[0] === held.row && value === held.warmup && (!warmupOutput() || compact(warmupOutput()) === 'READY'));
     };
-    const noteEdit = event => { if (event.isTrusted) held.edited = true; };
+    let performingInitializationEdit = false;
+    const noteEdit = event => { if (event.isTrusted && !performingInitializationEdit) held.edited = true; };
     document.addEventListener('beforeinput', noteEdit, true); document.addEventListener('input', noteEdit, true);
     try {
       let emptySince = null;
@@ -1064,7 +1065,13 @@ var CLF_DOM = (() => {
         initializerBox.focus({ preventScroll: true });
         const initialized = await sendControlledWarmup(initializerBox, '', WARMUP, emptyCurrent,
           reason => console.info('[OneCode warmup initialization] ' + reason),
-          replacement => emptyCurrent() && replacement === composer() && replacement?.isConnected);
+          replacement => emptyCurrent() && replacement === composer() && replacement?.isConnected,
+          operation => {
+            // execCommand emits trusted input for our synchronous insertion.
+            // Human edits during every asynchronous wait still revoke custody.
+            performingInitializationEdit = true;
+            try { return operation(); } finally { performingInitializationEdit = false; }
+          });
         // A dispatched preparation cannot be repeated on an unknown outcome.
         // Its native row and real route still have to pass the normal proof below.
         if (initialized !== WARMUP) return false;

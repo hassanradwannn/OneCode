@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.5': {
+    lead: () => t('Keep confirmed messages authorized through native page updates.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('ChatGPT Steer receipts'), text: () => t('Confirms a new question when ChatGPT reuses its previous section, so an accepted Steer keeps its task authorization.') },
+      { icon: 'i-retry', title: () => t('Gemini preparation edits'), text: () => t('Preparation continues through its own editor updates. Your edits during a wait still stop automatic preparation and preserve your draft.') }
+    ]
+  },
   '0.7.4': {
     lead: () => t('Recover Gemini preparation when a refresh returns an empty home page.'),
     highlights: [
