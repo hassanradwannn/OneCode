@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.12': {
+    lead: () => t('Keep rapid follow-up messages attached to their exact browser receipt.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Rapid Steer recovery'), text: () => t('Retains a verified native section alias from an acknowledged message so the next Steer can recognize a remounted source without accepting unrelated messages.') }
+    ]
+  },
   '0.7.11': {
     lead: () => t('Identify the browser checkpoint holding an input receipt.'),
     highlights: [
