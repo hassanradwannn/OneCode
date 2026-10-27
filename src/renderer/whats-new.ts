@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.21': {
+    lead: () => t('Keep completed replies with the latest follow-up.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Follow-up reply ownership'), text: () => t('Keeps completed replies attached to the latest acknowledged follow-up when the browser changes how it presents the conversation.') }
+    ]
+  },
   '0.7.20': {
     lead: () => t('Keep follow-up messages moving while the browser updates.'),
     highlights: [

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 101;
+  const RECORDER_VERSION = 102;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2284,7 +2284,7 @@
     if (!ordinary) return accepted;
     const known = reportedUserMessages.get(openedUserMessageId), prior = known?.receiptPriorIds || [];
     const native = fiberTurnFor(ordinary), users = orderedNativeUsers(native);
-    const older = Boolean(native && !native.conversationConflict && native.conversationId === conversationId &&
+    const older = Boolean(!ordinary.acceptedQuestionId && native && !native.conversationConflict && native.conversationId === conversationId &&
       native.question && prior.includes(native.question) && users && users.every(row => prior.includes(row.rawMessageId || row.messageId)));
     if (!accepted) return older && known?.receiptAccepted && known.receiptEpoch === epoch ? null : ordinary;
     if ((ordinary.nodes || [ordinary.node]).includes(accepted.node))
@@ -2356,11 +2356,21 @@
           receipt.accepted.conversationId !== conversationId || receipt.accepted.epoch !== epoch)) return null;
     if (!native || native.conversationConflict || native.conversationId !== conversationId ||
         (native.question !== openedUserMessageId && !(known.receiptAlias && known.receiptAlias.question === (native.question || null)) && !(known.receiptParents || []).some(parent =>
-          (parent.section.deref() === node || remounted) && parent.questionId === native.question) &&
-          !(remounted && known.receiptParentQuestion === native.question))) return null;
+          (parent.section.deref() === node || remounted || native.currentBranch?.user.messageId === openedUserMessageId) && parent.questionId === native.question) &&
+          !((remounted || native.currentBranch?.user.messageId === openedUserMessageId) && known.receiptParentQuestion === native.question))) return null;
     const priorIds = new Set(known.receiptPriorIds || []); priorIds.add(openedUserMessageId);
     if (views.some(view => view && view.conversationId === conversationId && (view.messages || []).some(row =>
-      row.role === 'user' && (row.stable !== true || !priorIds.has(row.rawMessageId || row.messageId))))) return null;
+      row.role === 'user' && (row.stable !== true || !priorIds.has(row.rawMessageId || row.messageId)))) ||
+      views.some(view => view?.conversationId === conversationId && view.currentBranch && !priorIds.has(view.currentBranch.user.messageId))) return null;
+    if (native.currentBranch) {
+      const branch = native.currentBranch;
+      if (branch.user.messageId !== openedUserMessageId || !matchesSubmittedNativeText(branch.user.rawText, known.receiptText) ||
+          CLF_DOM.messages().some(row => row.role === 'user' && !priorIds.has(row.id)) ||
+          (native.messages || []).some(row => row.role === 'user' && (row.rawMessageId || row.messageId) === openedUserMessageId &&
+            !matchesSubmittedNativeText(row.rawText, known.receiptText))) return null;
+      return { id: native.turnId || null, role: 'assistant', node, nodes: [node], acceptedQuestionId: openedUserMessageId,
+        acceptedMessageIds: native.messages.filter(row => row.role === 'assistant' && branch.assistantIds.includes(row.rawMessageId || row.messageId)).map(row => row.messageId) };
+    }
     const users = orderedNativeUsers(native);
     if (!users) return null;
     const ids = users.map(row => row.rawMessageId || row.messageId);
@@ -3998,7 +4008,7 @@
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
-  const FIBER_VERSION = 32;
+  const FIBER_VERSION = 33;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4435,6 +4445,14 @@
     }
     const keptVideos = videos.filter(video => !conflictingVideos.has(`${video.messageId}\u0000${video.assetId}`));
     const endMessageId = cap(raw.endMessageId, 200);
+    let currentBranch = null;
+    if (raw.currentBranch && typeof raw.currentBranch === 'object') {
+      const id = cap(raw.currentBranch.user?.messageId, 200), text = raw.currentBranch.user?.rawText, ids = raw.currentBranch.assistantIds;
+      if (id && typeof text === 'string' && text.length > 0 && text.length <= 256000 && Array.isArray(ids) && ids.length <= 400 &&
+          ids.every(value => typeof value === 'string' && value && value.length <= 200) && new Set(ids).size === ids.length)
+        currentBranch = { user: { messageId: id, rawText: text }, assistantIds: ids.slice() };
+    }
+    if (currentBranch && endMessageId && !currentBranch.assistantIds.includes(endMessageId)) return null;
     const codeModeCalls = [], codeIds = new Set();
     for (const entry of (Array.isArray(raw.codeModeCalls) ? raw.codeModeCalls : []).slice(0, FIBER_MAX_CALLS)) {
       const messageId = cap(entry && entry.messageId, 200);
@@ -4456,6 +4474,7 @@
       conversationConflict: raw.conversationConflict === true,
       requestOwnerRequired: raw.requestOwnerRequired === true,
       endMessageId,
+      ...(currentBranch ? { currentBranch } : {}),
       ...(raw.terminalState != null ? { terminalState: ['complete', 'interrupted'].includes(raw.terminalState) ? raw.terminalState : 'unknown' } : {}),
       calls: kept,
       codeModeCalls,
@@ -5384,9 +5403,11 @@
       const candidates = answer.turns.filter(turn => turn.turnId === ownedPageTurnId);
       if (candidates.length === 1) ownedPageTurn = candidates[0];
     }
-    if (ownedPageNode?.acceptedQuestionId && (exactOwner.localTurnId !== turnId ||
-        acceptedAssistantSection(ownedPageNode.node, ownedPageTurn, answer.turns)?.acceptedQuestionId !== ownedPageNode.acceptedQuestionId)) {
-      exactOwner = null; ownedPageNode = null; ownedPageTurn = null;
+    if (ownedPageNode?.acceptedQuestionId) {
+      const revalidated = exactOwner.localTurnId === turnId ? acceptedAssistantSection(ownedPageNode.node, ownedPageTurn, answer.turns) : null;
+      if (revalidated?.acceptedQuestionId !== ownedPageNode.acceptedQuestionId) {
+        exactOwner = null; ownedPageNode = null; ownedPageTurn = null;
+      } else ownedPageNode = { ...ownedPageNode, acceptedMessageIds: revalidated.acceptedMessageIds };
     }
     // A canonical historical owner cannot undo a positive current-task veto.
     // It may still place old A/B rows, but cannot lend C to a newer user/frame.
@@ -5552,6 +5573,10 @@
         currentNativeCproof: ownedPageNode?.acceptedQuestionId === openedUserMessageId,
         domRoles: CLF_DOM.turns().map(turn => turn.role), layout: CLF_DOM.layoutDiagnostics?.(),
         turns: answer.turns.map(turn => { const user = orderedNativeUsers(turn)?.at(-1); return { final: !!turn.endMessageId,
+          currentBranch: Boolean(turn.currentBranch), branchQuestion: turn.currentBranch?.user.messageId === openedUserMessageId,
+          branchFinal: Boolean(turn.currentBranch && turn.endMessageId && turn.currentBranch.assistantIds.includes(turn.endMessageId)),
+          branchBody: Boolean(turn.currentBranch?.user.messageId === openedUserMessageId && typeof heldCurrent?.receiptText === 'string' &&
+            matchesSubmittedNativeText(turn.currentBranch.user.rawText, heldCurrent.receiptText)),
           sameConversation: turn.conversationId === askedConversation, conflict: turn.conversationConflict === true,
           ownQuestion: (turn.messages || []).some(message => message.role === 'user' && (message.rawMessageId || message.messageId) === openedUserMessageId),
           matchedBody: Boolean(user && (user.rawMessageId || user.messageId) === openedUserMessageId &&
@@ -5756,13 +5781,16 @@
       // The live generation owns the turn it is writing; a settled one is claimed only by
       // ChatGPT's own request id. See settledTurnOwner().
       const candidateOwner = index === activeTurnIndex ? activeLocalTurnId : settledOwners.get(turn) || null;
-      const frameLocalOwner = candidateOwner === refusedSettledOwner ? null : candidateOwner;
+      const historicalAggregate = index !== activeTurnIndex && heldCurrent?.receiptAccepted &&
+        (turn.messages || []).filter(row => row.role === 'user').length > 1;
+      const frameLocalOwner = candidateOwner === refusedSettledOwner || historicalAggregate ? null : candidateOwner;
       const acceptedQuestion = index === activeTurnIndex ? ownedPageNode?.acceptedQuestionId ||
         (activeLocalTurnId === refusedSettledOwner ? openedUserMessageId : null) : null;
       const boundary = acceptedQuestion ? (turn.messages || []).findIndex(row => row.role === 'user' &&
         row.stable === true && (row.rawMessageId || row.messageId) === acceptedQuestion) : -1;
-      const currentMessages = new Set(boundary >= 0 && Number.isInteger(turn.messages[boundary].order) ?
-        turn.messages.filter(row => Number.isInteger(row.order) && row.order > turn.messages[boundary].order).map(row => row.messageId) : []);
+      const currentMessages = new Set(index === activeTurnIndex && ownedPageNode?.acceptedMessageIds ||
+        (boundary >= 0 && Number.isInteger(turn.messages[boundary].order) ?
+          turn.messages.filter(row => Number.isInteger(row.order) && row.order > turn.messages[boundary].order).map(row => row.messageId) : []));
       if (turn.imageGeneration && frameLocalOwner && !acceptedQuestion && concreteConversation(turn.conversationId) === askedConversation) {
         const id = `native-image-generation:${turn.turnId}`;
         if (!pageToolsReported.has(id)) {
@@ -6007,7 +6035,7 @@
           const page = (!localOwner || index !== activeTurnIndex) && priorMessage?.owner === turnId ? currentAssistantTurn() : null;
           const proofOwner = localOwner && index === activeTurnIndex ? localOwner :
             page && fiberTurnFor(page) === turn && localGenerationOf(page) === turnId ? turnId : null;
-          const ownUser = orderedNativeUsers(turn)?.at(-1), ownReceipt = reportedUserMessages.get(openedUserMessageId);
+          const ownUser = turn.currentBranch ? { rawMessageId: turn.currentBranch.user.messageId, rawText: turn.currentBranch.user.rawText } : orderedNativeUsers(turn)?.at(-1), ownReceipt = reportedUserMessages.get(openedUserMessageId);
           const logicalQuestion = proofOwner === turnId && ownReceipt?.receiptAccepted && ownReceipt.receiptId === openedUserMessageId &&
             ownReceipt.receiptEpoch === epoch && ownReceipt.conversationId === turn.conversationId &&
             (ownUser?.rawMessageId || ownUser?.messageId) === openedUserMessageId && matchesSubmittedNativeText(ownUser.rawText, ownReceipt.receiptText)
@@ -6032,7 +6060,7 @@
           ...(message.resolvedModel ? { resolvedModel: message.resolvedModel } : {}),
           ...(message.references ? { references: message.references } : {}),
           ...(message.createTime ? { authoredAt: message.createTime } : {}),
-          turnId: localOwner || (acceptedQuestion ? priorMessage?.owner : undefined),
+          turnId: localOwner || (acceptedQuestion || historicalAggregate ? priorMessage?.owner || streamMessageTurnOwners.get(message.messageId) || undefined : undefined),
           text: message.rawText,
           renderedHtml: message.renderedHtml,
           // create_time is stamped by ChatGPT's server clock while turn/tool events use the
@@ -10619,15 +10647,20 @@
       if (native) scan.resolvedCount++;
       if (!native || native.conversationConflict || native.conversationId !== forId) continue;
       scan.sameConversationCount++;
-      const users = orderedNativeUsers(native);
+      const branch = native.currentBranch;
+      const users = branch ? (native.messages || []).filter(row => row.role === 'user') : orderedNativeUsers(native);
       if (!users) return refuseClosedSource('native-users', { ...scan, orderedUsersValid: false });
       const ids = users.map(row => row.rawMessageId || row.messageId);
       // An unknown/newer native user elsewhere in the current view is not history.
       if (ids.some(id => id !== questionId && (reportedUserMessages.get(id)?.conversationId !== forId ||
           !userAnchorByMessage.get(id) || userAnchorByMessage.get(id).seq >= currentAnchor.seq)))
         return refuseClosedSource('native-users', { ...scan, orderedUsersValid: true, unknownNewer: true });
-      if (!ids.length || ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length || ids.at(-1) !== questionId ||
-          !matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) {
+      const currentUser = branch ? branch.user : users.at(-1);
+      const currentQuestion = branch ? branch.user.messageId : ids.at(-1);
+      const bodyMatches = branch ? matchesSubmittedNativeText(branch.user.rawText, known.receiptText) :
+        Boolean(currentUser && matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: currentUser.rawText }, known.receiptText));
+      if (ids.length > 64 || ids.some(id => !id) || new Set(ids).size !== ids.length || currentQuestion !== questionId || !bodyMatches ||
+          users.some(row => (row.rawMessageId || row.messageId) === questionId && !matchesSubmittedNativeText(row.rawText, known.receiptText))) {
         refuseClosedSource('native-user-proof', { orderedUsersValid: true, latestQuestion: ids.at(-1) === questionId,
           bodyMatches: Boolean(ids.length && matchesSubmittedBootstrap({ id: questionId, role: 'user', node, text: users.at(-1).rawText }, known.receiptText)) });
         continue;
@@ -10639,15 +10672,17 @@
       const receiptParentQuestion = Boolean(known.receiptParentQuestion && known.receiptParentQuestion === native.question);
       const receiptParents = (known.receiptParents || []).some(parent => parent.questionId === native.question);
       const rawHeader = native.question === questionId || Boolean(held && native.question === held.nativeQuestion);
+      const finalPosition = branch ? branch.assistantIds.includes(final) : finals.length === 1 &&
+        Number.isInteger(finals[0].order) && finals[0].order > users.at(-1).order;
       if ((native.terminalState && native.terminalState !== 'complete') || !held || recorded.conflicted || recorded.owner !== turnId ||
           held.owner !== turnId || held.conversationId !== forId || held.question !== questionId || held.final !== final ||
           (!rawHeader && !receiptAlias && !receiptParentQuestion && !receiptParents) || finals.length !== 1 ||
-          !Number.isInteger(finals[0].order) || finals[0].order <= users.at(-1).order ||
+          !finalPosition ||
           held.signature !== nativeFinalSignature(finals[0], turnId)) {
         refuseClosedSource('native-final-proof', { heldPresent: Boolean(held), recordedOwn: Boolean(recorded && !recorded.conflicted && recorded.owner === turnId),
           heldOwn: held?.owner === turnId, heldConversation: held?.conversationId === forId, logicalQuestion: held?.question === questionId,
           rawHeader, receiptAlias, receiptParentQuestion, receiptParents, endId: Boolean(held && held.final === final),
-          uniqueStableFinal: finals.length === 1, finalOrder: finals.length === 1 && Number.isInteger(finals[0].order) && finals[0].order > users.at(-1).order,
+          uniqueStableFinal: finals.length === 1, finalOrder: finalPosition, branchFinal: Boolean(branch && finalPosition),
           signature: Boolean(held && finals.length === 1 && held.signature === nativeFinalSignature(finals[0], turnId)),
           terminalPresent: Boolean(native.terminalState), terminalComplete: native.terminalState === 'complete' });
         continue;
