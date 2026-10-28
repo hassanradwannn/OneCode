@@ -2,7 +2,7 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.7.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.7.2](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.2)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
 Fresh installs use the complete 0.7.0 Windows/Linux artifacts. Compatible existing stable installations receive 0.7.0 through a verified application capsule of about 26 MB. Both platform capsules retain the verified 0.5.9 minimum complete base and require its matching runtime; a full installer or AppImage download is unnecessary on a compatible installation.
 
@@ -149,6 +149,8 @@ The skill provides reusable instructions. The **Core connector** provides access
 For several computers, set **Name for this computer** in Setup before adding its connector. For example, `legion-laptop` publishes `OneCode Core legion-laptop`. Each computer keeps its own URL and credentials. Do not reuse another computer's secret URL or give two devices names that the provider renders identically.
 
 ## A connection that survives restarts
+
+**First-time Funnel setup: allow up to 15 minutes before troubleshooting an initially unreachable connector.** Tailscale documents that public DNS propagation can take up to 10 minutes; 15 minutes is a practical first-setup allowance, not a guaranteed tunnel-issuance time. During that interval, Tailscale can look connected locally while ChatGPT or Gemini still cannot reach the public MCP URL. Keep OneCode and Tailscale running. OneCode keeps checking automatically; wait for the public DNS, HTTPS and MCP checks to pass before creating or retrying the provider connector. If it remains unreachable after that allowance, inspect the specific check and permissions instead of assuming every failure is propagation. [Tailscale DNS propagation guidance](https://tailscale.com/docs/features/tailscale-funnel#dns-propagation).
 
 Tailscale Funnel gives your PC a stable HTTPS address. Once connected, ordinary restarts keep the same connector URL. Keep the same Tailscale device and tailnet, and keep the MCP paths stored in OneCode. The PC, OneCode and Tailscale must be running for tools to work.
 
