@@ -540,7 +540,7 @@ export interface TailscaleStatus {
   account: 'unknown' | 'signed-out' | 'ready';
   funnel: 'unknown' | 'permission-required' | 'ready' | 'error';
   /** Public ingress is independent of local Serve/Funnel configuration and Gemini use. */
-  publicIngress?: { state: 'checking' | 'ready' | 'retry-required' | TailscalePublicFailure; checkedAt: number | null };
+  publicIngress?: { state: 'checking' | 'ready' | 'retry-required' | TailscalePublicFailure; checkedAt: number | null; lastReadyAt?: number };
   version?: string;
   checkedAt: number;
   /** Fixed app-owned explanation; never raw CLI output or account/peer data. */

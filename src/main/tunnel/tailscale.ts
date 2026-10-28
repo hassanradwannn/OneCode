@@ -368,7 +368,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
     check.publicIngress = { state: 'checking', checkedAt: null };
     startupTiming('routes-configured');
     report('connecting-tunnel', 'The owned Funnel route is configured. Checking its exact connector through public DNS and HTTPS…', publicUrl);
-    let failedSince: number | null = null, failures = 0, firstPublicReady = false;
+    let failedSince: number | null = null, failures = 0, firstPublicReady = false, lastPublicReadyAt: number | undefined;
     let previousPublicState: FunnelPublicResult['state'] | undefined;
     const details: Record<Exclude<FunnelPublicResult['state'], 'ready'>, string> = {
       'dns-pending': 'Public DNS has not published this device yet. Tailscale says propagation can take up to 10 minutes.',
@@ -394,7 +394,8 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
         // A slow public result cannot publish a route whose custody changed meanwhile.
         await verifyNative();
         if (stopped || epoch !== transportEpoch) return;
-        check.publicIngress = { state: result.state, checkedAt: Date.now() };
+        if (result.state === 'ready') lastPublicReadyAt = Date.now();
+        check.publicIngress = { state: result.state, checkedAt: Date.now(), ...(lastPublicReadyAt === undefined ? {} : { lastReadyAt: lastPublicReadyAt }) };
         if (result.state !== previousPublicState) {
           logInfo(`OneCode Funnel public check state=${result.state} probeElapsedMs=${probeElapsedMs} connectionAgeMs=${Math.round(performance.now() - startedAt)}`);
           previousPublicState = result.state;

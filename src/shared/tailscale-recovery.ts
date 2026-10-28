@@ -18,7 +18,7 @@ export function recoverySteps(step: string | undefined, mode: 'remote' | 'tunnel
   if (step === 'dns') steps.push(
     { text: 'Open the DNS page of your Tailscale admin console.', url: 'https://login.tailscale.com/admin/dns' },
     { text: 'Turn on MagicDNS. Under HTTPS Certificates, select Enable HTTPS and approve the certificate notice. A tailnet administrator may need to do this.' });
-  if (step === 'funnel') steps.push({ text: 'Ask your tailnet administrator to allow Funnel for this device using the Tailscale Funnel setup guide.', url: 'https://tailscale.com/docs/features/tailscale-funnel' });
+  if (step === 'funnel') steps.push({ text: 'Open Access controls in the Tailscale admin console. Expand Funnel and select Add Funnel to policy. An Owner, Admin or Network admin must approve this.', url: 'https://login.tailscale.com/admin/acls' });
   if (!step) steps.push(
     { text: 'Confirm Tailscale is connected, then inspect its status in PowerShell. If tailscale is not on PATH, use its full executable path from OneCode Advanced settings.', command: 'tailscale status\ntailscale serve status\ntailscale netcheck' },
     { text: 'On Windows, if the Tailscale service is stopped, open PowerShell as Administrator and start it.', command: 'Start-Service -Name Tailscale' });

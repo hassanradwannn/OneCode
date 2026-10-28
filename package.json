@@ -1,7 +1,7 @@
 {
   "name": "onecode",
-  "version": "0.7.27",
-  "shortVersionWindows": "0.7.27.0",
+  "version": "0.7.2",
+  "shortVersionWindows": "0.7.2.0",
   "description": "Desktop workspace for AI providers with local MCP tools, managed chats and parallel agents.",
   "license": "MIT",
   "author": "OneCode contributors",

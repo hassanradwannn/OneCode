@@ -2158,6 +2158,9 @@ function connectorCards(next: AppState): HTMLElement[] {
       card.append(
         el('p', 'hint', () => t("Anyone with this URL can use your enabled tools. Do not share it."))
       );
+      if (config.tunnel.kind === 'tailscale' && next.status.tailscale?.publicIngress?.state !== 'ready') {
+        card.append(el('p', 'hint is-warn', () => t('The last public connection check failed. OneCode is checking again; the provider may temporarily be unable to reach this URL.')));
+      }
     } else if (config.tunnel.kind === 'tailscale' && !tailscalePublicReady(next)) {
       card.append(el('p', 'hint', () => providerT('Wait for public HTTPS verification before connecting this URL in Gemini.')));
     } else if (config.tunnel.kind === 'openai') {
@@ -2373,7 +2376,7 @@ function pluginCreated(surface: SurfaceStatus): boolean {
 
 /** Shows Setup on one step, out of the finished summary if need be, and brings it into view. */
 function openSetupStep(name: string): void {
-  // Picking the first unfinished step is following progress, so the page moves on when it is done.
+  // Picking the first unfinished step follows progress as its prerequisites complete.
   setupOpenStep = step(name).classList.contains('is-current') ? null : name;
   if (state) apply(state);
   showTab('setup');

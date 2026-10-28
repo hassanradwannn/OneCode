@@ -17,6 +17,7 @@
  * protected-resource metadata request properly and never emits a non-JSON body.
  */
 
+import { admissionStream } from './admission-stream.js';
 import { noteConnectorUse } from '../connector-proof.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createInboundTiming, formatInboundTiming, requestIdFromHeader, withInboundRequestId } from './inbound.js';
@@ -338,15 +339,17 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
   const routes = surfacePaths.map((surface) => {
     const factory = () => withMcpProvider(provider, () => buildServer(stableContext(surface.id), surface.id, undefined, () => stableContext(surface.id)));
     const options = { onerror: (error: Error) => logError(`MCP handler error (${surface.id}): ${error.message}`) };
+    const toolWebHandler = createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: TOOL_STREAM_KEEP_ALIVE_MS });
     return {
+    toolWebHandler,
     ...surface,
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
     handler: toNodeHandler(createMcpHandler(factory), options),
     // Modern auto mode waits for the final JSON result without sending bytes.
     // Stream tool exchanges so long reads/polls keep public proxies alive too;
-    // discovery and admission failures retain their existing response contract.
-    toolHandler: toNodeHandler(createMcpHandler(factory, { responseMode: 'sse', keepAliveMs: TOOL_STREAM_KEEP_ALIVE_MS }), options)
+    // discovery retains its existing response format; admission errors use MCP SSE frames.
+    toolHandler: toNodeHandler(toolWebHandler, options)
   }; });
   const checkHost = localhostHostValidation();
   const checkOrigin = localhostOriginValidation();
@@ -450,7 +453,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // A Gemini client may send arbitrary/reused RPC ids and no request header. Never
     // convert a claimed header into browser proof when local capability routing is active.
     const requestId = provider === 'gemini' && geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
-    const dispatch = (body?: unknown, geminiBinding?: LocalBindingEvidence): void => {
+    const dispatch = (body?: unknown, geminiBinding?: LocalBindingEvidence, override?: ReturnType<typeof toNodeHandler>): void => {
       if (stopping || res.destroyed) {
         if (!res.destroyed) {
           res.setHeader('connection', 'close');
@@ -469,7 +472,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
       };
       res.once('finish', release);
       res.once('close', release);
-      const handler = (body as { method?: unknown } | undefined)?.method === 'tools/call' ? route.toolHandler : route.handler;
+      const handler = override ?? ((body as { method?: unknown } | undefined)?.method === 'tools/call' ? route.toolHandler : route.handler);
       withMcpProvider(provider, () => withInboundRequestId(geminiBinding ? null : requestId, () => void handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -485,11 +488,15 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
         }
         const message = parsed.body as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: { name?: unknown; arguments?: unknown } } | undefined;
         if (provider === 'chatgpt' && message?.method === 'tools/call') {
+          dispatch(message, undefined, toNodeHandler({ fetch: async (request, options) => admissionStream(request, async () => {
           try {
             const authenticated = await withMcpProvider(provider, () => authenticateChatgptExec(message.params?.name, message.params?.arguments));
-            dispatch({ ...message, params: { ...message.params, arguments: authenticated.args } }, authenticated.evidence);
+            request.signal.throwIfAborted();
+            if (stopping || res.destroyed) throw new Error('Request closed');
+            const body = { ...message, params: { ...message.params, arguments: authenticated.args } };
+            return await withMcpProvider(provider, () => withInboundRequestId(authenticated.evidence ? null : requestId, () => route.toolWebHandler.fetch(request, { ...options, parsedBody: body }), timing, publication, !selfTest && !tunnelProbe, authenticated.evidence));
           } catch (error) {
-            if (res.destroyed || res.headersSent) return;
+            if (res.destroyed || request.signal.aborted) throw error;
             const storage = sessionHistoryUnavailable(error);
             // Never log credentials, arguments or journal contents. A failed proof
             // read preserves the grant; reporting it as revoked hides recovery.
@@ -500,18 +507,21 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
               : 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.';
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
               result: { isError: true, content: [{ type: 'text', text }] } });
-            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
-            res.end(body);
+            return new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
           }
+          }) }));
           return;
         }
         if (provider === 'gemini' && geminiBindingsEnabled() && message?.method === 'tools/call') {
+          dispatch(message, undefined, toNodeHandler({ fetch: async (request, options) => admissionStream(request, async () => {
           try {
             const binding = await authenticateGeminiBinding(message.params?.arguments);
             const body = { ...message, params: { ...message.params, arguments: stripGeminiRoutingArgs(message.params?.arguments) } };
-            dispatch(body, binding);
+            request.signal.throwIfAborted();
+            if (stopping || res.destroyed) throw new Error('Request closed');
+            return await withMcpProvider(provider, () => withInboundRequestId(null, () => route.toolWebHandler.fetch(request, { ...options, parsedBody: body }), timing, publication, !selfTest && !tunnelProbe, binding));
           } catch (error) {
-            if (res.destroyed || res.headersSent) return;
+            if (res.destroyed || request.signal.aborted) throw error;
             // Only fixed codes and bounded routing shape enter diagnostics. Unknown tool
             // names can themselves contain a credential/task, so log declared names only.
             const storage = sessionHistoryUnavailable(error);
@@ -532,9 +542,9 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
               result: { isError: true, content: [{ type: 'text', text: storage
                 ? `${code}: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
                 : `${code}: no local tool ran. Reconnect the paired companion to this exact chat to refresh its session binding.` }] } });
-            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
-            res.end(body);
+            return new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
           }
+          }) }));
           return;
         }
         dispatch(parsed.body);

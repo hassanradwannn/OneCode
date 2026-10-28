@@ -805,11 +805,12 @@
                   <section class="field" id="tailscaleSetup" aria-label="Tailscale setup" hidden>
                     <p class="hint">OneCode checks the Tailscale installation on this computer. Choose Install and sign in when setup is required, then complete Tailscale’s first-party installation and sign in with your own account. Keep it running; your tailnet owner may need to allow Funnel.</p>
                     <div class="step-actions">
-                      <button class="btn" type="button" data-link-external="https://tailscale.com/download">Install and sign in</button>
-                      <button class="btn" type="button" data-link-external="https://tailscale.com/docs/features/tailscale-funnel">Funnel permission help</button>
+                      <button class="btn" type="button" data-link-external="https://tailscale.com/download">Download Tailscale</button>
+                      <button class="btn" type="button" data-link-external="https://login.tailscale.com/admin/dns">Open DNS settings</button>
+                      <button class="btn" type="button" data-link-external="https://login.tailscale.com/admin/acls">Open Funnel permissions</button>
                       <button class="btn btn-solid" type="button" id="tailscaleSetupAction" hidden>Finish Tailscale setup</button>
                     </div>
-                    <p class="hint">Click Connect to check Tailscale and the exact connector through public DNS and HTTPS. Installation, sign-in or a local Funnel route alone does not connect Gemini.</p>
+                    <p class="hint">In Access controls, expand Funnel and select Add Funnel to policy. A Tailscale administrator may need to do this. On the DNS page, enable MagicDNS and HTTPS certificates if prompted. Return here and wait for the public connection check.</p>
                     <p class="hint"><b>Tailscale CLI:</b> <span id="tailscaleCli">Not checked</span></p>
                     <p class="hint"><b>Tailscale account:</b> <span id="tailscaleAccount">Not checked</span></p>
                     <p class="hint"><b>Funnel permission:</b> <span id="tailscaleFunnel">Not checked</span></p>

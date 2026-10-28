@@ -1,9 +1,11 @@
 import type { AppState } from '../shared/types.js';
 
-/** A configured native route alone must never enable Gemini URL setup. */
+/** A configured native route alone must never enable provider URL setup. */
 export function tailscalePublicReady(next: Pick<AppState, 'config' | 'status'>): boolean {
+  const ingress = next.status.tailscale?.publicIngress;
   return next.config.tunnel.kind !== 'tailscale' ||
-    (next.status.state === 'connected' && next.status.tailscale?.publicIngress?.state === 'ready' && !!next.status.publicUrl);
+    (next.status.state === 'connected' && next.status.tailscale?.funnel === 'ready' && !!next.status.publicUrl &&
+      (ingress?.state === 'ready' || (typeof ingress?.lastReadyAt === 'number' && ingress.lastReadyAt > 0)));
 }
 
 /** Presentation of native connection checks; this does not authorize or start a tunnel. */

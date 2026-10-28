@@ -2222,8 +2222,8 @@ export async function geminiInputBindingStatus(proof: GeminiBindingInput, conver
   if (row.cancelledByUser) return { state: 'invalid', ...accepted };
   if (!['browser', 'sent'].includes(row.state) || isChatBlocked(conversationId)) return { state: 'invalid', ...accepted };
   const session = await getSession(sessionId);
-  if (!owns()) return { state: 'pending' };
-  if (session?.conversationId !== conversationId) return { state: 'invalid' };
+  if (!owns() || !session) return { state: 'pending' };
+  if (session.conversationId !== conversationId) return { state: 'invalid' };
   if (row.state === 'browser' || row.sendAuthorizedAt === undefined || row.deliveredAt === undefined ||
       !row.historyAnchored || !row.historySeq || !row.messageId) return { state: 'pending' };
   const question = await readLatestUserMessage(sessionId);

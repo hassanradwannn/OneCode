@@ -190,7 +190,7 @@ const RETRY_ALARM = 'clf-bridge-drain';
  * decide three at the same instant, and handing them out one per pass would spread three
  * reloads across a minute and a half for no reason anybody chose.
  *
- * A one-shot re-armed at the end of every pass, rather than `periodInMinutes`: a period may not
+ * A one-shot re-armed when it fires, rather than `periodInMinutes`: a period may not
  * go below a minute at all, and that periodic form was why a repair armed at T+20 could wait
  * until T+75.
  */
@@ -3598,7 +3598,19 @@ async function maintainOnce() {
   const intent = connectionEpoch;
   let observedTabs = [];
   phase('tabs-query');
-  try { observedTabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS }); } catch { /* Status/recovery still runs; no unobserved tab is pruned. */ }
+  // A read-only Chrome query can remain pending across suspend/resume. Do not let it
+  // pin this single maintenance owner forever, and do not treat an unknown tab list
+  // as an empty list (which could open or prune the wrong document).
+  let tabQueryTimer;
+  try {
+    const tabs = await Promise.race([
+      chrome.tabs.query({ url: CHATGPT_TAB_URLS }),
+      new Promise(resolve => { tabQueryTimer = setTimeout(() => resolve(null), 5000); })
+    ]);
+    if (!Array.isArray(tabs)) return;
+    observedTabs = tabs;
+  } catch { return; }
+  finally { clearTimeout(tabQueryTimer); }
   phase('account-routing');
   await geminiRouting.observe(observedTabs.filter(tab => providerForUrl(tab.url) === 'gemini'));
   const openConversations = [...new Set(observedTabs.map(conversationForTab).filter(Boolean))];
@@ -6624,6 +6636,7 @@ async function restoreOpenChatgptTabs() {
 
 chrome.runtime.onInstalled.addListener(() => {
   void restoreOpenChatgptTabs().then(() => recoverDeferredRevivals()).catch(() => undefined);
+  void load().then(() => scheduleRetry()).catch(() => undefined);
   void load()
     .then(() => ensurePaired())
     .catch(() => undefined)
@@ -6636,6 +6649,8 @@ if (chrome.runtime.onStartup && typeof chrome.runtime.onStartup.addListener === 
     void chrome.storage.local.remove(BACKGROUND_WINDOW_MIRROR).catch(() => undefined);
     // Tab-group ids are per browser session too (#128).
     void chrome.storage.local.remove(BACKGROUND_GROUP_MIRROR).catch(() => undefined);
+    // Arm recovery independently of pairing, journal drains and Chrome tab APIs.
+    void load().then(() => scheduleRetry()).catch(() => undefined);
     void load()
       .then(() => drainCommandAcks())
       .then(() => drain())
@@ -6675,20 +6690,18 @@ async function drainWorkerArchive() {
 if (chrome.alarms && chrome.alarms.onAlarm && typeof chrome.alarms.onAlarm.addListener === 'function') {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (!alarm || alarm.name !== RETRY_ALARM) return;
+    // Keep the fallback alive even if a browser API in this pass never resolves.
+    // A stalled maintenance flight is still owned by that flight and is not replayed.
+    retryAlarmScheduled = false;
+    scheduleRetry();
+    void load().then(() => connectWakeSocket()).catch(() => undefined);
     // Independent of the command passes below: a failure in either never holds up the other.
     void drainWorkerArchive().catch(() => undefined);
     void drainCommandAcks()
       .then(() => drain())
       .then(() => drainCloses())
       .then(() => maintain())
-      .catch(() => undefined)
-      .then(() => {
-        // Re-armed here and nowhere else. Every other caller of scheduleRetry() finds the
-        // alarm already standing and leaves it alone, which is what keeps a burst of failing
-        // requests from pushing the next pass further and further away.
-        retryAlarmScheduled = false;
-        scheduleRetry();
-      });
+      .catch(() => undefined);
   });
 }
 
@@ -6893,6 +6906,8 @@ chrome.tabs.onUpdated.addListener((_id, changeInfo, tab) => {
   void load().then(() => syncKeepAwake([tab], false)).catch(() => undefined);
 });
 
+// A blocked presence or pairing operation must not prevent the fallback wake.
+void load().then(() => scheduleRetry()).catch(() => undefined);
 void load()
   .then(() => ensurePaired())
   .catch(() => undefined)

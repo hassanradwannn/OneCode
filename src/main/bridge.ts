@@ -656,7 +656,8 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
     if (!entry || entry.sessionId !== custody.resume.sessionId || entry.state !== 'committed' || entry.to !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
     if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return pendingCommandBinding(proof.id, 'resume-send');
     const session = await getSession(entry.sessionId);
-    if (session?.conversationId !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
+    if (!session) return pendingCommandBinding(proof.id, 'resume-question');
+    if (session.conversationId !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
     const question = await readLatestUserMessage(entry.sessionId);
     if (!question) return pendingCommandBinding(proof.id, 'resume-question');
     if (question.messageId !== entry.destinationSend.messageId)

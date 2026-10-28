@@ -38,10 +38,11 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.7.2': {
-    lead: () => t('Keep independent chats moving when a browser rendering operation stalls.'),
+    lead: () => t('Improve browser recovery, task authorization and Tailscale setup.'),
     highlights: [
-      { icon: 'i-chat', title: () => t('Independent browser delivery'), text: () => t('A stalled rendering operation in one tab no longer holds the shared message pickup queue or prevents another chat from opening.') },
-      { icon: 'i-retry', title: () => t('Retained browser ownership'), text: () => t('Late browser replies retain their original tab ownership. A timeout cannot repeat an attachment or revive cancelled activity.') }
+      { icon: 'i-chat', title: () => t('Recover after inactivity'), text: () => t('Browser maintenance keeps its fallback wake running and recovers from a stalled tab query. Confirmed delivery clears stale readiness warnings.') },
+      { icon: 'i-retry', title: () => t('Keep task connections alive'), text: () => t('Tool connections stream keepalives while waiting for the exact task receipt. Temporary session recovery no longer permanently retires that task grant.') },
+      { icon: 'i-settings', title: () => t('Clearer connection setup'), text: () => t('Tailscale setup links directly to DNS and Funnel controls. A temporary public check failure keeps an established connector visible with an explanation.') }
     ]
   },
   '0.7.1': {
