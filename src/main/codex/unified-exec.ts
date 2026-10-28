@@ -1969,6 +1969,20 @@ export class UnifiedExecProcessManager {
     return confirmed;
   }
 
+  /** Settle restored orphan custody before update shutdown hides the GUI. Live work stays owned by shutdown. */
+  async prepareUpdateShutdown(): Promise<void> {
+    const store = this.wslCustody;
+    if (!store) return;
+    const active = new Set(this.processes.keys());
+    await store.confirmPriorBootLeaders(active);
+    for (const row of store.list()) {
+      if (active.has(row.processId)) continue;
+      if (!row.leaderExited || !await this.terminateWslCustody(row))
+        throw new Error('Update could not confirm a retained WSL process stopped. OneCode remains open; review Background work and retry after resolving it.');
+    }
+    if (store !== this.wslCustody) throw new Error('Terminal ownership changed during update preparation. Retry the update.');
+  }
+
   async terminateAllProcesses(): Promise<void> {
     const spawning = [...this.spawnFlights];
     for (const [id] of spawning) if (!this.processes.has(id)) this.cancelBeforeSpawnReturns.add(id);
@@ -2009,6 +2023,7 @@ export class UnifiedExecProcessManager {
     const confirmedWslLeaders = new Set(results.flatMap(result => result.status === 'fulfilled' && result.value.confirmed
       ? [result.value.processId] : []));
     const custody = this.wslCustody;
+    await custody?.confirmPriorBootLeaders(new Set([...this.processes.keys(), ...unconfirmedWslLeaders]));
     const wslRows = custody?.list() ?? [];
     for (let index = 0; index < wslRows.length; index += 4) {
       await Promise.allSettled(wslRows.slice(index, index + 4).map(async row => {

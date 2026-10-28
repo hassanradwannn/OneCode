@@ -153,6 +153,22 @@ function decodeWslOutput(buffer: Buffer): string {
   return buffer.toString('utf8');
 }
 
+/** Read-only OS evidence: a Windows process cannot survive a full Windows boot. */
+async function windowsBootTime(): Promise<number | null> {
+  if (process.platform !== 'win32') return null;
+  return new Promise(resolve => {
+    const child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference='Stop'; [Console]::WriteLine(([DateTimeOffset](Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds())"],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '', done = false;
+    const finish = (value: number | null) => { if (done) return; done = true; clearTimeout(timer); resolve(value); };
+    const timer = setTimeout(() => { child.kill(); finish(null); }, 10000);
+    child.stdout.on('data', chunk => { output += String(chunk); if (output.length > 1024) { child.kill(); finish(null); } });
+    child.once('error', () => finish(null));
+    child.once('close', code => { const value = Number(output.trim()); finish(code === 0 && Number.isSafeInteger(value) && value > 0 && value <= Date.now() ? value : null); });
+  });
+}
+
 export class FileWslExecCustody {
   private readonly directory: string;
   private readonly runner: WslCommandRunner;
@@ -163,10 +179,24 @@ export class FileWslExecCustody {
   private serial: Promise<void> = Promise.resolve();
   private initialized = false;
 
-  constructor(userDataDir: string, runner: WslCommandRunner = runWslCommand, registryProbe: WslRegistryProbe = probeRegisteredWslDistros) {
+  constructor(userDataDir: string, runner: WslCommandRunner = runWslCommand, registryProbe: WslRegistryProbe = probeRegisteredWslDistros,
+    private readonly bootTime: () => Promise<number | null> = windowsBootTime) {
     this.directory = path.join(userDataDir, 'exec-spool', 'wsl-custody');
     this.runner = runner;
     this.registryProbe = registryProbe;
+  }
+
+  /** Repair orphaned pre-boot leader evidence; descendants still require the normal exact-token scan. */
+  async confirmPriorBootLeaders(excluded: ReadonlySet<number>): Promise<void> {
+    const candidates = this.list().filter(row => !row.leaderExited && !excluded.has(row.processId));
+    if (!candidates.length) return;
+    const boot = await this.bootTime().catch(() => null);
+    if (boot === null || !Number.isSafeInteger(boot) || boot <= 0 || boot > Date.now()) return;
+    for (const row of candidates) {
+      // Leave a conservative clock boundary and recheck incarnation through markLeaderExited.
+      if (row.startedAt + 60000 < boot && !excluded.has(row.processId))
+        await this.markLeaderExited(row.processId, row.incarnation);
+    }
   }
 
   private key(processId: number, incarnation: number): string { return `${processId}-${incarnation}`; }

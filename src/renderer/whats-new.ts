@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.3': {
+    lead: () => t('Recover Windows updates blocked by process records from before a reboot.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Reliable update shutdown'), text: () => t('Windows boot evidence reconciles old process records before the ordinary exact WSL checks. Unresolved records now show an update error while the app remains open.') },
+      { icon: 'i-settings', title: () => t('First-time connection guidance'), text: () => t('Allow up to 15 minutes for first-time Funnel provisioning and public verification. Keep OneCode and Tailscale running while the checks continue.') }
+    ]
+  },
   '0.7.27': {
     lead: () => t('Deliver the selected-chat readiness repair through a complete Beta update.'),
     highlights: [

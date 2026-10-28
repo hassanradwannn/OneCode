@@ -720,7 +720,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');
     await requestPluginRefreshes(version, ['core']);
-  });
+  }, () => unifiedExecManager.prepareUpdateShutdown());
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
   const workbenchBrowser = new WorkbenchBrowserController(getWindow);

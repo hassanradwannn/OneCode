@@ -203,6 +203,7 @@ let installPoll: ReturnType<typeof setTimeout> | null = null;
 let installCheck: Promise<void> | null = null;
 let quitForUpdate: (() => void) | null = null;
 let prepareUpdateHandoff: ((version: string) => Promise<void>) | null = null;
+let preflightUpdateShutdown: (() => Promise<void>) | null = null;
 let busyProjection = updateBusyReasons;
 let installTarget = currentWindowsInstallTarget;
 let windowsDownload = downloadWindowsUpdate;
@@ -710,8 +711,9 @@ export function markInstallOnQuit(expectedVersion?: string): boolean {
 }
 
 /** Configured by the existing IPC/shutdown owner, never by the download engine. */
-export function configureUpdateInstall(quit: () => void, prepare?: (version: string) => Promise<void>): void {
+export function configureUpdateInstall(quit: () => void, prepare?: (version: string) => Promise<void>, preflight?: () => Promise<void>): void {
   quitForUpdate = quit;
+  if (preflight) preflightUpdateShutdown = preflight;
   if (prepare) prepareUpdateHandoff = prepare;
 }
 
@@ -794,6 +796,12 @@ function checkInstallIntent(): Promise<void> {
       installPoll = setTimeout(() => { installPoll = null; void checkInstallIntent(); }, 2000);
       installPoll.unref(); return;
     }
+    try { await preflightUpdateShutdown?.(); }
+    catch (error) {
+      if (current()) { cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); }
+      return;
+    }
+    if (!current()) return;
     if (markInstallOnQuit(version!)) {
       if (mode === 'now') logInfo(`update: explicit immediate install of ${version}; stopping app-owned work through shutdown`);
       quitForUpdate!();
@@ -831,6 +839,12 @@ function checkBetaInstallIntent(): Promise<void> {
       installPoll = setTimeout(() => { installPoll = null; void checkBetaInstallIntent(); }, 2000);
       installPoll.unref(); return;
     }
+    try { await preflightUpdateShutdown?.(); }
+    catch (error) {
+      if (current()) { cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); }
+      return;
+    }
+    if (!current()) return;
     runAfterInstall = true;
     quitForUpdate!();
   })().finally(() => { if (installCheck === run) installCheck = null; });
@@ -979,7 +993,7 @@ export function resetUpdateForTests(): void {
   runAfterInstall = false;
   cancelUpdateInstall();
   busyProjection = updateBusyReasons; installTarget = currentWindowsInstallTarget; windowsDownload = downloadWindowsUpdate;
-  quitForUpdate = null; prepareUpdateHandoff = null; installCheck = null;
+  quitForUpdate = null; prepareUpdateHandoff = null; preflightUpdateShutdown = null; installCheck = null;
   installFolderAccess = probeInstallFolder;
   status = CLEAR;
   staged = null;
