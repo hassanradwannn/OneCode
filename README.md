@@ -2,7 +2,7 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.7.2](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.2)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.2/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.7.3](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.3)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.3/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.3/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.3/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
 Fresh installs use the complete 0.7.0 Windows/Linux artifacts. Compatible existing stable installations receive 0.7.0 through a verified application capsule of about 26 MB. Both platform capsules retain the verified 0.5.9 minimum complete base and require its matching runtime; a full installer or AppImage download is unnecessary on a compatible installation.
 
