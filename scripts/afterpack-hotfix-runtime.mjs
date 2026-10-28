@@ -11,6 +11,16 @@ const BUILD_CHANNEL = process.env.ONECODE_BUILD_CHANNEL === 'beta' ? 'beta' : 's
 export default async function afterPack(context) {
   if (context.electronPlatformName !== 'win32' && context.electronPlatformName !== 'linux') return;
   const resources = path.join(context.appOutDir, 'resources');
+  if (context.electronPlatformName === 'linux') {
+    // Stable 0.5.9 accidentally included the Windows-only guide in Linux's immutable
+    // inventory. Keep those inert bytes pinned so web documentation edits cannot
+    // force a native base upgrade. Current setup guidance ships in app.asar and online.
+    const guide = await fs.readFile(new URL('../resources/linux-base-compat/WINDOWS-SETUP.md', import.meta.url));
+    if (createHash('sha256').update(guide).digest('hex') !== '8cee140940998aeca876e800193ded84c39073d650864e64312ad2a36bcd3145')
+      throw Error('The frozen Linux base compatibility guide changed');
+    await fs.writeFile(path.join(resources, 'WINDOWS-SETUP.md'), guide);
+  }
+
   await prepareChannelExtension(path.join(resources, 'extension'), BUILD_CHANNEL);
   if (BUILD_CHANNEL === 'beta') {
     // PublishManager runs after this hook on Linux. Use its exact configuration and
