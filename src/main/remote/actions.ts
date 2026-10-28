@@ -19,6 +19,7 @@ import { getProject } from '../projects.js';
 const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);
 const send = z.object({ action: z.literal('send'), id: z.string().uuid(), sessionId: sessionId.nullable(), provider: z.enum(CHAT_PROVIDERS),
   text: z.string().trim().min(1).max(64_000), model: z.string().max(80).nullable(), reasoningEffort: z.enum(REASONING_EFFORTS).nullable(),
+  modelSurface: z.enum(['chat', 'work']).optional(),
   expectedTurnId: z.string().min(1).max(256).nullable(), afterTurn: z.boolean().optional(), automation: z.enum(['off', 'goal', 'loop']).optional(),
   attachments: z.array(attachmentSchema).max(20).optional(),
   projectId: z.string().uuid().nullable().optional(),
@@ -49,11 +50,12 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   if (body.action === 'selectChat') return ensureSelectedChatReady(body.sessionId);
   if (body.action === 'rename') { await renameSession(body.sessionId, body.title, 'manual', undefined, body.expectedTitle); return { title: body.title }; }
   if (body.action === 'stop') return stopSessionTurn(body.sessionId, body.expectedTurnId);
+  if (body.modelSurface && (body.provider !== 'chatgpt' || !body.model)) throw new Error('A native Chat/Work model surface requires an explicit ChatGPT model.');
   const existing = (await listInputs()).find(row => row.id === body.id);
   const text = body.plan?.[0] ?? body.text;
   const objective = body.plan || body.automation === 'goal' ? body.text : undefined;
   if (existing) {
-    if ((existing.projectId ?? null) !== (body.projectId ?? null) || existing.text !== text || existing.objective !== objective || JSON.stringify(existing.stages ?? []) !== JSON.stringify(body.plan?.slice(1) ?? []) || existing.sessionId !== (body.sessionId ?? body.id) || existing.chatProvider !== body.provider || existing.model !== body.model || existing.reasoningEffort !== body.reasoningEffort || existing.automation !== body.automation || JSON.stringify(existing.attachments ?? []) !== JSON.stringify(body.attachments ?? []))
+    if ((existing.projectId ?? null) !== (body.projectId ?? null) || existing.text !== text || existing.objective !== objective || JSON.stringify(existing.stages ?? []) !== JSON.stringify(body.plan?.slice(1) ?? []) || existing.sessionId !== (body.sessionId ?? body.id) || existing.chatProvider !== body.provider || existing.model !== body.model || existing.reasoningEffort !== body.reasoningEffort || existing.requestedModelSurface !== body.modelSurface || existing.automation !== body.automation || JSON.stringify(existing.attachments ?? []) !== JSON.stringify(body.attachments ?? []))
       throw new Error('Message id belongs to a different input.');
     return { input: projectInput(existing) };
   }
@@ -68,11 +70,15 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   if ((activeTurnId ?? null) !== body.expectedTurnId) throw new Error('Task state changed. Refresh before sending.');
   if (body.model) {
     const model = resolveChatModel(getChatModels(body.provider).models, body.model);
-    if (!model || (body.reasoningEffort && !model.efforts.includes(body.reasoningEffort))) throw new Error('Refresh models and choose an available model and thinking effort.');
+    // An explicit observed mode can outlive this mutable catalog's other surface.
+    // It grants no availability: the native destination must still prove the pair.
+    if ((!model || (body.reasoningEffort && !model.efforts.includes(body.reasoningEffort))) &&
+        (!body.modelSurface || model?.nativeSurface === body.modelSurface)) throw new Error('Refresh models and choose an available model and thinking effort.');
   } else if (body.reasoningEffort) throw new Error('Select a model before choosing thinking effort.');
   if (body.automation === 'goal' && body.text.length > 16_000) throw new Error('Keep a new Goal objective below 16,000 characters.');
   if (!body.plan && !body.attachments?.length) await applyWrittenFolderApproval(text);
   const input = await sendDesktopInput({ id: body.id, sessionId: body.sessionId, provider: body.provider, text,
+    ...(body.modelSurface ? { modelSurface: body.modelSurface } : {}),
     ...(body.projectId ? { projectId: body.projectId } : {}),
     ...(body.automation ? { automation: body.automation } : {}),
     ...(body.plan ? { objective, stages: body.plan.slice(1), authoredSource: 'objective' as const }

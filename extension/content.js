@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 104;
+  const RECORDER_VERSION = 105;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1038,7 +1038,7 @@
   async function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
                              matchesUser = matchesSubmittedUser, receiptTimeoutMs = null, explain = null, mention = currentCoreMention(), sentRequest = null,
                              whileGenerating = false, initialDraft = null, prepareAttachments = null, nativeMedia = false, onSendAttempt = null,
-                             requireCore = mention !== null, priorUserIdsForNode = null, nativeUserReceipts = null) {
+                             requireCore = mention !== null, priorUserIdsForNode = null, nativeUserReceipts = null, requestedModel = null, requestedEffort = null) {
     // Missing discovery is not permission to send a tools-enabled task without
     // Core. Wait only before authorization, under the existing draft lease.
     if (CLF_DOM.provider === 'chatgpt' && requireCore && !mention) {
@@ -1054,7 +1054,7 @@
       }
     }
     return CLF_DOM.send({ stillCurrent, clearAcceptedDraft, beforeSend, acceptUserReceipt, matchesUser, receiptTimeoutMs, mention, explain, sentRequest, whileGenerating, initialDraft,
-      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode, nativeUserReceipts,
+      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode, nativeUserReceipts, requestedModel, requestedEffort,
       observeEvidence: check => { pageViewChecks.add(check); return () => pageViewChecks.delete(check); } });
   }
   const GOAL_MARKER_INSTRUCTION = '\n\nFor this Goal session only: at the end of each final reply, write exactly one separate last line: [[COS_GOAL:COMPLETE]] if the entire requested task is finished, or [[COS_GOAL:CONTINUE]] if requested work remains. Do not claim completion for partial work. If user input is required, explain it and omit both markers.';
@@ -13474,10 +13474,18 @@
     ), 'transient'));
     if (await failIfRetargeted()) return;
 
+    if (CLF_DOM.provider === 'chatgpt' && !target && !CLF_DOM.conversationId()) {
+      step('model-surface');
+      if (!await CLF_DOM.prepareChatModelSurface(stillOnTarget, boot.modelSurface ?? 'chat') || !stillOnTarget()) {
+        return void (await fail(t('content_bootstrap_model_unavailable',
+          'The requested model or reasoning is unavailable or could not be confirmed in the provider'), 'model:surface-unconfirmed'));
+      }
+    }
+
     if (boot.model || boot.reasoningEffort) step('model');
     let bootstrapModelFailure = '';
     if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget,
-      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }))) {
+      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }, boot.modelSurface))) {
       return void (await fail(t(
         'content_bootstrap_model_unavailable',
         "The requested model or reasoning is unavailable or could not be confirmed in the provider"
@@ -13497,6 +13505,7 @@
       ), 'transient'));
     }
     const selectionConfirmedAt = Date.now();
+    const selectionSurface = CLF_DOM.visibleModelSelection?.()?.modelSurface;
     const publishBootstrapSelection = async (id) => {
       if (CLF_DOM.conversationId() !== id) return;
       if (boot.type === 'resume' && boot.model) {
@@ -13516,13 +13525,14 @@
           // Re-run the picker proof on the concrete destination route. The requested model may
           // be a saved family/display alias, so only the route-stamped native execution id that
           // ChatGPT exposes after successful selection is valid destination evidence.
-          if (!(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, ownsDestination))) return;
+          if (!(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, ownsDestination, null, boot.modelSurface))) return;
           if (!ownsDestination()) return;
           const selected = CLF_DOM.visibleModelSelection?.();
           if (!selected) return;
           reportedModelSelection = JSON.stringify(selected);
           emit({ kind: 'model_selection', model: selected.model,
-            ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}), time: Date.now() });
+            ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
+            ...(selected.modelSurface ? { modelSurface: selected.modelSurface } : {}), time: Date.now() });
         } finally {
           bootstrapModelRestoreBusy = false;
         }
@@ -13536,7 +13546,8 @@
       // Once Send supplies its identity, journal that proof through the ordinary
       // model-selection owner. The closed picker cannot rediscover it passively.
       if (conversationId === id) emit({ kind: 'model_selection', model: boot.model,
-        ...(boot.reasoningEffort ? { reasoningEffort: boot.reasoningEffort } : {}), time: selectionConfirmedAt });
+        ...(boot.reasoningEffort ? { reasoningEffort: boot.reasoningEffort } : {}),
+        ...(selectionSurface ? { modelSurface: selectionSurface } : {}), time: selectionConfirmedAt });
     };
     if (await failIfRetargeted()) return;
     let insertionFailure = '';
@@ -13740,7 +13751,8 @@
     } : null;
     if (!(await sendSubmittedText(() => !attempt?.cancelled && sendingBootstrap(), false, authorizeBootstrapSend, acceptBootstrapReceipt,
                                   matchesSubmittedBootstrap, DESKTOP_RECEIPT_MS, why => { sendRefusal = bootstrapAuthorizationFailure || why; }, currentCoreMention(),
-                                  acceptBootstrapReceipt ? since => sentRequestSince(since) : null, false, bootstrapDraft))) {
+                                  acceptBootstrapReceipt ? since => sentRequestSince(since) : null, false, bootstrapDraft,
+                                  null, false, null, undefined, null, null, boot.model, boot.reasoningEffort))) {
       if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return;
       // Once send() was invoked, a missing/cleared draft cannot prove that no click
       // happened. Only the exact pre-click check above may release the dispatch.
@@ -14620,7 +14632,10 @@
     const sourceQuestion = () => {
       const users = CLF_DOM.messages().filter(row => row.role === 'user'), rendered = users.at(-1);
       const expected = message.directTurn?.questionId;
-      if (rendered && expected && rendered.id !== expected && alive && !resumeIdentityPending &&
+      // A shared native wrapper can expose no unambiguous DOM user at all.
+      // Retain the same exact accepted native owner before authorization so
+      // a pending MAIN stamp/reply joins before the receipt snapshot and Send.
+      if (expected && (!rendered || rendered.id !== expected) && alive && !resumeIdentityPending &&
           turnId === message.directTurn.id && openedUserMessageId === expected &&
           conversationId === target && CLF_DOM.conversationId() === target) {
         const known = reportedUserMessages.get(expected);
@@ -14916,9 +14931,12 @@
       const providerLimitation = () => CLF_DOM.errors().find(error => error.blocking === true)?.text;
       const limitation = providerLimitation();
       if (limitation) return fail(limitation);
+      if (CLF_DOM.provider === 'chatgpt' && !target && !CLF_DOM.conversationId() && !intoRunningTurn() &&
+          (!await CLF_DOM.prepareChatModelSurface(onTarget, input.modelSurface ?? 'chat') || !onTarget())) return fail(t(
+        'content_delivery_model_unconfirmed', 'Requested model or reasoning could not be confirmed'), 'surface-unconfirmed');
       let modelFailure = '';
       intakeStage('model');
-      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }))) return fail(
+      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }, input.modelSurface))) return fail(
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
           'Requested model or reasoning could not be confirmed'
@@ -15313,7 +15331,7 @@
       input.coreMention === false && !input.recovery && !agent,
       () => { sendAttempted = true; },
       input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
-        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode, nativeUserReceipts);
+        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode, nativeUserReceipts, input.model, input.reasoningEffort);
       // #744: one retry when the editor was replaced before anything asked to send it.
       intakeStage('sending');
       if (!(await nativeSend()) &&
@@ -15849,7 +15867,7 @@
         const home = await waitPageView(() => !CLF_DOM.conversationId() && onNativeAppHome() && !CLF_DOM.turns().length, current, 5000);
         if (!home || !current()) return failure();
       }
-      if (!(await CLF_DOM.prepareChatModelSurface(current)) || !current()) return failure();
+      if (!(await CLF_DOM.prepareChatModelSurface(current, CLF_DOM.provider === 'chatgpt' ? message.modelSurface ?? 'chat' : undefined)) || !current()) return failure();
       // A mounted editor can belong to a hidden/alternate surface. Do not stamp
       // it ready and strand the input there; the existing pre-send fallback owns
       // a clean New Chat when the native transition did not produce a usable one.

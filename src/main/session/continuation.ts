@@ -209,17 +209,18 @@ export function normalizeProjectId(value: unknown): string | null {
   return /^g-p-[0-9a-f]{32}$/.test(candidate) ? candidate : null;
 }
 
-type RequestedModel = { model: string; reasoningEffort: ReasoningEffort | null };
+type RequestedModel = { model: string; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface };
 
 function requestedModel(value: unknown): RequestedModel | null {
   if (!value || typeof value !== 'object') return null;
-  const { model, reasoningEffort } = value as Record<string, unknown>;
+  const { model, reasoningEffort, modelSurface } = value as Record<string, unknown>;
   if (typeof model !== 'string' || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(model) ||
       (reasoningEffort != null && !isReasoningEffort(reasoningEffort))) return null;
   // This compatibility ID means leave the provider's model alone, exactly like
   // Automatic in a fresh desktop input. It is not a model-picker requirement.
   if (model === 'gemini-current' && reasoningEffort == null) return null;
-  return { model, reasoningEffort: isReasoningEffort(reasoningEffort) ? reasoningEffort : null };
+  return { model, reasoningEffort: isReasoningEffort(reasoningEffort) ? reasoningEffort : null,
+    ...(modelSurface === 'chat' || modelSurface === 'work' ? { modelSurface } : {}) };
 }
 
 interface Continuation {

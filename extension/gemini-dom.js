@@ -729,7 +729,7 @@ var CLF_DOM = (() => {
     if (provenMention(box)?.name === name) return true;
     return all(MENTION, box).some(node => text(node).trim().replace(/^@/, '') === name || node.getAttribute('data-mention-name') === name);
   }
-  async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null) {
+  async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null, menuTimeoutMs = 8000) {
     const requestedName = name;
     const sameName = candidate => candidate === requestedName;
     const refused = reason => { explain?.(reason); return false; };
@@ -817,7 +817,7 @@ var CLF_DOM = (() => {
       if (!candidates.length) candidates.push(...all('[role="listbox"] button,.cdk-overlay-pane button').filter(node =>
         shown(node) && !node.closest(`${TURN},${BOX}`) && sameName(compact(text(node)).replace(/^@/, ''))));
       return candidates.length === 1 ? candidates[0] : null;
-    }, selectionCurrent);
+    }, selectionCurrent, menuTimeoutMs);
     if (!choices) {
       if (!selectionCurrent()) return refused(revokedReason());
       const items = all('.at-mentions-v2-item'), exact = items.filter(node => node.getAttribute('aria-label') === name);
@@ -884,6 +884,8 @@ var CLF_DOM = (() => {
       const ownsClaim = () => current() && openingClaim === opening && commandClaim === command && Boolean(opening || command) &&
         attachmentRows().length === attachments.length && attachmentRows().every((node, index) => node === attachments[index]);
       let clicked = false, refusal = null;
+      // Guidance is optional; a missing/renamed Skill must not spend the full
+      // required-Core lookup budget before the ordinary tool-free warm-up.
       const selected = await selectNativeMention('onecode-gemini', ownsClaim, reason => { refusal = reason; }, WARMUP, async (editor, owns, handedOff) => {
         const ready = await waitFor(() => enabled(sendButton()) && composerAuthoredText() === WARMUP &&
           provenMention(editor)?.name === 'onecode-gemini' && sendButton(), owns, 30000);
@@ -891,7 +893,7 @@ var CLF_DOM = (() => {
           refusal = 'warmup-skill-send-not-ready'; return false;
         }
         cancelApprovalReplyProofs('new-send'); handedOff(); clicked = true; ready.click(); return true;
-      });
+      }, 2500);
       if (selected) return SKILL_WARMUP;
       // A missing native Skill is guidance unavailability, not MCP authority.
       // Continue only after the unchanged original app draft was restored and
@@ -1189,7 +1191,7 @@ var CLF_DOM = (() => {
   /** One native Send, then exact new user-row evidence. Never resend after an ambiguous click. */
   async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, clearAcceptedDraft = true,
     beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, whileGenerating = false, initialDraft = null,
-    prepareAttachments = null, nativeMedia = false, onSendAttempt = null } = {}) {
+    prepareAttachments = null, nativeMedia = false, onSendAttempt = null, requestedModel = null, requestedEffort = null } = {}) {
     const refused = reason => {
       console.info('[OneCode Send] ' + JSON.stringify({ reason, callerCurrent: stillCurrent(),
         conversationPresent: Boolean(conversationId()), preparedConversation: Boolean(preparedConversation()),
@@ -1324,6 +1326,12 @@ var CLF_DOM = (() => {
       if (initialDraft && initialCommand && commandClaim === initialCommand &&
           !initialDraft.current() && (!current() || !initialDraft.rebind() || !initialDraft.current()))
         return refused('task-lease-not-restored');
+      // Fresh native conversation creation can reset the account's selected mode.
+      // Re-prove/reselect the requested model on that exact successor before Core
+      // selection, attachments or final Send authorization. Never resend warm-up.
+      if ((requestedModel && requestedModel !== 'gemini-current' || requestedEffort) &&
+          !await selectModelSettings(requestedModel, requestedEffort, current, explain))
+        return refused('post-warmup-model-unconfirmed');
     }
     const binding = id && !localHelper ? await bindingFor(id, current) : null;
     if (id && !localHelper && !binding) return refused('session-binding-unavailable');
@@ -1613,6 +1621,20 @@ var CLF_DOM = (() => {
     }
   }
   const pickerButton = () => unique(all('button[aria-label^="Open mode picker"]'));
+  const modelPickerCaption = picker => {
+    if (!picker) return '';
+    const caption = compact(text(picker).replace(/arrow_drop_down|expand_more|keyboard_arrow_down/g, ''));
+    const accessible = /^Open mode picker, currently ([^\r\n]{1,96})$/.exec(picker.getAttribute('aria-label') || '')?.[1];
+    return caption || compact(accessible || '');
+  };
+  const modelPickerLaneCurrent = (picker, label) => {
+    const lane = value => compact(value).normalize('NFKC').replace(/^Gemini\s*/i, '').replace(/^\d+(?:\.\d+)*\s*/, '')
+      .toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const actual = lane(modelPickerCaption(picker)), wanted = lane(label);
+    // The caption cannot identify a versioned ID, but a positive lane mismatch
+    // (for example Flash after selecting Argon) must not be reported as success.
+    return !actual || !wanted || actual === wanted;
+  };
   const visibleModelSelection = () => {
     const picker = pickerButton();
     if (!picker) return null;
@@ -1625,18 +1647,57 @@ var CLF_DOM = (() => {
     // versioned mode ID. Report the existing current-model option rather than
     // inventing an exact catalog match for worker/session observations.
     const selected = nativeModelMenu()?.find(row => row.selected);
-    return { model: selected?.id || 'gemini-current', reasoningEffort: null };
+    const selectedEffort = nativeThinkingMenu(nativeThinkingTrigger())?.find(row => row.selected)?.id;
+    return { model: selected?.id || 'gemini-current', reasoningEffort: selectedEffort || null };
   };
   const nativeModelRows = () => all('gem-menu-item[role="menuitem"][data-mode-id]').filter(node => shown(node) && !node.closest(TURN));
+  const nativeModelSelected = node => {
+    const explicit = ['aria-checked', 'aria-selected'].map(name => node.getAttribute(name)).filter(value => value !== null);
+    return explicit.length ? explicit.every(value => value === 'true') :
+      node.classList.contains('selected') && Boolean(node.querySelector('[aria-label="Selected"]'));
+  };
   function nativeModelMenu() {
     const rows = nativeModelRows().filter(node => enabled(node) && /^[0-9a-f]{16}$/i.test(node.getAttribute('data-mode-id') || '') &&
       !node.querySelector('[data-mat-icon-name="lock"],[fonticon="lock"],[data-mat-icon-name="lock_outline"],[fonticon="lock_outline"]') &&
       !all('mat-icon,gem-icon', node).some(icon => /^(?:lock|lock_outline)$/.test(compact(text(icon))))).map(node => ({ node,
         id: node.getAttribute('data-mode-id').toLowerCase(), label: compact(text(node.querySelector('.label'))),
-        selected: node.classList.contains('selected') && Boolean(node.querySelector('[aria-label="Selected"]')) }));
+        selected: nativeModelSelected(node) }));
     if (!rows.length || rows.some(row => !row.label || row.label.length > 80) || new Set(rows.map(row => row.id)).size !== rows.length ||
         rows.filter(row => row.selected).length !== 1) return null;
     return rows;
+  }
+  function nativeThinkingTrigger() {
+    const roots = [...new Set(nativeModelRows().map(node => node.closest('gem-menu[role="menu"]')).filter(Boolean))];
+    if (roots.length !== 1) return null;
+    return unique(all('gem-menu-item[role="menuitem"][aria-haspopup="true"][aria-controls]', roots[0]).filter(node =>
+      shown(node) && enabled(node) && node.closest('gem-menu[role="menu"]') === roots[0] &&
+      !node.hasAttribute('data-mode-id') && compact(text(node.querySelector('.label'))) === 'Thinking level'));
+  }
+  function nativeThinkingMenu(trigger) {
+    if (!trigger?.isConnected || trigger.getAttribute('aria-expanded') !== 'true') return null;
+    const menu = document.getElementById(trigger.getAttribute('aria-controls'));
+    if (!menu?.matches('gem-menu[role="menu"]') || !shown(menu) || menu.getAttribute('data-visible') === 'false') return null;
+    const rows = all('gem-menu-item[role="menuitem"]', menu).filter(node => shown(node) && enabled(node) &&
+      node.closest('gem-menu[role="menu"]') === menu && !node.hasAttribute('data-mode-id')).map(node => ({
+        node, id: compact(text(node.querySelector('.label'))).toLowerCase(), selected: nativeModelSelected(node)
+      }));
+    if (!rows.length || rows.some(row => !['low', 'medium', 'high'].includes(row.id)) ||
+        new Set(rows.map(row => row.id)).size !== rows.length || rows.filter(row => row.selected).length !== 1) return null;
+    return rows;
+  }
+  async function readNativeThinking(current) {
+    if (!current()) return null;
+    const trigger = nativeThinkingTrigger();
+    if (!trigger) return { efforts: [], selected: null };
+    const owned = trigger.getAttribute('aria-expanded') !== 'true';
+    if (owned) trigger.click();
+    const rows = await waitFor(() => nativeThinkingMenu(trigger), current, 5000);
+    if (owned && current() && trigger.isConnected && trigger.getAttribute('aria-expanded') === 'true') {
+      trigger.click();
+      if (!await waitFor(() => !trigger.isConnected || trigger.getAttribute('aria-expanded') !== 'true' || !nativeModelRows().length,
+          current, 3000)) return null;
+    }
+    return rows && current() ? { efforts: rows.map(row => row.id), selected: rows.find(row => row.selected).id } : null;
   }
   function modelSurface(current) {
     const picker = pickerButton(), box = composer(), route = location.href, draft = box?.textContent, files = attachmentRows();
@@ -1645,7 +1706,8 @@ var CLF_DOM = (() => {
     return { picker, ownsDraft, current: () => ownsDraft() && pickerButton() === picker };
   }
   async function closeModelMenu(picker, current, owned, settled = () => true, timeout = 3000) {
-    if (!owned || !nativeModelRows().length) return true;
+    if (!owned) return true;
+    if (!nativeModelRows().length) return Boolean(await waitFor(settled, current, timeout));
     if (!current() || !enabled(picker)) return false;
     picker.click();
     return Boolean(await waitFor(() => nativeModelRows().length === 0 && settled(), current, timeout));
@@ -1655,12 +1717,69 @@ var CLF_DOM = (() => {
     if (!surface.current() || !enabled(picker) || generating()) { failure?.('picker_unavailable'); return null; }
     const owned = nativeModelRows().length === 0;
     if (owned) picker.click();
-    const rows = await waitFor(nativeModelMenu, surface.current, 5000);
-    const closed = await closeModelMenu(picker, surface.current, owned);
-    if (!closed) { failure?.('picker_close_failed'); return null; }
-    if (!rows || !surface.current()) { failure?.('model_unconfirmed'); return null; }
-    return [{ id: 'gemini-current', label: 'Automatic (current Gemini model)', efforts: [] },
-      ...rows.map(({ id, label }) => ({ id, label, efforts: [] }))];
+    let interrupted = false;
+    const interrupt = event => { if (event.isTrusted) interrupted = true; };
+    const interruptions = ['pointerdown', 'keydown', 'beforeinput', 'input'];
+    for (const type of interruptions) document.addEventListener(type, interrupt, true);
+    const owns = () => !interrupted && surface.ownsDraft() && !generating();
+    let original = null, originalEffort = null, originalThinkingOpen = false, switched = false, restored = true, problem = null, models = null;
+    const open = async () => {
+      const trigger = pickerButton();
+      if (!owns() || !enabled(trigger)) return null;
+      if (!nativeModelRows().length) trigger.click();
+      return await waitFor(nativeModelMenu, () => owns() && pickerButton() === trigger, 5000);
+    };
+    try {
+      const rows = await waitFor(nativeModelMenu, surface.current, 5000);
+      if (!rows || !surface.current() || !owns()) problem = 'model_unconfirmed';
+      else {
+        original = rows.find(row => row.selected);
+        originalThinkingOpen = nativeThinkingTrigger()?.getAttribute('aria-expanded') === 'true';
+        const thinking = await readNativeThinking(owns);
+        if (!thinking) problem = 'model_unconfirmed';
+        else {
+          originalEffort = thinking.selected;
+          const observed = [];
+          for (const row of rows) {
+            if (!owns()) { problem = 'model_unconfirmed'; break; }
+            if (!nativeModelMenu()?.some(choice => choice.id === row.id && choice.selected)) {
+              switched = true;
+              if (!await selectModelSettings(row.id, null, owns)) { problem = 'model_unconfirmed'; break; }
+            }
+            const live = await open();
+            if (!live?.some(choice => choice.id === row.id && choice.label === row.label && choice.selected)) { problem = 'model_unconfirmed'; break; }
+            const levels = row.id === original.id && !switched ? thinking : await readNativeThinking(owns);
+            if (!levels || !owns()) { problem = 'model_unconfirmed'; break; }
+            observed.push({ id: row.id, label: row.label, efforts: levels.efforts });
+          }
+          if (!problem && observed.length === rows.length) models = observed;
+        }
+      }
+    } finally {
+      try {
+        // Discovery may inspect different model-specific Thinking menus. Restore
+        // only through this original draft/route owner, including its exact effort.
+        // A cancellation or human draft never grants a restoration mutation.
+        if (switched) restored = Boolean(original && owns() && await selectModelSettings(original.id, originalEffort, owns));
+        if (restored && owns()) {
+          if (owned) restored = await closeModelMenu(pickerButton(), owns, true);
+          else {
+            const rows = await open();
+            restored = Boolean(rows && (!original || rows.some(row => row.id === original.id && row.selected)));
+            if (restored && originalThinkingOpen) {
+              const trigger = nativeThinkingTrigger();
+              if (!trigger) restored = false;
+              else {
+                if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click();
+                restored = Boolean(await waitFor(() => nativeThinkingMenu(trigger)?.some(row => row.id === originalEffort && row.selected), owns, 5000));
+              }
+            }
+          }
+        } else restored = false;
+      } finally { for (const type of interruptions) document.removeEventListener(type, interrupt, true); }
+    }
+    if (!models || !restored || !owns()) { failure?.(!restored ? 'restore_failed' : problem || 'model_unconfirmed'); return null; }
+    return [{ id: 'gemini-current', label: 'Automatic (current Gemini model)', efforts: [] }, ...models];
   }
   async function selectModelSettings(model, effort, current = () => true, failure = null) {
     const initial = modelSurface(current);
@@ -1676,8 +1795,9 @@ var CLF_DOM = (() => {
       }));
       return false;
     };
-    if (!current() || (effort && !['none', 'minimal'].includes(effort))) return refuse('request-unavailable');
-    if (!model) return true;
+    if (!current() || (effort != null && !['low', 'medium', 'high'].includes(effort))) return refuse('request-unavailable');
+    const requestedEffort = effort ?? null;
+    if (!model && !requestedEffort) return true;
     // The fresh native editor can become writable before its model control is
     // mounted/readable. Wait under the original claim and exact draft lease;
     // observing that later control grants no authority to replace either one.
@@ -1686,7 +1806,7 @@ var CLF_DOM = (() => {
       return enabled(candidate) && visibleModelSelection()?.model ? candidate : null;
     }, () => initial.ownsDraft() && !generating(), 5000);
     if (!picker) return refuse('picker-not-ready');
-    let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null;
+    let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null, confirmedLabel = null, provedPicker = null;
     const surface = { current: () => {
       if (!initial.ownsDraft() || generating()) return false;
       const next = pickerButton();
@@ -1704,15 +1824,58 @@ var CLF_DOM = (() => {
       return true;
     } };
     if (!surface.current()) return refuse('picker-changed', surface);
-    if (model === 'gemini-current') return true;
+    if (model === 'gemini-current' && !requestedEffort) return true;
     let owned = nativeModelRows().length === 0;
     if (owned) picker.click();
+    let confirmEffort = async () => !requestedEffort;
     try {
       const rows = await waitFor(nativeModelMenu, surface.current, 5000);
-      const options = rows?.filter(row => row.id === String(model).toLowerCase() || row.label === model) || [];
+      const options = rows?.filter(row => !model || model === 'gemini-current' ? row.selected :
+        row.id === String(model).toLowerCase() || row.label === model) || [];
       if (options.length !== 1 || !surface.current()) return refuse('choice-unconfirmed', surface);
       const target = options[0];
-      if (target.selected) { confirmedId = target.id; return true; }
+      confirmEffort = async () => {
+        if (!requestedEffort) { provedPicker = picker; return true; }
+        let trigger = nativeThinkingTrigger();
+        if (!trigger || !surface.current()) return false;
+        let thinkingOwned = trigger.getAttribute('aria-expanded') !== 'true';
+        if (thinkingOwned) trigger.click();
+        try {
+          const rows = await waitFor(() => nativeThinkingMenu(trigger), surface.current, 5000);
+          const choice = rows?.find(row => row.id === requestedEffort);
+          if (!choice || !surface.current()) return false;
+          if (!choice.selected) {
+            choiceClicked = true; choice.node.click();
+            const changed = await waitFor(() => !nativeThinkingMenu(trigger) || nativeThinkingMenu(trigger)?.some(row => row.id === requestedEffort && row.selected),
+              surface.current, 5000);
+            if (!changed || !await waitFor(() => picker.isConnected && pickerButton() === picker && enabled(picker), surface.current, 5000)) return false;
+            if (!nativeModelRows().length) { picker.click(); owned = true; }
+            if (!await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
+                modelPickerLaneCurrent(picker, target.label), surface.current, 5000)) return false;
+            trigger = nativeThinkingTrigger();
+            if (!trigger) return false;
+            if (trigger.getAttribute('aria-expanded') !== 'true') { trigger.click(); thinkingOwned = true; }
+          }
+          const proven = Boolean(await waitFor(() => nativeThinkingMenu(trigger)?.some(row => row.id === requestedEffort && row.selected) &&
+            nativeModelMenu()?.some(row => row.id === target.id && row.selected) && modelPickerLaneCurrent(picker, target.label), surface.current, 5000));
+          if (proven) provedPicker = picker;
+          return proven;
+        } finally {
+          if (thinkingOwned && surface.current() && trigger?.isConnected && trigger.getAttribute('aria-expanded') === 'true') {
+            closingConfirmedId = confirmedId;
+            trigger.click();
+            if (!await waitFor(() => !trigger.isConnected || trigger.getAttribute('aria-expanded') !== 'true' || !nativeModelRows().length,
+                surface.current, 3000)) return false;
+          }
+        }
+      };
+      if (target.selected) {
+        const settled = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
+          modelPickerLaneCurrent(picker, target.label), surface.current, 5000);
+        if (!settled) return refuse('selected-caption-unconfirmed', surface);
+        confirmedId = target.id; confirmedLabel = target.label;
+        return await confirmEffort() || refuse('effort-choice-unconfirmed', surface);
+      }
       choiceClicked = true; target.node.click();
       // The closed trigger says only Gemini/Flash, while native choices have
       // distinct versions. Reopen and prove the actual selected mode ID.
@@ -1720,25 +1883,30 @@ var CLF_DOM = (() => {
         (nativeModelRows().length === 0 || nativeModelMenu()?.some(row => row.id === target.id && row.selected)), surface.current, 5000);
       if (!changed || !surface.current()) return refuse('choice-did-not-change', surface);
       if (!nativeModelRows().length) { picker.click(); owned = true; }
-      const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected), surface.current, 5000);
-      if (selected) confirmedId = target.id;
-      return selected ? true : refuse('selected-choice-unconfirmed', surface);
+      const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
+        modelPickerLaneCurrent(picker, target.label), surface.current, 5000);
+      if (selected) { confirmedId = target.id; confirmedLabel = target.label; }
+      return !selected ? refuse('selected-choice-unconfirmed', surface) : await confirmEffort() || refuse('effort-choice-unconfirmed', surface);
     } finally {
-      const closeUntil = Date.now() + 3000, reboundBeforeClose = pickerRebound;
+      const closeUntil = Date.now() + 3000;
       closingConfirmedId = confirmedId;
-      const pickerSettled = () => picker.isConnected && pickerButton() === picker;
+      const pickerSettled = () => picker.isConnected && pickerButton() === picker &&
+        (!confirmedId || modelPickerLaneCurrent(picker, confirmedLabel));
       if (!await closeModelMenu(picker, surface.current, owned, pickerSettled)) return refuse('picker-close-failed', surface);
       // Closing our own menu may also replace the header when no choice click
       // was necessary. Re-prove the exact ID on that one successor before
       // returning success, within the original close budget and draft lease.
-      if (!reboundBeforeClose && pickerRebound) {
+      if (provedPicker && provedPicker !== picker) {
         if (!closingConfirmedId || !surface.current() || !enabled(picker)) return refuse('picker-close-failed', surface);
         picker.click();
-        const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === closingConfirmedId && row.selected),
+        const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === closingConfirmedId && row.selected &&
+          modelPickerLaneCurrent(picker, row.label)),
           surface.current, Math.max(0, closeUntil - Date.now()));
         if (!selected) return refuse('selected-choice-unconfirmed', surface);
+        if (!await confirmEffort()) return refuse('effort-choice-unconfirmed', surface);
         if (!await closeModelMenu(picker, surface.current, true, pickerSettled, Math.max(0, closeUntil - Date.now())))
           return refuse('picker-close-failed', surface);
+        if (provedPicker !== picker) return refuse('selected-choice-unconfirmed', surface);
       }
     }
   }

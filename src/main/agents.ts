@@ -21,6 +21,7 @@ import { liveConnectorName } from './mcp/surfaces.js';
 import { workerBrief, workerOwnTask } from '../shared/worker-brief.js';
 import { getChatModels, refreshForUnoffered } from './chat-models.js';
 import { resolveChatModel, type ChatModelOption } from '../shared/chat-models.js';
+import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
 import { logInfo, logWarn } from './logger.js';
 import { inheritWorkspace, releasePrimeWorkspace, bindAgentWorkspace } from './workspace.js';
 import { requestCorrelation } from './session/correlation.js';
@@ -639,6 +640,7 @@ export interface WorkerSpawn {
   model: string | null;
   /** Requested reasoning level, or null to inherit the default. */
   reasoningEffort: ReasoningEffort | null;
+  modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
 }
 
 /** Workers that exist but have not joined: their chat is still owed. */
@@ -648,7 +650,7 @@ export function pendingWorkerSpawns(): WorkerSpawn[] {
       (agent) =>
         agent.info.role === 'worker' && agent.info.state === 'invited' && !unpublishedAgents.has(agent)
     )
-    .map((agent) => ({ runId: run.runId, primeConversationId: run.primeConversationId, id: agent.info.id, task: agent.info.task, model: agent.info.model, reasoningEffort: agent.info.reasoningEffort })));
+    .map((agent) => ({ runId: run.runId, primeConversationId: run.primeConversationId, id: agent.info.id, task: agent.info.task, model: agent.info.model, reasoningEffort: agent.info.reasoningEffort, ...(agent.info.modelSurface ? { modelSurface: agent.info.modelSurface } : {}) })));
 }
 
 /**
@@ -1389,7 +1391,7 @@ export function identify(caller: Caller): AgentInfo {
  * cannot tell them apart is one that reports back on the house rules.
  */
 const briefFor = workerBrief;
-function makeWorker(id: string, label: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null): Agent {
+function makeWorker(id: string, label: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null, modelSurface?: import('../shared/chat-models.js').NativeModelSurface): Agent {
   return {
     info: {
       id,
@@ -1399,6 +1401,7 @@ function makeWorker(id: string, label: string, task: string, model: string | nul
       jobTitle: (workerOwnTask(task).split(/[\r\n]/, 1)[0]?.trim() ?? '').slice(0, 160) || undefined,
       model,
       reasoningEffort,
+      ...(modelSurface ? { modelSurface } : {}),
       state: 'invited',
       createdAt: Date.now(),
       activatedAt: null,
@@ -2039,7 +2042,7 @@ export function requestWorkerBootstraps(ids: readonly string[], runId?: string):
         !unpublishedAgents.has(agent) &&
         wanted.has(agent.info.id)
     )
-    .map((agent) => ({ runId: run.runId, primeConversationId: run.primeConversationId, id: agent.info.id, task: agent.info.task, model: agent.info.model, reasoningEffort: agent.info.reasoningEffort }));
+    .map((agent) => ({ runId: run.runId, primeConversationId: run.primeConversationId, id: agent.info.id, task: agent.info.task, model: agent.info.model, reasoningEffort: agent.info.reasoningEffort, ...(agent.info.modelSurface ? { modelSurface: agent.info.modelSurface } : {}) }));
   if (owed.length === 0) return 0;
   if (spawnRequest) spawnRequest(owed);
   else logWarn('multi-agent: no browser extension is paired, so worker chats cannot be opened automatically');
@@ -2078,7 +2081,8 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     throw new AgentError(`The shared context is too long (limit ${MAX_CONTEXT_CHARS} characters)`);
   }
 
-  const observedModels = getChatModels().models;
+  const modelProvider = chatProviderForConversation(input.caller.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const observedModels = getChatModels(modelProvider).models;
   const defaultNotes = new Set<string>();
   const planned = input.workers.map((worker, index) => {
     const task = worker.task.trim();
@@ -2088,17 +2092,23 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     if (label.length > MAX_LABEL_CHARS) {
       throw new AgentError(`Worker ${index + 1}'s label is too long (limit ${MAX_LABEL_CHARS} characters)`);
     }
-    const requested = usableDefaults(
-      normalizeModel(index, worker.model === undefined ? getConfig().multiAgent.defaultModel : worker.model),
-      normalizeReasoningEffort(index, worker.reasoning_effort === undefined ? getConfig().multiAgent.defaultReasoning : worker.reasoning_effort),
-      worker.model === undefined, worker.reasoning_effort === undefined, observedModels, defaultNotes);
+    const selectedModel = normalizeModel(index, worker.model === undefined ? getConfig().multiAgent.defaultModel : worker.model);
+    const selectedEffort = normalizeReasoningEffort(index, worker.reasoning_effort === undefined ? getConfig().multiAgent.defaultReasoning : worker.reasoning_effort);
+    const affinity = getConfig().multiAgent.defaultModelAffinity;
+    const modeBoundDefault = worker.model === undefined && modelProvider === 'chatgpt' && affinity?.provider === modelProvider &&
+      affinity.model === selectedModel && (affinity.surface === 'chat' || affinity.surface === 'work');
+    // A catalog from another native mode cannot erase the saved exact default.
+    // Its destination must activate the observed mode and prove this pair at Send.
+    const requested = modeBoundDefault ? { model: selectedModel, effort: selectedEffort } : usableDefaults(
+      selectedModel, selectedEffort, worker.model === undefined, worker.reasoning_effort === undefined, observedModels, defaultNotes);
     const model = requested.model, reasoningEffort = requested.effort;
-    validateWorkerModel(index, model, reasoningEffort, observedModels);
+    if (!modeBoundDefault) validateWorkerModel(index, model, reasoningEffort, observedModels);
     // Composed once, here, and stored as *the* task. Everything downstream — the bootstrap
     // the browser types, the repeated-spawn match, the status table, the snapshot — then
     // sees the same single string a worker actually receives, with no second field to keep
     // in step and no way for the two halves to be delivered apart.
-    return { label, task: briefFor(context, task), model, reasoningEffort };
+    const modelSurface = modelProvider === 'chatgpt' && model ? modeBoundDefault ? affinity.surface : resolveChatModel(observedModels, model)?.nativeSurface : undefined;
+    return { label, task: briefFor(context, task), model, reasoningEffort, surfaceIntent: modeBoundDefault, ...(modelSurface ? { modelSurface } : {}) };
   });
 
   const conversationId = input.caller.conversationId ?? null;
@@ -2214,7 +2224,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   const createdAgents: Agent[] = [];
   for (const [index, worker] of planned.entries()) {
     const id = ids[index] as string;
-    const agent = makeWorker(id, worker.label || id, worker.task, worker.model, worker.reasoningEffort);
+    const agent = makeWorker(id, worker.label || id, worker.task, worker.model, worker.reasoningEffort, worker.modelSurface);
     agent.info.workerAllocationRunId = activeRun.runId;
     activeRun.agents.set(id, agent);
     stampOwner(activeRun);
@@ -2260,7 +2270,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
  * worker still gets one; only an exact repetition of work already under way is folded back.
  */
 function matchExistingRequest(
-  requested: ReadonlyArray<{ label: string; task: string; model: string | null; reasoningEffort: ReasoningEffort | null }>,
+  requested: ReadonlyArray<{ label: string; task: string; model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../shared/chat-models.js').NativeModelSurface; surfaceIntent?: boolean }>,
   live: readonly Agent[]
 ): Agent[] | null {
   if (requested.length === 0 || live.length === 0) return null;
@@ -2271,20 +2281,24 @@ function matchExistingRequest(
   // file plain text: the NUL that used to do this job was a literal byte, which made every
   // text tool treat the source as binary. Model and reasoning ride along because a retry that
   // asks for a different model or level is new intent, not the same request arriving twice.
-  const shape = (label: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null): string =>
-    JSON.stringify([label.trim(), task.trim(), model, reasoningEffort]);
+  const shape = (label: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null, modelSurface?: import('../shared/chat-models.js').NativeModelSurface): string =>
+    JSON.stringify([label.trim(), task.trim(), model, reasoningEffort, modelSurface]);
   const taken = new Set<Agent>();
   const matched: Agent[] = [];
   for (const worker of requested) {
+    // Worker API arguments contain no surface. A catalog refresh cannot turn
+    // an exact API retry into new work; retain the accepted assignment's mode.
+    // An explicit saved-default mode change is distinct configuration intent.
+    const requestedSurface = worker.surfaceIntent ? worker.modelSurface : undefined;
     // The stored label defaults to the worker id, so an unlabelled request has to match the
     // way spawn would have written it.
     const found = live.find(
       (agent) =>
         !taken.has(agent) &&
-        (shape(agent.info.label, agent.info.task, agent.info.model, agent.info.reasoningEffort) ===
-          shape(worker.label || agent.info.id, worker.task, worker.model, worker.reasoningEffort) ||
-          shape(agent.info.label, agent.info.task, agent.info.model, agent.info.reasoningEffort) ===
-            shape(worker.label, worker.task, worker.model, worker.reasoningEffort))
+        (shape(agent.info.label, agent.info.task, agent.info.model, agent.info.reasoningEffort, worker.surfaceIntent ? agent.info.modelSurface : undefined) ===
+          shape(worker.label || agent.info.id, worker.task, worker.model, worker.reasoningEffort, requestedSurface) ||
+          shape(agent.info.label, agent.info.task, agent.info.model, agent.info.reasoningEffort, worker.surfaceIntent ? agent.info.modelSurface : undefined) ===
+            shape(worker.label, worker.task, worker.model, worker.reasoningEffort, requestedSurface))
     );
     if (!found) return null;
     taken.add(found);
@@ -5592,6 +5606,7 @@ function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number)
         jobTitle: typeof entry.info.jobTitle === 'string' && entry.info.jobTitle ? entry.info.jobTitle.slice(0, 160) : undefined,
         model: isModelSlug(entry.info.model) ? entry.info.model : null,
         reasoningEffort: isReasoningEffort(entry.info.reasoningEffort) ? entry.info.reasoningEffort : null,
+        modelSurface: entry.info.modelSurface === 'chat' || entry.info.modelSurface === 'work' ? entry.info.modelSurface : undefined,
         sleptAt: typeof entry.info.sleptAt === 'number' ? entry.info.sleptAt : null,
         contextTokens: Number.isFinite(entry.info.contextTokens) ? entry.info.contextTokens : 0,
         lastRevivalCommandId:

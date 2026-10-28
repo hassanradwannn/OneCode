@@ -1,6 +1,7 @@
 import { chatScheduler } from './chat-schedules.js';
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
 import { CHAT_PROVIDERS, chatProviderConversationUrl, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
+import type { ChatModelAffinity } from '../shared/chat-models.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
 import { approvalCardView, requestApprovalAnswer } from './approval-wait.js';
@@ -202,6 +203,7 @@ const capabilityPatch = z.object(
   >
 );
 
+const chatModelAffinity = z.object({ provider: z.enum(CHAT_PROVIDERS), model: z.string().trim().min(1).max(80), surface: z.enum(['chat', 'work']) }).strict().optional();
 const settingsPatch = z.object({
   // This computer's connector name suffix; see shared/connector-names.ts. Spaces are collapsed.
   connectorSuffix: z.string().max(64).transform(value => value.trim().replace(/\s+/g, ' '))
@@ -238,6 +240,7 @@ const settingsPatch = z.object({
     appearance: appearanceSchema.optional(),
     autoContinue: z.boolean().optional(),
     defaultChatModel: z.string().trim().min(1).max(80).optional(),
+    defaultChatModelAffinity: chatModelAffinity,
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional(),
     chatProvider: z.enum(CHAT_PROVIDERS).optional(),
     chatBrowser: z.enum(CHAT_BROWSERS).optional(),
@@ -295,6 +298,7 @@ const settingsPatch = z.object({
   multiAgent: z.object({
     enabled: z.boolean(),
     defaultModel: z.string().max(80).optional(),
+    defaultModelAffinity: chatModelAffinity,
     defaultReasoning: z.enum(['', ...REASONING_EFFORTS]).optional(),
     maxWorkers: z.number().int().min(1).max(8),
     globalMaxWorkers: z.number().int().min(0).max(64).optional(),
@@ -316,6 +320,7 @@ const settingsPatch = z.object({
       backend: z.enum(['api', 'chatgpt', 'templates']).optional(),
       loopBackend: z.enum(['api', 'chatgpt']).optional(),
       helperModel: z.string().trim().min(1).max(80).optional(),
+      helperModelAffinity: chatModelAffinity,
       helperReasoning: z.enum(REASONING_EFFORTS).optional(),
     enabled: z.boolean(),
     // Which of the two standing modes the switch runs. One field, so the renderer has no way
@@ -355,6 +360,9 @@ const settingsPatch = z.object({
 
 const settingsSave = z.object({ base: settingsPatch, patch: settingsPatch }).strict();
 type SettingsSnapshot = z.infer<typeof settingsPatch>;
+function sameChatModelAffinity(a: ChatModelAffinity | undefined, b: ChatModelAffinity | undefined): boolean {
+  return a?.provider === b?.provider && a?.model === b?.model && a?.surface === b?.surface;
+}
 
 /**
  * Three-way merge for the renderer's settings form.
@@ -373,6 +381,15 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
     throw new Error('Setup profile changed. Edit the tunnel ID in the selected profile again.');
   }
   const pick = <T>(live: T, before: T, next: T): T => (Object.is(before, next) ? live : next);
+  const chatProvider = pick(current.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, base.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, wanted.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const ordinaryModel = pick(current.ui.defaultChatModel, base.ui.defaultChatModel, wanted.ui.defaultChatModel);
+  const workerModel = pick(current.multiAgent.defaultModel, base.multiAgent.defaultModel, wanted.multiAgent.defaultModel);
+  const helperModel = pick(current.goal.helperModel, base.goal.helperModel, wanted.goal.helperModel);
+  const pickAffinity = (live: ChatModelAffinity | undefined, before: ChatModelAffinity | undefined, next: ChatModelAffinity | undefined,
+    model: string | undefined): ChatModelAffinity | undefined => {
+    const affinity = sameChatModelAffinity(before, next) ? live : next;
+    return affinity?.provider === chatProvider && affinity.model === model ? affinity : undefined;
+  };
   const pickRules = (live: string[], before: string[], next: string[]): string[] =>
     before.length === next.length && before.every((rule, index) => rule === next[index]) ? live : next;
   const capabilities = Object.fromEntries(
@@ -437,9 +454,10 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
     ui: {
       appearance: mergeAppearance(current.ui.appearance, base.ui.appearance, wanted.ui.appearance),
       autoContinue: pick(current.ui.autoContinue, base.ui.autoContinue, wanted.ui.autoContinue),
-      defaultChatModel: pick(current.ui.defaultChatModel, base.ui.defaultChatModel, wanted.ui.defaultChatModel),
+      defaultChatModel: ordinaryModel,
+      defaultChatModelAffinity: pickAffinity(current.ui.defaultChatModelAffinity, base.ui.defaultChatModelAffinity, wanted.ui.defaultChatModelAffinity, ordinaryModel),
       defaultChatReasoning: pick(current.ui.defaultChatReasoning, base.ui.defaultChatReasoning, wanted.ui.defaultChatReasoning),
-      chatProvider: pick(current.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, base.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER, wanted.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+      chatProvider,
       chatBrowser: pick(current.ui.chatBrowser, base.ui.chatBrowser, wanted.ui.chatBrowser),
       // Only the local file picker owns these paths; a stale settings snapshot cannot erase them.
       browserExecutables: current.ui.browserExecutables,
@@ -510,7 +528,8 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       )
     },
     multiAgent: {
-      defaultModel: pick(current.multiAgent.defaultModel, base.multiAgent.defaultModel, wanted.multiAgent.defaultModel),
+      defaultModel: workerModel,
+      defaultModelAffinity: pickAffinity(current.multiAgent.defaultModelAffinity, base.multiAgent.defaultModelAffinity, wanted.multiAgent.defaultModelAffinity, workerModel),
       defaultReasoning: pick(current.multiAgent.defaultReasoning, base.multiAgent.defaultReasoning, wanted.multiAgent.defaultReasoning),
       enabled: pick(current.multiAgent.enabled, base.multiAgent.enabled, wanted.multiAgent.enabled),
       maxWorkers: pick(current.multiAgent.maxWorkers, base.multiAgent.maxWorkers, wanted.multiAgent.maxWorkers),
@@ -572,7 +591,8 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       includeToolCalls: pick(current.goal.includeToolCalls, base.goal.includeToolCalls, wanted.goal.includeToolCalls),
       backend: pick(current.goal.backend, base.goal.backend, wanted.goal.backend),
       loopBackend: pick(current.goal.loopBackend, base.goal.loopBackend, wanted.goal.loopBackend),
-      helperModel: pick(current.goal.helperModel, base.goal.helperModel, wanted.goal.helperModel),
+      helperModel,
+      helperModelAffinity: pickAffinity(current.goal.helperModelAffinity, base.goal.helperModelAffinity, wanted.goal.helperModelAffinity, helperModel),
       helperReasoning: pick(current.goal.helperReasoning, base.goal.helperReasoning, wanted.goal.helperReasoning),
       enabled: pick(current.goal.enabled, base.goal.enabled, wanted.goal.enabled),
       mode: pick(current.goal.mode, base.goal.mode, wanted.goal.mode),
@@ -835,6 +855,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       before.goal.backend !== next.goal.backend ||
       before.goal.loopBackend !== next.goal.loopBackend ||
       before.goal.helperModel !== next.goal.helperModel || before.goal.helperReasoning !== next.goal.helperReasoning ||
+      !sameChatModelAffinity(before.goal.helperModelAffinity, next.goal.helperModelAffinity) ||
       before.goal.provider.kind !== next.goal.provider.kind ||
       before.goal.provider.baseUrl !== next.goal.provider.baseUrl ||
       before.goal.reasoning !== next.goal.reasoning ||

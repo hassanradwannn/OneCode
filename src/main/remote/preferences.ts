@@ -9,6 +9,8 @@ import { resolveChatModel } from '../../shared/chat-models.js';
 
 export const remotePreferencesSchema = z.object({
   chatProvider: z.enum(CHAT_PROVIDERS).optional(), defaultChatModel: z.string().max(80).optional(),
+  defaultChatModelAffinity: z.union([z.object({ provider: z.enum(CHAT_PROVIDERS), model: z.string().min(1).max(80), surface: z.enum(['chat', 'work']) }).strict(), z.literal('')])
+    .optional().transform(value => value === '' ? undefined : value),
   defaultChatReasoning: z.union([z.enum(REASONING_EFFORTS), z.literal('')]).optional(), followUp: z.enum(['steer', 'queue']).optional(),
   enterSends: z.boolean().optional(), followOutput: z.boolean().optional(), theme: z.enum(['light', 'dark']).optional(),
   turnNotifications: z.boolean().optional(), backgroundChats: z.boolean().optional(), backgroundPlacement: z.enum(['window', 'group']).optional(),
@@ -29,9 +31,15 @@ export async function saveRemotePreferences(raw: unknown): Promise<ReturnType<ty
     const providerChanged = changes.chatProvider !== undefined && changes.chatProvider !== current.ui.chatProvider;
     const ui = { ...current.ui, ...changes, ...(changes.defaultChatModel === '' || providerChanged && !changes.defaultChatModel ? { defaultChatModel: undefined } : {}),
       defaultChatReasoning: changes.defaultChatReasoning === '' || providerChanged && changes.defaultChatReasoning === undefined ? undefined : changes.defaultChatReasoning ?? current.ui.defaultChatReasoning };
+    const provider = ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
+    const affinity = ui.defaultChatModelAffinity;
+    if (changes.defaultChatModelAffinity && (provider !== 'chatgpt' || affinity?.provider !== provider || affinity.model !== ui.defaultChatModel)) throw new Error('Model surface must match the selected provider and model.');
+    if (affinity && (provider !== 'chatgpt' || affinity.provider !== provider || affinity.model !== ui.defaultChatModel)) delete ui.defaultChatModelAffinity;
     if (ui.defaultChatModel && (providerChanged || 'defaultChatModel' in changes || 'defaultChatReasoning' in changes)) {
-      const model = resolveChatModel(getChatModels(ui.chatProvider ?? DEFAULT_CHAT_PROVIDER).models, ui.defaultChatModel);
-      if (!model || (ui.defaultChatReasoning && !model.efforts.includes(ui.defaultChatReasoning))) throw new Error('Refresh models and choose an available model and thinking effort.');
+      const model = resolveChatModel(getChatModels(provider).models, ui.defaultChatModel);
+      if ((!model || (ui.defaultChatReasoning && !model.efforts.includes(ui.defaultChatReasoning))) &&
+          (!ui.defaultChatModelAffinity || model?.nativeSurface === ui.defaultChatModelAffinity.surface)) throw new Error('Refresh models and choose an available model and thinking effort.');
+      if (!ui.defaultChatModelAffinity && provider === 'chatgpt' && model?.nativeSurface) ui.defaultChatModelAffinity = { provider, model: ui.defaultChatModel, surface: model.nativeSurface };
     }
     return { ...current, ui };
   });

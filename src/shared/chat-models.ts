@@ -5,7 +5,9 @@ export function isAstraModel(model: string | null | undefined, effort?: Reasonin
   return /^(?:astra|(?:gpt-?)?6(?:\.0)?-(?:pro|astra))$/.test(normalized) ||
     (/^(?:gpt-?)?6(?:\.0)?$/.test(normalized) && effort === 'pro');
 }
-export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[] };
+export type NativeModelSurface = 'chat' | 'work';
+export type ChatModelAffinity = { provider: import('./chat-provider.js').ChatProvider; model: string; surface: NativeModelSurface };
+export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[]; nativeSurface?: NativeModelSurface };
 export const EFFORT_NAMES: Record<string, string> = { none: 'Instant', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra', pro: 'Pro' } satisfies Record<ReasoningEffort, string>;
 export const COMPOSER_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
 /**

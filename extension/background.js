@@ -159,7 +159,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 19;
+const BRIDGE_PROTOCOL = 20;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -2400,10 +2400,11 @@ function inputReuseProbe(tabId, documentId) {
   return tabReply(tabId, { type: 'clf-input-reuse-state' }, { documentId });
 }
 
-function prepareDesktopInputReceipt(tabId, id, documentId) {
-  // The content-side maximum is 13s: sidebar, New Chat, then Work -> Chat.
+function prepareDesktopInputReceipt(tabId, id, documentId, modelSurface) {
+  // The content-side maximum is 13s: sidebar, New Chat, then the requested surface.
   // Timeout keeps `preparing` custody; it never authorizes another tab or Send.
-  return tabReply(tabId, { type: 'clf-prepare-desktop-input', id }, { documentId }, 15000);
+  return tabReply(tabId, { type: 'clf-prepare-desktop-input', id,
+    ...(['chat', 'work'].includes(modelSurface) ? { modelSurface } : {}) }, { documentId }, 15000);
 }
 
 /** An input's existing election/document can select its owned tab, never OS focus. */
@@ -2616,15 +2617,25 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
           (recoveredReuse ? candidate.id === recoveredReuse.tab :
             (!conversationForTab(candidate) || reusable.has(conversationForTab(candidate)))))
           .sort((a, b) => Number(!!conversationForTab(a)) - Number(!!conversationForTab(b)) || a.id - b.id);
-        for (const candidate of choices) {
+        // These are read-only document observations. Start them together so
+        // frozen earlier candidates cost one timeout budget, not one per tab.
+        // Consume in the original rank order; only the elected winner below
+        // may prepare/navigate, after its fresh document and Chrome checks.
+        const probes = choices.map(candidate => {
           const source = { tab: candidate.id, documentId: tabDocuments[String(candidate.id)], navigationEpoch: tabEpochs[String(candidate.id)] };
-          if (!ownsDocument(source)) continue;
+          if (!ownsDocument(source)) return Promise.resolve(null);
           const proof = recoveredReuse?.tab === source.tab && recoveredReuse.documentId === source.documentId && recoveredReuse.navigationEpoch === source.navigationEpoch
-            ? { safe: true, navigationEpoch: source.navigationEpoch }
-            : await inputReuseProbe(candidate.id, source.documentId);
+            ? Promise.resolve({ safe: true, navigationEpoch: source.navigationEpoch })
+            : inputReuseProbe(candidate.id, source.documentId);
+          return proof.then(proof => ({ candidate, source, proof }));
+        });
+        for (const pending of probes) {
+          const observed = await pending;
+          if (!observed) continue;
+          const { candidate, source, proof } = observed;
           const current = await chrome.tabs.get(candidate.id).catch(() => null);
           if (proof?.safe !== true || proof.navigationEpoch !== source.navigationEpoch || !ownsDocument(source) ||
-              !current || current.pinned || current.pendingUrl || current.url !== candidate.url) continue;
+              !current || current.pinned || current.pendingUrl || current.url !== candidate.url || modelCatalogTarget?.tab === candidate.id) continue;
           const borrowed = conversationForTab(candidate);
           if (borrowed) tabReuses[String(candidate.id)] = { documentId: source.documentId, conversationId: borrowed, at: Date.now() };
           await elect(input.id, { ...source, url: current.url, stage: 'preparing' });
@@ -2633,7 +2644,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
           const owner = (await chrome.storage.session.get('modelCatalogOwner')).modelCatalogOwner;
           if (owner?.tab === candidate.id) await chrome.storage.session.set({ modelCatalogOwner: { ...owner, handedToInput: input.id } });
           if (!await renderElectedInput(input.id, source)) break;
-          const prepared = await prepareDesktopInputReceipt(candidate.id, input.id, source.documentId);
+          const prepared = await prepareDesktopInputReceipt(candidate.id, input.id, source.documentId, input.modelSurface);
           const latest = await chrome.tabs.get(candidate.id).catch(() => null);
           if (!latest || latest.pendingUrl || tabDocuments[String(candidate.id)] !== source.documentId) break;
           if (prepared?.ready === true && matchesInput(input, latest)) {
@@ -3388,6 +3399,8 @@ async function runVideoExports(jobs) {
  */
 let keepAwakeTabs = null;
 let groupOpenedForWake = null;
+let keepAwakeFlight = null;
+let keepAwakePending = null;
 async function keepAwakeState() {
   if (!keepAwakeTabs) {
     const stored = (await chrome.storage.session.get('keepAwakeTabs')).keepAwakeTabs;
@@ -3401,38 +3414,85 @@ async function noteKeepAwake(tabId, documentId, on) {
   else delete told[String(tabId)];
   await chrome.storage.session.set({ keepAwakeTabs: told });
 }
-async function syncKeepAwake(tabs, everyTab = true) {
+function syncKeepAwake(tabs, everyTab = true) {
+  // Coalesce group bookkeeping behind one owner. A sleeping document must not
+  // hold maintenance (and the next outbox publication) through N reply budgets.
+  const pending = everyTab || !keepAwakePending ? { tabs: new Map(), everyTab, observation: maintenancePhaseSequence, intent: connectionEpoch } : keepAwakePending;
+  for (const tab of tabs) if (Number.isInteger(tab?.id)) pending.tabs.set(tab.id, { ...tab });
+  keepAwakePending = pending;
+  if (keepAwakeFlight) return keepAwakeFlight;
+  keepAwakeFlight = (async () => {
+    while (keepAwakePending) {
+      const request = keepAwakePending; keepAwakePending = null;
+      const current = () => request.intent === connectionEpoch;
+      const latest = () => request.observation === maintenancePhaseSequence && !keepAwakePending;
+      await syncKeepAwakeNow([...request.tabs.values()], request.everyTab, current, latest);
+    }
+  })().finally(() => { keepAwakeFlight = null; });
+  return keepAwakeFlight;
+}
+async function syncKeepAwakeNow(tabs, everyTab, current, latest) {
   const told = await keepAwakeState();
   const group = groupsAvailable() ? await storedBackgroundGroup() : null;
+  if (!current()) return;
   let waiting = false;
-  for (const tab of tabs) {
-    if (!Number.isInteger(tab?.id)) continue;
+  for (const observed of tabs) {
+    if (!current()) return;
+    if (!Number.isInteger(observed?.id)) continue;
+    const tab = await chrome.tabs.get(observed.id).catch(() => null);
+    if (!current()) return;
+    if (!tab) continue;
     const key = String(tab.id);
     const documentId = tabDocuments[key];
-    const want = Boolean(group) && tab.groupId === group.id;
+    const source = { tab: tab.id, documentId, navigationEpoch: tabEpochs[key] };
+    const want = groupsAvailable() && Boolean(group) && tab.groupId === group.id;
+    const stillWants = async expected => {
+      const live = await chrome.tabs.get(tab.id).catch(() => null);
+      const activeGroup = groupsAvailable() ? await storedBackgroundGroup() : null;
+      return current() && ownsDocument(source) && Boolean(live) &&
+        (Boolean(activeGroup) && live.groupId === activeGroup.id) === expected &&
+        (!expected || activeGroup.id === group.id);
+    };
     if (want && (!documentId || told[key] !== documentId)) {
       if (tab.frozen === true || !documentId) {
         waiting = true;
         if (tab.frozen === true && group.collapsed === true && groupOpenedForWake === null) {
+          const activeGroup = groupsAvailable() ? await storedBackgroundGroup() : null;
+          if (!current() || activeGroup?.id !== group.id) continue;
           await chrome.tabGroups.update(group.id, { collapsed: false }).then(() => { groupOpenedForWake = group.id; }, () => undefined);
         }
         continue;
       }
+      if (!ownsDocument(source) || !await stillWants(true)) { waiting = true; continue; }
       const reply = await tabReply(tab.id, { type: 'clf-keep-awake', on: true }, { documentId });
+      if (!current()) return;
+      if (!ownsDocument(source) || !await stillWants(true)) { waiting = true; continue; }
       if (reply?.ok === true) await noteKeepAwake(tab.id, documentId, true);
       else waiting = true;
     } else if (!want && told[key] !== undefined) {
-      if (documentId && told[key] === documentId) await tabReply(tab.id, { type: 'clf-keep-awake', on: false }, { documentId });
+      const previous = told[key];
+      if (documentId && previous === documentId) {
+        if (!ownsDocument(source)) continue;
+        await tabReply(tab.id, { type: 'clf-keep-awake', on: false }, { documentId });
+        if (!current() || !ownsDocument(source) || told[key] !== previous || !await stillWants(false)) continue;
+      }
+      if (!current() || told[key] !== previous) continue;
       await noteKeepAwake(tab.id, null, false);
     }
   }
-  if (everyTab) {
-    for (const key of Object.keys(told)) if (!tabs.some(tab => String(tab.id) === key)) await noteKeepAwake(key, null, false);
+  if (everyTab && latest()) {
+    for (const key of Object.keys(told)) if (!tabs.some(tab => String(tab.id) === key)) {
+      if (!current() || !latest()) return;
+      await noteKeepAwake(key, null, false);
+    }
   }
-  if (everyTab && groupOpenedForWake !== null && !waiting) {
+  if (everyTab && groupOpenedForWake !== null && !waiting && current() && latest()) {
     const id = groupOpenedForWake;
+    const activeGroup = groupsAvailable() ? await storedBackgroundGroup() : null;
+    const live = await chrome.tabs.query({ groupId: id }).catch(() => null);
+    if (!current() || !latest() || !Array.isArray(live)) return;
     groupOpenedForWake = null;
-    if (group?.id === id && !tabs.some(tab => tab.groupId === id && tab.active === true)) {
+    if (activeGroup?.id === id && !live.some(tab => tab.groupId === id && tab.active === true)) {
       await chrome.tabGroups.update(id, { collapsed: true }).catch(() => undefined);
     }
   }
@@ -3759,8 +3819,6 @@ async function maintainOnce() {
   }
   phase('window-layout');
   const backgroundReady = await reconcileBackgroundWindow(reply.data);
-  phase('keep-awake');
-  await syncKeepAwake(observedTabs).catch(() => undefined);
   if (reply.data.placement) {
     phase('successor-placement');
     await placeSuccessorChat(reply.data.placement, null);
@@ -3784,6 +3842,11 @@ async function maintainOnce() {
   await deliverDesktopInputs(inputs, reply.data.background === true,
     Array.isArray(reply.data.reusableConversations) ? reply.data.reusableConversations.filter(id => !repairConversations.has(id)) : [],
     reply.data.inputOpeningIds, refreshRendering);
+  // An elected input applies its own rendering policy before preparation or
+  // offering. Group-wide lock bookkeeping must not queue its delivery behind
+  // unrelated sleeping documents that each need a bounded browser reply.
+  phase('keep-awake');
+  void syncKeepAwake(observedTabs).catch(() => undefined);
   if (!backgroundReady) { phase('window-layout'); await reconcileBackgroundWindow(reply.data); }
   const monitoring = reply.data.recoveryMonitoring === true;
   if (monitoring !== recoveryMonitoring) {
@@ -6115,7 +6178,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 104;
+const PAGE_RECORDER_VERSION = 105;
 
 let deferredRecoveryWork = null;
 

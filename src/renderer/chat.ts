@@ -13,7 +13,7 @@ import { generationPlaceholder, inlinePresentation, loadInlineVideo, retireDetac
 import { currentLanguage, ui, t } from './i18n.js';
 import { initSkills } from './skills.js';
 import { imageStorageButton } from './image-storage.js';
-import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, initChatModels, confirmedComposerModel, composerSendModel, ensureComposerModel, chatModelName } from './chat-models.js';
+import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, initChatModels, confirmedComposerModel, composerSendModel, ensureComposerModel, chatModelName, settingsModelAffinity } from './chat-models.js';
 import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
 import { decorateJsonCode } from './json-code.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
@@ -4623,7 +4623,8 @@ function groupImageRows(rows: HTMLElement[]): HTMLElement[] {
 function composerSessionSelection(summary: SessionSummary | null | undefined) {
   if (summary?.conversationId) return summary.selectedModel;
   const opening = pendingComposerInputs.find(row => row.opening && row.sessionId === summary?.id && ['queued', 'browser'].includes(row.state));
-  return opening?.model ? { model: opening.model, reasoningEffort: opening.reasoningEffort ?? undefined, observedAt: opening.createdAt } : null;
+  return opening?.model ? { model: opening.model, reasoningEffort: opening.reasoningEffort ?? undefined,
+    ...(opening.modelSurface ? { modelSurface: opening.modelSurface } : {}), observedAt: opening.createdAt } : null;
 }
 function paintDetail(followBottom = historyBefore === null): void {
   paintStateLine();
@@ -5694,7 +5695,7 @@ function urgentFrom(threshold: number): number {
 }
 
 /** Reads the three config sections this panel owns, for the renderer's save path. */
-export function chatSettingsPatch(current: Config): {
+export function chatSettingsPatch(current: Config, provider: ChatProvider = current.ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER): {
   sessions: Config['sessions'];
   compaction: Config['compaction'];
   multiAgent: Config['multiAgent'];
@@ -5707,6 +5708,8 @@ export function chatSettingsPatch(current: Config): {
     return Math.min(max, Math.max(min, Math.round(raw)));
   };
   const threshold = number('autoCompactTokens', current.compaction.autoTokens, 10_000, 4_000_000);
+  const workerModel = $<HTMLSelectElement>('workerModel').value;
+  const helperModel = $<HTMLSelectElement>('helperModel').value || current.goal.helperModel || DEFAULT_HELPER_CHAT_MODEL;
   return {
     sessions: {
       // Main enforces these invariants too. Keeping the canonical values in the complete
@@ -5729,7 +5732,8 @@ export function chatSettingsPatch(current: Config): {
         : DEFAULT_HANDOFF_LENGTH
     },
     multiAgent: {
-      defaultModel: $<HTMLSelectElement>('workerModel').value,
+      defaultModel: workerModel,
+      defaultModelAffinity: settingsModelAffinity(workerModel, current.multiAgent.defaultModelAffinity, provider, 'workerModel'),
       defaultReasoning: $<HTMLSelectElement>('workerReasoning').value as Config['multiAgent']['defaultReasoning'],
       // The exposure switch lives with every other Gemini tool switch, on Home. Settings owns
       // the per-family worker limit and the optional broker-wide admission cap below.
@@ -5756,7 +5760,8 @@ export function chatSettingsPatch(current: Config): {
       includeToolCalls: $<HTMLInputElement>('goalIncludeToolCalls').checked,
       backend: $<HTMLSelectElement>('goalBackend').value as Config['goal']['backend'],
       loopBackend: $<HTMLSelectElement>('loopBackend').value as Config['goal']['loopBackend'],
-      helperModel: $<HTMLSelectElement>('helperModel').value || current.goal.helperModel || DEFAULT_HELPER_CHAT_MODEL,
+      helperModel,
+      helperModelAffinity: settingsModelAffinity(helperModel, current.goal.helperModelAffinity, provider, 'helperModel'),
       helperReasoning: ($<HTMLSelectElement>('helperReasoning').value || current.goal.helperReasoning || 'high') as Config['goal']['helperReasoning'],
       provider: {
         kind: ($<HTMLSelectElement>('goalProvider').value || current.goal.provider?.kind || 'openrouter') as Config['goal']['provider']['kind'],
@@ -6691,9 +6696,9 @@ async function retryPlannedInput(entry: InputEntry): Promise<void> {
   if (dismissedInputNotices.has(entry.id) || entry.stagesApplied || !['failed', 'cancelled'].includes(entry.state)) return;
   // The outbox retains the authored workflow after failure. Retry that payload, not
   // its stage-one display text, and never revive the old browser claim/receipt.
-  const { sessionId, projectId, text, objective, stages, images, attachments, attachmentDelivery, automation, loopAfterTurn, model, reasoningEffort, afterTurn } = entry;
+  const { sessionId, projectId, text, objective, stages, images, attachments, attachmentDelivery, automation, loopAfterTurn, model, reasoningEffort, modelSurface, afterTurn } = entry;
   const args: InputArgs = { id: crypto.randomUUID(), sessionId, projectId, text, objective, stages, images, attachments, attachmentDelivery,
-    automation, loopAfterTurn, model, reasoningEffort, afterTurn, mode: entry.requestedMode ?? entry.mode, dueAt: Date.now() };
+    automation, loopAfterTurn, model, reasoningEffort, ...(modelSurface ? { modelSurface } : {}), afterTurn, mode: entry.requestedMode ?? entry.mode, dueAt: Date.now() };
   const generation = selectionGeneration;
   // Hide during the attempt, but persist dismissal only after its replacement is durable.
   dismissedInputNotices.add(entry.id); void refreshInputQueue();
@@ -6953,7 +6958,7 @@ async function ensureSelectedProvider(id: string, selection: number, poll = fals
   }, next.phase === 'history-wait' ? Math.max(2000, Math.min(15000, (next.retryAt ?? 0) - Date.now())) : 2000);
 }
 
-function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 'reasoningEffort'>): void {
+function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 'reasoningEffort' | 'modelSurface'>): void {
   const ownerChanged = id !== selectedId;
   rememberDraft();
   selectionGeneration++; chatFind?.selectionChanged(); replaceComposerDraft();
@@ -7181,12 +7186,12 @@ export function initChat(next: Deps): void {
       if (!id) {
         const draft = objective.value, mode = $<HTMLSelectElement>('sessionObjectiveMode').value as 'goal' | 'loop';
         if (!draft.trim()) return;
-        const settings = confirmedComposerModel();
-        if (!settings) { toast(t('Reload model choices and select an available model and thinking effort before sending.')); return; }
+        const settings = confirmedComposerModel() ?? composerSendModel();
+        if (!settings?.model) { toast(t('Reload model choices and select an available model and thinking effort before sending.')); return; }
         closeObjectiveEditor();
         const selection = selectionGeneration, intent = goalIntentGeneration, requestId = crypto.randomUUID();
         const projectId = selectedProjectId;
-        const { model, reasoningEffort } = settings;
+        const { model, reasoningEffort, modelSurface } = settings;
         const automation = $<HTMLSelectElement>('chatAutomation');
         automation.value = mode;
         automation.dataset.edited = 'true'; paintAutomationSwitch();
@@ -7202,7 +7207,7 @@ export function initChat(next: Deps): void {
           const dueAt = Date.now(), inputId = crypto.randomUUID();
           const entry: InputEntry = { id: inputId, sessionId: null, projectId, text: opening.reply, objective: draft.trim(), authoredSource: 'objective', automation: mode,
             loopAfterTurn: openingLoopDelivery(),
-            mode: 'auto', dueAt, model, reasoningEffort, state: 'queued', owner: null, createdAt: dueAt, conversationId: null };
+            mode: 'auto', dueAt, model, reasoningEffort, ...(modelSurface ? { modelSurface } : {}), state: 'queued', owner: null, createdAt: dueAt, conversationId: null };
           startingInputs.set(inputId, entry); pendingNewInput = { id: inputId, generation: selection };
           goalProgress = { requestId, selection, inputId, phase: 'queued', text: '' }; paintDeliveryControls();
           try {

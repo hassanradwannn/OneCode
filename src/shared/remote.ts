@@ -4,7 +4,7 @@ import type { Config } from './types.js';
 import type { ControlApiSession, ControlApiSessionDetail, ControlApiSessionList } from './control-api.js';
 
 /** An explicit projection, never the host config or an Electron IPC envelope. */
-export const REMOTE_UI_KEYS = ['chatProvider', 'defaultChatModel', 'defaultChatReasoning', 'followUp', 'enterSends', 'followOutput', 'theme',
+export const REMOTE_UI_KEYS = ['chatProvider', 'defaultChatModel', 'defaultChatReasoning', 'defaultChatModelAffinity', 'followUp', 'enterSends', 'followOutput', 'theme',
   'turnNotifications', 'backgroundChats', 'backgroundPlacement', 'tabsToKeepOpen', 'autoContinue', 'autoSelectSkills', 'rotateTurnMinutes'] as const;
 export type RemotePreferences = Pick<Config['ui'], typeof REMOTE_UI_KEYS[number]>;
 export interface RemoteDevice { id: string; name: string; lastSeenAt: number }
@@ -22,6 +22,6 @@ export type RemoteSessionDetail = Omit<ControlApiSessionDetail, 'session'> & {
   session: RemoteSession;
   providerReadiness?: import('./chat-readiness.js').SelectedChatReadiness | null;
   plan?: import('./agent-plan.js').AgentPlan | null;
-  selection?: { model: string; reasoningEffort?: import('./session.js').ReasoningEffort } | null;
+  selection?: { model: string; reasoningEffort?: import('./session.js').ReasoningEffort; modelSurface?: import('./chat-models.js').NativeModelSurface } | null;
 };
 export type RemoteSessionList = Omit<ControlApiSessionList, 'sessions'> & { sessions: RemoteSession[] };

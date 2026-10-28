@@ -7,6 +7,7 @@ import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { initRemoteSettings } from './remote-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
+import { settingsModelAffinity } from './chat-models.js';
 import { selectedBrowserConnected } from '../shared/browser-readiness.js';
 import { chatProviderLabel } from '../shared/chat-provider.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
@@ -729,7 +730,9 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
     capabilities[capability] = input.checked;
   }
   const readOnly = over.readOnly ?? previous.readOnly;
-  const chatPatch = chatSettingsPatch(previous);
+  const chatProvider = $<HTMLSelectElement>('chatProvider').value as ChatProvider;
+  const defaultChatModel = $<HTMLSelectElement>('defaultChatModel').value || undefined;
+  const chatPatch = chatSettingsPatch(previous, chatProvider);
   const selectedBridgePort = $<HTMLSelectElement>('browserBridgePort').value;
   const patch: SettingsPatch = {
     connectorSuffix: connectorSuffixDraft(previous),
@@ -747,9 +750,10 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
     },
     ui: {
       ...previous.ui,
-      defaultChatModel: $<HTMLSelectElement>('defaultChatModel').value || undefined,
+      defaultChatModel,
+      defaultChatModelAffinity: settingsModelAffinity(defaultChatModel ?? '', previous.ui.defaultChatModelAffinity, chatProvider, 'defaultChatModel'),
       defaultChatReasoning: ($<HTMLSelectElement>('defaultChatReasoning').value || undefined) as Config['ui']['defaultChatReasoning'],
-      chatProvider: $<HTMLSelectElement>('chatProvider').value as ChatProvider,
+      chatProvider,
       chatBrowser: $<HTMLSelectElement>('chatBrowser').value as ChatBrowser,
       cosBrowserMinimize: $<HTMLSelectElement>('cosBrowserMinimize').value === 'tray' ? 'tray' : 'taskbar',
       finishTool: $<HTMLInputElement>('finishTool').checked,

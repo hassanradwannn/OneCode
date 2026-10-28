@@ -19,7 +19,7 @@ import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
 import { MAX_BROWSER_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
 import { isConversationDeleted } from '../shared/chat-error.js';
 import { prepareSessionPrompt } from './session/prompt.js';
-import { pendingChatModelRequest, observeChatModels, requestChatModels } from './chat-models.js';
+import { pendingChatModelRequest, observeChatModels, requestChatModels, observedModelSurface } from './chat-models.js';
 import { isDeliberateEffort, isProModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
 import { injectedUserMessage, recordedRequestTurn, responseTurnId, type TimelineTurns } from '../shared/chronology.js';
@@ -403,6 +403,7 @@ type CommandSpec =
        * typed into the chat or shown to the model.
        */
       model: string | null;
+      modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
       /**
        * Requested reasoning level for the worker's fresh chat, or null to inherit.
        *
@@ -583,6 +584,7 @@ export interface BridgeCommand {
    * Null for every other command kind.
    */
   model: string | null;
+  modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
   /**
    * Requested reasoning level for a worker's fresh chat, or null to inherit.
    *
@@ -1942,6 +1944,7 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
       if (isReasoningEffort(item['reasoningEffort'])) {
         observation.reasoningEffort = item['reasoningEffort'];
       }
+      if (item['modelSurface'] === 'chat' || item['modelSurface'] === 'work') observation.modelSurface = item['modelSurface'];
     }
     // Long final handoff-style answers are valid transcript content too. Keep this aligned
     // with the page-side assistant bound so the bridge does not silently become the next
@@ -6446,7 +6449,7 @@ async function startBridgeOnce(epoch: number, prepared?: PreparedBridge): Promis
   retireInactiveWorkerRecovery();
   dropSpawnRequestListener?.();
   dropSpawnRequestListener = onSpawnRequest((workers) => {
-    for (const worker of workers) queueWorkerBootstrap(worker.id, worker.task, worker.model, worker.reasoningEffort, worker.runId);
+    for (const worker of workers) queueWorkerBootstrap(worker.id, worker.task, worker.model, worker.reasoningEffort, worker.runId, worker.modelSurface ?? null);
   });
   // The same replay contract for waking a worker that already has a chat. A run restored
   // from disk can hold a worker left in `waking` by a crash mid-revival; registering here
@@ -7255,12 +7258,15 @@ async function cancelAutomaticResumesNow(sessionId?: string): Promise<number> {
  * stored: the chat this opens is bound to the slot by the extension's report, and the
  * recovery key exists only if the user asks the app for one after that has failed.
  */
-export function queueWorkerBootstrap(agent: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null, runId: string): BridgeCommand | null {
+export function queueWorkerBootstrap(agent: string, task: string, model: string | null, reasoningEffort: ReasoningEffort | null, runId: string, frozenSurface?: import('../shared/chat-models.js').NativeModelSurface | null): BridgeCommand | null {
   // A worker bootstrap is authority for one concrete broker incarnation. There is no safe
   // meaning for one outside a run, and manufacturing an unscoped command here is exactly how
   // stale durable work later becomes somebody else's `worker-1`.
   if (!runId || !swarmRunning(runId)) return null;
-  const command = queue({ type: 'worker', agent, task, model, reasoningEffort, runId });
+  // Broker replay supplies null for legacy unknown mode, so a newer catalog can
+  // never lend a different mode to an older accepted worker assignment.
+  const modelSurface = frozenSurface === null ? undefined : frozenSurface ?? observedModelSurface(model, chatProviderForConversation(primeConversation(runId), selectedChatProvider()), getConfig().multiAgent.defaultModelAffinity);
+  const command = queue({ type: 'worker', agent, task, model, reasoningEffort, runId, ...(modelSurface ? { modelSurface } : {}) });
   // Start the clock at broker admission, exactly as a revival does. A bootstrap that never
   // reaches a page is the case that has no other clock at all.
   armDeadline(command);
@@ -7720,7 +7726,7 @@ function offerPlacement(command: Command): boolean {
  * a replacement's only while that browser holds the replacement's source chat.
  */
 function pendingBrowserPlacement(conversationId: string | null, browser: string | null = null): {
-  id: string; model: string | null; reasoningEffort: ReasoningEffort | null;
+  id: string; model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
   background?: true; active: boolean; homeConversationId: string | null; project: string | null;
 } | null {
   const command = commands.find(entry => entry.owner === null && entry.placement &&
@@ -7737,6 +7743,7 @@ function pendingBrowserPlacement(conversationId: string | null, browser: string 
   return {
     id: command.id, model: worker ? spec.model : selection?.model ?? null,
     reasoningEffort: worker ? spec.reasoningEffort : selection?.reasoningEffort ?? null,
+    ...((worker ? spec.modelSurface : selection?.modelSurface) ? { modelSurface: worker ? spec.modelSurface : selection?.modelSurface } : {}),
     active: !worker, homeConversationId: placement.conversationId, project: commandProject(command),
     ...(placement.background ? { background: true as const } : {})
   };
@@ -11726,6 +11733,7 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
     agent: spec.type === 'resume' ? null : spec.agent,
     model: spec.type === 'worker' ? spec.model : selection?.model ?? null,
     reasoningEffort: spec.type === 'worker' ? spec.reasoningEffort : selection?.reasoningEffort ?? null,
+    ...((spec.type === 'worker' ? spec.modelSurface : selection?.modelSurface) ? { modelSurface: spec.type === 'worker' ? spec.modelSurface : selection?.modelSurface } : {}),
     // The fence the page enforces before it types. Only a revival has one: the other two
     // kinds open a chat that does not exist yet, so there is nothing to compare against.
     conversationId: spec.type === 'revive' ? spec.conversationId : null
@@ -12070,6 +12078,7 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
       task: worker.task.slice(0, 512 * 1024),
       model: isModelSlug(worker.model) ? worker.model : null,
       reasoningEffort: isReasoningEffort(worker.reasoningEffort) ? worker.reasoningEffort : null,
+      ...(isModelSlug(worker.model) && (worker.modelSurface === 'chat' || worker.modelSurface === 'work') ? { modelSurface: worker.modelSurface } : {}),
       runId: worker.runId
     };
   }

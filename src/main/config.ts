@@ -55,6 +55,11 @@ import {
 } from '../shared/command-allowlist.js';
 
 export const browserBridgePortSchema = z.union([z.literal('auto'), z.literal(BROWSER_BRIDGE_PORTS)]);
+const chatModelAffinitySchema = z.object({
+  provider: z.enum(CHAT_PROVIDERS),
+  model: z.string().trim().min(1).max(80),
+  surface: z.enum(['chat', 'work'])
+}).strict().optional().catch(undefined);
 
 /**
  * Defaults for the newer sections, in one place so the schema and defaultConfig()
@@ -328,6 +333,7 @@ const configSchema = z.object({
     appearance: appearanceSchema.optional().catch(undefined),
     autoContinue: z.boolean().optional().default(true),
     defaultChatModel: z.string().trim().min(1).max(80).optional().catch(undefined),
+    defaultChatModelAffinity: chatModelAffinitySchema,
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional().catch(undefined),
     chatProvider: z.enum(CHAT_PROVIDERS).optional().default('gemini'),
     chatBrowser: z.enum(CHAT_BROWSERS).optional().default('chrome'),
@@ -428,6 +434,7 @@ const configSchema = z.object({
     .object({
       enabled: z.boolean().optional().default(DEFAULT_MULTI_AGENT.enabled),
     defaultModel: z.string().max(80).optional(),
+    defaultModelAffinity: chatModelAffinitySchema,
     defaultReasoning: z.enum(['', ...REASONING_EFFORTS]).optional(),
       maxWorkers: z.number().int().min(1).max(8).optional().default(DEFAULT_MULTI_AGENT.maxWorkers),
       globalMaxWorkers: z.number().int().min(0).max(64).optional().default(DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0),
@@ -465,6 +472,7 @@ const configSchema = z.object({
       backend: z.enum(['api', 'chatgpt', 'templates']).optional().default('chatgpt'),
       loopBackend: z.enum(['api', 'chatgpt']).optional().default('chatgpt'),
       helperModel: z.string().trim().min(1).max(80).optional().default(DEFAULT_HELPER_CHAT_MODEL).catch(DEFAULT_HELPER_CHAT_MODEL),
+      helperModelAffinity: chatModelAffinitySchema,
       helperReasoning: z.enum(REASONING_EFFORTS).optional().default('high').catch('high'),
       // Repaired rather than rejected for the same reason `reasoning` below is: a config
       // written by a version that knows one more mode than this one must not send every root

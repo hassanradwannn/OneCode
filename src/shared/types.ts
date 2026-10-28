@@ -4,6 +4,7 @@ import type { PluginRefreshStatus } from './plugin-refresh.js';
 import { WINDOWS_COMPUTER_READ_METHODS, WINDOWS_COMPUTER_INPUT_METHODS } from './windows-computer.js';
 import { BROWSER_READ_TOOLS, BROWSER_WRITE_TOOLS } from './browser-control.js';
 import type { CommandAllowlistSettings } from './command-allowlist.js';
+import type { ChatModelAffinity } from './chat-models.js';
 export type { CommandAllowlistSettings } from './command-allowlist.js';
 /** Types shared between the main process and the renderer. No runtime logic here. */
 
@@ -139,6 +140,8 @@ export interface UiPrefs {
   autoContinue?: boolean;
   /** Preferred account-observed model for a fresh ordinary chat; omitted keeps the catalog fallback. */
   defaultChatModel?: string;
+  /** Native mode observed for this exact provider/model default. */
+  defaultChatModelAffinity?: ChatModelAffinity;
   /** Preferred reasoning for a fresh ordinary chat; omitted keeps the model's normal fallback. */
   defaultChatReasoning?: ReasoningEffort;
   /** Maintenance may reuse existing tabs but cannot open helpers or missing chats. */
@@ -312,6 +315,7 @@ export interface GoalSettings {
   /** Include tool details in handoff briefs only; Goal/Loop always use authored conversation text. */
   includeToolCalls?: boolean;
   helperModel?: string;
+  helperModelAffinity?: ChatModelAffinity;
   helperReasoning?: ReasoningEffort;
   backend?: GoalBackend;
   loopBackend?: 'api' | 'chatgpt';
@@ -354,6 +358,7 @@ export interface GoalSettings {
  */
 export interface MultiAgentSettings {
   defaultModel?: string;
+  defaultModelAffinity?: ChatModelAffinity;
   defaultReasoning?: ReasoningEffort | '';
   enabled: boolean;
   /** Upper bound on simultaneous slot-holding workers in one prime family. */

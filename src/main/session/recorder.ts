@@ -1788,6 +1788,7 @@ export interface ChatObservation {
   /** Current native selection evidence, not a historical message or requested worker model. */
   model?: string;
   reasoningEffort?: import('../../shared/session.js').ReasoningEffort;
+  modelSurface?: import('../../shared/chat-models.js').NativeModelSurface;
   /** True when `time` is ChatGPT's own authored create_time, not local observation time. */
   authoredTime?: boolean;
   /** Provider time retained for display without changing local recovery clocks. */
@@ -2319,7 +2320,7 @@ async function recordChatObservationsNow(
     };
     switch (item.kind) {
       case 'model_selection':
-        if (item.model) await observeSessionModel(sessionId, conversationId, item.model, item.time, item.reasoningEffort);
+        if (item.model) await observeSessionModel(sessionId, conversationId, item.model, item.time, item.reasoningEffort, item.modelSurface);
         break;
       case 'conversation_title':
         // Apply after canonical messages so legacy preview proof exists in either batch order.

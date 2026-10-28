@@ -21,7 +21,7 @@ export async function remoteRead(route: string, params: URLSearchParams): Promis
   return { ...detail, session: session(detail.session),
     providerReadiness: selectedChatReadinessFor(detail.session.id, stored?.conversationId ?? null),
     selection: selection?.conversationId === detail.session.conversationId
-      ? { model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) } : null,
+      ? { model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}), ...(selection.modelSurface ? { modelSurface: selection.modelSurface } : {}) } : null,
     plan: plan ? { updatedAt: plan.updatedAt, ...(plan.explanation ? { explanation: redactSecretText(plan.explanation) } : {}),
       plan: plan.plan.map(step => ({ step: redactSecretText(step.step), status: step.status,
         ...(step.details ? { details: redactSecretText(step.details) } : {}) })) } : null };

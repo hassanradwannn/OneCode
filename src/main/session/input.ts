@@ -33,6 +33,7 @@ import { invokedSkills } from '../../shared/skill-invocation.js';
 import { SKILL_ID_PATTERN } from '../../shared/skills.js';
 import { autoSelectManagedSkills } from '../skill-routing.js';
 import { asksForImage } from './image-request.js';
+import { observedModelSurface } from '../chat-models.js';
 
 export const inputArgs = z.object({
   provider: z.enum(CHAT_PROVIDERS).optional(),
@@ -57,6 +58,8 @@ export const inputArgs = z.object({
   afterTurn: z.boolean().optional(),
   dueAt: z.number().int().nonnegative(),
   model: z.string().max(80).nullable(),
+  /** Explicit native mode from the selected observed model choice. */
+  modelSurface: z.enum(['chat', 'work']).optional(),
   reasoningEffort: z.enum(REASONING_EFFORTS).nullable()
 });
 export type InputArgs = z.infer<typeof inputArgs>;
@@ -99,6 +102,8 @@ export function adoptWarmupRecovery(r: WarmupRecovery, owner: string, browser: s
     ...(conversationId ? { conversationId } : {}) };
 }
 const entrySchema = inputArgs.extend({
+  /** Original request metadata; the delivery surface may be inferred and frozen below. */
+  requestedModelSurface: z.enum(['chat', 'work']).optional(),
   /** Saved interval authority; only the scheduler's internal admission supplies this. */
   scheduleId: z.string().uuid().optional(),
   steerReady: z.literal(true).optional(),
@@ -935,6 +940,7 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
   const selectedProvider = raw.provider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   return serial(async () => {
     const input = inputArgs.parse(raw);
+    if (input.modelSurface && !input.model) throw new Error('A native model surface requires an explicit model');
     const requestedMode = input.mode;
     if (scheduleId !== undefined && (!z.string().uuid().safeParse(scheduleId).success || !input.sessionId ||
         input.mode !== 'after-turn' || finishOwner || input.delivery || input.attachmentDelivery || input.steerTurnId ||
@@ -946,7 +952,7 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const prior = current.find((entry) => entry.id === input.id);
     if (prior) {
       if (prior.scheduleId !== scheduleId) throw new Error('Message id already belongs to different scheduling authority');
-      if (JSON.stringify(inputArgs.parse({ ...prior, sessionId: prior.opening ? prior.requestedSessionId ?? null : prior.sessionId, mode: prior.requestedMode ?? prior.mode })) !== JSON.stringify(input)) throw new Error('Message id already belongs to different input');
+      if (JSON.stringify(inputArgs.parse({ ...prior, modelSurface: prior.requestedModelSurface, sessionId: prior.opening ? prior.requestedSessionId ?? null : prior.sessionId, mode: prior.requestedMode ?? prior.mode })) !== JSON.stringify(input)) throw new Error('Message id already belongs to different input');
       if (!terminal(prior)) await materializeOpening(prior);
       return { ...prior };
     }
@@ -982,6 +988,8 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const authoredAt = authoredBrowserInput({ ...input, scheduleId, finishOwner }) ? Date.now() : undefined;
     let policy = input.sessionId ? await sessionInputPolicy(input.sessionId, undefined, authoredAt) : null;
     const previousOpening = [...current].reverse().find(row => row.opening && row.sessionId === input.sessionId);
+    const inputProvider = chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider);
+    if (input.modelSurface && inputProvider !== 'chatgpt') throw new Error('This provider does not support a native Chat/Work model surface');
     if (input.provider && previousOpening?.chatProvider && !requestedSession?.conversationId && previousOpening.chatProvider !== input.provider)
       throw new Error('An opening chat keeps its provider');
     // An explicit reviewed resend may replace a proven pre-send failure in the same
@@ -1024,10 +1032,17 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const transportIntent = scheduleId || input.steerTurnId ? 'browser' as const : toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
       ? policy?.canInject ? 'tool' as const : !policy || policy.browserAllowed || policy.directTurn ? 'browser' as const : undefined : undefined;
     const directTurn = steerSource ?? (!input.steerTurnId && !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null);
-    const entry: InputEntry = { ...input, ...(scheduleId ? { scheduleId } : {}), chatProvider: chatProviderForConversation(requestedSession?.conversationId, previousOpening?.chatProvider ?? selectedProvider), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
+    const entry: InputEntry = { ...input, ...(scheduleId ? { scheduleId } : {}), chatProvider: inputProvider, ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
       ...(steerSource ? { steerReady: true as const } : {}),
       ...(injectionOwner ? { toolTurnId: injectionOwner.turnId } : {}), ...(transportIntent ? { transportIntent } : {}),
       ...(requestedMode !== input.mode ? { requestedMode } : {}), ...(finishOwner ? { finishOwner } : {}), state: 'queued', owner: null, createdAt: Date.now(), conversationId: null };
+    const selection = requestedSession?.selectedModel;
+    const sessionSurface = entry.chatProvider === 'chatgpt' && requestedSession?.conversationId && selection?.conversationId === requestedSession.conversationId &&
+      selection.model === input.model && (selection.modelSurface === 'chat' || selection.modelSurface === 'work') ? selection.modelSurface : undefined;
+    if (input.modelSurface) entry.requestedModelSurface = input.modelSurface;
+    const modelSurface = entry.chatProvider === 'chatgpt' && input.mode !== 'finish' && !directTurn ? input.modelSurface ?? sessionSurface ?? observedModelSurface(input.model, entry.chatProvider!, getConfig().ui.defaultChatModelAffinity) : undefined;
+    delete entry.modelSurface;
+    if (modelSurface) entry.modelSurface = modelSurface;
     if (input.projectId) {
       await projectWorkspace(input.projectId);
       if (input.sessionId) {
@@ -1952,9 +1967,9 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return turnId;
 }
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
+    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
     const current = await load();
     for (const entry of ordered(current)) {
       if (companionOf(current, entry)) continue;
@@ -1973,6 +1988,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
         const silenceTurnId = entry.silenceBoundary?.turnId ?? (end?.kind === 'turn_end' && end.outcome === 'failed' &&
           end.reason === 'thinking_failed' && end.turnId && await eligibleStageEnd(entry) === end.turnId ? end.turnId : undefined);
         result.push({ id: entry.id, conversationId, chatProvider: chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+          ...(entry.modelSurface && entry.mode !== 'finish' ? { modelSurface: entry.modelSurface } : {}),
           ...(entry.recovery ? { recovery: { questionId: entry.recovery.questionId,
             ...(entry.recovery.phase === 'stopping' ? { phase: entry.recovery.phase } : {}),
             stop: entry.silenceBoundary?.nativeBusy === true && entry.recovery.phase === 'ready' } } : {}),
@@ -2609,6 +2625,7 @@ export async function publishBrowserDecision(id: string, owner: string, conversa
 export async function requestBrowserDecision(text: string, signal: AbortSignal, options: {
   lifetime?: 'temporary-planner';
   sourceSessionId?: string; conversationId?: string | null; model?: string | null;
+  modelSurface?: import('../../shared/chat-models.js').NativeModelSurface;
   reasoningEffort?: InputArgs['reasoningEffort'] | null;
   publish?: (text: string) => void;
   /** Gemini took the prompt (exact receipt) and it ended without an answer. */
@@ -2650,6 +2667,9 @@ export async function requestBrowserDecision(text: string, signal: AbortSignal, 
         reasoningEffort: options.reasoningEffort === undefined ? 'high' : options.reasoningEffort,
         decisionSourceSessionId: options.sourceSessionId, lifetime: options.lifetime, purpose: 'decision', state: 'queued', owner: null,
         createdAt: Date.now(), conversationId: options.conversationId ?? null });
+      entry.chatProvider = chatProviderForConversation(entry.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+      const modelSurface = entry.chatProvider === 'chatgpt' ? options.modelSurface ?? observedModelSurface(entry.model, entry.chatProvider, getConfig().goal.helperModelAffinity) : undefined;
+      if (modelSurface) entry.modelSurface = modelSurface;
       await commit(append(current, entry));
       return entry;
     });

@@ -3031,26 +3031,42 @@
     const candidates = [];
     if (triggers.length <= 8) for (const trigger of triggers) {
       try {
-        const picker = readPickerSnapshot(trigger) || readShellPickerSnapshot(trigger);
-        if (picker) candidates.push({ node: trigger, picker });
+        const ids = (trigger.getAttribute('aria-controls') || '').trim().split(/\s+/).filter(Boolean);
+        const panels = ids.length <= 4 ? [...new Set(ids.map(id => document.getElementById(id)))].filter(node => node &&
+          node.matches('[role="menu"],[role="listbox"],[role="dialog"]') &&
+          node.getClientRects().length > 0 && node.getAttribute('data-state') !== 'closed' &&
+          !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`)) : [];
+        // The merged native picker can keep its evaluated owner only on the portal.
+        // Read that exact controlled panel; a free-floating menu supplies no proof.
+        const panel = panels.length === 1 ? panels[0] : null;
+        const picker = readPickerSnapshot(trigger) || readShellPickerSnapshot(trigger) ||
+          (panel && (readPickerSnapshot(panel) || readShellPickerSnapshot(panel)));
+        if (picker) candidates.push({ node: trigger, panel, picker });
       } catch { /* An unrelated native menu is not picker evidence. */ }
     }
     const specific = candidates.filter(candidate => candidate.node.matches(reported));
     const identified = specific.length === 1 ? specific[0] : candidates.length === 1 ? candidates[0] : null;
     const native = triggers.filter(trigger => trigger.matches(reported));
     const fallback = native.length === 1 ? native[0] : triggers.length === 1 ? triggers[0] : null;
-    const node = document.querySelector('[data-testid="composer-intelligence-picker-content"], [data-model-picker-view]') || identified?.node || fallback;
+    const node = identified?.panel || document.querySelector('[data-testid="composer-intelligence-picker-content"], [data-model-picker-view]') || identified?.node || fallback;
     let state = null;
-    try { state = identified?.picker || readPickerSnapshot(node); } catch { /* Unknown state invalidates prior proof. */ }
+    try { state = identified?.picker || readPickerSnapshot(node) || readShellPickerSnapshot(node); } catch { /* Unknown state invalidates prior proof. */ }
+    const modes = [...document.querySelectorAll('[role="radio"][data-tpp-toggle-value]')].filter(item => item.getClientRects().length > 0 &&
+      !item.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`));
+    const chats = modes.filter(item => item.getAttribute('data-tpp-toggle-value') === 'chatgpt'), works = modes.filter(item => item.getAttribute('data-tpp-toggle-value') === 'work');
+    const nativeSurface = chats.length === 1 && works.length === 1
+      ? chats[0].getAttribute('aria-checked') === 'true' && works[0].getAttribute('aria-checked') === 'false' ? 'chat'
+        : works[0].getAttribute('aria-checked') === 'true' && chats[0].getAttribute('aria-checked') === 'false' ? 'work' : null : null;
+    if (state && nativeSurface) state = { ...state, nativeSurface };
     const selected = state ? state.choices.find(choice => choice.bucket === state.currentBucket && choice.available)
       : (node && node === fallback ? closedPickerSelection(node) : null);
     const provenTrigger = identified?.node || (selected && node === fallback ? fallback : null);
     for (const trigger of triggers) {
       if (trigger !== provenTrigger) trigger.removeAttribute('data-clf-picker-route');
       else if (trigger.getAttribute('data-clf-picker-route') !== location.pathname) trigger.setAttribute('data-clf-picker-route', location.pathname);
-      if (trigger !== node) for (const attribute of ['data-clf-selected-model', 'data-clf-selected-effort', 'data-clf-selected-route']) trigger.removeAttribute(attribute);
+      if (trigger !== node) for (const attribute of ['data-clf-selected-model', 'data-clf-selected-effort', 'data-clf-selected-route', 'data-clf-selected-surface']) trigger.removeAttribute(attribute);
     }
-    for (const [attribute, value] of [['data-clf-selected-model', selected?.id], ['data-clf-selected-effort', selected?.effort], ['data-clf-selected-route', selected && location.pathname]]) {
+    for (const [attribute, value] of [['data-clf-selected-model', selected?.id], ['data-clf-selected-effort', selected?.effort], ['data-clf-selected-route', selected && location.pathname], ['data-clf-selected-surface', selected && nativeSurface]]) {
       if (!value) node?.removeAttribute(attribute);
       else if (node.getAttribute(attribute) !== value) node.setAttribute(attribute, value);
     }
@@ -3159,15 +3175,23 @@
       const laneEffort = c => shellProExecutionModel(c?.model) ? 'pro' :
         effort(String(c?.labels?.effort ?? c?.sliderLabel ?? '').trim().toLowerCase()) ??
         ((c?.labels?.effort ?? c?.sliderLabel) ? shellLaneTransportEffort(c?.reasoningEffort) : effort(c?.reasoningEffort));
-      const current = options.filter(o => o?.selected === true);
+      // The merged Chat/Work picker exposes its recommended Default separately,
+      // without an id or label. This is a private UI navigation key, never a model
+      // identity. Its row is elected separately from every named native option.
+      const defaultKey = '__onecode_native_default__';
+      const hasDefault = p.modelListConfig.defaultOption && typeof p.modelListConfig.defaultOption === 'object';
+      if (options.some(o => o?.id === defaultKey)) return null;
+      const navigation = hasDefault ? [{ ...p.modelListConfig.defaultOption, id: defaultKey, label: defaultKey }, ...options] : options;
+      if (navigation.length > 20) return null;
+      const current = navigation.filter(o => o?.selected === true);
       if (current.length !== 1) return null;
       const version = group(current[0].id);
-      const versions = options.filter(o => o && o.disabled !== true).map(o => ({ id: group(o.id), label: label(o.label) }));
+      const versions = navigation.filter(o => o && o.disabled !== true).map(o => ({ id: group(o.id), label: label(o.label) }));
       // The shell names older models by number alone ("5.6"); the September picker's own rule
       // names them in full, so the list reads GPT-6, GPT-5.6, GPT-5.5 alike.
       const modelName = value => { const name = label(value); return name && /^\d/.test(name) ? `GPT-${name}` : name; };
       const choices = p.powerSelections.map(c => ({ bucket: c?.powerSettingIndex, id: id(c?.model),
-        label: modelName(c?.modelLabel), familyId: id(c?.model), familyLabel: modelName(c?.modelLabel), effort: laneEffort(c),
+        label: modelName(c?.labels?.model ?? c?.modelLabel), familyId: id(c?.model), familyLabel: modelName(c?.labels?.model ?? c?.modelLabel), effort: laneEffort(c),
         available: p.modelSelectionDisabled !== true && c?.disabled !== true &&
           (!c?.availability || c.availability.status === 'available') && !p.modelSwitcherDenialsBySlug?.[c?.model] }));
       if (!version || !versions.length || versions.some(v => !v.id || !v.label) || !choices.length ||

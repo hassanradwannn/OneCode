@@ -3078,6 +3078,7 @@ var CLF_DOM = (() => {
         const state = data.picker;
         const groupId = value => typeof value === 'string' && value.length <= 80 && /^[\p{L}\p{N}._ -]+$/u.test(value) && value.trim() === value && value.trim();
         const valid = state && typeof state.version === 'string' && Number.isInteger(state.currentBucket) &&
+          (state.nativeSurface === undefined || state.nativeSurface === 'chat' || state.nativeSurface === 'work') &&
           Array.isArray(state.versions) && state.versions.length > 0 && state.versions.length <= 20 &&
           state.versions.every(v => groupId(v.id) && typeof v.label === 'string' && v.label.length > 0 && v.label.length <= 80) &&
           Array.isArray(state.choices) && state.choices.length > 0 && state.choices.length <= 12 &&
@@ -3105,6 +3106,18 @@ var CLF_DOM = (() => {
     // model owner. A quoted attribute or an effort value alone cannot authorize it.
     return observed.length === 1 ? observed[0] : candidates.length === 1 && !candidates[0].matches(reported) ? candidates[0] : null;
   }
+  /** A newer native portal has no legacy picker marker. Its exact composer
+   * trigger must own it through aria-controls; unrelated menus never qualify. */
+  function modelPickerPanel() {
+    const valid = node => node && !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`);
+    const trigger = modelPickerTrigger();
+    const ids = (trigger?.getAttribute('aria-controls') || '').trim().split(/\s+/).filter(Boolean);
+    const controlled = ids.length <= 4 ? [...new Set(ids.map(id => document.getElementById(id)))].filter(node => valid(node) &&
+      node.matches('[role="menu"],[role="listbox"],[role="dialog"]')) : [];
+    if (controlled.length) return controlled.length === 1 ? controlled[0] : null;
+    const legacy = [...document.querySelectorAll(PICKER)].filter(valid);
+    return legacy.length === 1 ? legacy[0] : null;
+  }
   /** Match the row's leading name, excluding secondary captions and decorations. */
   function pickerVersionNamed(row, expected) {
     const text = node => String(node.textContent || '').replace(/\s+/g, ' ').trim();
@@ -3117,13 +3130,21 @@ var CLF_DOM = (() => {
     }
     return false;
   }
-  function modelPickerAccess(stillCurrent, failure = () => {}) {
+  function modelPickerAccess(stillCurrent, failure = () => {}, modelSurface) {
     const shown = node => node && !node.closest('[hidden],[aria-hidden="true"],[inert]') && node.getClientRects().length > 0;
-    const picker = () => document.querySelector(PICKER);
+    const picker = modelPickerPanel;
     const trigger = modelPickerTrigger;
+    let ownedSurface = modelSurface;
     let motion = null;
+    const motionToken = crypto.randomUUID(), motionPanels = new Set();
+    const ownMotion = panel => {
+      if (motion && panel && panel.getAttribute('data-clf-picker-motion') !== motionToken) {
+        panel.setAttribute('data-clf-picker-motion', motionToken); motionPanels.add(panel);
+      }
+      return panel;
+    };
     const openPicker = () => {
-      const panel = picker();
+      const panel = ownMotion(picker());
       return panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : null;
     };
     const wait = (read, timeout = 3000) => new Promise(resolve => {
@@ -3150,7 +3171,8 @@ var CLF_DOM = (() => {
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       const timer = setTimeout(() => finish(null), timeout); void check();
     });
-    const state = predicate => wait(async () => { const value = await readPickerState(); return value && (!predicate || predicate(value)) ? value : null; });
+    const state = predicate => wait(async () => { const value = await readPickerState(); return value &&
+      (!ownedSurface || value.nativeSurface === undefined || value.nativeSurface === ownedSurface) && (!predicate || predicate(value)) ? value : null; });
     // The shell trigger needs MAIN ownership proof. A cold account can hydrate
     // after the first reply, so DOM readiness must refresh that proof as well.
     const readyTrigger = () => wait(async () => { await readPickerState(); return trigger(); }, 15000);
@@ -3164,29 +3186,30 @@ var CLF_DOM = (() => {
         // focus scope indefinitely. Suppress only this owned picker animation for
         // this operation; native state still closes/unmounts it and proves release.
         motion = document.createElement('style');
-        motion.textContent = '[role="menu"]:has(> [data-testid="composer-intelligence-picker-content"]),[role="dialog"]:has([data-testid="composer-intelligence-picker-content"]),[role="menu"]:has([data-model-picker-view]),[role="menu"][data-model-picker-view]{animation:none!important}';
+        motion.textContent = `[data-clf-picker-motion="${motionToken}"]{animation:none!important}` +
+          '[role="menu"]:has(> [data-testid="composer-intelligence-picker-content"]),[role="dialog"]:has([data-testid="composer-intelligence-picker-content"]),[role="menu"]:has([data-model-picker-view]),[role="menu"][data-model-picker-view]{animation:none!important}';
         document.head.append(motion);
         // The read-only helper identifies the exact native owner when another menu
         // shares the composer. Never select by translated captions or button order.
         // A cold home editor mounts before its native Chat/Work picker. Workers
         // enter here directly, without the New Chat reuse/catalog preparation.
-        // Wait for that surface, then use the same owned Chat transition before
-        // interpreting account choices. Work's picker is not a denied Chat model.
+        // Validate that surface while retaining the native account's chosen mode.
         if (!await readyTrigger()) { failure(stillCurrent() ? 'trigger-unconfirmed' : 'page-changed'); return null; }
-        if (!await prepareChatModelSurface(stillCurrent)) { failure(stillCurrent() ? 'chat-surface-unconfirmed' : 'page-changed'); return null; }
+        if (!await prepareChatModelSurface(stillCurrent, modelSurface)) { failure(stillCurrent() ? 'chat-surface-unconfirmed' : 'page-changed'); return null; }
         // A retained exit-animation node is not an open native menu.
         if (!openPicker()) { const button = await readyTrigger();
           if (!key(button, 'Enter')) { failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null; }
           if (!await wait(openPicker)) { failure(stillCurrent() ? 'picker-open-unconfirmed' : 'page-changed'); return null; }
         }
         const observed = await state();
+        if (observed?.nativeSurface && !ownedSurface) ownedSurface = observed.nativeSurface;
         if (!observed) failure(stillCurrent() ? 'picker-state-unconfirmed' : 'page-changed');
         return observed;
       },
       async close() {
         try {
         if (!stillCurrent()) return false;
-        const panel = picker();
+        const panel = ownMotion(picker());
         if (!panel) return true;
         const dialog = panel.closest('[role="dialog"]'), active = document.activeElement;
         if (!shown(panel) && !shown(dialog)) return true;
@@ -3198,11 +3221,15 @@ var CLF_DOM = (() => {
         // menu node. Reading metadata never reopens or changes the picker.
         if (closed && stillCurrent()) await readPickerState();
         return closed && stillCurrent();
-        } finally { motion?.remove(); motion = null; }
+        } finally {
+          motion?.remove(); motion = null;
+          for (const panel of motionPanels) if (panel.getAttribute('data-clf-picker-motion') === motionToken) panel.removeAttribute('data-clf-picker-motion');
+          motionPanels.clear();
+        }
       },
       async version(version) {
         const before = await state(); if (!before) return null;
-        const versionRows = () => [...(picker()?.querySelectorAll('[role="menuitemradio"]') || [])].filter(shown);
+        const versionRows = () => [...(picker()?.querySelectorAll('[role="menuitemradio"],[role="option"],[role="menuitem"][aria-checked]') || [])].filter(shown);
         if (before.version === version && !versionRows().length) return before;
         const label = before.versions.find(v => v.id === version)?.label;
         if (!label) return null;
@@ -3214,7 +3241,15 @@ var CLF_DOM = (() => {
           toggle[0].click();
         }
         const option = await wait(() => {
-          const rows = versionRows().filter(node => pickerVersionNamed(node, label) && node.getAttribute('aria-disabled') !== 'true');
+          const native = versionRows().filter(node => node.getAttribute('aria-disabled') !== 'true');
+          const defaultKey = '__onecode_native_default__';
+          const named = before.versions.filter(value => value.id !== defaultKey);
+          // Native Default has no provider id/label. Account state proves that
+          // one extra row exists; every named option must match exactly once,
+          // leaving exactly one owned radio. No locale or menu position guess.
+          if (version === defaultKey && named.some(value => native.filter(node => pickerVersionNamed(node, value.label)).length !== 1)) return null;
+          const rows = native.filter(node => version === defaultKey
+            ? !named.some(value => pickerVersionNamed(node, value.label)) : pickerVersionNamed(node, label));
           return rows.length === 1 ? rows[0] : null;
         });
         if (!key(option, 'Enter')) return null;
@@ -3227,7 +3262,8 @@ var CLF_DOM = (() => {
           const from = current.choices.findIndex(c => c.bucket === current.currentBucket), to = current.choices.findIndex(c => c.bucket === bucket);
           if (from < 0 || to < 0) return null;
           const expected = current.choices[from + (to > from ? 1 : -1)].bucket;
-          const controls = [...picker().querySelectorAll('[role="menuitem"][aria-keyshortcuts]')].filter(node => shown(node) && node.getAttribute('aria-keyshortcuts').includes('ArrowRight'));
+          const controls = [...(picker()?.querySelectorAll('[role="menuitem"][aria-keyshortcuts],[role="slider"]') || [])].filter(node => shown(node) &&
+            (node.getAttribute('role') === 'slider' || node.getAttribute('aria-keyshortcuts')?.includes('ArrowRight')));
           if (controls.length !== 1 || !key(controls[0], to > from ? 'ArrowRight' : 'ArrowLeft')) return null;
           const version = current.version;
           current = await state(next => next.version === version && next.currentBucket === expected);
@@ -3239,11 +3275,13 @@ var CLF_DOM = (() => {
   // The current native picker or closed trigger carries the MAIN-world snapshot.
   // The route stamp prevents a retained composer from lending another chat proof.
   function visibleModelSelection() {
-    const node = document.querySelector(PICKER) || modelPickerTrigger();
+    const panel = modelPickerPanel();
+    const node = panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : modelPickerTrigger();
     if (node?.getAttribute('data-clf-selected-route') !== location.pathname) return null;
     const model = node?.getAttribute('data-clf-selected-model'), reasoningEffort = node?.getAttribute('data-clf-selected-effort');
+    const modelSurface = node?.getAttribute('data-clf-selected-surface');
     return model && /^[a-zA-Z0-9._-]{1,80}$/.test(model) && ['none','minimal','low','medium','high','xhigh','max','ultra','pro'].includes(reasoningEffort)
-      ? { model, reasoningEffort } : null;
+      ? { model, reasoningEffort, ...(modelSurface === 'chat' || modelSurface === 'work' ? { modelSurface } : {}) } : null;
   }
   /**
    * Whether a borrowed chat can serve account model discovery. A chat still set to a model the
@@ -3255,39 +3293,76 @@ var CLF_DOM = (() => {
     if ([...document.querySelectorAll('[role="radio"][data-tpp-toggle-value]')].some(node => !node.closest(OWN_SURFACES) && node.getClientRects().length > 0)) return true;
     return Boolean(await readPickerState());
   }
-  /** Account model discovery belongs to Chat; Work mounts a different picker.
-   * The caller owns one idle document and verifies draft/epoch before and after this transition. */
-  async function prepareChatModelSurface(stillCurrent = () => true) {
+  /** Preserve the native Chat/Work choice. The caller owns one idle document;
+   * a Work picker must prove its evaluated owner on that exact composer. */
+  async function prepareChatModelSurface(stillCurrent = () => true, requestedSurface) {
     const radios = () => [...document.querySelectorAll('[role="radio"][data-tpp-toggle-value]')]
-      .filter(node => !node.closest(OWN_SURFACES) && node.getClientRects().length > 0);
+      .filter(node => !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`) && node.getClientRects().length > 0);
     const state = () => {
       const nodes = radios(), chat = nodes.filter(node => node.getAttribute('data-tpp-toggle-value') === 'chatgpt'),
         work = nodes.filter(node => node.getAttribute('data-tpp-toggle-value') === 'work');
       return chat.length === 1 && work.length === 1 ? { chat: chat[0], work: work[0] } : null;
     };
     if (!stillCurrent()) return false;
+    if (requestedSurface !== undefined && requestedSurface !== 'chat' && requestedSurface !== 'work') return false;
     const before = state();
     // Existing ordinary conversations do not expose the new-chat surface toggle.
     if (!before) return radios().length === 0;
-    if (before.chat.getAttribute('aria-checked') === 'true') return true;
-    if (before.work.getAttribute('aria-checked') !== 'true' || before.chat.disabled || before.chat.getAttribute('aria-disabled') === 'true') return false;
-    return new Promise(resolve => {
-      let done = false;
-      const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(value); };
-      const check = () => {
-        if (!stillCurrent()) return finish(false);
-        const next = state();
-        if (next?.chat.getAttribute('aria-checked') === 'true' && next.work.getAttribute('aria-checked') === 'false') finish(true);
-      };
-      const observer = new MutationObserver(check);
-      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
-      const timer = setTimeout(() => finish(false), 5000);
-      before.chat.click(); check();
-    });
+    const desired = requestedSurface === 'chat' ? 'chat' : requestedSurface === 'work' ? 'work' : null;
+    const selected = before.chat.getAttribute('aria-checked') === 'true' && before.work.getAttribute('aria-checked') === 'false' ? 'chat'
+      : before.work.getAttribute('aria-checked') === 'true' && before.chat.getAttribute('aria-checked') === 'false' ? 'work' : null;
+    if (!selected) return false;
+    if (desired && selected !== desired) return activate(desired);
+    if (selected === 'chat') return true;
+    if (before.work.getAttribute('aria-checked') !== 'true') return false;
+    const editor = composer(), form = editor?.closest('form'), route = location.pathname;
+    if (!editor || !form) return false;
+    const text = editor.textContent, attachments = hasComposerAttachments();
+    const evaluated = await readPickerState();
+    if (!stillCurrent() || location.pathname !== route || composer() !== editor || editor.textContent !== text || hasComposerAttachments() !== attachments) return false;
+    const next = state(), native = modelPickerTrigger();
+    return Boolean(evaluated && next?.work === before.work && next.work.getAttribute('aria-checked') === 'true' &&
+      next.chat.getAttribute('aria-checked') === 'false' && native && form.contains(native) && native.getAttribute('data-clf-picker-route') === route);
+
+    async function activate(surface) {
+      const editor = composer(), form = editor?.closest('form'), route = location.pathname, conversation = conversationId();
+      if (!editor || !form || !composerVisible() || String(editor.textContent || '').trim() || hasComposerAttachments() || generating()) return false;
+      const control = surface === 'chat' ? before.chat : before.work;
+      if (control.disabled || control.getAttribute('aria-disabled') === 'true') return false;
+      let interrupted = false, clicked = false;
+      const interrupt = event => { if (event.isTrusted) interrupted = true; };
+      const current = () => stillCurrent() && !interrupted && location.pathname === route && conversationId() === conversation && !generating() &&
+        (!composer() || !String(composer().textContent || '').trim() && !hasComposerAttachments()) && (clicked || composer() === editor);
+      document.addEventListener('pointerdown', interrupt, true); document.addEventListener('keydown', interrupt, true);
+      try {
+        if (!current()) return false;
+        clicked = true; control.click();
+        return await new Promise(resolve => {
+          let done = false, reading = false, scheduled = null;
+          const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); if (scheduled !== null) clearTimeout(scheduled); resolve(value); };
+          const schedule = () => { if (!done && scheduled === null) scheduled = setTimeout(() => { scheduled = null; void check(); }, 0); };
+          const check = async () => {
+            if (done || reading) return;
+            if (!current()) return finish(false);
+            const next = state(), editor = composer();
+            if (!next || !editor || !composerVisible() || next[surface].getAttribute('aria-checked') !== 'true' ||
+                next[surface === 'chat' ? 'work' : 'chat'].getAttribute('aria-checked') !== 'false') return;
+            reading = true;
+            const evaluated = await readPickerState(); reading = false;
+            if (done) return;
+            if (!current()) return finish(false);
+            const native = modelPickerTrigger(), form = editor.closest('form');
+            if (composer() === editor && evaluated?.nativeSurface === surface && native && form?.contains(native) && native.getAttribute('data-clf-picker-route') === route) finish(true);
+          };
+          const observer = new MutationObserver(schedule); observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+          const timer = setTimeout(() => finish(false), 5000); void check();
+        });
+      } finally { document.removeEventListener('pointerdown', interrupt, true); document.removeEventListener('keydown', interrupt, true); }
+    }
   }
   function collectModelChoices(result, state) {
     for (const choice of state.choices.filter(c => c.available)) {
-      const entry = result.get(choice.familyId) || { id: choice.familyId, label: choice.familyLabel, efforts: [], aliases: [] };
+      const entry = result.get(choice.familyId) || { id: choice.familyId, label: choice.familyLabel, efforts: [], aliases: [], ...(state.nativeSurface ? { nativeSurface: state.nativeSurface } : {}) };
       if (!entry.efforts.includes(choice.effort)) entry.efforts.push(choice.effort);
       if (!entry.aliases.includes(choice.id)) entry.aliases.push(choice.id);
       result.set(choice.familyId, entry);
@@ -3303,7 +3378,7 @@ var CLF_DOM = (() => {
       // include account/workspace denials which the raw global preset list does not prove.
       for (const version of original.versions) {
         const state = await ui.version(version.id);
-        if (!state) throw new Error('model_unconfirmed');
+        if (!state || state.nativeSurface !== original.nativeSurface) throw new Error('model_unconfirmed');
         collectModelChoices(result, state);
       }
     } catch { failure('model_unconfirmed'); result.clear(); }
@@ -3320,14 +3395,14 @@ var CLF_DOM = (() => {
     if (!closed) failure('picker_close_failed');
     return restored && closed && stillCurrent() && result.size ? [...result.values()] : null;
   }
-  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}) {
+  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}, modelSurface) {
     if (!model && !effort) return true;
     let reported = false;
     // Fixed diagnostic stages only. A caller's diagnostic callback cannot change
     // selection authority or make a failed native proof successful.
     const report = reason => { if (!reported) { reported = true; try { failure(reason); } catch {} } };
     const refused = reason => { report(stillCurrent() ? reason : 'page-changed'); return false; };
-    const ui = modelPickerAccess(stillCurrent, report), original = await ui.open();
+    const ui = modelPickerAccess(stillCurrent, report, modelSurface), original = await ui.open();
     if (!original) { await ui.close(); return refused('picker-unavailable'); }
     // Account-evaluated exact selection is already proof; visiting unrelated
     // versions can reset it or fail unnecessarily. Captions and denied choices

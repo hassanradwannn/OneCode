@@ -16,13 +16,13 @@ const paths: Record<string, string> = {
 export function Icon({ name }: { name: string }) {
   return <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill={name === 'stop' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.plus} />{name === 'settings' && <circle cx="12" cy="12" r="3" />}</svg>;
 }
-export function ModelMenu({ models, model, effort, disabled, choose, refresh }: {
-  models: ChatModelOption[]; model: string; effort: string; disabled: boolean;
+export function ModelMenu({ models, model, effort, disabled, unverified = false, choose, refresh }: {
+  models: ChatModelOption[]; model: string; effort: string; disabled: boolean; unverified?: boolean;
   choose(model: string, effort: string): void; refresh(): void;
 }) {
   const selected = resolveChatModel(models, model), root = useRef<HTMLDetailsElement>(null);
   const [showModels, setShowModels] = useState(false);
-  const supported = COMPOSER_EFFORTS.filter(value => selected?.efforts.includes(value));
+  const supported = unverified ? [] : COMPOSER_EFFORTS.filter(value => selected?.efforts.includes(value));
   const label = EFFORT_NAMES[effort] ?? 'Automatic';
   useEffect(() => {
     const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && root.current) root.current.open = false; };
@@ -30,15 +30,15 @@ export function ModelMenu({ models, model, effort, disabled, choose, refresh }: 
     document.addEventListener('pointerdown', close); document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, []);
-  return <details ref={root} className="model-menu" onToggle={() => { if (root.current?.open) setShowModels(!selected?.efforts.length); }}>
+  return <details ref={root} className="model-menu" onToggle={() => { if (root.current?.open) setShowModels(unverified || !selected?.efforts.length); }}>
     <summary aria-label="Model and thinking effort" aria-disabled={disabled} onClick={event => { if (disabled) event.preventDefault(); }}>
-      <span>{selected?.label ?? (model ? `${model} · unavailable` : 'Automatic')}{effort ? ` · ${label}` : ''}</span><Icon name="chevron" />
+      <span>{unverified ? `${model} · previously observed` : selected?.label ?? (model ? `${model} · unavailable` : 'Automatic')}{effort ? ` · ${label}` : ''}</span><Icon name="chevron" />
     </summary>
     <div className="model-popover" role="group" aria-label="Model choices">
       <header className="power-header"><Icon name="bolt" /><strong>{label}</strong><button type="button" title="Refresh models" aria-label="Refresh models" disabled={disabled} onClick={refresh}><Icon name="refresh" /></button></header>
       <button type="button" className="power-model" aria-expanded={showModels} onClick={() => setShowModels(value => !value)}>{selected?.label ?? 'Choose model'}<Icon name="chevron" /></button>
       {showModels ? <div className="model-choices"><button type="button" data-model="" aria-pressed={!model} disabled={disabled} onClick={() => { choose('', ''); if (root.current) root.current.open = false; }}>Automatic</button>
-        {models.filter(row => !row.id.endsWith('-current')).map(row => <button key={row.id} type="button" data-model={row.id} disabled={disabled} aria-pressed={row.id === selected?.id} onClick={() => { choose(row.id, ''); setShowModels(false); if (!row.efforts.length && root.current) root.current.open = false; }}>{row.label}{row.id === selected?.id && <span>✓</span>}</button>)}
+        {models.filter(row => !row.id.endsWith('-current')).map(row => <button key={row.id} type="button" data-model={row.id} disabled={disabled} aria-pressed={!unverified && row.id === selected?.id} onClick={() => { choose(row.id, ''); setShowModels(false); if (!row.efforts.length && root.current) root.current.open = false; }}>{row.label}{!unverified && row.id === selected?.id && <span>✓</span>}</button>)}
       </div> : !!supported.length && <div className="power-effort"><input type="range" aria-label="Thinking effort" aria-valuetext={label} min={0} max={supported.length - 1} step={1} value={Math.max(0, supported.indexOf(effort as typeof supported[number]))} disabled={disabled} onChange={event => choose(selected!.id, supported[Number(event.target.value)]!)} />
         <div className="power-endpoints"><span>{EFFORT_NAMES[supported[0]!]}</span><span>{EFFORT_NAMES[supported.at(-1)!]}</span></div>
         <button type="button" className="effort-default" data-effort="" onClick={() => choose(selected!.id, '')}>Automatic effort</button>

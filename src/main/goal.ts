@@ -2017,7 +2017,7 @@ let helperFallbackLogged = '';
 /** The helper model as it will actually run, for progress and logs; never a model it will not use. */
 function helperModelLabel(): string { return goalHelperSelection().model ?? "the provider’s current selection"; }
 
-export function goalHelperSelection(): { model: string | null; reasoningEffort: ReasoningEffort | null } {
+export function goalHelperSelection(): { model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../shared/chat-models.js').NativeModelSurface } {
   const settings = getConfig().goal;
   let model: string | null = settings.helperModel ?? DEFAULT_HELPER_CHAT_MODEL;
   let reasoningEffort: ReasoningEffort | null = settings.helperReasoning ?? 'high';
@@ -2025,6 +2025,11 @@ export function goalHelperSelection(): { model: string | null; reasoningEffort: 
   // before discovery. Its historical High default is not a Gemini effort; sending
   // it made the first Goal/Loop/Plan helper fail the native settings admission.
   if (model === 'gemini-current') return { model: null, reasoningEffort: null };
+  const affinity = settings.helperModelAffinity, provider = getConfig().ui?.chatProvider ?? 'gemini';
+  // A catalog from the other native mode cannot revoke an explicitly saved
+  // model. The destination still has to prove this exact pair after activation.
+  if (provider === 'chatgpt' && affinity?.provider === provider && affinity.model === model &&
+      (affinity.surface === 'chat' || affinity.surface === 'work')) return { model, reasoningEffort, modelSurface: affinity.surface };
   const catalog = getChatModels();
   const models = catalog.models;
   // No readable picker at all (seen on Free plans, #1282): no model can ever be confirmed, so an

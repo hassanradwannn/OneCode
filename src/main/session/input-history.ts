@@ -25,7 +25,7 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
   // inherit the page model, so their old queued settings cannot become evidence.
   const selection = browserInputModel(entry);
   if (!messageId.startsWith('input:') && selection.model && entry.conversationId) {
-    await observeSessionModel(sessionId, entry.conversationId, selection.model, entry.deliveredAt!, selection.reasoningEffort ?? undefined);
+    await observeSessionModel(sessionId, entry.conversationId, selection.model, entry.deliveredAt!, selection.reasoningEffort ?? undefined, selection.modelSurface);
   }
   const message = {
     time, source: 'app' as const, kind: 'user_message' as const,

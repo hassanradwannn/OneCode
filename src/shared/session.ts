@@ -699,7 +699,7 @@ export interface SessionSummary {
    */
   autoTitle?: { title: string; source: 'fallback' | 'provider' };
   /** Latest proven native picker selection; scoped to its frontend, never worker creation intent. */
-  selectedModel?: { conversationId: string; model: string; observedAt: number; reasoningEffort?: ReasoningEffort };
+  selectedModel?: { conversationId: string; model: string; observedAt: number; reasoningEffort?: ReasoningEffort; modelSurface?: import('./chat-models.js').NativeModelSurface };
   /** Explicit local project; durable across frontend conversation replacement. */
   projectId?: string;
   id: string;
@@ -989,6 +989,8 @@ export interface AgentInfo {
    * across sleep/wake reuse. Null for the prime, which runs in the user's own chat.
    */
   model: string | null;
+  /** Observed native mode frozen with a worker's requested model. */
+  modelSurface?: import('./chat-models.js').NativeModelSurface;
   state: AgentState;
   createdAt: number;
   /**

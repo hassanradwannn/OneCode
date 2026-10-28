@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from './session.js';
+import type { NativeModelSurface } from './chat-models.js';
 
 /** Normalized image bytes only. No local filesystem path crosses into the renderer. */
 export interface InputImage { name: string; dataUrl: string; }
@@ -30,10 +31,10 @@ export function queuedFollowup(row: InputIntent): boolean {
 /** Finish tasks continue the chat; their old enqueue-time picker is not a new
  * model choice. Apply this projection to legacy queues too, preserving authored
  * fields for idempotent retries and keeping delivery/history on the same rule. */
-export function browserInputModel(input: { mode: string; model: string | null; reasoningEffort: ReasoningEffort | null }): { model: string | null; reasoningEffort: ReasoningEffort | null } {
+export function browserInputModel(input: { mode: string; model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: NativeModelSurface }): { model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: NativeModelSurface } {
   return input.mode === 'finish'
     ? { model: null, reasoningEffort: null }
-    : { model: input.model, reasoningEffort: input.reasoningEffort };
+    : { model: input.model, reasoningEffort: input.reasoningEffort, ...(input.modelSurface ? { modelSurface: input.modelSurface } : {}) };
 }
 /** The explicit queue action cannot change from Steer to a new turn across a stale UI read. */
 export interface QueuedInputNowIntent {

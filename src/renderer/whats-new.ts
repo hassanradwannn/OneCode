@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.4': {
+    lead: () => t('Keep native model choices and message preparation in sync.'),
+    highlights: [
+      { icon: 'i-settings', title: () => t('Updated model picker'), text: () => t('Reads the current native model menu, including recommended model groups and their reasoning settings. Choices remain scoped to the selected account.') },
+      { icon: 'i-chat', title: () => t('Smoother chat preparation'), text: () => t('Rechecks the requested model after fresh-chat preparation and prevents unrelated idle-tab checks from delaying queued input.') },
+      { icon: 'i-retry', title: () => t('Steer through native redraws'), text: () => t('Keeps the exact accepted source while native message rows are absent, then waits for the pending frame before sending your direction.') }
+    ]
+  },
   '0.7.3': {
     lead: () => t('Recover Windows updates blocked by process records from before a reboot.'),
     highlights: [

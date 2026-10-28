@@ -3519,7 +3519,7 @@ export async function clearSessionName(id: string): Promise<void> {
 /** Persist current provider selection independently of recording/history replay. */
 export async function observeSessionModel(
   id: string, conversationId: string, model: string, observedAt: number,
-  reasoningEffort?: ReasoningEffort
+  reasoningEffort?: ReasoningEffort, modelSurface?: import('../../shared/chat-models.js').NativeModelSurface
 ): Promise<void> {
   if (!/^[a-zA-Z0-9 ._-]{1,80}$/.test(model) || !Number.isFinite(observedAt)) return;
   const entry = await ensureOpen(id);
@@ -3528,7 +3528,7 @@ export async function observeSessionModel(
     // and delayed delivery receipts cannot overwrite a newer provider selection either.
     if (entry.summary.conversationId !== conversationId ||
         observedAt < (entry.summary.selectedModel?.observedAt ?? 0)) return;
-    const selectedModel = { conversationId, model, observedAt, ...(reasoningEffort ? { reasoningEffort } : {}) };
+    const selectedModel = { conversationId, model, observedAt, ...(reasoningEffort ? { reasoningEffort } : {}), ...(['chat', 'work'].includes(modelSurface ?? '') ? { modelSurface } : {}) };
     if (JSON.stringify(entry.summary.selectedModel) === JSON.stringify(selectedModel)) return;
     const staged = { ...entry.summary, selectedModel };
     await writeSummary(staged, entry.historySeq);

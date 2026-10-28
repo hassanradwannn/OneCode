@@ -5,6 +5,7 @@ import { wakeBrowserWork } from './browser-wake.js';
 import { z } from 'zod';
 import { logInfo } from './logger.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
+import { resolveChatModel, type NativeModelSurface, type ChatModelAffinity } from '../shared/chat-models.js';
 import { readDurable, writeDurableSoon } from './durable.js';
 import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 const observation = z.object({
@@ -14,7 +15,8 @@ const observation = z.object({
     id: z.string().min(1).max(80).regex(/^[a-zA-Z0-9._-]+$/),
     label: z.string().trim().min(1).max(80),
     efforts: z.array(z.enum(REASONING_EFFORTS)).max(REASONING_EFFORTS.length),
-    aliases: z.array(z.string().min(1).max(80).regex(/^[a-zA-Z0-9._-]+$/)).max(20).optional()
+    aliases: z.array(z.string().min(1).max(80).regex(/^[a-zA-Z0-9._-]+$/)).max(20).optional(),
+    nativeSurface: z.enum(['chat', 'work']).optional()
   }).strict()).min(1).max(20).nullable()
 }).strict();
 const progress = z.object({
@@ -198,6 +200,12 @@ export async function setChatModelProvider(provider: ChatProvider): Promise<void
   activeProvider = provider; await owners[provider].restoreChatModels(); notify?.(owners[provider].getChatModels()); wakeBrowserWork();
 }
 export const getChatModels = (provider: ChatProvider = activeProvider): ChatModelCatalog => owners[provider].getChatModels();
+/** Freeze only an explicitly observed native mode; never derive it from a model slug. */
+export function observedModelSurface(model: string | null | undefined, provider: ChatProvider, affinity?: ChatModelAffinity): NativeModelSurface | undefined {
+  if (provider !== 'chatgpt' || !model) return undefined;
+  if (affinity?.provider === provider && affinity.model === model && (affinity.surface === 'chat' || affinity.surface === 'work')) return affinity.surface;
+  return resolveChatModel(owners.chatgpt.getChatModels().models, model)?.nativeSurface;
+}
 export const requestChatModels = (allowOpen = true, provider: ChatProvider = activeProvider): ChatModelCatalog => owners[provider].requestChatModels(allowOpen);
 export const startChatModelDiscovery = (allowOpen = true, provider: ChatProvider = activeProvider): Promise<ChatModelCatalog> => owners[provider].startChatModelDiscovery(allowOpen);
 export const refreshForUnoffered = (saved: string): void => owners[activeProvider].refreshForUnoffered(saved);

@@ -1,6 +1,6 @@
 import { EFFORT_NAMES, COMPOSER_EFFORTS } from '../shared/chat-models.js';
 import { ui, uiText, t } from './i18n.js';
-import type { ChatModelCatalog } from '../shared/chat-models.js';
+import type { ChatModelAffinity, ChatModelCatalog, NativeModelSurface } from '../shared/chat-models.js';
 import { chatModelDisplayLabel, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel } from '../shared/chat-models.js';
 import type { Config } from '../shared/types.js';
 import type { ReasoningEffort } from '../shared/session.js';
@@ -9,6 +9,24 @@ import { type ChatProvider } from '../shared/chat-provider.js';
 let activeProvider: ChatProvider = 'gemini';
 let settingsProvider: ChatProvider = 'gemini';
 const catalogs: Partial<Record<ChatProvider, ChatModelCatalog>> = {};
+type SettingsModelSelector = 'defaultChatModel' | 'workerModel' | 'helperModel';
+const settingsModelEdits = new Map<SettingsModelSelector, { provider: ChatProvider; model: string; surface?: NativeModelSurface }>();
+
+/** Save native mode evidence only with the provider/model tuple that supplied it. */
+export function settingsModelAffinity(model: string, previous?: ChatModelAffinity, provider: ChatProvider = settingsProvider,
+  selector?: SettingsModelSelector): ChatModelAffinity | undefined {
+  if (!model || model === 'gemini-current') return undefined;
+  const edited = selector && settingsModelEdits.get(selector);
+  if (edited && edited.provider === provider && edited.model === model)
+    return edited.surface ? { provider, model, surface: edited.surface } : undefined;
+  // A later catalog can describe the same ID in another native mode. Reading
+  // settings is not a deliberate change to the person's existing mode intent.
+  if (previous?.provider === provider && previous.model === model) return { ...previous };
+  const choices = catalogs[provider] ?? (provider === activeProvider ? catalog : undefined);
+  const surface = choices && resolveChatModel(choices.models, model)?.nativeSurface;
+  if (surface) return { provider, model, surface };
+  return undefined;
+}
 
 let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
 let generation = 0;
@@ -16,9 +34,9 @@ let onComposerPaint: (() => void) | undefined;
 const catalogWaiters = new Set<() => void>();
 let discovery: Promise<void> | null = null;
 let catalogSubscribed = false;
-type ObservedSelection = { model: string; reasoningEffort?: ReasoningEffort; observedAt: number };
-let composerContext: { scope: string | null; observation: ObservedSelection | null; edited: boolean; automatic?: boolean } | null = null;
-let ordinaryDefaults: { model: string; reasoningEffort: string } = { model: '', reasoningEffort: '' };
+type ObservedSelection = { model: string; reasoningEffort?: ReasoningEffort; observedAt: number; modelSurface?: NativeModelSurface };
+let composerContext: { scope: string | null; observation: ObservedSelection | null; edited: boolean; automatic?: boolean; affinity?: ChatModelAffinity } | null = null;
+let ordinaryDefaults: { model: string; reasoningEffort: string; affinity?: ChatModelAffinity } = { model: '', reasoningEffort: '' };
 /**
  * Automatic: send with whatever model Gemini already has selected, switching nothing.
  *
@@ -29,7 +47,7 @@ let ordinaryDefaults: { model: string; reasoningEffort: string } = { model: '', 
  * preferred observed model). Exact requests stay exact: a model the person picked or set as the
  * new-chat default is never replaced by Automatic. The menu also offers Automatic deliberately.
  */
-type SendModel = { model: string | null; reasoningEffort: ReasoningEffort | null };
+type SendModel = { model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: NativeModelSurface };
 const AUTOMATIC: SendModel = { model: null, reasoningEffort: null };
 type ModelInput = { sessionId: string | null; deliveredSessionId?: string | null; conversationId: string | null;
   state: string; purpose?: string; historyAnchored?: boolean; historySeq?: number; messageId?: string;
@@ -53,11 +71,16 @@ function exactModelRequested(): boolean {
   return !composerContext || composerContext.scope === null ? !!ordinaryDefaults.model : false;
 }
 function automaticApplies(): boolean {
-  return composerContext?.automatic === true || (!catalog.models.length && !exactModelRequested());
+  return composerContext?.automatic === true || implicitWorkDefault() || (!catalog.models.length && !exactModelRequested());
+}
+function implicitWorkDefault(): boolean {
+  if (activeProvider !== 'chatgpt' || ordinaryDefaults.model || composerContext?.edited || composerContext?.scope) return false;
+  const model = document.getElementById('composerModel') as HTMLSelectElement | null;
+  return observedModel(model?.value ?? '')?.nativeSurface === 'work';
 }
 /** The person chose Automatic (from the menu, or instead of an unavailable exact model). */
 function chooseAutomatic(): void {
-  if (composerContext) { composerContext.edited = true; composerContext.automatic = true; }
+  if (composerContext) { composerContext.edited = true; composerContext.automatic = true; delete composerContext.affinity; }
   else composerContext = { scope: null, observation: null, edited: true, automatic: true };
   paintPair('composerModel', 'composerReasoning', '', '');
   paintStatus();
@@ -73,6 +96,23 @@ const composerEfforts = COMPOSER_EFFORTS;
 const effortLabel = (effort: string): string => effortNames[effort] ? t(effortNames[effort]) : effort;
 function observedModel(value: string) {
   return resolveChatModel(catalog.models, value);
+}
+function composerModelSurface(model: string): NativeModelSurface | undefined {
+  const frozen = composerContext?.affinity;
+  if (frozen?.provider === activeProvider && frozen.model === model) return frozen.surface;
+  const observation = composerContext?.scope ? composerContext.observation : null;
+  if (observation && (observation.model === model || resolveChatModel(catalog.models, observation.model)?.id === model))
+    return observation.modelSurface;
+  const saved = (!composerContext || composerContext.scope === null && !composerContext.edited) ? ordinaryDefaults.affinity : undefined;
+  if (saved?.provider === activeProvider && saved.model === model) return saved.surface;
+  return observedModel(model)?.nativeSurface;
+}
+function rememberComposerModel(model: string, changed = true): void {
+  const surface = changed ? observedModel(model)?.nativeSurface : composerModelSurface(model);
+  composerContext ??= { scope: null, observation: null, edited: true };
+  composerContext.edited = true;
+  if (model) composerContext.automatic = false;
+  composerContext.affinity = model && surface ? { provider: activeProvider, model, surface } : undefined;
 }
 
 /**
@@ -109,16 +149,19 @@ export function applyComposerSessionModel(scope: string | null, observation: Obs
   if (!composerContext || composerContext.scope !== scope) {
     // A later deliberate picker edit belongs to the still-selected New Chat,
     // even if its accepted IPC response arrives after that edit.
-    let carried: { model: string; effort: string; automatic: boolean } | null = null;
+    let carried: { model: string; effort: string; automatic: boolean; modelSurface?: NativeModelSurface } | null = null;
     if (inputSelection !== undefined && scope !== null) {
       carried = promoting && composerContext?.scope === null && composerContext.edited ? {
         model: $<HTMLSelectElement>('composerModel').value,
         effort: $<HTMLSelectElement>('composerReasoning').value,
+        modelSurface: composerModelSurface($<HTMLSelectElement>('composerModel').value),
         automatic: composerContext.automatic === true || $<HTMLSelectElement>('composerModel').value === 'gemini-current'
       } : { model: inputSelection.model ?? '', effort: inputSelection.reasoningEffort ?? '',
+        modelSurface: inputSelection.modelSurface,
         automatic: inputSelection.model === null || inputSelection.model === 'gemini-current' };
     }
-    composerContext = { scope, observation, edited: Boolean(carried), ...(carried ? { automatic: carried.automatic } : {}) };
+    composerContext = { scope, observation, edited: Boolean(carried), ...(carried ? { automatic: carried.automatic,
+      ...(!carried.automatic && carried.modelSurface ? { affinity: { provider: activeProvider, model: carried.model, surface: carried.modelSurface } } : {}) } : {}) };
     if (carried) paintPair('composerModel', 'composerReasoning', carried.automatic ? '' : carried.model, carried.automatic ? '' : carried.effort);
   } else if (observation && (!composerContext.observation || observation.observedAt >= composerContext.observation.observedAt)) {
     composerContext.observation = observation;
@@ -126,6 +169,8 @@ export function applyComposerSessionModel(scope: string | null, observation: Obs
   if (inputSelection && scope !== null && !composerContext.edited) {
     composerContext.edited = true;
     composerContext.automatic = inputSelection.model === null || inputSelection.model === 'gemini-current';
+    composerContext.affinity = !composerContext.automatic && inputSelection.model && inputSelection.modelSurface
+      ? { provider: activeProvider, model: inputSelection.model, surface: inputSelection.modelSurface } : undefined;
     paintPair('composerModel', 'composerReasoning', composerContext.automatic ? '' : inputSelection.model ?? '',
       composerContext.automatic ? '' : inputSelection.reasoningEffort ?? '');
   }
@@ -262,7 +307,7 @@ function paintEffortShortcut(supported: readonly ReasoningEffort[]): void {
     }
   }
   spark.dataset.action = action;
-  spark.disabled = supported.length < 2;
+  spark.disabled = automaticApplies() || supported.length < 2;
   const label = () => spark.disabled ? t('Thinking effort') : minimum
     ? t('Use maximum effort: {0}', [effortLabel(supported.at(-1)!)])
     : t('Use minimum effort: {0}', [effortLabel(supported[0]!)]);
@@ -317,7 +362,7 @@ function paintComposerChoices(): void {
     // Automatic sits first in the list, as a deliberate choice that switches nothing.
     const button = el('button', 'model-choice') as HTMLButtonElement;
     button.type = 'button'; button.dataset.keepMenu = 'true'; button.dataset.model = '';
-    const auto = composerContext?.automatic === true || selected.value === 'gemini-current';
+    const auto = automaticApplies() || selected.value === 'gemini-current';
     button.setAttribute('aria-pressed', String(auto));
     button.append(el('span', '', () => t("Automatic")), icon('i-check'));
     button.addEventListener('click', event => {
@@ -332,13 +377,13 @@ function paintComposerChoices(): void {
   for (const choice of distinctModelChoices(choices).filter(choice => choice.id !== 'gemini-current')) {
     const button = el('button', 'model-choice') as HTMLButtonElement;
     button.type = 'button'; button.dataset.keepMenu = 'true'; button.dataset.model = choice.id;
-    button.setAttribute('aria-pressed', String(choice.id === selected.value));
+    button.setAttribute('aria-pressed', String(!automaticApplies() && choice.id === selected.value));
     button.append(el('span', '', choice.label), icon('i-check'));
     button.addEventListener('click', event => {
       // Repainting the choices detaches this button before the document listener.
       // Keep the model menu open without giving it a second selection authority.
       event.stopPropagation();
-      if (selected.value === choice.id) return;
+      if (selected.value === choice.id) { rememberComposerModel(choice.id); paintStatus(); return; }
       const focused = document.activeElement === button;
       selected.value = choice.id;
       selected.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -347,7 +392,7 @@ function paintComposerChoices(): void {
     modelOptions.append(button);
   }
   const current = supported.findIndex(power => power === effort.value);
-  if (composerContext?.automatic) {
+  if (automaticApplies()) {
     if (title) ui(title, 'textContent', () => t("Automatic"));
     if (subtitle) ui(subtitle, 'textContent', () => t("Sent without choosing a model"));
     return;
@@ -357,7 +402,7 @@ function paintComposerChoices(): void {
   const selectedLabel = distinctModelChoices(choices).find(choice => choice.id === selected.value)?.label;
   if (subtitle) ui(subtitle, 'textContent', () => typeof selectedLabel === 'function' ? selectedLabel() : selectedLabel ?? t('Select model'));
   const choose = (power: ReasoningEffort | string): void => {
-    if (composerContext) composerContext.edited = true;
+    rememberComposerModel(selected.value, false);
     effort.value = power;
     if (title) ui(title, 'textContent', () => power ? effortLabel(power) : t('Automatic'));
     paintComposerLabel();
@@ -455,26 +500,40 @@ function paintComposerChoices(): void {
 /** Admission guard for desktop sends: a stale selection is not permission to use defaults. */
 /** What Send uses: the confirmed pair, or Automatic (see {@link automaticApplies}). */
 export function composerSendModel(): SendModel | null {
-  if (composerContext?.automatic) return { ...AUTOMATIC };
-  return confirmedComposerModel() ?? (automaticApplies() ? { ...AUTOMATIC } : null);
+  if (composerContext?.automatic || implicitWorkDefault()) return { ...AUTOMATIC };
+  const confirmed = confirmedComposerModel();
+  if (confirmed) return confirmed;
+  // A catalog read on another native mode cannot erase a previously observed
+  // exact mode intent. Keep it visibly unverified; the browser still has to
+  // prove account availability and the requested pair before its one Send.
+  const model = $<HTMLSelectElement>('composerModel').value, effort = $<HTMLSelectElement>('composerReasoning').value;
+  const modelSurface = model && model !== 'gemini-current' ? composerModelSurface(model) : undefined;
+  if (modelSurface && (!effort || composerEfforts.includes(effort as ReasoningEffort)))
+    return { model, reasoningEffort: effort as ReasoningEffort || null, modelSurface };
+  return automaticApplies() ? { ...AUTOMATIC } : null;
 }
 
-export function confirmedComposerModel(): { model: string; reasoningEffort: ReasoningEffort | null } | null {
-  if (!catalog.models.length) return null;
+export function confirmedComposerModel(): { model: string; reasoningEffort: ReasoningEffort | null; modelSurface?: NativeModelSurface } | null {
+  if (!catalog.models.length || implicitWorkDefault()) return null;
   const model = $<HTMLSelectElement>('composerModel').value;
   const reasoningEffort = $<HTMLSelectElement>('composerReasoning').value;
   const choice = composerModels().find(choice => choice.id === model);
-  if (choice && !choice.efforts.length && !reasoningEffort) return { model, reasoningEffort: null };
+  const modelSurface = composerModelSurface(model), surface = modelSurface ? { modelSurface } : {};
+  if (modelSurface && choice?.nativeSurface && choice.nativeSurface !== modelSurface) return null;
+  if (choice && !choice.efforts.length && !reasoningEffort) return { model, reasoningEffort: null, ...surface };
   const confirmed = choice?.efforts.find(effort => effort === reasoningEffort);
-  return confirmed ? { model, reasoningEffort: confirmed } : null;
+  return confirmed ? { model, reasoningEffort: confirmed, ...surface } : null;
 }
 
 function paintComposerLabel(): void {
   // Display the same admission decision as Send, including discovery and removed efforts.
   const confirmed = confirmedComposerModel();
+  const requested = confirmed ? null : composerSendModel();
+  const preserved = requested?.model && requested.modelSurface ? requested : null;
   const modelLabel = confirmed ? confirmed.model === 'gemini-current' ? t('Automatic') : catalog.models.find(model => model.id === confirmed.model)!.label : '';
   const label = () => confirmed
     ? confirmed.reasoningEffort === null ? modelLabel : chatModelDisplayLabel(modelLabel, confirmed.reasoningEffort, effortLabel(confirmed.reasoningEffort))
+    : preserved ? chatModelName(preserved.model!, preserved.reasoningEffort ?? undefined)
     : automaticApplies() ? t("Automatic")
     : catalog.state === 'pending' ? t("Loading models…") : t("Select model");
   const node = $('composerModelLabel');
@@ -493,6 +552,7 @@ function paintStatus(): void {
     if (node) ui(node, 'aria-label', () => t('{0} model', [t("provider")]));
   }
   paintComposerChoices();
+  const needsNativeCheck = !confirmedComposerModel() && Boolean(composerSendModel()?.modelSurface);
   const error = () => catalog.error?.startsWith('Model discovery timed out. ')
     ? t('Model discovery timed out. {0}', [t(catalog.error.slice('Model discovery timed out. '.length))]) : t(catalog.error ?? '');
   const message = () => catalog.state === 'pending' ? t(catalog.waiting ?? "Reading your account’s model choices…")
@@ -502,8 +562,9 @@ function paintStatus(): void {
   for (const id of ['chatModelStatus', 'composerModelStatus']) {
     const node = document.getElementById(id);
     if (node) {
-      ui(node, 'textContent', message);
-      if (id === 'composerModelStatus') node.hidden = catalog.state === 'ready' && !catalog.error;
+      ui(node, 'textContent', id === 'composerModelStatus' && needsNativeCheck
+        ? () => t('The requested model settings will be checked in the browser before sending.') : message);
+      if (id === 'composerModelStatus') node.hidden = !needsNativeCheck && catalog.state === 'ready' && !catalog.error;
     }
   }
   for (const id of ['refreshChatModels', 'refreshComposerModels']) {
@@ -545,8 +606,11 @@ function discoverModels(): Promise<void> {
 export async function ensureComposerModel(refresh = false): Promise<SendModel | null> {
   const provider = activeProvider;
   // Automatic never waits for the list; only an exact request does.
-  if (!refresh && automaticApplies()) return composerSendModel();
-  if (!refresh && catalog.models.length && catalog.state !== 'pending') return confirmedComposerModel();
+  if (!refresh) {
+    const requested = composerSendModel();
+    if (requested) return requested;
+  }
+  if (!refresh && catalog.models.length && catalog.state !== 'pending') return null;
   const ready = new Promise<void>(resolve => {
     const finish = () => { clearTimeout(timer); catalogWaiters.delete(check); resolve(); };
     const check = () => { if (provider !== activeProvider || catalog.state === 'ready' || catalog.state === 'unavailable') finish(); };
@@ -561,7 +625,19 @@ export async function ensureComposerModel(refresh = false): Promise<SendModel | 
 }
 
 export function applyChatModels(config: Config, previous?: Config, provider: ChatProvider = config.ui?.chatProvider ?? 'gemini'): void {
-  settingsProvider = config.ui?.chatProvider ?? 'gemini';
+  const nextSettingsProvider = config.ui?.chatProvider ?? 'gemini';
+  if (nextSettingsProvider !== settingsProvider) settingsModelEdits.clear();
+  settingsProvider = nextSettingsProvider;
+  for (const [selector, model, affinity] of [
+    ['defaultChatModel', config.ui?.defaultChatModel, config.ui?.defaultChatModelAffinity],
+    ['workerModel', config.multiAgent.defaultModel, config.multiAgent.defaultModelAffinity],
+    ['helperModel', config.goal.helperModel, config.goal.helperModelAffinity]
+  ] as const) {
+    const edit = settingsModelEdits.get(selector);
+    if (edit?.provider === settingsProvider && edit.model === model &&
+        (edit.surface ? affinity?.provider === edit.provider && affinity.model === edit.model && affinity.surface === edit.surface : !affinity))
+      settingsModelEdits.delete(selector);
+  }
   const providerChanged = provider !== activeProvider;
   activeProvider = provider;
   if (providerChanged) {
@@ -577,7 +653,7 @@ export function applyChatModels(config: Config, previous?: Config, provider: Cha
     return select && document.activeElement === select && previous && select.value !== (prior ?? '') ? select.value : value;
   };
   ordinaryDefaults = provider === settingsProvider
-    ? { model: config.ui?.defaultChatModel ?? '', reasoningEffort: config.ui?.defaultChatReasoning ?? '' }
+    ? { model: config.ui?.defaultChatModel ?? '', reasoningEffort: config.ui?.defaultChatReasoning ?? '', affinity: config.ui?.defaultChatModelAffinity }
     : { model: '', reasoningEffort: '' };
   if (providerChanged) paintPair('composerModel', 'composerReasoning', ordinaryDefaults.model, ordinaryDefaults.reasoningEffort);
   paintPair('defaultChatModel', 'defaultChatReasoning', chosen('defaultChatModel', config.ui?.defaultChatModel ?? '', previous?.ui?.defaultChatModel), chosen('defaultChatReasoning', config.ui?.defaultChatReasoning ?? '', previous?.ui?.defaultChatReasoning), true);
@@ -658,10 +734,7 @@ export function initChatModels(onPaint?: () => void): void {
   });
   for (const [modelId, effortId, allowEmpty] of pairs) {
     document.getElementById(modelId)?.addEventListener('change', () => {
-      if (modelId === 'composerModel' && composerContext) {
-        composerContext.edited = true;
-        if ($<HTMLSelectElement>(modelId).value) composerContext.automatic = false;
-      }
+      if (modelId === 'composerModel') rememberComposerModel($<HTMLSelectElement>(modelId).value);
       const model = $<HTMLSelectElement>(modelId);
       const effort = $<HTMLSelectElement>(effortId);
       const supported = catalog.models.find(item => item.id === model.value)?.efforts ?? [];
@@ -669,10 +742,15 @@ export function initChatModels(onPaint?: () => void): void {
         ? supported.includes(effort.value as ReasoningEffort) ? effort.value : ''
         : model.value ? supported.includes('high') ? 'high' : supported[0] ?? '' : '';
       paintPair(modelId, effortId, model.value, nextEffort, allowEmpty);
+      if (modelId !== 'composerModel') {
+        const choices = catalogs[settingsProvider] ?? (settingsProvider === activeProvider ? catalog : undefined);
+        settingsModelEdits.set(modelId, { provider: settingsProvider, model: model.value,
+          surface: choices && resolveChatModel(choices.models, model.value)?.nativeSurface });
+      }
       paintStatus();
     });
     document.getElementById(effortId)?.addEventListener('change', () => {
-      if (effortId === 'composerReasoning' && composerContext) composerContext.edited = true;
+      if (effortId === 'composerReasoning') rememberComposerModel($<HTMLSelectElement>(modelId).value, false);
       paintStatus();
     });
   }
