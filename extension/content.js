@@ -15003,7 +15003,7 @@
         nativeAttachmentAttempted = true;
         return await CLF_DOM.uploadImages(input.images, () => sendCurrent() && onTarget() && draftCurrent(), draft, files);
       } : null;
-      if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files))) return uploadUnconfirmed();
+      if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files, { whileGenerating: Boolean(message.directTurn) }))) return uploadUnconfirmed();
       // Stop/picker closure can remount the native editor on its next render.
       // Wait for this same untouched draft; never insert it twice or recapture a
       // human-edited replacement as our own. Authorization follows this barrier.

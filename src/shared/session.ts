@@ -313,6 +313,8 @@ export function messageReferences(value: unknown): MessageReference[] | undefine
 
 /** A tool call still running for a chat, as its live caption names it. */
 export interface RunningToolActivity {
+  /** Exact admitted native turn, when the request carries an input capability. */
+  turnId?: string;
   /** Present-tense summary built from the call's own arguments, e.g. "Running git status". */
   title: string;
   /** The kind its finished row will have, so the live row wears the same icon. */

@@ -5220,22 +5220,23 @@ function paintTurnNow(): void {
  */
 function pollRunningTools(): void {
   const summary = sessions.find(entry => entry.id === selectedId);
-  if (!summary || !turnStatusLine.classList.contains('is-working')) {
+  if (!summary || summary.activeTurnId === null || !turnStatusLine.classList.contains('is-working')) {
     const had = runningTools.length > 0;
     runningTools = [];
-    if (had) paintPendingInputs();
+    if (had) { paintTurnNow(); paintPendingInputs(); }
     return;
   }
   if (Date.now() - runningToolsAt < 900 && events.length === runningToolsEvents) return;
   runningToolsAt = Date.now();
   runningToolsEvents = events.length;
-  const conversationIds = [...new Set([summary.conversationId, ...summary.chatIds].filter((id): id is string => !!id))].slice(0, 16);
+  const conversationIds = [...new Set([summary.conversationId].filter((id): id is string => !!id))].slice(0, 16);
   if (!conversationIds.length) return;
   const request = ++runningToolsRequest, session = selectedId;
   void api.runningTools(conversationIds).then(reply => {
     if (request !== runningToolsRequest || session !== selectedId) return;
     const had = runningTools.length > 0;
-    runningTools = reply.ok ? reply.data : [];
+    const active = sessions.find(entry => entry.id === session)?.activeTurnId;
+    runningTools = reply.ok && active !== null ? reply.data.filter(call => !call.turnId || call.turnId === active) : [];
     runningToolsFor = session;
     paintTurnNow();
     if (had !== runningTools.length > 0) paintPendingInputs();

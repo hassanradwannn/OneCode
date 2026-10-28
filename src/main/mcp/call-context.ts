@@ -202,7 +202,8 @@ export function runningToolActivity(conversationIds: readonly string[]): Running
   return [...running]
     .filter(call => { const owner = call.activity ? exactOwner(call) : null; return owner !== null && conversationIds.includes(owner); })
     .sort((a, b) => a.startedAt - b.startedAt)
-    .map(call => ({ ...call.activity!, since: call.startedAt }));
+    .map(call => ({ ...call.activity!, since: call.startedAt,
+      ...(call.caller.geminiBinding?.inputTurn?.turnId ? { turnId: call.caller.geminiBinding.inputTurn.turnId } : {}) }));
 }
 
 /** Finished tool work whose unattributed durable record is still landing. */

@@ -2538,7 +2538,7 @@ var CLF_DOM = (() => {
     channel.port2.postMessage(null);
   }
 
-  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null, nativeUserReceipts = null } = {}) {
+  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null, nativeUserReceipts = null, initialDraft = null } = {}) {
     // Why a Send ended without acceptance, as one short code for the caller's diagnostics (#820).
     // It names the first refusal only and never changes what Send does.
     const refused = (why) => { try { explain?.(why); } catch { /* Diagnostics never change Send. */ } return false; };
@@ -2567,6 +2567,7 @@ var CLF_DOM = (() => {
       const beforeConversation = conversationId();
       const beforeGenerating = generating();
       const beforeStop = stopButton();
+      let steerStopAttempted = false;
       const priorUsers = messages().filter((message) => message.role === 'user');
       // A native section can contain several questions or be recycled by React.
       // Remember its known identities, including sections whose old question is
@@ -2734,7 +2735,22 @@ var CLF_DOM = (() => {
               draftText() !== (mentionedDraft ?? submitted) || busy()) return finish(false, busy() ? 'page-busy' : 'draft-changed');
           if (box.getAttribute('aria-disabled') === 'true' || box.getAttribute('contenteditable') === 'false') return;
           const button = sendButton();
-          if (!sendButtonEnabled(button)) return;
+          if (!sendButtonEnabled(button)) {
+            // Explicit Steer may encounter a layout that retains Stop with a staged
+            // draft. Spend one native Stop under the same exact draft/source lease,
+            // then wait for Send within this operation's original deadline.
+            if (whileGenerating && !steerStopAttempted && acceptUserReceipt && initialDraft?.current() &&
+                !approvalWaiting() && stillCurrent() && composer() === box &&
+                draftText() === (mentionedDraft ?? submitted)) {
+              const stop = stopButton();
+              if (stop?.isConnected && !stop.disabled && stop.getAttribute('aria-disabled') !== 'true') {
+                steerStopAttempted = true;
+                stopGeneration(() => !done && stillCurrent() && composer() === box && initialDraft.current() &&
+                  draftText() === (mentionedDraft ?? submitted) && !approvalWaiting());
+              }
+            }
+            return;
+          }
           if (authorizing) return;
           const click = (resumed = false) => {
             if (done) return;
@@ -2973,7 +2989,7 @@ var CLF_DOM = (() => {
   function pluginManagementIdle() {
     return safe(() => ![...document.querySelectorAll('textarea,input:not([type="hidden"]),[contenteditable="true"]')].some(node => node.getClientRects().length > 0 && String(node.value || node.textContent || '').trim()), false);
   }
-  async function uploadImages(images, stillCurrent = () => true, draft = null, files = []) {
+  async function uploadImages(images, stillCurrent = () => true, draft = null, files = [], { whileGenerating = false } = {}) {
     if (files.length) images = [...(images || []), ...files];
     if (!images?.length) return true;
     if (!Array.isArray(images) || images.length > 20 || !stillCurrent() || hasComposerAttachments()) return false;
@@ -3038,7 +3054,7 @@ var CLF_DOM = (() => {
         // The provider can rename report.md to report(1).md during processing.
         // Bind once by exact original names, then retain those exact remove controls.
         if (tiles.length !== ownedTiles.length || tiles.some(node => !ownedTiles.includes(node))) return finish(false);
-        if (!host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]') && sendButtonEnabled(sendButton())) {
+        if (!host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]') && (sendButtonEnabled(sendButton()) || whileGenerating && sendButtonEnabled(stopButton()))) {
           if (draft?.attachments(ownedTiles) === false) return finish(false);
           finish(true);
         }
