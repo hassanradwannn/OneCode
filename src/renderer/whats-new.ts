@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.27': {
+    lead: () => t('Deliver the selected-chat readiness repair through a complete Beta update.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Readiness follows delivery'), text: () => t('A confirmed Send in the exact selected conversation clears an older timed-out provider-tab warning instead of leaving the banner stuck.') },
+      { icon: 'i-retry', title: () => t('Complete updater register'), text: () => t('Beta release builds now finalize the canonical cross-platform checksum register before publication, so existing installs can verify and consume the candidate.') }
+    ]
+  },
   '0.7.26': {
     lead: () => t('Keep selected-chat readiness aligned with successful native delivery.'),
     highlights: [

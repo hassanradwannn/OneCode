@@ -266,3 +266,66 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APP_SOURCE_DIR: app-source
         run: node workflow-source/scripts/draft-app-release.mjs upload
+
+  finalize-release-checksums:
+    name: finalize canonical release checksum register
+    needs: build-and-upload
+    if: needs.build-and-upload.result == 'success' && inputs.operation != 'beta-full-backfill' && inputs.operation != 'stable-full-backfill'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      SOURCE_REF: ${{ inputs.source_ref }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      BUILD_OPERATION: ${{ inputs.operation }}
+      BASE_VERSION: ${{ inputs.base_version }}
+
+    steps:
+      - name: Check out workflow tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-source
+          persist-credentials: false
+
+      - name: Check out exact app source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: app-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+          package-manager-cache: false
+
+      - name: Recheck exact draft and source before checksum finalization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SOURCE_DIR: app-source
+          BUILD_PLATFORM: win32
+        run: node workflow-source/scripts/draft-app-release.mjs verify
+
+      - name: Merge platform registers and publish canonical checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          rm -rf checksum-finalize
+          mkdir checksum-finalize
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir checksum-finalize \
+            --pattern 'SHA256SUMS-win32-x64.txt' --pattern 'SHA256SUMS-linux-x64.txt'
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > checksum-finalize/assets.json
+          node workflow-source/scripts/merge-platform-release-checksums.mjs checksum-finalize
+          existing="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "SHA256SUMS.txt") | .name')"
+          if [[ -z "$existing" ]]; then
+            gh release upload "$RELEASE_TAG" checksum-finalize/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"
+          else
+            echo "Canonical SHA256SUMS.txt already exists and matched the verified register."
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > checksum-finalize/assets-after.json
+          node workflow-source/scripts/merge-platform-release-checksums.mjs checksum-finalize assets-after.json
