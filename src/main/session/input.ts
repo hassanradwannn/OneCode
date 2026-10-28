@@ -742,7 +742,7 @@ export function retryUnclaimedInput(id: string): Promise<InputEntry | null> {
     return next;
   });
 }
-async function commit(next: InputEntry[]): Promise<void> {
+async function commit(next: InputEntry[], beforeChanged?: () => void): Promise<void> {
   const previous = new Map((entries ?? []).map(row => [row.id, row]));
   next = next.map(row => ['failed', 'cancelled'].includes(row.state) && row.error && row.failedAt === undefined
     ? { ...row, failedAt: ['failed', 'cancelled'].includes(previous.get(row.id)?.state ?? '')
@@ -758,6 +758,11 @@ async function commit(next: InputEntry[]): Promise<void> {
     throw error;
   }
   entries = next;
+  // A caller may derive secondary state from the exact durable input row. Publish that derived
+  // state before observers receive the existing changed notification, so they cannot race the
+  // durable commit and permanently cache an older projection. The durable write already won; a
+  // secondary observer must never be allowed to roll it back.
+  try { beforeChanged?.(); } catch { /* derived state cannot undo a durable input commit */ }
   wakeBrowserWork();
   for (const listener of inputListeners) { try { listener(); } catch { /* observer only */ } }
   try { deliveryHooks?.changed(); } catch { /* a detached renderer does not undo a durable commit */ }
@@ -766,7 +771,7 @@ async function commit(next: InputEntry[]): Promise<void> {
  * row is the crash tombstone: an ambiguous settings write is never replayed after a
  * later user Off. Only this live operation may replace it with the successful delivery.
  */
-async function transition(current: InputEntry[], next: InputEntry[], automated: InputEntry[], phase: 'before-send' | 'after-send'): Promise<void> {
+async function transition(current: InputEntry[], next: InputEntry[], automated: InputEntry[], phase: 'before-send' | 'after-send', beforeChanged?: () => void): Promise<void> {
   if (automated.length) {
     if (!deliveryHooks) throw new Error('Input delivery is not ready');
     const reserved = new Map(automated.flatMap(entry => next.filter(row => sameDelivery(entry, row)).map(row => [row.id, row] as const)));
@@ -778,7 +783,7 @@ async function transition(current: InputEntry[], next: InputEntry[], automated: 
     }));
     for (const entry of automated) await deliveryHooks.applyAutomation(entry.conversationId!, entry.automation!, phase, entry.objective, entry.loopAfterTurn);
   }
-  await commit(next);
+  await commit(next, beforeChanged);
 }
 /** Freeze the exact transport bytes with its durable claim, never the authored enqueue payload. */
 async function prepare(entry: InputEntry, suffix = '', nativeMedia = false): Promise<InputEntry> {
@@ -2260,7 +2265,7 @@ export function bindBrowserInputProject(id: string, owner: string, conversationI
     return true;
   });
 }
-export function acknowledgeBrowserInput(id: string, owner: string, conversationId?: string | null, messageId?: string): Promise<boolean> {
+export function acknowledgeBrowserInput(id: string, owner: string, conversationId?: string | null, messageId?: string, beforeChanged?: () => void): Promise<boolean> {
   return serial(async () => {
     const current = await load();
     const entry = current.find((row) => row.id === id && row.owner === owner);
@@ -2298,7 +2303,7 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
     await transition(current, current.map((row) => row === entry ? acknowledged : row.id === entry.companionInputId ? { ...row,
       state: acknowledged.state, error: acknowledged.error, deliveredSessionId: acknowledged.deliveredSessionId,
       messageId: acknowledged.messageId, deliveredAt: acknowledged.deliveredAt } : row),
-      entry.state !== 'cancelled' && (entry.opening || !entry.sessionId) && entry.automation && deliveredConversation && entry.purpose !== 'decision' ? [acknowledged] : [], 'after-send');
+      entry.state !== 'cancelled' && (entry.opening || !entry.sessionId) && entry.automation && deliveredConversation && entry.purpose !== 'decision' ? [acknowledged] : [], 'after-send', beforeChanged);
     if (entry.completedTurnId && entry.sessionId && deliveredConversation)
       await consumeGoalReplyForInputNow(deliveredConversation, entry.sessionId, entry.completedTurnId);
     logInfo(`input ${id}: browser acknowledged after ${Math.max(0, Date.now() - entry.createdAt)} ms`);

@@ -989,6 +989,18 @@ export function selectedChatReadinessFor(sessionId: string, currentConversationI
   const state = request && selectedReadinessState(request);
   return state ? { ...state } : null;
 }
+/**
+ * A native Send receipt is stronger readiness evidence than an older selection probe. Retire only
+ * the exact selected session/conversation, and never let a different browser satisfy an already
+ * assigned selection. An unassigned selection may adopt the browser that proved this exact Send.
+ */
+function confirmSelectedChatReadinessFromDelivery(sessionId: string | null | undefined, conversationId: string, browser: string | null): void {
+  if (!sessionId || !browser) return;
+  const request = selectedChatReadiness.get(sessionId);
+  if (!request || request.conversationId !== conversationId || (request.browser && request.browser !== browser)) return;
+  request.browser ??= browser;
+  request.state = { phase: 'ready' };
+}
 /** Read-only report of the existing selection owner; no chat IDs, tokens or browser identity. */
 export function selectedChatReadinessDiagnostics(): Array<{
   phase: SelectedChatReadiness['phase']; ageMs: number; opening: boolean; assigned: boolean; reads: number; reports: number;
@@ -3476,8 +3488,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         await registerGoalDecisionChat(helperConversation, entry.decisionSourceSessionId);
       }
       if (route === '/input/answer') return json(res, 200, { ok: typeof body.response === 'string' && await completeBrowserDecision(body.id, body.owner, body.response, deliveredConversation) }, origin);
-      const acknowledged = await acknowledgeBrowserInput(body.id, body.owner, deliveredConversation, typeof body.messageId === 'string' ? body.messageId : undefined);
-      if (acknowledged && deliveredConversation) await collectRecordedBrowserDecision(deliveredConversation);
+      const browser = browserOf(req);
+      const acknowledged = await acknowledgeBrowserInput(body.id, body.owner, deliveredConversation,
+        typeof body.messageId === 'string' ? body.messageId : undefined,
+        deliveredConversation ? () => confirmSelectedChatReadinessFromDelivery(
+          entry.sessionId ?? entry.deliveredSessionId, deliveredConversation, browser) : undefined);
+      if (acknowledged && deliveredConversation) {
+        await collectRecordedBrowserDecision(deliveredConversation);
+      }
       return json(res, 200, { ok: acknowledged }, origin);
     }
     const target = body.conversationId === null ? null : conversationId(body.conversationId);

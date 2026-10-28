@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.7.26': {
+    lead: () => t('Keep selected-chat readiness aligned with successful native delivery.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Readiness follows delivery'), text: () => t('A confirmed Send in the exact selected conversation clears an older timed-out provider-tab warning instead of leaving the banner stuck.') },
+      { icon: 'i-retry', title: () => t('Read-only recovery'), text: () => t('Late readiness reconciliation checks the existing selection only. It does not reopen, focus, reload or resend the provider tab.') }
+    ]
+  },
   '0.7.25': {
     lead: () => t('Keep message delivery moving during browser preparation and progress updates.'),
     highlights: [

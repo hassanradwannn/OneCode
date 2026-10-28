@@ -1290,7 +1290,14 @@ async function loadSessions(detail: 'reread' | 'changed' = 'reread'): Promise<vo
   paintSessions();
   chatSearch?.refresh();
   const row = selectedId === null ? undefined : sessions.find(entry => entry.id === selectedId);
-  if (row) reconcileSelectedProviderAttachment(row.id, row.conversationId);
+  if (row) {
+    reconcileSelectedProviderAttachment(row.id, row.conversationId);
+    // A refused selection stops its own timer. Canonical activity (especially an exact native
+    // Send ACK) may prove the already-selected provider tab later, so reconcile that state with a
+    // read-only poll. This never opens, focuses, reloads or resends a provider tab.
+    const readiness = document.getElementById('selectedProviderStatus');
+    if (readiness && !readiness.hidden && selectedProviderTimer === null) void ensureSelectedProvider(row.id, selectionGeneration, true);
+  }
   if (detail === 'reread' || selectedId === null || detailFor !== selectedId || changed.all || changed.ids.has(selectedId) ||
       row?.updatedAt !== detailStamp?.updatedAt || row?.events !== detailStamp?.events) {
     await loadDetail(); void mediaPanel?.refresh();
