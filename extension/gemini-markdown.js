@@ -76,7 +76,15 @@ var CLF_GEMINI_MARKDOWN = (() => {
       return /^(p|div|section|article)$/.test(tag) ? `\n\n${content.trim()}\n\n` : content;
     }
     let result = read(root).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    for (const [token, value] of blocks) result = result.split(token).join(value);
+    for (const [token, value] of blocks) result = result.replaceAll(token, (_match, offset) => {
+      // Lists/quotes prefix the protected token before code is restored. Carry
+      // that exact continuation prefix onto every code line; otherwise only
+      // the opening fence remains inside the list and the body becomes prose.
+      const prefix = result.slice(result.lastIndexOf('\n', offset - 1) + 1, offset);
+      const continuation = prefix.replace(/(?:[-+*]|\d+[.)])[ \t]+/g, marker => ' '.repeat(marker.length));
+      const indent = /^(?:[ \t]*> ?)*[ \t]*$/.test(continuation) ? continuation : '';
+      return value.replace(/\n/g, '\n' + indent);
+    });
     return result;
   }
   return { render };

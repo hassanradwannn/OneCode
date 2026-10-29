@@ -225,6 +225,11 @@ var CLF_DOM = (() => {
    * history and compaction. Prefer ChatGPT's content subtrees; strip controls only as a
    * fallback for an unfamiliar renderer shape.
    */
+  function assistantMarkdown(node) {
+    if (typeof CLF_GEMINI_MARKDOWN === 'undefined' || typeof node?.cloneNode !== 'function') return text(node);
+    const copy = node.cloneNode(true); stripOwn(copy);
+    return CLF_GEMINI_MARKDOWN.render(copy);
+  }
   function messageText(node, role) {
     return safe(() => {
       if (!node) return '';
@@ -251,7 +256,7 @@ var CLF_DOM = (() => {
         const parts = [...node.querySelectorAll('.markdown, [data-markdown-text-style="assistant-message"]')]
           .filter((part) => !(part.closest && part.closest('[data-interrupted]')))
           .filter((part) => !(part.closest && part.closest(TOOL)))
-          .map((part) => text(part))
+          .map((part) => assistantMarkdown(part))
           .filter(Boolean);
         if (parts.length > 0) return parts.join('\n\n');
       }
@@ -289,7 +294,7 @@ var CLF_DOM = (() => {
         for (const row of clone.querySelectorAll(TOOL)) row.remove();
         for (const commentary of clone.querySelectorAll('[data-interrupted]')) commentary.remove();
       }
-      return text(clone);
+      return role === 'assistant' ? assistantMarkdown(clone) : text(clone);
     }, '');
   }
 

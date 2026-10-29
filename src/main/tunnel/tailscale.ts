@@ -355,6 +355,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       if (!published && !same(unrelatedRoutes(before, custody), unrelatedRoutes(live, custody))) {
         throw new FunnelSetupError('Other Tailscale routes changed. OneCode will not overwrite or restore another service’s configuration. Inspect Tailscale before reconnecting.');
       }
+      delete check.waitingForNetwork;
       check.funnel = 'ready';
       const origin = `https://${custody.dnsName}${custody.port === 443 ? '' : `:${custody.port}`}`;
       const publicUrl = `${origin}${custody.mount}${local.pathname}`;
@@ -431,7 +432,14 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       } catch (error) {
         if (stopped || epoch !== transportEpoch) return;
         check.publicIngress = undefined;
-        if (check.funnel !== 'permission-required') check.funnel = 'error';
+        if (error instanceof TailscaleNotReady) {
+          if (error.reason === 'network') check.waitingForNetwork = true;
+          else delete check.waitingForNetwork;
+          check.funnel = 'unknown';
+        } else {
+          delete check.waitingForNetwork;
+          if (check.funnel !== 'permission-required') check.funnel = 'error';
+        }
         report('tunnel-unavailable', error instanceof FunnelSetupError || error instanceof TailscaleNotReady || error instanceof TailscaleSetupRequired ? error.message : describeFailure(error));
       } finally {
         checking = false;
@@ -472,7 +480,11 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
     check.publicIngress = undefined;
     await removeOwned();
     await relay?.stop();
-    if (check.funnel !== 'permission-required') check.funnel = 'error';
+    if (error instanceof TailscaleNotReady) {
+      if (error.reason === 'network') check.waitingForNetwork = true;
+      else delete check.waitingForNetwork;
+      check.funnel = 'unknown';
+    } else if (check.funnel !== 'permission-required') check.funnel = 'error';
     if (!check.version) check.cli = 'error';
     const pendingSetup = (error instanceof TailscaleSetupRequired || error instanceof TailscaleNotReady) && !nativeMutation;
     const message = error instanceof FunnelSetupError || error instanceof TailscaleSetupRequired || error instanceof TailscaleNotReady ? error.message : describeFailure(error);

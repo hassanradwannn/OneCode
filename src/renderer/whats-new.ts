@@ -20,8 +20,10 @@ const RELEASES: Readonly<Record<string, Release>> = {
     lead: () => t('Keep existing chats connected and bring native diagrams into your workspace.'),
     highlights: [
       { icon: 'i-retry', title: () => t('Recover the existing task'), text: () => t('Connection resets keep the recorded question and generation while the browser reconnects, preserving exact task authorization.') },
-      { icon: 'i-browser', title: () => t('Native inline diagrams'), text: () => t('Capture exposed diagram source with its exact response and show it in the isolated Desktop and Remote preview.') },
-      { icon: 'i-gear', title: () => t('Visible update progress'), text: () => t('Follow received bytes and known totals, then verification and preparation before an update becomes ready to install.') }
+      { icon: 'i-browser', title: () => t('Native inline diagrams'), text: () => t('Capture exposed diagram source, grow its card to fit, and expand the whole chart within the screen in Desktop and Remote.') },
+      { icon: 'i-chat', title: () => t('Keep formatted code'), text: () => t('Preserve code blocks, indentation and blank lines inside native lists and quotations.') },
+      { icon: 'i-gear', title: () => t('Visible update progress'), text: () => t('Follow received bytes and known totals, then verification and preparation before an update becomes ready to install.') },
+      { icon: 'i-retry', title: () => t('Clearer connection recovery'), text: () => t('A Tailscale network wait stays separate from a Funnel permission failure while OneCode checks the saved connection again.') }
     ]
   },
   '0.8.0': {

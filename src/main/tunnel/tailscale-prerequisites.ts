@@ -7,7 +7,9 @@ export class TailscaleSetupRequired extends Error {
 }
 const row = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 /** Read-only network/daemon wait; it does not authorize opening account setup. */
-export class TailscaleNotReady extends Error {}
+export class TailscaleNotReady extends Error {
+  constructor(message: string, readonly reason: 'network' | 'approval' = 'network') { super(message); }
+}
 
 /** Only failed read-only daemon queries qualify. Never apply this to a route mutation. */
 export async function readTailscaleDaemon<T>(read: () => Promise<T>): Promise<T> {
@@ -24,7 +26,7 @@ export async function readTailscaleDaemon<T>(read: () => Promise<T>): Promise<T>
 export function tailscalePrerequisites(status: Record<string, unknown>, funnel: boolean): { id: string; dnsName: string } {
   const self = row(status.Self), tailnet = row(status.CurrentTailnet);
   if (status.BackendState === 'NeedsMachineAuth')
-    throw new TailscaleNotReady('Approve this device in the Tailscale admin console. OneCode will detect approval automatically.');
+    throw new TailscaleNotReady('Approve this device in the Tailscale admin console. OneCode will detect approval automatically.', 'approval');
   if (!status.AuthURL && (['NoState', 'Starting', 'Stopped'].includes(String(status.BackendState)) ||
       (status.BackendState === 'Running' && self.Online === false)))
     throw new TailscaleNotReady('Waiting for Tailscale to connect. Keep Tailscale running and connected; OneCode will check again automatically.');

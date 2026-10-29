@@ -6299,7 +6299,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 115;
+const PAGE_RECORDER_VERSION = 116;
 
 let deferredRecoveryWork = null;
 
@@ -6732,7 +6732,7 @@ async function restoreChatgptTabNow(id, current, documentId) {
       if (!current()) return false;
       await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'claude-models.js', 'claude-dom.js'] });
     } else {
-      await chrome.scripting.executeScript({ target, files: ['chatgpt-dom.js'] });
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'chatgpt-dom.js'] });
     }
     if (!current()) return false;
     // Keep the React/Fiber reader in ChatGPT's own world, exactly like the static manifest

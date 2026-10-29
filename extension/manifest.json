@@ -79,6 +79,7 @@
       ],
       "js": [
         "i18n.js",
+        "gemini-markdown.js",
         "chatgpt-dom.js",
         "content.js"
       ],

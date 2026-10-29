@@ -1,6 +1,6 @@
 import { marked } from 'marked';
 import type { ArtifactFile, ArtifactKind, ArtifactOrigin } from '../shared/artifact.js';
-import { nativeWidgetStyle } from './native-widget-preview.js';
+import { nativeWidgetStyle, widgetDiagramSize } from './native-widget-preview.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
 import { ARTIFACT_VIEWPORTS, fitArtifactViewport, type ArtifactViewport } from './artifact-viewport.js';
 
@@ -103,7 +103,9 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string,
   const bridge = parsed.createElement('script'); bridge.textContent = (previewStorageScript() + consoleBridgeScript(channel)).replace(/<\/script/gi, '<\\/script');
   parsed.head.prepend(charset, csp, viewport, bridge); parsed.head.append(scrolling);
   if (widget) {
-    const style = new DOMParser().parseFromString(nativeWidgetStyle(dark), 'text/html').querySelector('style');
+    const diagram = widgetDiagramSize(entry.text);
+    if (diagram) parsed.body.querySelector('svg')?.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const style = new DOMParser().parseFromString(nativeWidgetStyle(dark, Boolean(diagram)), 'text/html').querySelector('style');
     if (style) parsed.head.insertBefore(parsed.importNode(style, true), bridge);
   }
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
@@ -160,7 +162,14 @@ export function createArtifactPreview(options: {
   });
   const shell = document.createElement('div'); shell.className = 'artifact-preview-shell'; shell.append(frame); options.parent.replaceChildren(shell);
   let viewport: ArtifactViewport = 'responsive';
-  const simulated = options.kind === 'web';
+  const entry = options.files.find(file => file.path === options.entrypoint) ?? options.files[0];
+  const nativeWidget = options.origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(options.origin.nativeSurface ?? '');
+  const diagram = entry && (nativeWidget || /\.svg$/i.test(entry.path)) ? widgetDiagramSize(entry.text) : null;
+  if (diagram) {
+    options.parent.dataset.previewLayout = 'diagram';
+    options.parent.style.setProperty('--artifact-ratio', `${diagram.width} / ${diagram.height}`);
+  }
+  const simulated = options.kind === 'web' && !diagram;
   const selector = document.createElement('select'); selector.className = 'artifact-viewport-select'; selector.setAttribute('aria-label', 'Preview viewport');
   for (const [value, preset] of Object.entries(ARTIFACT_VIEWPORTS)) {
     const option = document.createElement('option'); option.value = value; option.textContent = preset.label; selector.append(option);
@@ -174,6 +183,7 @@ export function createArtifactPreview(options: {
     frame.style.transform = `scale(${fit.scale})`; frame.style.transformOrigin = '0 0';
   };
   const setViewport = (mode: ArtifactViewport) => {
+    if (diagram) mode = 'responsive';
     viewport = mode; selector.value = mode; selector.title = mode === 'responsive' ? 'Use the available preview size' : `${ARTIFACT_VIEWPORTS[mode].width} × ${ARTIFACT_VIEWPORTS[mode].height} · Fit to preview`;
     options.parent.dataset.previewViewport = mode; resize();
   };
@@ -192,5 +202,5 @@ export function createArtifactPreview(options: {
     messages++; options.onMessage?.({ level: data.level as ArtifactPreviewMessage['level'], text: data.text.slice(0, 4000) });
   };
   window.addEventListener('message', receive);
-  return { setViewport, destroy(): void { retired = true; observer?.disconnect(); selector.remove(); delete options.parent.dataset.previewViewport; window.removeEventListener('message', receive); if (documentId) options.releaseDocument?.(documentId); frame.remove(); shell.remove(); } };
+  return { setViewport, destroy(): void { retired = true; observer?.disconnect(); selector.remove(); delete options.parent.dataset.previewViewport; if (diagram) { delete options.parent.dataset.previewLayout; options.parent.style.removeProperty('--artifact-ratio'); } window.removeEventListener('message', receive); if (documentId) options.releaseDocument?.(documentId); frame.remove(); shell.remove(); } };
 }

@@ -19,16 +19,19 @@ export function tailscaleSetupView(next: Pick<AppState, 'config' | 'status' | 'r
     ['connecting-tunnel', 'connected', 'offline', 'tunnel-unavailable'].includes(next.status.state);
   return {
     actionRequired: publicTlsFailed && !tailscalePublicReady(next),
-    provisioningHint: publicTlsFailed
+    provisioningHint: check?.waitingForNetwork
+      ? 'Waiting for Tailscale and the network to reconnect. Keep Tailscale running; OneCode checks again automatically. This wait does not indicate a Funnel policy failure.'
+      : publicTlsFailed
       ? check.canRepair === true
         ? 'Public DNS is available, but the public HTTPS handshake failed. Use Repair public connection below. OneCode keeps checking automatically.'
         : 'Public DNS is available, but the public HTTPS handshake failed. Check the network and Tailscale. OneCode keeps checking automatically.'
       : 'In Access controls, expand Funnel and select Add Funnel to policy. A Tailscale administrator may need to do this. On the DNS page, enable MagicDNS and HTTPS certificates if prompted. Return here and wait for the public connection check. Allow up to 15 minutes on first setup for public provisioning and verification. Keep OneCode and Tailscale running; the checks continue automatically.',
     cli: check?.cli === 'ready' ? 'Verified' : check?.cli === 'missing' ? 'Not installed'
       : check?.cli === 'error' ? 'Check failed' : next.resolvedBinary ? 'Detected; Connect verifies it' : 'Not checked',
-    account: check?.account === 'ready' ? 'Signed in' : check?.account === 'signed-out' ? 'Sign in to Tailscale' : 'Not checked',
+    account: check?.account === 'ready' ? 'Signed in' : check?.account === 'signed-out' ? 'Sign in to Tailscale'
+      : check?.waitingForNetwork ? 'Waiting for Tailscale' : 'Not checked',
     funnel: check?.funnel === 'ready' ? 'Verified in last check' : check?.funnel === 'permission-required' ? 'Permission required'
-      : check?.funnel === 'error' ? 'Check failed' : 'Not checked',
+      : check?.funnel === 'error' ? 'Check failed' : check?.waitingForNetwork ? 'Waiting for Tailscale' : 'Not checked',
     publicIngress: check?.publicIngress?.state === 'ready' ? 'Verified through public DNS and HTTPS'
       : check?.publicIngress?.state === 'checking' ? 'Checking public DNS and HTTPS'
       : check?.publicIngress?.state === 'dns-pending' ? 'Waiting for public DNS'

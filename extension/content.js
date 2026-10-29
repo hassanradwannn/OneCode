@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 115;
+  const RECORDER_VERSION = 116;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2443,7 +2443,8 @@
   function generationTurn(turns = CLF_DOM.turns()) {
     const question = turns.findLastIndex(turn => turn.role === 'user');
     const ownsQuestion = Boolean(openedUserMessageId && question >= 0 &&
-      CLF_DOM.messagesIn(turns[question]).some(message => message.role === 'user' && message.id === openedUserMessageId));
+      (CLF_DOM.provider !== 'chatgpt' && turns[question].id === openedUserMessageId ||
+        CLF_DOM.messagesIn(turns[question]).some(message => message.role === 'user' && message.id === openedUserMessageId)));
     // Hydration may remount an old answer with a new node after our baseline.
     // An adopted generation still belongs after the latest question; DOM novelty
     // above that boundary cannot establish or retain its assistant owner.
@@ -2553,6 +2554,16 @@
    * Deliberately conservative. "The model hit its output limit" is a claim this page
    * gives no evidence for, so it is never made: an unexplained stop stays unknown.
    */
+  function nativeTerminalTurn(turn) {
+    if (!turn || !openedUserMessageId) return false;
+    const turns = CLF_DOM.turns(), question = turns.findLastIndex(row => row.role === 'user');
+    const answer = turns.findLastIndex(row => row.role === 'assistant');
+    // A completed historical footer can remain mounted or remount while the
+    // current response is waiting on a tool. Neither DOM novelty nor unreadable
+    // question text can lend that old completion to the current task grant.
+    return question >= 0 && answer > question && turns[question].id === openedUserMessageId &&
+      turns[answer].id === turn.id && turns[answer].node === turn.node;
+  }
   function endOutcome(turn, nativeFinal = false) {
     if ((stopRequestedAt || (resumedFromStop && resumedFromStop === turnId)) && !nativeFinal) return {
       outcome: 'stopped',
@@ -2588,7 +2599,7 @@
     if (CLF_DOM.provider !== 'chatgpt') {
       // The provider's own completed response footer is stronger evidence than
       // a missing Stop button, and remains readable after a long-chat reload.
-      if (turn && CLF_DOM.messageComplete?.({ node: turn.node }))
+      if (nativeTerminalTurn(turn) && CLF_DOM.messageComplete?.({ node: turn.node }))
         return answerText(turn).length > 0 ? { outcome: 'completed' } : {
           outcome: 'completed', detail: 'The provider completed the native response without visible answer text.'
         };
@@ -3532,6 +3543,10 @@
       // claiming server-side cancellation; later exact work can disprove it.
       if (stopRequestedAt) quietOutcome = { outcome: 'stopped' };
       let result = quietOutcome || endOutcome(quietTurn || turn);
+      if (CLF_DOM.provider !== 'chatgpt' && result.outcome === 'completed' &&
+          endOutcome(quietTurn || turn).outcome !== 'completed') {
+        quietOutcome = result = { outcome: 'unknown' };
+      }
       const settled = result.reason === 'thinking_failed' || quietFor >= TURN_SETTLE_MS;
       // `unknown` means exactly "nothing proves the turn ended". A real
       // answer/error/interrupt closes after the settle window, and ten minutes of genuine

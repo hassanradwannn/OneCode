@@ -539,6 +539,8 @@ export interface ConnectionStatus {
 
 export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' | 'http-error' | 'metadata-error' | 'mcp-error' | 'timeout';
 export interface TailscaleStatus {
+  /** A read-only daemon/node prerequisite is waiting for connectivity, not policy approval. */
+  waitingForNetwork?: boolean;
   /** Current native custody with failed public TLS permits OS-consented desktop recovery. */
   canRepair?: boolean;
   /** Desktop setup action; static first-party URL, never CLI output. */
