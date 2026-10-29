@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 5;
+  const VERSION = 7;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -72,6 +72,24 @@
     const distinct = [...new Map(values.map(value => [JSON.stringify(value), value])).values()];
     return distinct.length === 1 ? distinct[0] : null;
   };
+  const userSourceTraces = new WeakMap();
+  function userSourceTrace(node, snapshot, ready = false) {
+    const previous = userSourceTraces.get(node) || { firstFailure: null, firstCandidateFailure: null, lastFailure: null, ready: null };
+    if (ready) previous.ready = snapshot;
+    else {
+      previous.firstFailure ||= snapshot;
+      if (snapshot.turnCandidates > 0) previous.firstCandidateFailure ||= snapshot;
+      previous.lastFailure = snapshot;
+    }
+    userSourceTraces.set(node, previous);
+    try { node.setAttribute('data-onecode-claude-user-source-trace', JSON.stringify(previous)); } catch { /* Bounded fixed gate diagnostics only. */ }
+  }
+  const valueType = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+  function descriptorType(value, key) {
+    if (!value || !['object', 'function'].includes(typeof value)) return 'not-object';
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    return !property ? 'missing' : 'value' in property ? 'value' : 'getter' in property && typeof property.get === 'function' ? 'getter' : 'accessor';
+  }
   function projectUser(message) {
     const diagnostic = (stage, flags = {}) => { try { document.documentElement.setAttribute('data-onecode-claude-user-source-diagnostic', JSON.stringify({ stage, ...flags })); } catch { /* Fixed read-only state flags. */ } };
     const chat = new RegExp(`^/chat/(${UUID})/?$`, 'i').exec(location.pathname)?.[1]?.toLowerCase();
@@ -83,19 +101,52 @@
     const node = matches[0];
     const bodies = node.querySelectorAll(':scope > div.contents').length;
     if (bodies !== 1) { diagnostic('body-unavailable', { bodies }); return null; }
-    const props = propsAt(node), sources = props.flatMap(props => {
+    const props = propsAt(node), samples = [], counts = { turnCandidates: 0, matchingIds: 0, nativeHumanIds: 0, userRoles: 0, arrays: 0, soleItems: 0, eligibleSources: 0 };
+    const sources = props.flatMap((props, depth) => {
       const row = own(props, 'row');
       const candidates = [own(props, 'turn'), own(row, 'kind') === 'turn' ? own(row, 'turn') : null];
-      return candidates.flatMap(turn => {
-        if (own(turn, 'id') !== message || own(turn, 'role') !== 'user') return [];
+      return candidates.flatMap((turn, origin) => {
+        if (turn !== undefined && turn !== null) {
+          const turnId = own(turn, 'id'), role = own(turn, 'role'), items = role === 'user' ? own(turn, 'items') : undefined;
+          const item = role === 'user' ? own(items, '0') : undefined, itemId = own(item, 'id'), body = role === 'user' ? own(item, 'text') : undefined;
+          const matching = turnId === message, userRole = role === 'user', array = Array.isArray(items), sole = array && items.length === 1;
+          const nativeHuman = turnId === `new-human-message-uuid-${message}`;
+          counts.turnCandidates++; if (matching) counts.matchingIds++; if (nativeHuman) counts.nativeHumanIds++; if (userRole) counts.userRoles++; if (array) counts.arrays++; if (sole) counts.soleItems++;
+          if (samples.length < 4) samples.push({ depth, origin: origin === 0 ? 'turn' : 'row.turn', turnType: valueType(turn),
+            turnDescriptor: descriptorType(origin === 0 ? props : row, 'turn'), turnIdDescriptor: descriptorType(turn, 'id'),
+            turnIdType: valueType(turnId), turnIdExact: matching, turnIdCaseFolded: typeof turnId === 'string' && turnId.toLowerCase() === message,
+            turnIdNativeUserWrapper: turnId === `new-user-message-uuid-${message}`,
+            turnIdNativeHumanWrapper: nativeHuman,
+            turnIdChars: typeof turnId === 'string' ? turnId.length : null,
+            turnIdEndsNative: typeof turnId === 'string' && turnId.endsWith(message),
+            turnIdPrefixChars: typeof turnId === 'string' && turnId.endsWith(message) ? turnId.length - message.length : null,
+            userRole, roleType: valueType(role), itemsDescriptor: descriptorType(turn, 'items'), itemsType: valueType(items),
+            itemCount: array && Number.isSafeInteger(items.length) && items.length <= 256 ? items.length : null,
+            indexDescriptor: descriptorType(items, '0'), itemType: valueType(item), itemIdDescriptor: descriptorType(item, 'id'),
+            itemIdType: valueType(itemId), itemIdExact: itemId === `${message}:0`,
+            itemIdNativeUserWrapper: itemId === `new-user-message-uuid-${message}:0`,
+            itemIdChars: typeof itemId === 'string' ? itemId.length : null,
+            itemIdEndsNative: typeof itemId === 'string' && itemId.endsWith(`${message}:0`),
+            itemIdPrefixChars: typeof itemId === 'string' && itemId.endsWith(`${message}:0`) ? itemId.length - message.length - 2 : null,
+            textKind: own(item, 'kind') === 'text', plainFormat: own(item, 'format') === 'plain',
+            textDescriptor: descriptorType(item, 'text'), textType: valueType(body), textChars: typeof body === 'string' ? body.length : null });
+        }
+        // During a live reply Claude retains this exact witnessed temporary
+        // wrapper on turn.id while the mounted row and sole item already have
+        // their real UUID. No other prefix, suffix or casing is normalized.
+        const turnId = own(turn, 'id');
+        if ((turnId !== message && turnId !== `new-human-message-uuid-${message}`) || own(turn, 'role') !== 'user') return [];
         const items = own(turn, 'items');
         if (!Array.isArray(items) || items.length !== 1) return [];
         const item = own(items, '0'), text = own(item, 'text');
-        return own(item, 'kind') === 'text' && own(item, 'id') === `${message}:0` && own(item, 'format') === 'plain' &&
-          typeof text === 'string' && text.length > 0 && text.length <= 240000 ? [{ text }] : [];
+        const eligible = own(item, 'kind') === 'text' && own(item, 'id') === `${message}:0` && own(item, 'format') === 'plain' &&
+          typeof text === 'string' && text.length > 0 && text.length <= 240000;
+        if (eligible) counts.eligibleSources++;
+        return eligible ? [{ text }] : [];
       });
     });
     const source = uniqueValue(sources);
+    userSourceTrace(node, { at: Date.now(), props: props.length, ...counts, samples }, Boolean(source));
     if (!source) { diagnostic('source-unavailable', { props: props.length, candidates: sources.length,
       fiberKeys: Object.getOwnPropertyNames(node).filter(key => key.startsWith('__reactFiber$')).length }); return null; }
     let token = node.getAttribute('data-clf-claude-user-token');
