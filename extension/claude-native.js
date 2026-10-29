@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 4;
+  const VERSION = 5;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -26,11 +26,45 @@
   function propsAt(node) {
     const keys = Object.getOwnPropertyNames(node).filter(key => key.startsWith('__reactFiber$'));
     if (keys.length !== 1) return [];
-    const result = [], seen = new Set(); let fiber = own(node, keys[0]);
-    for (let count = 0; fiber && count < 40 && !seen.has(fiber); count++) {
-      seen.add(fiber); const props = own(fiber, 'memoizedProps');
+    const path = [], seen = new Set(); let fiber = own(node, keys[0]), base = null, paired = false;
+    // A mounted DOM pointer can retain React's previous render. Prove the same
+    // committed root/child path used by the existing provider recorder; never
+    // merge arbitrary alternate props or mutate React's return links.
+    while (fiber && path.length < 2048) {
+      if (seen.has(fiber)) return [];
+      seen.add(fiber); const alternate = own(fiber, 'alternate'); paired ||= Boolean(alternate);
+      if (own(fiber, 'tag') === 3) {
+        const root = own(fiber, 'stateNode'), current = own(root, 'current');
+        if (!current || current !== fiber && current !== alternate) return [];
+        base = { root, current, node: current }; break;
+      }
+      path.push(fiber); fiber = own(fiber, 'return');
+    }
+    let committed;
+    if (!base) {
+      // Older unpaired public owner facades have no root bookkeeping. Real or
+      // double-buffered React fibers must always prove their committed root.
+      if (fiber || paired || path.some(value => typeof own(value, 'tag') === 'number')) return [];
+      committed = path;
+    } else {
+      committed = [base.current]; let budget = 4096;
+      for (let index = path.length - 1; index >= 0; index--) {
+        const wanted = path[index], alternate = own(wanted, 'alternate'); let selected = null;
+        for (let child = own(base.node, 'child'); child; child = own(child, 'sibling')) {
+          if (--budget < 0) return [];
+          if (child !== wanted && child !== alternate) continue;
+          if (selected) return []; selected = child;
+        }
+        if (!selected || own(base.root, 'current') !== base.current) return [];
+        committed.push(selected); base.node = selected;
+      }
+      if (own(base.node, 'stateNode') !== node) return [];
+      committed.reverse();
+    }
+    const result = [];
+    for (const fiber of committed.slice(0, 40)) {
+      const props = own(fiber, 'memoizedProps');
       if (props && typeof props === 'object') result.push(props);
-      fiber = own(fiber, 'return');
     }
     return result;
   }

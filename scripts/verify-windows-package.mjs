@@ -11,6 +11,8 @@ const browserCredentialFile = /(?:^|\/)(?:Cookies(?:-journal)?|Login Data(?:-jou
 // Vendor modules legitimately contain source directories named cookies. Browser databases
 // are files; never exempt an entire vendor subtree from the private-file audit.
 const isPrivate = (label, isDirectory) => privatePath.test(label) || !isDirectory && browserCredentialFile.test(label);
+const skillFiles = new Set(['skills/onecode-gemini/SKILL.md', 'skills/onecode-chatgpt/SKILL.md', 'skills/onecode-claude/SKILL.md']);
+const skillDirectories = new Set(['skills', ...[...skillFiles].map(file => path.posix.dirname(file))]);
 const developerPath = /(?:[A-Z]:(?:\\+|\/+)(?:Gemini Code|OneCode|chat-on-steroids)(?:\\+|\/+)|[A-Z]:(?:\\+|\/+)Users(?:\\+|\/+)(?!(?:you|example|Public|Default)(?:\\+|\/+))[^\\/\r\n"'<>]+(?:\\+|\/+))/i;
 function inspectText(bytes, label) {
   if (developerPath.test(bytes.toString('utf8'))) throw new Error(`Developer-specific path in packaged ${label}`);
@@ -49,8 +51,8 @@ export function assertWindowsPackageIsolation(resources) {
       const stat = lstatSync(file);
       if (stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) throw new Error(`Linked/special file in packaged resources: ${label}`);
       if ((label === 'skills' || label.startsWith('skills/')) && !(stat.isDirectory()
-        ? ['skills', 'skills/onecode-gemini', 'skills/onecode-chatgpt'].includes(label)
-        : ['skills/onecode-gemini/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label))) throw new Error(`Unapproved skill resource input: ${label}`);
+        ? skillDirectories.has(label)
+        : skillFiles.has(label))) throw new Error(`Unapproved skill resource input: ${label}`);
       if (label.startsWith('updater/') && (stat.isDirectory() || !['updater/windows-update-helper.cjs', 'updater/hotfix-contract.cjs', 'updater/runtime.json', 'updater/legacy-relaunch.ps1', 'updater/app-update.yml'].includes(label)))
         throw new Error(`Unapproved updater resource input: ${label}`);
       if (label === 'updater/runtime.json') hotfixContract.runtime(JSON.parse(readFileSync(file, 'utf8')));
@@ -58,7 +60,7 @@ export function assertWindowsPackageIsolation(resources) {
         throw new Error('Updater resource configuration differs from the active feed');
       if (isPrivate(label, stat.isDirectory())) throw new Error(`Private profile/credential file in packaged resources: ${label}`);
       if (stat.isDirectory()) visit(file, label);
-      else if ((label.startsWith('extension/') || label.startsWith('updater/') || label === 'WINDOWS-SETUP.md' || ['skills/onecode-gemini/SKILL.md', 'skills/onecode-chatgpt/SKILL.md'].includes(label)) && /\.(?:js|cjs|ps1|json|html|css|md|txt)$/i.test(label)) {
+      else if ((label.startsWith('extension/') || label.startsWith('updater/') || label === 'WINDOWS-SETUP.md' || skillFiles.has(label)) && /\.(?:js|cjs|ps1|json|html|css|md|txt)$/i.test(label)) {
         inspectText(readFileSync(file), label); ownedFiles++;
       }
     }
