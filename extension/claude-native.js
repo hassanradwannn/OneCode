@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 2;
+  const VERSION = 4;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -38,6 +38,37 @@
     const distinct = [...new Map(values.map(value => [JSON.stringify(value), value])).values()];
     return distinct.length === 1 ? distinct[0] : null;
   };
+  function projectUser(message) {
+    const diagnostic = (stage, flags = {}) => { try { document.documentElement.setAttribute('data-onecode-claude-user-source-diagnostic', JSON.stringify({ stage, ...flags })); } catch { /* Fixed read-only state flags. */ } };
+    const chat = new RegExp(`^/chat/(${UUID})/?$`, 'i').exec(location.pathname)?.[1]?.toLowerCase();
+    if (location.origin !== 'https://claude.ai' || !chat || !uuid.test(message || '')) { diagnostic('route-unavailable'); return null; }
+    const matches = [...document.querySelectorAll('[data-testid="user-message"]')].filter(node => shown(node) &&
+      !node.parentElement?.closest('[data-testid="user-message"],[data-testid="assistant-message"]') &&
+      suffix.exec(node.id || '')?.[1]?.toLowerCase() === message);
+    if (matches.length !== 1) { diagnostic('row-unavailable', { matches: matches.length }); return null; }
+    const node = matches[0];
+    const bodies = node.querySelectorAll(':scope > div.contents').length;
+    if (bodies !== 1) { diagnostic('body-unavailable', { bodies }); return null; }
+    const props = propsAt(node), sources = props.flatMap(props => {
+      const row = own(props, 'row');
+      const candidates = [own(props, 'turn'), own(row, 'kind') === 'turn' ? own(row, 'turn') : null];
+      return candidates.flatMap(turn => {
+        if (own(turn, 'id') !== message || own(turn, 'role') !== 'user') return [];
+        const items = own(turn, 'items');
+        if (!Array.isArray(items) || items.length !== 1) return [];
+        const item = own(items, '0'), text = own(item, 'text');
+        return own(item, 'kind') === 'text' && own(item, 'id') === `${message}:0` && own(item, 'format') === 'plain' &&
+          typeof text === 'string' && text.length > 0 && text.length <= 240000 ? [{ text }] : [];
+      });
+    });
+    const source = uniqueValue(sources);
+    if (!source) { diagnostic('source-unavailable', { props: props.length, candidates: sources.length,
+      fiberKeys: Object.getOwnPropertyNames(node).filter(key => key.startsWith('__reactFiber$')).length }); return null; }
+    let token = node.getAttribute('data-clf-claude-user-token');
+    if (!uuid.test(token || '')) { token = crypto.randomUUID(); node.setAttribute('data-clf-claude-user-token', token); }
+    diagnostic('ready', { props: props.length, candidates: sources.length });
+    return { conversation: chat, message, token, text: source.text };
+  }
   function projectComposer() {
     if (location.origin !== 'https://claude.ai') return null;
     const boxes = [...document.querySelectorAll('[data-testid="chat-input"][data-cds="Editor"][contenteditable="true"][role="textbox"][aria-label="Write your prompt to Claude"]')].filter(shown);
@@ -122,8 +153,13 @@
     return { cards, viewer: { ...sources, ...owner, token: selected[0].token } };
   }
   const receive = event => {
-    if (event.source !== window || event.origin !== location.origin || !['onecode-claude-file-read', 'onecode-claude-composer-read'].includes(event.data?.type) ||
+    if (event.source !== window || event.origin !== location.origin || !['onecode-claude-file-read', 'onecode-claude-composer-read', 'onecode-claude-user-read'].includes(event.data?.type) ||
         !/^[0-9a-f-]{36}$/.test(event.data.nonce || '')) return;
+    if (event.data.type === 'onecode-claude-user-read') {
+      let user; try { user = projectUser(event.data.message); } catch { user = null; }
+      window.postMessage({ type: 'onecode-claude-user-read-result', nonce: event.data.nonce, path: location.pathname, user }, location.origin);
+      return;
+    }
     if (event.data.type === 'onecode-claude-composer-read') {
       let composer; try { composer = projectComposer(); } catch { composer = null; }
       window.postMessage({ type: 'onecode-claude-composer-read-result', nonce: event.data.nonce, path: location.pathname, composer }, location.origin);

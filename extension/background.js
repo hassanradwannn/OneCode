@@ -1254,7 +1254,11 @@ async function hello(candidate) {
     // hold up discovery for longer than a packaged file read takes.
     await Promise.race([workerStampReady, new Promise(resolve => setTimeout(resolve, 500))]);
     const nativePlatform = await nativeBrowserPlatform();
-    const response = await fetchBounded(`http://127.0.0.1:${candidate}/hello`, {
+    const credential = token, intent = connectionEpoch;
+    const identifies = body => body && body.app === 'onecode' && nativePlatform !== null && body.platform === nativePlatform &&
+      Number.isSafeInteger(body.bridge) && body.bridge >= 0 && typeof body.version === 'string' && body.version.length > 0 && body.version.length <= 80;
+    const endpoint = `http://127.0.0.1:${candidate}/hello`;
+    const response = await fetchBounded(endpoint, {
       cache: 'no-store',
       headers: versionHeaders()
     }, HELLO_TIMEOUT_MS);
@@ -1263,7 +1267,17 @@ async function hello(candidate) {
     // WSL can forward a Linux loopback listener into Windows while its own app is
     // closed. Do not attach, re-pair or import another OS's conversations through it.
     // Missing platform evidence cannot prove that a legacy listener is on this OS.
-    return body && body.app === 'onecode' && nativePlatform !== null && body.platform === nativePlatform ? body : null;
+    if (!identifies(body)) return null;
+    if (!credential || disconnected) return body;
+    if (token !== credential || connectionEpoch !== intent) return null;
+    // Identify the native app before forwarding an existing credential to any
+    // candidate port. This second greeting proves ownership without pairing,
+    // presence, or a read of queued work; unrelated HTTP listeners see no token.
+    const proof = await fetchBounded(endpoint, { cache: 'no-store', headers: { ...versionHeaders(), authorization: `Bearer ${credential}` } }, HELLO_TIMEOUT_MS);
+    if (!proof.ok) return null;
+    const owned = await proof.json();
+    return token === credential && connectionEpoch === intent && !disconnected && identifies(owned) &&
+      owned.bridge === body.bridge && owned.version === body.version ? owned : null;
   } catch {
     return null;
   }
@@ -1327,30 +1341,56 @@ function discover(force = false) {
 
 async function discoverNow(force) {
   await load();
+  const credential = token, intent = connectionEpoch, boundPort = port;
+  const current = () => token === credential && connectionEpoch === intent;
+  let incompatible = null;
+  const inspected = new Set();
+  const compatible = body => body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
+  // Missing evidence is accepted only for the same legacy endpoint this browser
+  // already retained. Protocol compatibility alone cannot choose another install.
+  const owner = (candidate, body) => !credential || body.credentialMatches === true ||
+    candidate === boundPort && body.credentialMatches === undefined;
+  const accept = async (candidate, body) => {
+    if (!current()) return null;
+    if (body.disconnected === true) await latchAppDisconnect();
+    port = candidate;
+    portCheckedAt = Date.now();
+    portCompatible = compatible(body);
+    appVersion = typeof body.version === 'string' ? body.version : null;
+    appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
+    await persist();
+    return { port, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
+  };
   if (port !== null && !force) {
-    if (Date.now() - portCheckedAt < PORT_TRUST_MS) return { port, paired: token !== null, compatible: portCompatible !== false, version: appVersion, bridge: appProtocol };
+    if (Date.now() - portCheckedAt < PORT_TRUST_MS && portCompatible !== false) return { port, paired: token !== null, compatible: true, version: appVersion, bridge: appProtocol };
+    inspected.add(port);
     const body = await hello(port);
+    if (!current()) return null;
     if (body) {
-      if (body.disconnected === true) await latchAppDisconnect();
-      portCheckedAt = Date.now();
-      portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
-      appVersion = typeof body.version === 'string' ? body.version : null;
-      appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
-      return { port, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
+      if (body.credentialMatches === true || compatible(body) && owner(port, body)) return accept(port, body);
+      if (!compatible(body)) incompatible = { candidate: port, body };
     }
   }
   for (const candidate of PORTS) {
+    if (inspected.has(candidate)) continue;
     const body = await hello(candidate);
+    if (!current()) return null;
     if (body) {
-      if (body.disconnected === true) await latchAppDisconnect();
-      port = candidate;
-      portCheckedAt = Date.now();
-      portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
-      appVersion = typeof body.version === 'string' ? body.version : null;
-      appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
-      await persist();
-      return { port: candidate, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
+      if (body.credentialMatches === true || compatible(body) && owner(candidate, body)) return accept(candidate, body);
+      if (!compatible(body)) incompatible ??= { candidate, body };
     }
+  }
+  // A retained port or an earlier listener may belong to another installed lane.
+  // Keep mismatch diagnostics only after checking for a compatible native app;
+  // an incompatible neighbour cannot pin discovery or revoke this connection.
+  if (incompatible) {
+    if (owner(incompatible.candidate, incompatible.body)) return accept(incompatible.candidate, incompatible.body);
+    // An unrelated listener may explain a protocol mismatch but never replaces
+    // the retained endpoint, clears Disconnect, or earns automatic pairing.
+    portCheckedAt = 0; portCompatible = false;
+    return { port: incompatible.candidate, paired: false, compatible: false,
+      version: typeof incompatible.body.version === 'string' ? incompatible.body.version : null,
+      bridge: Number.isFinite(Number(incompatible.body.bridge)) ? Number(incompatible.body.bridge) : null };
   }
   port = null;
   portCheckedAt = 0;
@@ -6259,7 +6299,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 109;
+const PAGE_RECORDER_VERSION = 111;
 
 let deferredRecoveryWork = null;
 

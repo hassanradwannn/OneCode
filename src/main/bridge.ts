@@ -864,7 +864,7 @@ let extensionBuildSeen: string | null = null;
  */
 const announcedExtensions = new Map<string, number>();
 const EXTENSION_ANNOUNCE_MS = 30 * 60_000;
-/** When each extension build last made a request, to tell a stale companion from a lone one. */
+/** Authenticated compatible sightings only; discovery announcements grant no work priority. */
 const extensionBuildSeenAt = new Map<string, number>();
 const STALE_COMPANION_WINDOW_MS = 60_000;
 
@@ -1377,6 +1377,12 @@ function changed(): void {
 
 export async function bridgeStatus(): Promise<BridgeStatus> {
   const stored = await getSecret('bridgeToken');
+  // Discovery announcements are diagnostics, not the live selected browser.
+  // Another installation/profile can probe this port before its protocol fence.
+  const liveExternal = getConfig().ui.chatBrowser !== 'cos' && externalExtensionPresent() ? externalExtension : null;
+  const liveVersion = liveExternal?.version ?? extensionVersion;
+  const liveProtocol = liveExternal ? liveExternal.protocol ?? null : extensionProtocolSeen;
+  const liveBuild = liveExternal ? liveExternal.build ?? null : extensionBuildSeen;
   return {
     running: server !== null,
     portOverridden: bridgePortSelection().overridden,
@@ -1388,10 +1394,10 @@ export async function bridgeStatus(): Promise<BridgeStatus> {
     // tab open went "missing" a minute after start although it was connected all along.
     present: browserPresent() || browserWakeConnected(),
     lastSeenAt,
-    extensionVersion,
-    extensionUpdateRequired: !!extensionVersion && !isNewer(extensionVersion, APP_VERSION) &&
-      ((extensionProtocolSeen !== null && extensionProtocolSeen !== BRIDGE_PROTOCOL) ||
-        !!(extensionBuildSeen && shippedExtensionBuild() && extensionBuildSeen !== shippedExtensionBuild())),
+    extensionVersion: liveVersion,
+    extensionUpdateRequired: !!liveVersion && !isNewer(liveVersion, APP_VERSION) &&
+      ((liveProtocol !== null && liveProtocol !== BRIDGE_PROTOCOL) ||
+        !!(liveBuild && shippedExtensionBuild() && liveBuild !== shippedExtensionBuild())),
     externalExtension: externalExtensionStatus(),
     cosExtension: { present: cosExtensionPresent() }
   };
@@ -1433,7 +1439,7 @@ export function browserWakeConnected(): boolean { return browserWake?.connected(
  * Version observations do not grant presence. Old peers without a host header are unknown:
  * an older built-in worker also lacks that header and must not complete external Setup.
  */
-let externalExtension: { seenAt: number | null; version: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko'; chatgptAccess?: boolean; provider?: ChatProvider } | null = null;
+let externalExtension: { seenAt: number | null; version: string | null; protocol?: number | null; build?: string | null; browserId?: string; signedIn?: boolean | null; loginAt?: number; engine?: 'gecko'; chatgptAccess?: boolean; provider?: ChatProvider } | null = null;
 
 /** The CoS browser's own copy of the extension, last heard from: its sign-in step needs it connected. */
 let cosExtensionSeenAt: number | null = null;
@@ -1485,7 +1491,8 @@ function noteExternalExtension(req: http.IncomingMessage): boolean {
   const appeared = !sameBrowser || externalExtension?.version !== version;
   // Firefox runs a signed add-on it updates itself (x-extension-engine: gecko); Chromium sends none.
   const engine = req.headers['x-extension-engine'] === 'gecko' ? 'gecko' as const : undefined;
-  externalExtension = { ...(sameBrowser ? externalExtension : {}), seenAt: Date.now(), version, browserId, engine };
+  externalExtension = { ...(sameBrowser ? externalExtension : {}), seenAt: Date.now(), version,
+    protocol: extensionProtocol(req), build: extensionBuildOf(req), browserId, engine };
   // Lasting evidence for Setup: this browser has the extension, in this version.
   const proved = browserId !== undefined && version !== null && noteExternalInstalled(browserId, version);
   return appeared || proved;
@@ -1520,6 +1527,12 @@ function scheduleBrowserPresence(): void {
 }
 
 function noteBrowserSeen(req: http.IncomingMessage): boolean {
+  const stamp = extensionBuildOf(req);
+  if (stamp) {
+    extensionBuildSeenAt.delete(stamp);
+    extensionBuildSeenAt.set(stamp, Date.now());
+    if (extensionBuildSeenAt.size > 16) extensionBuildSeenAt.delete(extensionBuildSeenAt.keys().next().value!);
+  }
   const externalAppeared = noteExternalExtension(req);
   const wasPresent = browserPresent();
   lastSeenAt = Date.now();
@@ -1662,13 +1675,9 @@ function noteExtensionVersion(req: http.IncomingMessage): void {
   const version = req.headers['x-extension-version'];
   const protocol = extensionProtocol(req);
   const stamp = extensionBuildOf(req);
-  if (stamp) {
-    extensionBuildSeenAt.delete(stamp);
-    extensionBuildSeenAt.set(stamp, Date.now());
-    if (extensionBuildSeenAt.size > 16) extensionBuildSeenAt.delete(extensionBuildSeenAt.keys().next().value!);
-  }
   if (typeof version !== 'string') return warnProtocol(protocol);
-  const externalChanged = req.headers['x-extension-host'] === 'browser' && externalExtension?.version !== version.slice(0, 32) && !keepsExternalRecord(req);
+  const externalChanged = req.headers['x-extension-host'] === 'browser' && !externalExtensionPresent() &&
+    externalExtension?.version !== version.slice(0, 32) && !keepsExternalRecord(req);
   if (externalChanged) externalExtension = { version: version.slice(0, 32), seenAt: null };
   extensionVersion = version.slice(0, 32);
   extensionProtocolSeen = protocol;
@@ -2839,7 +2848,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Unknown, not incompatible, for a caller that states no protocol (curl in a bug report).
         compatible: extensionProtocol(req) === null ? null : !foreignHost && protocolCompatible(req),
         paired: stored !== null && stored !== BROWSER_DISCONNECTED,
-        disconnected: stored === BROWSER_DISCONNECTED
+        disconnected: stored === BROWSER_DISCONNECTED,
+        // Discovery may identify only the installation that already owns this retained
+        // credential. No pairing, presence or task work is performed by this comparison.
+        ...(req.headers.authorization?.startsWith('Bearer ') ? { credentialMatches: await authorised(req) } : {})
       },
       origin
     );

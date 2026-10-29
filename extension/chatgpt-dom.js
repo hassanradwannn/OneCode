@@ -3306,14 +3306,18 @@ var CLF_DOM = (() => {
     if (!stillCurrent()) return false;
     if (requestedSurface !== undefined && requestedSurface !== 'chat' && requestedSurface !== 'work') return false;
     const before = state();
+    const readyComposer = () => {
+      const editor = composer();
+      return editor && composerVisible() && composerWritable() && editor.closest('form') ? editor : null;
+    };
     // Existing ordinary conversations do not expose the new-chat surface toggle.
-    if (!before) return radios().length === 0;
+    if (!before) return radios().length === 0 && Boolean(readyComposer());
     const desired = requestedSurface === 'chat' ? 'chat' : requestedSurface === 'work' ? 'work' : null;
     const selected = before.chat.getAttribute('aria-checked') === 'true' && before.work.getAttribute('aria-checked') === 'false' ? 'chat'
       : before.work.getAttribute('aria-checked') === 'true' && before.chat.getAttribute('aria-checked') === 'false' ? 'work' : null;
     if (!selected) return false;
     if (desired && selected !== desired) return activate(desired);
-    if (selected === 'chat') return true;
+    if (selected === 'chat') return Boolean(readyComposer());
     if (before.work.getAttribute('aria-checked') !== 'true') return false;
     const editor = composer(), form = editor?.closest('form'), route = location.pathname;
     if (!editor || !form) return false;
@@ -3347,12 +3351,18 @@ var CLF_DOM = (() => {
             const next = state(), editor = composer();
             if (!next || !editor || !composerVisible() || next[surface].getAttribute('aria-checked') !== 'true' ||
                 next[surface === 'chat' ? 'work' : 'chat'].getAttribute('aria-checked') !== 'false') return;
+            // Chat may expose only its native High control, with no model picker.
+            // Mode readiness proves the clicked native pair and its idle composer,
+            // never model availability. Exact named selections keep their separate
+            // picker/native selection proof before Send.
+            if (surface === 'chat') return finish(Boolean(current() && next.chat === before.chat && next.work === before.work &&
+              readyComposer() === editor && editor.closest('form') === form && form.isConnected));
             reading = true;
             const evaluated = await readPickerState(); reading = false;
             if (done) return;
             if (!current()) return finish(false);
-            const native = modelPickerTrigger(), form = editor.closest('form');
-            if (composer() === editor && evaluated?.nativeSurface === surface && native && form?.contains(native) && native.getAttribute('data-clf-picker-route') === route) finish(true);
+            const native = modelPickerTrigger(), currentForm = editor.closest('form');
+            if (composer() === editor && evaluated?.nativeSurface === surface && native && currentForm?.contains(native) && native.getAttribute('data-clf-picker-route') === route) finish(true);
           };
           const observer = new MutationObserver(schedule); observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
           const timer = setTimeout(() => finish(false), 5000); void check();

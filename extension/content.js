@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 109;
+  const RECORDER_VERSION = 111;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -3752,6 +3752,9 @@
       void refreshFiber(null, true).finally(() => { mediaRefresh = false; });
     };
     listen(document, 'load', refreshLoadedMedia, true);
+    if (CLF_DOM.provider === 'claude') listen(document, 'onecode-claude-user-ready', () => {
+      if (recorderHandle.healthy() && sameChat()) { observe(); void flush(); }
+    });
     let timer = null;
     let urgentQueued = false;
     let idlePresentationPending = false;

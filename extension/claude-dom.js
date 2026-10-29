@@ -128,10 +128,59 @@ var CLF_DOM = (() => {
     return [{ id: turn.id, role: turn.role, text: value, turnId: turn.id, node: turn.node, interrupted: false }];
   }
   const messages = () => { const seen = new Set(); return turns().flatMap((turn, at) => messagesIn(turn, at, seen)); };
+  const nativeUserText = new WeakMap();
+  let nativeUserReceiptRead = null;
+  function nativeUserBody(root, id) {
+    const node = root.parentElement, route = location.pathname, signature = root.innerHTML;
+    if (!root.isConnected || turnIdOf(node) !== id) return null;
+    let state = nativeUserText.get(node);
+    if (state?.route !== route || state?.signature !== signature) {
+      clearTimeout(state?.retry);
+      state = { route, signature, attempts: 0, pending: false, text: null, last: 0, until: Date.now() + 30000, retry: null };
+      nativeUserText.set(node, state);
+    }
+    const receipt = nativeUserReceiptRead;
+    if (receipt && !receipt.prior.has(id) && receipt.current()) state.until = Math.max(state.until, receipt.until);
+    if (state.text !== null) return state.text;
+    if (state.pending || Date.now() >= state.until || Date.now() - state.last < 250) return null;
+    clearTimeout(state.retry); state.retry = null;
+    state.pending = true; state.attempts++; state.last = Date.now();
+    const diagnostic = stage => { try { node.setAttribute('data-onecode-claude-user-read-diagnostic', JSON.stringify({ stage, attempts: state.attempts })); } catch { /* Fixed read-only counters. */ } };
+    diagnostic('reading');
+    const nonce = crypto.randomUUID(), native = nativeSuffix.exec(node.id || '')?.[1]?.toLowerCase();
+    let timer;
+    const finish = value => {
+      clearTimeout(timer); window.removeEventListener('message', receive); state.pending = false;
+      if (!node.isConnected || location.pathname !== route || turnIdOf(node) !== id || root.innerHTML !== signature || nativeUserText.get(node) !== state) return;
+      if (value === null) {
+        // React's public turn props can hydrate without changing its already
+        // mounted HTML. A few early reads must not permanently retire that row.
+        const delay = Math.min(2000, 250 * 2 ** Math.min(state.attempts - 1, 3));
+        if (Date.now() + delay < state.until) { diagnostic('waiting-for-source'); state.retry = setTimeout(() => nativeUserBody(root, id), delay); }
+        else diagnostic('source-deadline');
+        return;
+      }
+      state.text = value;
+      diagnostic('ready');
+      document.dispatchEvent(new Event('onecode-claude-user-ready'));
+    };
+    const receive = event => {
+      if (event.source !== window || event.origin !== location.origin || event.data?.type !== 'onecode-claude-user-read-result' || event.data.nonce !== nonce) return;
+      const proof = event.data.user;
+      finish(event.data.path === route && proof && `claude:${proof.conversation}` === conversationId() && proof.message === native &&
+        uuid.test(proof.token || '') && node.getAttribute('data-clf-claude-user-token') === proof.token &&
+        typeof proof.text === 'string' && proof.text.length > 0 && proof.text.length <= 240000 ? clean(proof.text) : null);
+    };
+    window.addEventListener('message', receive); timer = setTimeout(() => finish(null), 2000);
+    window.postMessage({ type: 'onecode-claude-user-read', nonce, message: native }, location.origin);
+    return null;
+  }
   function userAuthoredText(root, id) {
-    const raw = blockText(root);
+    const source = nativeUserBody(root, id);
+    const raw = source ?? blockText(root);
     const chips = all(sentSkillGroup, root).filter(wrapper => {
-      const buttons = all(':scope > span[role="button"][type="button"][tabindex="0"][data-base-ui-click-trigger][aria-haspopup="dialog"]', wrapper);
+      const buttons = all(':scope > span[role="button"][type="button"][data-base-ui-click-trigger][aria-haspopup="dialog"]', wrapper)
+        .filter(node => ['0', '-1'].includes(node.getAttribute('tabindex')));
       if (buttons.length !== 1 || compact(buttons[0].textContent) !== '/onecode') return false;
       const slash = all('span[aria-hidden="true"]', buttons[0]).filter(node => compact(node.textContent) === '/');
       if (slash.length !== 1) return false;
@@ -144,13 +193,21 @@ var CLF_DOM = (() => {
     const candidate = blockText(copy), accepted = acceptedSkillQuestions.get(id);
     const outgoing = outgoingSkill && outgoingSkill.current() && !outgoingSkill.prior.has(id) &&
       (!outgoingSkill.conversation || id.startsWith(`${outgoingSkill.conversation}:user:`)) ? outgoingSkill : null;
+    // The native plain item serializes the positively selected chip as this
+    // exact witnessed prefix. Its remaining original bytes, not flattened DOM
+    // whitespace, must match this Send's frozen task before removing it.
+    const authoredSource = source?.startsWith('/onecode ') ? source.slice('/onecode '.length) : null;
+    if (authoredSource !== null && (accepted && authoredSource === accepted || outgoing && authoredSource === outgoing.expected)) {
+      if (outgoing) { acceptedSkillQuestions.set(id, authoredSource); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
+      return authoredSource;
+    }
     if (accepted && candidate === accepted || outgoing && candidate === outgoing.expected) {
       if (outgoing) { acceptedSkillQuestions.set(id, candidate); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
       return candidate;
     }
     // Reloaded historical presentation can recognize the same native chip and
     // an intact app frame. This never marks a skill selected or authorizes Send.
-    return userPromptText(candidate) !== null ? candidate : raw;
+    return source ?? (userPromptText(candidate) !== null ? candidate : raw);
   }
   function waitFor(read, current, timeout = 15000) {
     return new Promise(resolve => {
@@ -203,9 +260,14 @@ var CLF_DOM = (() => {
       rebind: () => { if (retired || !current() || composerAuthoredText() !== clean(expected)) return false; box = composer(); return Boolean(box); } };
   }
   async function prepareNativeSkill(name, current = () => true) {
-    if (name !== 'onecode' || !current()) return { selected: false };
+    const noteStage = stage => { try { document.documentElement.setAttribute('data-onecode-claude-skill-diagnostic', JSON.stringify({ stage,
+      composers: all(BOX).filter(shown).length, chips: composer() ? all(skillChipSelector, composer()).length : 0,
+      slashMenus: all('[data-cds-portal] [role="menu"][data-positioning="native-anchor"]').filter(shown).length })); } catch { /* Fixed native-state flags only. */ } };
+    const unavailable = stage => { noteStage(stage); return { selected: false }; };
+    if (name !== 'onecode' || !current()) return unavailable('operation-unavailable');
     const box = composer(), route = location.href, conversation = conversationId();
-    if (!box || !composerWritable() || composerAuthoredText() || hasComposerAttachments() || all(skillChipSelector, box).length) return { selected: false };
+    if (!box || !composerWritable()) return unavailable('editor-unavailable');
+    if (composerAuthoredText() || hasComposerAttachments() || all(skillChipSelector, box).length) return unavailable('composer-not-empty');
     const questions = messages().filter(row => row.role === 'user').map(row => row.id).join('\u0000');
     let interrupted = false, performing = false, success = false;
     const act = run => { performing = true; try { return run(); } finally { performing = false; } };
@@ -216,19 +278,20 @@ var CLF_DOM = (() => {
       menu.style.getPropertyValue('position-anchor') === '--slash-command-menu' || menu.style.positionAnchor === '--slash-command-menu'));
     for (const type of ['pointerdown', 'keydown', 'beforeinput', 'input']) document.addEventListener(type, note, true);
     try {
-      if (all('[role="menu"]').some(shown) || !act(() => insertPrompt('/', true))) return { selected: false };
+      if (all('[role="menu"]').some(shown)) return unavailable('native-menu-open');
+      if (!act(() => insertPrompt('/', true))) return unavailable('slash-insertion-failed');
       const searching = () => owns() && composerAuthoredText() === '/';
-      const menu = await waitFor(slashMenu, searching, 2500); if (!menu) return { selected: false };
+      const menu = await waitFor(slashMenu, searching, 2500); if (!menu) return unavailable('slash-menu-unavailable');
       const row = await waitFor(() => unique(all('[role="menuitem"]', menu).filter(item => item.closest('[role="menu"]') === menu &&
         enabled(item) && leadingName(item) === name)), searching, 2000);
-      if (!row || !searching()) return { selected: false };
+      if (!row || !searching()) return unavailable('skill-row-unavailable');
       act(() => row.click());
       const token = await waitFor(() => {
         const candidates = all(skillChipSelector, box).filter(node => shown(node) && compact(node.textContent) === '/onecode' &&
           all('[data-node-view-wrapper][contenteditable="false"]', node).length === 1);
         return candidates.length === 1 ? candidates[0] : null;
       }, owns, 2500);
-      if (!token || !owns()) return { selected: false };
+      if (!token || !owns()) return unavailable('skill-token-unconfirmed');
       const proof = { name, token, box, route, questions, current, expected: '', revoked: false, editing: false,
         account: document.querySelector('button[data-testid="user-menu-button"]') };
       const editTypes = ['beforeinput', 'input', 'keydown', 'pointerdown'];
@@ -243,8 +306,9 @@ var CLF_DOM = (() => {
       activeNativeSkill = proof;
       for (const type of editTypes) document.addEventListener(type, noteEdit, true);
       nativeSkillSelections.set(box, proof);
-      if (composerAuthoredText()) { proof.dispose(); return { selected: false }; }
+      if (composerAuthoredText()) { proof.dispose(); return unavailable('selected-draft-changed'); }
       success = true;
+      noteStage('selected');
       return { selected: true, current: () => skillSelection() === proof, dispose: proof.dispose };
     } finally {
       if (!success && owns() && !all(skillChipSelector, box).length) {
@@ -510,7 +574,7 @@ var CLF_DOM = (() => {
     if (!box || !submitted || !composerWritable() || !stillCurrent() || initialDraft && !initialDraft.current()) return refuse('editor-not-ready');
     if (generating() && !whileGenerating) return refuse('page-busy');
     if (whileGenerating && (!start || typeof acceptUserReceipt !== 'function')) return refuse('page-busy');
-    let edited = false, clicked = false, stopped = false;
+    let edited = false, clicked = false, stopped = false, rawRead = null;
     const prior = new Set(messages().filter(row => row.role === 'user').map(row => row.id));
     const noteEdit = event => { if (event.isTrusted && (event.target?.closest?.(BOX) ||
       event.type === 'click' && (event.target?.closest?.('[role="menu"]') || event.target?.closest?.('button') === attachButton()))) edited = true; };
@@ -533,6 +597,8 @@ var CLF_DOM = (() => {
       const button = sendButton();
       if (!current() || !enabled(button) || button !== ready) return refuse('draft-changed');
       if (skillSelection(box)) outgoingSkill = { expected: submitted, prior, conversation: start, current: stillCurrent };
+      rawRead = { prior, current: () => !edited && stillCurrent(), until: Date.now() + (receiptTimeoutMs || 180000) };
+      nativeUserReceiptRead = rawRead;
       onSendAttempt?.(); clicked = true; button.click();
       let elected = start;
       const accepted = await waitFor(() => {
@@ -550,7 +616,10 @@ var CLF_DOM = (() => {
       if (clearAcceptedDraft && composer() === box && composerAuthoredText() === submitted && stillCurrent()) clearPromptExact(submitted);
       return true;
     } catch { return refuse(clicked ? 'send-acceptance-unconfirmed' : 'page-unavailable'); }
-    finally { for (const type of ['beforeinput', 'input', 'click']) document.removeEventListener(type, noteEdit, true); }
+    finally {
+      if (nativeUserReceiptRead === rawRead) nativeUserReceiptRead = null;
+      for (const type of ['beforeinput', 'input', 'click']) document.removeEventListener(type, noteEdit, true);
+    }
   }
   const conversationTitle = () => document.title.replace(/\s*[-–|]\s*Claude\s*$/, '').trim();
   const newChatControl = async (current = () => true) => current() ? unique(all('a[href="/new"][aria-label="New chat"],a[href="/new"][data-testid="new-chat-button"]')) : null;

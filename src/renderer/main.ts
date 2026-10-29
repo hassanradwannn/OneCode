@@ -1540,12 +1540,15 @@ function apply(next: AppState): void {
   applying = true;
   const { config } = next;
   const status = presentedStatus(next.status);
+  const tailscale = tailscaleSetupView(next);
+  const actionRequired = tailscale?.actionRequired === true;
+  const statusText = actionRequired ? 'Action needed' : STATUS_TEXT[status.state];
 
   const connected = status.state === 'connected';
   const offline = status.state === 'offline';
   const disconnecting = status.state === 'disconnecting';
-  const busy = disconnecting || status.state === 'starting-server' || status.state === 'connecting-tunnel';
-  const failed = status.state === 'auth-failed' || status.state === 'tunnel-unavailable';
+  const busy = !actionRequired && (disconnecting || status.state === 'starting-server' || status.state === 'connecting-tunnel');
+  const failed = actionRequired || status.state === 'auth-failed' || status.state === 'tunnel-unavailable';
   const running = isRunning(status.state);
   // The tunnel field is filled before Setup is judged: what is missing reads the fields, so that
   // drafts count, and on the first paint an unfilled field made a finished setup look unfinished.
@@ -1560,7 +1563,7 @@ function apply(next: AppState): void {
   // Connected, it is a quiet dot. Otherwise it opens to say what to do or what is happening: Connect,
   // Connecting…, or what went wrong. Its label keeps the last words while it closes, so the text
   // fades with the width instead of vanishing first.
-  const connectionTone = connected ? 'is-connected' : offline ? 'is-offline' : busy ? 'is-busy' : failed ? 'is-error' : '';
+  const connectionTone = actionRequired ? 'is-error' : connected ? 'is-connected' : offline ? 'is-offline' : busy ? 'is-busy' : failed ? 'is-error' : '';
   const sidebarConnection = $('sidebarConnection');
   const wasConnected = sidebarConnection.classList.contains('is-connected');
   // Disconnecting is work in progress like connecting: the capsule says so with the same light and sheen,
@@ -1574,7 +1577,7 @@ function apply(next: AppState): void {
   const label = $('sidebarConnectionLabel');
   const capsuleWords = (): string => disconnecting ? t('Disconnecting…') : busy ? t('Connecting…')
     // A failure says so in one short word; its reason is in the title and the details.
-    : offline ? t(STATUS_TEXT[status.state]) : failed ? t('Failed') : t('Connect');
+    : actionRequired ? t('Action needed') : offline ? t(STATUS_TEXT[status.state]) : failed ? t('Failed') : t('Connect');
   // Connecting sends several updates with the same words: those change nothing, and a morph under way
   // keeps going. New words morph from what is on screen now, the width mid-way included.
   // Opening from the dot (Disconnecting…) morphs the same way, with no old words to fade.
@@ -1639,13 +1642,13 @@ function apply(next: AppState): void {
       { borderColor: 'color-mix(in srgb, var(--green) 70%, transparent)' }, { borderColor: 'var(--line)' }
     ], { duration: 900, easing: 'ease-out' });
   }
-  if (previousConnectionState !== null && previousConnectionState !== status.state) {
-    ui($('connectionAnnounce'), 'textContent', () => t(STATUS_TEXT[status.state]));
+  if (previousConnectionState !== null) {
+    ui($('connectionAnnounce'), 'textContent', () => t(statusText));
   }
   previousConnectionState = status.state;
   const connectionPopover = $('connectionPopover');
   connectionPopover.className = `connection-popover scroll${capsuleTone ? ` ${capsuleTone}` : ''}`;
-  ui($('connectionPopoverTitle'), 'textContent', () => t(STATUS_TEXT[status.state]));
+  ui($('connectionPopoverTitle'), 'textContent', () => t(statusText));
 
   const id = config.tunnel.tunnelId;
   ui($('headerSub'), 'textContent', () => config.tunnel.kind === 'openai'
@@ -1917,13 +1920,13 @@ function apply(next: AppState): void {
   wizConnect.dataset.tone = tone;
   const pill = $('wizStatusPill');
   pill.dataset.tone = tone;
-  ui(pill, 'textContent', () => t(STATUS_TEXT[status.state]));
+  ui(pill, 'textContent', () => t(statusText));
   const detail = $('wizStatus');
   detail.hidden = !failed || !status.detail;
   ui(detail, 'textContent', () => failed ? status.detail : '');
-  const tailscale = tailscaleSetupView(next);
   $('tailscaleSetup').hidden = tailscale === null;
   if (tailscale) {
+    ui($('tailscaleProvisioningHint'), 'textContent', () => t(tailscale.provisioningHint));
     const setupStep = next.status.tailscale?.setup?.step;
     const action = setupStep && TAILSCALE_SETUP_ACTIONS[setupStep];
     const setupButton = $<HTMLButtonElement>('tailscaleSetupAction'); setupButton.hidden = !action;
@@ -2273,6 +2276,8 @@ function paintClock(): void {
   if (!state) return;
   const { bridge } = state;
   const status = shownStatus(state.status);
+  const actionRequired = tailscaleSetupView(state)?.actionRequired === true;
+  const statusText = actionRequired ? 'Action needed' : STATUS_TEXT[status.state];
   const running = isRunning(status.state);
   const connected = status.state === 'connected';
   const disconnecting = status.state === 'disconnecting';
@@ -2288,26 +2293,26 @@ function paintClock(): void {
   const core = status.surfaces.find((surface) => surface.id === 'core');
   ui($('connectionPopoverConnector'), 'textContent', () => disconnecting ? t('Disconnecting…') : !running
     ? t("Not connected")
-    : core?.lastRequestAt
+    : actionRequired ? t('Action needed') : core?.lastRequestAt
       ? t("Reached")
       : connected
         ? t("waiting")
-        : t(STATUS_TEXT[status.state]));
+        : t(statusText));
   ui($('connectionPopoverBrowser'), 'textContent', () => bridge.present
     ? t("Connected")
     : bridge.paired ? t("Paired · not active") : t("Not connected"));
 
   const connectorRow = $('connectionPopoverConnector').parentElement!;
   const browserRow = $('connectionPopoverBrowser').parentElement!;
-  connectorRow.dataset.tone = connected ? 'ok' : disconnecting ? 'closing' : status.state === 'starting-server' || status.state === 'connecting-tunnel' ? 'wait' : 'bad';
+  connectorRow.dataset.tone = actionRequired ? 'bad' : connected ? 'ok' : disconnecting ? 'closing' : status.state === 'starting-server' || status.state === 'connecting-tunnel' ? 'wait' : 'bad';
   browserRow.dataset.tone = bridge.present ? 'ok' : bridge.paired ? 'wait' : 'bad';
   ui(connectorRow, 'title', () => core?.lastRequestAt ? t("Reached {0}", [ago(core.lastRequestAt)]) : $('connectionPopoverConnector').textContent ?? '');
   ui(browserRow, 'title', () => bridge.lastSeenAt ? t("Seen {0}", [ago(bridge.lastSeenAt)]) : $('connectionPopoverBrowser').textContent ?? '');
   ui($('connectionPopoverTitle'), 'title', () => disconnecting ? t('Closing connection…') : status.handshakeAt !== null ? t("verified {0}", [ago(status.handshakeAt)]) : t("no handshake yet"));
 
   const triggerText = status.handshakeAt !== null && running
-    ? `${t(STATUS_TEXT[status.state])} · ${t("verified {0}", [ago(status.handshakeAt)])}`
-    : t(STATUS_TEXT[status.state]);
+    ? `${t(statusText)} · ${t("verified {0}", [ago(status.handshakeAt)])}`
+    : t(statusText);
   ui($('sidebarConnection'), 'aria-label', () => triggerText);
   ui($('sidebarConnection'), 'title', () => triggerText);
 }
