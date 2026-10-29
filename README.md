@@ -19,7 +19,7 @@ The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, 
 - Show update bytes, known totals, verification and preparation before ready-to-install. Compatible application capsules retain the verified 0.5.9 complete-base chain.
 - Show a Tailscale network wait separately from a failed Funnel permission check while preserving saved route custody.
 
-See [0.8.1 release notes](docs/release-notes/v0.8.1.md) and [verification scope](docs/release-acceptance/v0.8.1.md). Automated checks and native acceptance are recorded separately; final Remote fullscreen, installed Linux updater progress and exhaustive live provider coverage remain pending.
+See [0.8.1 release notes](docs/release-notes/v0.8.1.md) and [verification scope](docs/release-acceptance/v0.8.1.md). Windows and Linux builds passed verification, and Linux download progress was confirmed by the maintainer. Automated checks and native acceptance are recorded separately.
 
 The preceding [0.7.4 release](docs/release-notes/v0.7.4.md) supports both ChatGPT picker layouts, opens new chats in Chat by default, retains explicit Work choices, adds Gemini Thinking levels and reduces avoidable browser preparation delays. These repairs are included.
 
