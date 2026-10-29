@@ -2,7 +2,7 @@ import { isNewer, type AppState, type ChatBrowser } from '../shared/types.js';
 import { $, toast } from './dom.js';
 import { onLanguageChange, t, ui } from './i18n.js';
 import { extensionPicture, quoted, renderExtensionPicture } from './extension-pictures.js';
-import { chatProviderLabel, DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
+import { chatProviderLabel, chatProviderHomeUrl, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { selectedBrowserConnected } from '../shared/browser-readiness.js';
 
 type ExternalBrowser = Exclude<ChatBrowser, 'cos'>;
@@ -24,7 +24,7 @@ type Login = { done: boolean; signedIn: boolean; text(): string };
  * the status never claims a sign-out it did not see.
  */
 export function signInState(state: AppState, where: ChatBrowser, live: boolean,
-  proof: { signedIn: boolean | null; provider?: 'gemini' | 'chatgpt' } | null): Login {
+  proof: { signedIn: boolean | null; provider?: ChatProvider } | null): Login {
   const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
   const providerName = chatProviderLabel(provider);
   if (where === 'cos') {
@@ -116,7 +116,7 @@ export function initBrowserSetup(actions: {
     const browser = state.config.ui.chatBrowser ?? 'chrome';
     const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
     const providerName = chatProviderLabel(provider);
-    const providerHost = provider === 'chatgpt' ? 'chatgpt.com' : 'gemini.google.com';
+    const providerHost = new URL(chatProviderHomeUrl(provider)).hostname;
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;
       initialized = true;

@@ -82,6 +82,8 @@ extraResources:
     to: skills/onecode-chatgpt/SKILL.md
   - from: resources/skills/onecode-gemini/SKILL.md
     to: skills/onecode-gemini/SKILL.md
+  - from: resources/skills/onecode-claude/SKILL.md
+    to: skills/onecode-claude/SKILL.md
 
 npmRebuild: false
 

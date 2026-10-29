@@ -1,3 +1,4 @@
+import type { ChatProvider } from '../../shared/chat-provider.js';
 import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, handoffPromptForLength, type HandoffLength } from '../../shared/handoff.js';
 
 /**
@@ -27,7 +28,7 @@ export function nativeHandoffPrompt(
   includeToolCalls = true,
   handoffPrompt = DEFAULT_HANDOFF_PROMPT,
   length: HandoffLength = DEFAULT_HANDOFF_LENGTH,
-  _provider: 'chatgpt' | 'gemini' = 'chatgpt'
+  _provider: ChatProvider = 'chatgpt'
 ): string {
   const identity = sourceContinuationMarker(token);
   const briefInstructions = handoffPromptForLength(handoffPrompt.trim() || DEFAULT_HANDOFF_PROMPT, length);

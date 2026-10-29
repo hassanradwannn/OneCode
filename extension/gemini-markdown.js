@@ -1,4 +1,4 @@
-/** Preserve semantic formatting from rendered Gemini responses; never replay HTML. */
+/** Preserve semantic formatting from rendered provider responses; never replay HTML. */
 var CLF_GEMINI_MARKDOWN = (() => {
   let serial = 0;
   const omit = 'button,script,style,svg,action-card,remy-confirmation-card,[hidden],[aria-hidden="true"]';
@@ -27,6 +27,17 @@ var CLF_GEMINI_MARKDOWN = (() => {
       if (node.nodeType !== 1) return '';
       if (node.matches(omit) || /(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(node.getAttribute('style') || '')) return '';
       const tag = node.localName;
+      // MathML's explicit TeX annotation is source, while the accompanying
+      // typeset HTML repeats its visual text. Preserve source once for the
+      // existing trusted=false math renderer instead of flattening both copies.
+      if (tag === 'math' || node.matches('.katex,.katex-display')) {
+        const annotations = [...node.querySelectorAll('annotation[encoding="application/x-tex"]')];
+        const tex = annotations.length === 1 ? annotations[0].textContent : null;
+        if (tex && tex.length <= 50000) {
+          const display = node.matches('.katex-display') || node.closest('.katex-display') || node.getAttribute('display') === 'block';
+          return display ? keepBlock(`\\[\n${tex}\n\\]`) : `\\(${tex}\\)`;
+        }
+      }
       if (tag === 'code-block' || tag === 'pre') return code(node);
       if (tag === 'code') {
         const value = node.textContent || '', runs = [...value.matchAll(/`+/g)].map(match => match[0].length);

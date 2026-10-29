@@ -114,6 +114,14 @@ export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint:
     const { diagramBody, diagramStyle } = await import('./artifact-mermaid-preview.js');
     return previewShell(diagramBody(entry.text), diagramStyle, channel);
   }
+  if (kind === 'web' && /\.(?:jsx|tsx|[cm]?js|ts)$/i.test(entry.path)) {
+    const { reactPreview } = await import('./artifact-react-preview.js');
+    const preview = await reactPreview(files, entry.path);
+    const result = previewShell(preview.body, preview.head + `<script>${previewStorageScript()}</script>`, channel);
+    if (new TextEncoder().encode(result).length > 4 * 1024 * 1024)
+      return previewShell('<p role="alert">Component preview exceeds its size limit. The original files remain available in the editor.</p>', '', channel);
+    return result;
+  }
   if (kind === 'web') return webDocument(files, entry.path, channel);
   return previewShell(`<pre>${htmlEscape(entry.text)}</pre>`, '<style>pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace}</style>', channel);
 }

@@ -11,6 +11,7 @@ interface NativeOutputAdapter {
   /** The actual browser export representation, independently of normalized admission. */
   exports: Readonly<Record<'image' | 'video', 'original' | 'rendered' | false>>;
   snapshotSurfaces: readonly string[];
+  snapshotSurface?: (surface: string) => boolean;
 }
 const opaqueId = (id: string): boolean => /^[A-Za-z0-9_-]{1,160}$/.test(id);
 const uuid = (id: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -41,6 +42,19 @@ export const NATIVE_OUTPUT_ADAPTERS = {
     mediaAsset: (id: string, kind: 'image' | 'video') => kind === 'image' ? /^image_(?:0|[1-9]\d{0,3})$/.test(id) : id === 'video',
     artifact: opaqueId, revision: opaqueId,
     roles: ['assistant'], exports: { image: 'rendered', video: 'original' }, snapshotSurfaces: ['canvas']
+  },
+  claude: {
+    // Public native message UUID, independently scoped to a namespaced conversation.
+    // Registration permits transport validation; the adapter must witness the exact row.
+    message: (id: string, conversationId: string) => id.startsWith(`${conversationId}:assistant:`) &&
+      uuid(id.slice(`${conversationId}:assistant:`.length)), mediaAsset: () => false,
+    artifact: () => false, revision: () => false,
+    roles: ['assistant'], exports: { image: false, video: false }, snapshotSurfaces: [],
+    snapshotSurface: (surface: string) => {
+      const prefix = 'artifact:/mnt/user-data/outputs/';
+      if (!surface.startsWith(prefix) || surface.length > 640 || /[\\\u0000-\u001f\u007f?#]/.test(surface)) return false;
+      return surface.slice(prefix.length).split('/').every(part => !!part && part !== '.' && part !== '..');
+    }
   }
 } satisfies Record<ChatProvider, NativeOutputAdapter>;
 
@@ -49,7 +63,8 @@ export function admitNativeArtifactSnapshot(input: {conversationId: string; prov
   const provider = chatProviderForStoredConversation(input.conversationId);
   if (!provider || input.provider !== provider || typeof input.messageId !== 'string' || typeof input.surface !== 'string') return null;
   const adapter: NativeOutputAdapter = NATIVE_OUTPUT_ADAPTERS[provider];
-  return adapter.message(input.messageId, input.conversationId) && adapter.snapshotSurfaces.includes(input.surface) ? provider : null;
+  return adapter.message(input.messageId, input.conversationId) &&
+    (adapter.snapshotSurfaces.includes(input.surface) || adapter.snapshotSurface?.(input.surface) === true) ? provider : null;
 }
 
 export function nativeOutputAdapter(conversationId: string): NativeOutputAdapter | null {

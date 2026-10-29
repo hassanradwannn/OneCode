@@ -8,7 +8,7 @@ export function createActiveTabs(chrome) {
   const WAIT_MS = 1000;
   let saving = Promise.resolve();
   const valid = tab => Number.isInteger(tab?.id) && tab.id > 0 && typeof tab.url === 'string' &&
-    tab.url.length <= 4096 && /^https:\/\/(?:gemini\.google\.com|chatgpt\.com|chat\.openai\.com)\//.test(tab.url) && !tab.pendingUrl;
+    tab.url.length <= 4096 && /^https:\/\/(?:gemini\.google\.com|chatgpt\.com|chat\.openai\.com|claude\.ai)\//.test(tab.url) && !tab.pendingUrl;
   const permitted = () => typeof chrome.permissions?.contains === 'function'
     ? chrome.permissions.contains({ permissions: ['debugger'] }).catch(() => false) : Promise.resolve(false);
   const save = () => {

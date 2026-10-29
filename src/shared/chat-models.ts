@@ -7,7 +7,31 @@ export function isAstraModel(model: string | null | undefined, effort?: Reasonin
 }
 export type NativeModelSurface = 'chat' | 'work';
 export type ChatModelAffinity = { provider: import('./chat-provider.js').ChatProvider; model: string; surface: NativeModelSurface };
-export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[]; nativeSurface?: NativeModelSurface };
+export type NativeReasoningControl = { kind: 'levels'; label: string } |
+  { kind: 'toggle'; label: string; on: ReasoningEffort; off: ReasoningEffort; checked: boolean };
+export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[]; nativeSurface?: NativeModelSurface;
+  /** false means unobserved, distinct from an observed empty effort menu. Legacy adapters omit it. */
+  effortsObserved?: boolean; reasoningControl?: NativeReasoningControl; description?: string; group?: string; effortLabels?: Partial<Record<ReasoningEffort, string>>; effortHints?: Partial<Record<ReasoningEffort, string>> };
+/** Only positively observed controls render; old adapters retain their existing level picker. */
+export function nativeReasoningControl(model: ChatModelOption | undefined, provider?: import('./chat-provider.js').ChatProvider): NativeReasoningControl | null {
+  if (!model || model.effortsObserved === false) return null;
+  if (model.reasoningControl) return model.reasoningControl;
+  return provider !== 'claude' && model.efforts.length ? { kind: 'levels', label: 'Effort' } : null;
+}
+export type ChatModelDiscoveryRequest = { nonce: string; expiresAt: number; allowOpen: boolean;
+  provider: import('./chat-provider.js').ChatProvider; model?: string };
+/** Empty intent keeps native settings; it must not invent a provider's Automatic mode. */
+export function currentModelChoiceLabel(provider?: import('./chat-provider.js').ChatProvider): string {
+  return provider === 'claude' ? 'Current model' : 'Automatic';
+}
+export function currentEffortChoiceLabel(provider?: import('./chat-provider.js').ChatProvider): string {
+  return provider === 'claude' ? 'Current effort' : 'Automatic';
+}
+/** Native label identifiers are opaque; syntax alone never proves account availability. */
+export function isNativeModelId(value: unknown, provider?: import('./chat-provider.js').ChatProvider): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 80 && value.trim() === value &&
+    (provider === 'claude' ? !/[\u0000-\u001f\u007f]/.test(value) : /^[A-Za-z0-9._-]+$/.test(value));
+}
 export const EFFORT_NAMES: Record<string, string> = { none: 'Instant', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra', pro: 'Pro' } satisfies Record<ReasoningEffort, string>;
 export const COMPOSER_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
 /**

@@ -11,6 +11,12 @@ export const CHAT_PROVIDER_DEFINITIONS = {
     conversationId: /^(?![0-9a-f]{16}$)[0-9a-z-]{8,64}$/i,
     capabilities: { maxMessageChars: 96_000, nativeProjects: true, nativePluginRefresh: true, generatedImageExport: true,
       handoff: 'native-answer' as const, receipt: 'fiber-question' as const }
+  },
+  claude: {
+    label: 'Claude', homeUrl: 'https://claude.ai/new', conversationPrefix: 'https://claude.ai/chat/',
+    conversationId: /^claude:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i,
+    capabilities: { maxMessageChars: 96_000, nativeProjects: false, nativePluginRefresh: false, generatedImageExport: false,
+      handoff: 'markdown-tool' as const, receipt: 'native-question' as const }
   }
 } as const;
 export type ChatProvider = keyof typeof CHAT_PROVIDER_DEFINITIONS;
@@ -55,8 +61,34 @@ export function chatProviderHomeUrl(provider: ChatProvider): string {
   return providerDefinition(provider).homeUrl;
 }
 
+/** Native connection settings for the explicitly selected provider. */
+export function chatProviderConnectionsUrl(provider: ChatProvider): string {
+  providerDefinition(provider);
+  return { gemini: 'https://gemini.google.com/customize/connectors', chatgpt: 'https://chatgpt.com/plugins',
+    claude: 'https://claude.ai/customize/connectors' }[provider];
+}
+
 export function chatProviderConversationUrl(provider: ChatProvider, conversationId: string): string {
-  return providerDefinition(provider).conversationPrefix + encodeURIComponent(conversationId);
+  if (provider === 'claude' && !isChatProviderConversationId(conversationId, provider)) throw new Error('Unsupported provider conversation');
+  return providerDefinition(provider).conversationPrefix + encodeURIComponent(provider === 'claude' ? conversationId.trim().slice('claude:'.length).toLowerCase() : conversationId);
+}
+
+/** A native service UUID is namespaced before it enters shared session storage. */
+export function chatProviderConversationIdFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    if (url.hostname === 'claude.ai') {
+      const native = /^\/chat\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/?$/i.exec(url.pathname)?.[1];
+      return native ? `claude:${native.toLowerCase()}` : null;
+    }
+    if (url.hostname === 'gemini.google.com') return /^\/(?:u\/\d+\/)?app\/([0-9a-f]{16})\/?$/i.exec(url.pathname)?.[1]?.toLowerCase() ?? null;
+    if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') {
+      const id = /^\/(?:g\/[^/]+\/)?c\/([0-9a-z-]+)\/?$/i.exec(url.pathname)?.[1];
+      return id && isChatProviderConversationId(id, 'chatgpt') ? id : null;
+    }
+  } catch { /* Invalid URLs supply no provider identity. */ }
+  return null;
 }
 
 export function chatProviderLabel(provider: ChatProvider): string {

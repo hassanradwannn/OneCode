@@ -588,9 +588,9 @@ async function runIdeHelper(model: string, messages: z.infer<typeof messageSchem
 function requestedProvider(model: string, fallback: ChatProvider): { provider: ChatProvider; explicit: boolean } {
   const normalized = model.toLowerCase();
   if (normalized === 'onecode' || normalized === 'onecode-agent') return { provider: fallback, explicit: false };
-  if (normalized === 'onecode-chatgpt' || normalized === 'chatgpt') return { provider: 'chatgpt', explicit: true };
-  if (normalized === 'onecode-gemini' || normalized === 'gemini') return { provider: 'gemini', explicit: true };
-  throw new ApiError(404, 'model_not_found', 'Use onecode, onecode-chatgpt, or onecode-gemini.');
+  const provider = CHAT_PROVIDERS.find(provider => normalized === provider || normalized === `onecode-${provider}`);
+  if (provider) return { provider, explicit: true };
+  throw new ApiError(404, 'model_not_found', 'Choose a provider model listed by /v1/models.');
 }
 
 type ApiSlashControl =
@@ -600,9 +600,10 @@ type ApiSlashControl =
 function slashControl(messages: z.infer<typeof messageSchema>[]): ApiSlashControl | null {
   const latest = [...messages].reverse().find(message => message.role === 'user' && !!messageText(message.content));
   if (!latest) return null;
-  const match = messageText(latest.content).match(/^\/(new|provider)(?:\s+(chatgpt|gemini))?\s*$/i);
+  const match = messageText(latest.content).match(/^\/(new|provider)(?:\s+([a-z]+))?\s*$/i);
   if (!match) return null;
   const provider = match[2]?.toLowerCase() as ChatProvider | undefined;
+  if (provider && !CHAT_PROVIDERS.includes(provider)) return null;
   return match[1]!.toLowerCase() === 'new' ? { kind: 'new', provider } : { kind: 'provider', provider };
 }
 
@@ -886,7 +887,7 @@ function modelList(state: AgentApiRuntimeState): unknown {
     id, object: 'model', created, owned_by: 'onecode',
     onecode: { provider, capabilities: '/v1/onecode/capabilities' }
   });
-  return { object: 'list', data: [model('onecode', 'selected'), model('onecode-chatgpt', 'chatgpt'), model('onecode-gemini', 'gemini')], onecode: { selected_provider: state.provider } };
+  return { object: 'list', data: [model('onecode', 'selected'), ...CHAT_PROVIDERS.map(provider => model(`onecode-${provider}`, provider))], onecode: { selected_provider: state.provider } };
 }
 
 function completionBody(result: AgentApiCompletionResult): unknown {

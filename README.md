@@ -2,15 +2,30 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.7.4](https://github.com/hassanradwannn/OneCode/releases/tag/v0.7.4)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.4/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.4/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.4/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.8.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Fresh installs use the complete 0.7.0 Windows/Linux artifacts. Compatible existing stable installations receive 0.7.0 through a verified application capsule of about 26 MB. Both platform capsules retain the verified 0.5.9 minimum complete base and require its matching runtime; a full installer or AppImage download is unnecessary on a compatible installation.
+Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
-The current release supports **Windows x64 and Linux x64**, with **ChatGPT web and Gemini web** through one Companion extension.
+The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
 
-## What's new in 0.7.0
+## What's new in 0.8.0
+
+- A third browser provider in Setup, new chats, Remote and the experimental local API. Existing chats, workers and queued messages keep their original provider.
+- Account-observed current and legacy models, native reasoning controls, descriptions and usage-cost hints. Refresh reads the list without cycling models; selecting one can inspect just its controls. Only observed levels or a binary switch appear, with their native labels; unknown or absent controls show no invented setting. Upgrade/locked choices are excluded. **Current model / Current effort** preserves native settings; exact choices are confirmed before Send.
+- Guided custom MCP setup and an optional native skill exported from Setup. Core tools work without the skill; exporting it does not install or enable it.
+- Usage-limit notices show the provider's observed reset deadline or text. Missing deadlines remain unknown. Quota resets do not cause automatic task replay.
+- Interactive JSX/TSX previews with bundled React, Tailwind, Lucide icons and Recharts, alongside Markdown, Mermaid, SVG and HTML. Desktop and Remote share the isolated preview with network access closed.
+- Provider-scoped local tool authorization, retained terminal results, stored-chat opening and Goal/Loop restart state extend to the added provider.
+
+See [0.8.0 release notes](docs/release-notes/v0.8.0.md) and [verification scope](docs/release-acceptance/v0.8.0.md). Automated checks and native acceptance are recorded separately; exhaustive paid-account, browser and native Linux coverage is not claimed.
+
+The preceding [0.7.4 release](docs/release-notes/v0.7.4.md) supports both ChatGPT picker layouts, opens new chats in Chat by default, retains explicit Work choices, adds Gemini Thinking levels and reduces avoidable browser preparation delays. These repairs are included.
+
+## Earlier releases
+
+### 0.7.0
 
 This release brings together the reliability repairs developed since Stable 0.6.17:
 
@@ -24,14 +39,14 @@ This release brings together the reliability repairs developed since Stable 0.6.
 
 See the [0.7.0 release notes](docs/release-notes/v0.7.0.md) and [acceptance record](docs/release-acceptance/v0.7.0.md) for the changes and validation scope. Windows and Linux builds and package checks passed; remaining native Linux acceptance was not completed for this release.
 
-### Current limitations
+### Historical 0.7.0 limitations
 
 - Some chats can show an older or incomplete app transcript even when the complete native reply is saved. Synchronization is still under investigation.
 - Initial model preparation can stall during Compact & Resume. Saved-summary recovery passed, while the cause of the first-attempt timeout remains unproved. For an abandoned attempt with a saved summary, expand its **Compact & Resume** row and choose **Open a new chat with this summary**.
 
 ## Experimental local OneCode API
 
-OneCode 0.6.3 adds an opt-in **Experimental** loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. `/new`, `/provider` and `/session` control durable OneCode chats, while IDE-originated requests are mapped to their own project/thread sessions instead of sharing one global IDE chat. JetBrains retrieval/title helper requests are handled locally so they do not create provider turns or delay the real coding request.
+OneCode offers an opt-in **Experimental** loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. `/v1/models` advertises `onecode`, `onecode-chatgpt`, `onecode-gemini` and `onecode-claude`. `/new`, `/provider` and `/session` control durable chats, while IDE requests retain their own project/thread sessions and provider affinity. JetBrains retrieval/title helper requests are handled locally so they do not create provider turns or delay the coding request.
 
 The durable OneCode session owns chat history, so IDE system/current-file context is preserved without replaying earlier assistant/tool transcript into every turn. When an IDE project already matches an approved OneCode project/root, the API binds that session to the normal project owner and OneCode can read, patch and run the project files directly; otherwise it returns the IDE-native edit/snippet format until that folder is approved once.
 
@@ -128,29 +143,32 @@ These earlier repairs are included in 0.4.4. Historical details remain in the [0
 
 ## Work with your own provider account
 
-Keep chats and projects together, delegate workers, use account-available models, and access local files, terminals, plugins and skills. The model picker refreshes from the selected native account, excludes locked models and offers one Automatic choice.
+Keep chats and projects together, delegate workers, use account-available models, and access local files, terminals, plugins and skills. The model picker refreshes from the selected native account and excludes locked models. Keep the provider's current selection or deliberately choose an observed model and thinking level.
+
+Component previews support the bundled React, Tailwind, Lucide and Recharts libraries and artifact-local imports. Unsupported packages, external services and provider-only runtime APIs show a preview error while preserving editable source. Native artifact capture requires actual exposed source/export controls; a model's statement that it created an artifact does not prove the bytes reached OneCode.
 
 **Computer use** is available from Plugins. OneCode reuses an existing CUA Driver installation and daemon, or downloads the official driver during an explicit installation. Chats can also read locally saved session history through Core tools.
 
 ## Install
 
-1. **Windows x64:** run the [0.7.0 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Setup-x64.exe). **Linux x64:** download the [0.7.0 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.AppImage) or [0.7.0 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.7.0/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
+1. **Windows x64:** run the [0.8.0 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Setup-x64.exe). **Linux x64:** download the [0.8.0 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Linux-x64.AppImage) or [0.8.0 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.0/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
-4. Load the bundled **OneCode Companion** extension in Brave, Chrome or Edge. Setup opens its folder for you.
-5. Choose **Gemini** or **ChatGPT** in Setup. Add **OneCode Core** in that provider using the exact URL shown, then approve a working folder and choose the tools you want to enable.
+4. Load the bundled **OneCode Companion** in Chrome, Edge or Brave using Setup's instructions. Firefox detection/staging does not supply a signed package; see its [availability status](docs/WINDOWS-SETUP.md#firefox). The optional OneCode browser uses the same adapters.
+5. Choose **Gemini**, **ChatGPT** or **Claude** in Setup. Add **OneCode Core** in that provider using the exact URL shown, then approve a working folder and choose the tools you want to enable.
 6. ChatGPT users with native Skills can export **onecode-chatgpt** from Setup, upload it through ChatGPT Plugins → Skills, enable it, then turn on **Use ChatGPT's onecode-chatgpt skill** in OneCode. Leave the option off when Skills is unavailable.
 7. Gemini users can optionally install the bundled **onecode-gemini** skill: save its ZIP, open Gemini → **Customize → Skills**, upload it and choose **Create**. [SKILL.md](resources/skills/onecode-gemini/SKILL.md) is included in the installer and source; the ZIP is also on Releases.
+8. With Claude selected, Setup shows **Customize → Connectors → + Add → Add custom connector**, using the shown Name and MCP server URL. Some accounts show these controls under Plugins. Enable the connection once in that account; ordinary messages use it without typing an @ mention or reopening and retoggling its menu. Optionally export **onecode**, upload its ZIP through Skills without renaming the native skill, enable it, then enable the matching OneCode skill option. Leave that option off until the skill is installed in the same account.
 
 Send tasks from OneCode. Your selected provider account supplies the model; no model API key is required for ordinary browser chats. Each person runs OneCode and Tailscale on their own PC. There is no OneCode cloud service to subscribe to or share.
 
-The skill provides reusable instructions. The **Core connector** provides access to local tools and works without the skill: OneCode selects it and supplies its tool instructions when sending a task. Installing the skill cannot repair an unreachable server URL. Use the same provider account for its connector, optional native skill and managed browser chats.
+The skill provides reusable instructions; the **Core connector** supplies enabled tools and works without it. Each adapter follows its provider's native connection mechanism. When the optional skill is enabled in OneCode, a confirmed native skill selection can use shorter reusable guidance; an unavailable selector falls back to the same task's prepared full guidance. With the option off, ordinary Core instructions and live task context remain in use. Installing a skill cannot repair an unreachable server URL. Use the same provider account for its connector, optional native skill and managed chats.
 
 For several computers, set **Name for this computer** in Setup before adding its connector. For example, `legion-laptop` publishes `OneCode Core legion-laptop`. Each computer keeps its own URL and credentials. Do not reuse another computer's secret URL or give two devices names that the provider renders identically.
 
 ## A connection that survives restarts
 
-**First-time Funnel setup: allow up to 15 minutes before troubleshooting an initially unreachable connector.** Tailscale documents that public DNS propagation can take up to 10 minutes; 15 minutes is a practical first-setup allowance, not a guaranteed tunnel-issuance time. During that interval, Tailscale can look connected locally while ChatGPT or Gemini still cannot reach the public MCP URL. Keep OneCode and Tailscale running. OneCode keeps checking automatically; wait for the public DNS, HTTPS and MCP checks to pass before creating or retrying the provider connector. If it remains unreachable after that allowance, inspect the specific check and permissions instead of assuming every failure is propagation. [Tailscale DNS propagation guidance](https://tailscale.com/docs/features/tailscale-funnel#dns-propagation).
+**First-time Funnel setup: allow up to 15 minutes before troubleshooting an initially unreachable connector.** Tailscale documents that public DNS propagation can take up to 10 minutes; 15 minutes is a practical first-setup allowance, not a guaranteed tunnel-issuance time. Tailscale can look connected locally while the provider cannot reach public MCP. Keep OneCode and Tailscale running. OneCode keeps checking automatically; wait for public DNS, HTTPS and MCP checks to pass before creating or retrying the connector. If it remains unreachable after that allowance, inspect the specific check and permissions instead of assuming every failure is propagation. [Tailscale propagation guidance](https://tailscale.com/docs/features/tailscale-funnel#dns-propagation).
 
 Tailscale Funnel gives your PC a stable HTTPS address. Once connected, ordinary restarts keep the same connector URL. Keep the same Tailscale device and tailnet, and keep the MCP paths stored in OneCode. The PC, OneCode and Tailscale must be running for tools to work.
 
@@ -168,19 +186,21 @@ Remote mode uses a separate private Tailscale Serve route and access key. Keep i
 
 Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible Windows and Linux-AppImage application hotfixes use smaller verified bundles while retaining their immutable native base; incompatible native/runtime changes require a complete installer/AppImage. The Windows updater also validates its cached installer and blockmap before attempting a differential download. DEB installations remain package-manager-owned.
 
-Ask ChatGPT or Gemini to check a local job at an interval, such as every 60 minutes. The agent must register the interval and message with Core `automations` and verify the returned schedule ID and next run. OneCode saves the schedule and sends its message into the same chat at each interval until cancelled. Manage or cancel checks in **Settings → Agents & automation → Scheduled checks**, or ask the agent. Keep the PC awake, OneCode running and the provider signed in. A provider-native Monitoring card alone does not register a OneCode check; a sent message does not prove the check ran or the job succeeded.
+Ask the agent to check a local job at an interval, such as every 60 minutes. It must register the interval and message with Core `automations` and verify the returned schedule ID and next run. OneCode saves the schedule and sends its message into the same chat at each interval until cancelled. Manage or cancel checks in **Settings → Agents & automation → Scheduled checks**, or ask the agent. Keep the PC awake, OneCode running and the provider signed in. A provider-native monitoring card does not register a OneCode check; delivery does not prove a check ran or succeeded.
 
 Updates preserve your profile and saved chats. If an older installation cannot update, run the latest installer once.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
-Developers can follow the current release history in the [changelog](CHANGELOG.md), the [0.7.0 release notes](docs/release-notes/v0.7.0.md), the [acceptance record](docs/release-acceptance/v0.7.0.md), the [OneCode API guide](docs/ONECODE-API.md) and the [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical release notes and acceptance records remain available.
+OneCode's local session, each queued input and the provider's native conversation have separate identities. New chats do not borrow another task's UUID or tool authority, and parallel chats retain separate claims, documents and turns. Compact & Resume keeps the task family and saved results while binding its successor through a fresh exact receipt. See [browser conversations and local sessions](docs/PROVIDER-SESSIONS.md).
+
+Developers can follow the current release in the [changelog](CHANGELOG.md), [0.8.0 release notes](docs/release-notes/v0.8.0.md), [verification record](docs/release-acceptance/v0.8.0.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
 ## Before you start
 
-- This release supports **Gemini web and ChatGPT web on Windows x64 and Linux x64** through one Companion extension.
+- This release supports **ChatGPT web, Gemini web and Claude web on Windows x64 and Linux x64** through one Companion extension. Native acceptance scope is recorded separately.
 - The selected provider decides which models and custom MCP apps your account can use. OneCode cannot grant subscription features or extra usage.
 - Fresh installs enable file reading only. Enable commands, writes or desktop control deliberately; those tools act with your Windows user's privileges.
 - Enabled tool confirmations on OneCode's own Gemini connector can be handled automatically by its companion. Other apps' approvals are not included.

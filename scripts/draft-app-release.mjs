@@ -147,6 +147,9 @@ function expectedNames({ version, channel, op = selectedOperation }) {
     `${prefix}-Companion-${version}.zip`, 'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip',
     'SKILL.md', 'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', `${prefix}-Base-x64.json`
   ];
+  // Older frozen sources did not prepare this asset. Keep historical backfills valid.
+  const [major, minor] = version.split('.').map(Number);
+  if (major > 0 || minor >= 8) full.push('OneCode-Claude-Skill.zip');
   return op === 'beta-release' ? [...full, 'OneCode-Beta-Hotfix-x64.zip', 'OneCode-Beta-Hotfix-x64.json']
     : op === 'stable-full' || op === 'stable-release' ? [...full, 'OneCode-Hotfix-x64.zip', 'OneCode-Hotfix-x64.json'] : full;
 }

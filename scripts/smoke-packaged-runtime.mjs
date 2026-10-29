@@ -125,6 +125,11 @@ if (!readFileSync(required(skillPath)).equals(readFileSync(path.join(repository,
 const chatgptSkillPath = 'skills/onecode-chatgpt/SKILL.md';
 if (!readFileSync(required(chatgptSkillPath)).equals(readFileSync(path.join(repository, ...chatgptSkillPath.split('/')))))
   throw new Error('Packaged ChatGPT skill differs from the public source asset');
+const claudeSkillPath = 'skills/onecode-claude/SKILL.md';
+if (!readFileSync(required(claudeSkillPath)).equals(readFileSync(path.join(repository, 'resources', ...claudeSkillPath.split('/')))))
+  throw new Error('Packaged provider skill differs from the public source asset');
+if (!/^---\r?\nname: onecode\r?\n/.test(readFileSync(required(claudeSkillPath), 'utf8')))
+  throw new Error('Packaged provider skill does not use its accepted native name');
 
 if (targetPlatform === 'win32') {
   if (process.platform === 'win32') {

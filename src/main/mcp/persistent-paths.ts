@@ -11,13 +11,13 @@
  */
 import { clearSecret, getSecret, setSecret, type SecretKey } from '../secrets.js';
 import { SURFACE_IDS, type SurfaceId } from './surfaces.js';
-import type { ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, type ChatProvider } from '../../shared/chat-provider.js';
 
 export type SurfaceTokens = Partial<Record<SurfaceId, string>>;
 
 /** The shape `startMcpServer` mints: 32 random bytes, base64url. */
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
-const key = (id: SurfaceId, provider: ChatProvider): SecretKey => provider === 'gemini' ? `mcp:path:${id}` : `mcp:path:chatgpt:${id}`;
+const key = (id: SurfaceId, provider: ChatProvider): SecretKey => provider === 'gemini' ? `mcp:path:${id}` : `mcp:path:${provider}:${id}`;
 
 /** The token at the end of one surface URL, or null. */
 export function surfaceTokenOf(url: string, id: SurfaceId): string | null {
@@ -50,6 +50,6 @@ export async function rememberSurfaceTokens(urls: Record<SurfaceId, string>, pro
 }
 
 export async function forgetSurfaceTokens(): Promise<void> {
-  for (const provider of ['gemini', 'chatgpt'] as const)
+  for (const provider of CHAT_PROVIDERS)
     for (const id of SURFACE_IDS) await clearSecret(key(id, provider)).catch(() => undefined);
 }

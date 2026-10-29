@@ -73,6 +73,17 @@ const guides: Record<string, Array<Page | Still>> = {
       { text: 'Review the tool list and finish connecting. The companion selects this app and approves its enabled tools automatically.', box: [22, 61, 64, 30] }
     ] }
   ],
+  'claude-plugin': [
+    { src: new URL('./setup-images/claude-connectors.png', import.meta.url).href, spots: [
+      { text: 'Open Customize, then Connectors. Some accounts show this under Plugins.', box: [12.5, 7.8, 9.9, 4] },
+      { text: 'Choose Add, then Add custom connector.', box: [79.5, 7.7, 17.5, 9.9] }
+    ] },
+    { src: new URL('./setup-images/claude-add-connector.png', import.meta.url).href, spots: [
+      { text: 'Paste the connector name shown in OneCode.', box: [9.2, 28.4, 85.7, 6.5] },
+      { text: 'Paste this installation’s HTTPS MCP server URL.', box: [9.2, 44.2, 85.7, 6.5] },
+      { text: 'Choose Continue, review the available tools and finish connecting. Enable this exact connector in the chat’s plus menu.', box: [81, 89, 14.1, 6.4] }
+    ] }
+  ],
   'chatgpt-plugin': [
     { scene: 'plugin-add', spots: [
       { key: 'add', text: labels => t('Click {0}', [quoted(labels.add!)]) },
@@ -216,7 +227,7 @@ export function initSetupGuide(): (provider: ChatProvider) => void {
       host.replaceChildren();
       const slot = host.dataset.movesInto ? document.getElementById(host.dataset.movesInto) : null;
       slot?.querySelector(':scope > .guide-moves')?.remove();
-      const group = host.dataset.setupGuide === 'plugin' && provider === 'chatgpt' ? 'chatgpt-plugin' : host.dataset.setupGuide!;
+      const group = host.dataset.setupGuide === 'plugin' && provider !== 'gemini' ? `${provider}-plugin` : host.dataset.setupGuide!;
       const pictures = shots(group);
       if (pictures.length) guide(host, pictures, enlarge);
     }

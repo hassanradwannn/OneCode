@@ -1,3 +1,5 @@
+import { chatProviderForConversation } from '../../shared/chat-provider.js';
+import { isNativeModelId } from '../../shared/chat-models.js';
 /**
  * The one-time transaction that moves a local session from one Gemini chat to another.
  *
@@ -211,10 +213,10 @@ export function normalizeProjectId(value: unknown): string | null {
 
 type RequestedModel = { model: string; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface };
 
-function requestedModel(value: unknown): RequestedModel | null {
+function requestedModel(value: unknown, conversationId?: unknown): RequestedModel | null {
   if (!value || typeof value !== 'object') return null;
   const { model, reasoningEffort, modelSurface } = value as Record<string, unknown>;
-  if (typeof model !== 'string' || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(model) ||
+  if (typeof model !== 'string' || !(chatProviderForConversation(conversationId) === 'claude' ? isNativeModelId(model, 'claude') : /^[a-zA-Z0-9 ._-]{1,80}$/.test(model)) ||
       (reasoningEffort != null && !isReasoningEffort(reasoningEffort))) return null;
   // This compatibility ID means leave the provider's model alone, exactly like
   // Automatic in a fresh desktop input. It is not a model-picker requirement.
@@ -331,7 +333,7 @@ export interface ContinuationSnapshot {
 
 function durableRecord(entry: Continuation): ContinuationRecord {
   return {
-    requestedModel: requestedModel(entry.requestedModel),
+    requestedModel: requestedModel(entry.requestedModel, entry.from),
     sourceTurnId: entry.sourceTurnId,
     token: entry.token,
     sessionId: entry.sessionId,
@@ -389,7 +391,7 @@ function publishRecord(entry: Continuation, record: ContinuationRecord): void {
   if (record.state === 'committed' || record.state === 'aborted') endResumeClaim(entry.token);
   entry.to = record.to;
   entry.project = normalizeProjectId(record.project);
-  entry.requestedModel = requestedModel(record.requestedModel);
+  entry.requestedModel = requestedModel(record.requestedModel, record.from);
   // Never let a durable read move the deadline backwards: a snapshot written before this field
   // existed reports nothing, and reading that as "last touched when it opened" would expire a
   // handoff that has been progressing since.
@@ -484,7 +486,7 @@ export interface ContinuationView {
 }
 
 const view = (entry: Continuation): ContinuationView => ({
-  requestedModel: requestedModel(entry.requestedModel),
+  requestedModel: requestedModel(entry.requestedModel, entry.from),
   touchedAt: entry.touchedAt,
   token: entry.token,
   sessionId: entry.sessionId,
@@ -825,7 +827,7 @@ export async function openContinuationNow(
     const source = await getSession(sessionId);
     entry.sourceTurnId = source?.activeTurnId ?? null;
     if (source?.conversationId === fromConversationId && source.selectedModel?.conversationId === fromConversationId) {
-      entry.requestedModel = requestedModel(source.selectedModel);
+      entry.requestedModel = requestedModel(source.selectedModel, entry.from);
     }
     try {
       await writeDurableNow(CONTINUATIONS_STATE, snapshotWith(entry.token, durableRecord(entry)));
@@ -1210,7 +1212,8 @@ export async function bindContinuationDestinationMessageNow(
  * this compaction, and it is the one already stored.
  */
 export async function attachSummary(token: string, text: string, authorize?: () => Promise<boolean>): Promise<Handoff | null> {
-  const brief = byToken.get(token)?.sourceSend.receipt?.provider === 'gemini' ? text : text.trim();
+  const provider = byToken.get(token)?.sourceSend.receipt?.provider;
+  const brief = provider === 'gemini' || provider === 'claude' ? text : text.trim();
   if (!brief.trim()) return null;
   return capture(token, brief, async (entry) =>
     prepareHandoff({
@@ -1803,7 +1806,7 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
     // The retention window scales with the same per-ticket deadline the live sweep uses:
     // a Pro brief still inside its longer writing clock must survive a restart within it
     // rather than vanish silently at twice the ordinary TTL.
-    const retentionMs = manualWaitingTtlMs(raw.state, requestedModel(raw.requestedModel)) * 2;
+    const retentionMs = manualWaitingTtlMs(raw.state, requestedModel(raw.requestedModel, raw.from)) * 2;
     const lastTouchedAt = Number.isFinite(raw.touchedAt) && raw.touchedAt! <= now ? raw.touchedAt! : raw.openedAt;
     if (
       !/^[A-Za-z0-9_-]{16,64}$/.test(raw.token) ||
@@ -1819,7 +1822,7 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
       continue;
     }
     const entry: Continuation = {
-      requestedModel: requestedModel(raw.requestedModel),
+      requestedModel: requestedModel(raw.requestedModel, raw.from),
       sourceTurnId: typeof raw.sourceTurnId === 'string' ? raw.sourceTurnId : null,
       token: raw.token,
       sessionId: raw.sessionId,

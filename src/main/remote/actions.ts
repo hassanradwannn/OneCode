@@ -32,7 +32,8 @@ export const remoteActionSchema = z.discriminatedUnion('action', [send,
   z.object({ action: z.literal('stop'), id: z.string().uuid(), sessionId, expectedTurnId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal('rename'), id: z.string().uuid(), sessionId, title: z.string().trim().min(1).max(120), expectedTitle: z.string().max(120) }).strict(),
   z.object({ action: z.literal('cancel'), id: z.string().uuid(), inputId: z.string().uuid() }).strict(),
-  z.object({ action: z.literal('refreshModels'), id: z.string().uuid(), provider: z.enum(CHAT_PROVIDERS) }).strict(),
+  z.object({ action: z.literal('refreshModels'), id: z.string().uuid(), provider: z.enum(CHAT_PROVIDERS),
+    model: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/).optional() }).strict(),
   z.object({ action: z.literal('preferences'), id: z.string().uuid(), expectedRevision: z.string().regex(/^[0-9a-f]{64}$/), changes: z.unknown() }).strict()
 ]);
 export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Promise<unknown> {
@@ -43,7 +44,8 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   if (body.action === 'cancelSchedule') return chatScheduler.change(body.scheduleId, { enabled: false });
   if (body.action === 'cancelPlan') return { cancelled: cancelTaskRequest(body.requestId) };
   if (body.action === 'preferences') return saveRemotePreferences({ expectedRevision: body.expectedRevision, changes: body.changes });
-  if (body.action === 'refreshModels') return startChatModelDiscovery(true, body.provider);
+  if (body.action === 'refreshModels') return body.model === undefined ? startChatModelDiscovery(true, body.provider)
+    : startChatModelDiscovery(true, body.provider, body.model);
   if (body.action === 'cancel') return { cancelled: await cancelDesktopInput(body.inputId) };
   const session = body.sessionId ? await getSession(body.sessionId) : null;
   if (body.sessionId && !session?.conversationId) throw new Error('This task has no attached provider chat.');
@@ -72,7 +74,7 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
     const model = resolveChatModel(getChatModels(body.provider).models, body.model);
     // An explicit observed mode can outlive this mutable catalog's other surface.
     // It grants no availability: the native destination must still prove the pair.
-    if ((!model || (body.reasoningEffort && !model.efforts.includes(body.reasoningEffort))) &&
+    if ((!model || (body.reasoningEffort && model.effortsObserved !== false && !model.efforts.includes(body.reasoningEffort))) &&
         (!body.modelSurface || model?.nativeSurface === body.modelSurface)) throw new Error('Refresh models and choose an available model and thinking effort.');
   } else if (body.reasoningEffort) throw new Error('Select a model before choosing thinking effort.');
   if (body.automation === 'goal' && body.text.length > 16_000) throw new Error('Keep a new Goal objective below 16,000 characters.');

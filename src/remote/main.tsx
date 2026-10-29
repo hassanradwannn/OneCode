@@ -3,16 +3,16 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { RemoteBootstrap, RemotePreferences, RemoteSession, RemoteSessionDetail, RemoteSessionList } from '../shared/remote.js';
 import type { ControlApiEvents, ControlApiInput, ControlApiInputs } from '../shared/control-api.js';
-import type { ChatProvider } from '../shared/chat-provider.js';
+import { chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
 import type { ReasoningEffort } from '../shared/session.js';
 import { request, action, setRemoteToken, hasRemoteToken, hasRemoteLink, connectRemote, reconnectRemote, forgetRemoteLink, RemoteRequestError, RemoteActionError } from './api.js';
 import '../renderer/chat-content.css';
 import './remote.css';
 import './presentations.css';
-import { Icon, ModelMenu, DictationButton } from './composer-controls.js';
+import { Icon, ModelMenu, DictationButton, NativeReasoningSwitch } from './composer-controls.js';
 import { Transcript, CurrentPlan } from './transcript.js';
 import { useComposerCompletion } from './composer-completion.js';
-import { resolveChatModel, type NativeModelSurface } from '../shared/chat-models.js';
+import { resolveChatModel, currentModelChoiceLabel, nativeReasoningControl, type NativeModelSurface } from '../shared/chat-models.js';
 import '../renderer/icons.css';
 import type { InputAttachment } from '../shared/input.js';
 import { historyRoute, mergeHistory } from './history.js';
@@ -39,7 +39,7 @@ function ScheduledChecks() {
   }, []);
   return <section><h2>Scheduled checks</h2><p className="muted">Ask ChatGPT or Gemini to repeat a message at an interval until cancelled. Keep OneCode running, the PC awake and the provider signed in.</p>
     {error && <p role="alert">{error}</p>}{!rows.length && <p>No scheduled checks.</p>}
-    {rows.map(row => <div className="setting" key={row.id}><span>{row.title}<small>{row.provider === 'gemini' ? 'Gemini' : 'ChatGPT'} · {row.intervalMinutes} min · {row.enabled ? new Date(row.nextRunAt).toLocaleString() : 'Cancelled'}</small>
+    {rows.map(row => <div className="setting" key={row.id}><span>{row.title}<small>{chatProviderLabel(row.provider)} · {row.intervalMinutes} min · {row.enabled ? new Date(row.nextRunAt).toLocaleString() : 'Cancelled'}</small>
       <small>{row.lastError || row.runs.at(-1)?.detail || (row.runs.length ? `Last scheduled message: ${row.runs.at(-1)!.state}` : '')}</small><small>{row.message}</small></span>
       {row.enabled && <button disabled={cancelling === row.id} onClick={async () => { setCancelling(row.id); try {
         const changed = await action<ChatSchedule>({action:'cancelSchedule',id:crypto.randomUUID(),scheduleId:row.id});
@@ -57,6 +57,17 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
   const bool = (label: string, key: keyof RemotePreferences, hint: string) => <label className="setting"><span>{label}<small>{hint}</small></span><input type="checkbox" checked={draft[key] === true} onChange={event => update(key, event.target.checked as never)} /></label>;
   const provider = bootstrap.providers.find(row => row.id === draft.chatProvider) ?? bootstrap.providers[0]!;
   const defaultModel = provider.models.models.find(row => row.id === draft.defaultChatModel);
+  const defaultControl = nativeReasoningControl(defaultModel, provider.id);
+  const readThinkingLevels = (model: string) => {
+    void action({ action: 'refreshModels', id: crypto.randomUUID(), provider: provider.id, model })
+      .then(() => refresh()).catch(error => setMessage((error as Error).message));
+  };
+  const chooseDefaultModel = (model: string) => {
+    const choice = resolveChatModel(provider.models.models, model);
+    update('defaultChatModel', model); update('defaultChatReasoning', undefined);
+    update('defaultChatModelAffinity', choice?.nativeSurface ? { provider: provider.id, model, surface: choice.nativeSurface } : undefined);
+    if (provider.id === 'claude' && choice && (choice.effortsObserved === false || !choice.reasoningControl && choice.efforts.length > 0)) readThinkingLevels(choice.id);
+  };
   const save = async () => {
     setBusy(true); setMessage('');
     const changes = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== baseline.current[key as keyof RemotePreferences]).map(([key, value]) => [key, value === undefined ? '' : value]));
@@ -70,8 +81,9 @@ function Settings({ bootstrap, refresh, back, appearance, saveAppearance, discon
   };
   return <section className="settings"><button onClick={back}>← Chat</button><h1>Settings</h1><p className="muted">Preferences on {bootstrap.host}</p><nav className="settings-tabs" aria-label="Settings categories">{['Chats', 'Automation', 'Workspace', 'Appearance', 'Notifications', 'Remote access'].map(name => <button key={name} aria-pressed={name === tab} onClick={() => setTab(name)}>{name}</button>)}</nav>
     {tab === 'Chats' && <><label className="setting"><span>Default provider<small>Applies to new chats. Existing chats keep their provider.</small></span><select value={draft.chatProvider} onChange={event => { update('chatProvider', event.target.value as ChatProvider); update('defaultChatModel', ''); update('defaultChatReasoning', undefined); update('defaultChatModelAffinity', undefined); }}>{bootstrap.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select></label>
-      <label className="setting"><span>Default model<small>Choices observed on the host provider page.</small></span><select value={draft.defaultChatModel ?? ''} onChange={event => { const model = event.target.value, choice = resolveChatModel(provider.models.models, model); update('defaultChatModel', model); update('defaultChatReasoning', undefined); update('defaultChatModelAffinity', choice?.nativeSurface ? { provider: provider.id, model, surface: choice.nativeSurface } : undefined); }}><option value="">Automatic</option>{!!draft.defaultChatModel && !defaultModel && <option value={draft.defaultChatModel}>{draft.defaultChatModel} · Previously observed</option>}{provider.models.models.filter(model => !model.id.endsWith('-current')).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
-      {!!defaultModel?.efforts.length && <label className="setting"><span>Thinking effort</span><select value={draft.defaultChatReasoning ?? ''} onChange={event => update('defaultChatReasoning', event.target.value as ReasoningEffort)}><option value="">Provider default</option>{defaultModel.efforts.map(effort => <option key={effort}>{effort}</option>)}</select></label>}
+      <label className="setting"><span>Default model<small>Choices observed on the host provider page.</small></span><select value={draft.defaultChatModel ?? ''} onChange={event => chooseDefaultModel(event.target.value)}><option value="">{currentModelChoiceLabel(provider.id)}</option>{!!draft.defaultChatModel && !defaultModel && <option value={draft.defaultChatModel}>{draft.defaultChatModel} · Previously observed</option>}{provider.models.models.filter(model => !model.id.endsWith('-current')).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
+      {defaultControl?.kind === 'toggle' && <NativeReasoningSwitch control={defaultControl} effort={draft.defaultChatReasoning ?? ''} disabled={busy} choose={value => update('defaultChatReasoning', value ? value as ReasoningEffort : undefined)} />}
+      {defaultControl?.kind === 'levels' && !!defaultModel?.efforts.length && <label className="setting"><span>{defaultControl.label}</span><select value={draft.defaultChatReasoning ?? ''} onChange={event => update('defaultChatReasoning', event.target.value as ReasoningEffort)}><option value="">Provider default</option>{defaultModel.efforts.map(effort => <option key={effort} value={effort}>{defaultModel.effortLabels?.[effort] ?? effort}{defaultModel.effortHints?.[effort] ? ` · ${defaultModel.effortHints[effort]}` : ''}</option>)}</select></label>}
       <label className="setting"><span>Messages during a running task</span><select value={draft.followUp ?? 'steer'} onChange={event => update('followUp', event.target.value as 'steer' | 'queue')}><option value="steer">Send new direction immediately</option><option value="queue">Queue after this turn</option></select></label>{bool('Enter to send', 'enterSends', 'Shift+Enter adds a new line.')}</>}
     {tab === 'Automation' && <><ScheduledChecks />{bool('Automatic continuation', 'autoContinue', 'Continue eligible interrupted responses.')}{bool('Automatic skill selection', 'autoSelectSkills', 'Choose relevant installed skills for new messages.')}<label className="setting"><span>Rotate long turns after (minutes)<small>0 disables scheduled rotation.</small></span><input type="number" min={0} max={120} value={draft.rotateTurnMinutes ?? 0} onChange={event => update('rotateTurnMinutes', Number(event.target.value))} /></label></>}
     {tab === 'Workspace' && <>{bool('Background chats', 'backgroundChats', 'Open app-created provider chats in the background.')}<label className="setting"><span>Background placement</span><select value={draft.backgroundPlacement ?? 'window'} onChange={event => update('backgroundPlacement', event.target.value as 'window' | 'group')}><option value="window">Separate window</option><option value="group">Browser tab group</option></select></label><label className="setting"><span>Provider tabs to retain</span><input type="number" min={1} max={50} value={draft.tabsToKeepOpen ?? 8} onChange={event => update('tabsToKeepOpen', Number(event.target.value))} /></label></>}
@@ -206,7 +218,7 @@ function Workspace({ disconnect, initialBootstrap }: { disconnect(): void; initi
   const delivering = inputs.some(row => (row.sessionId === selected || row.deliveredSessionId === selected) && !!selected && !row.automatic && row.delivery === 'pending' && row.state === 'queued');
   const verifyModelSurface = actualProvider === 'chatgpt' && !!model && !!modelSurface && currentModel?.nativeSurface !== modelSurface;
   const modelProblem = verifyModelSurface ? '' : model && !currentModel ? 'This model is unavailable. Choose a model from the current provider.'
-    : effort && !currentModel?.efforts.includes(effort as ReasoningEffort) ? 'Choose a supported thinking effort.' : '';
+    : effort && currentModel?.effortsObserved !== false && !currentModel?.efforts.includes(effort as ReasoningEffort) ? 'Choose a supported thinking effort.' : '';
   const send = async (event: FormEvent) => {
     event.preventDefault(); if (!draft.trim() || sending || pending || uploading || activePlan?.busy || activePlan?.unconfirmed || planInvalid || !actualProvider || (selected && !currentDetail)) return;
     if (activePlan && !activePlan.stages) { await preparePlan(); return; }
@@ -362,11 +374,12 @@ function Workspace({ disconnect, initialBootstrap }: { disconnect(): void; initi
           <div className="composer-toolbar">
             <input ref={files} type="file" multiple hidden onChange={event => { void upload(event.target.files); }} />
             <details className="add-menu" ref={addMenu}><summary aria-label="Add photos, files or skills" aria-disabled={sending || !!pending || uploading} onClick={event => { if (sending || pending || uploading) event.preventDefault(); }}><Icon name="plus" /></summary><div className="model-popover"><button type="button" disabled={uploading || sending || !!pending} onClick={() => files.current?.click()}>Add photos &amp; files</button><button type="button" onClick={async () => { try { setSkills(await request('skills')); setSkillsLoaded(true); setShowSkills(value => !value); } catch (error) { setError((error as Error).message); } }}>Skills <span>＋</span></button>{showSkills && skills.map(skill => <button type="button" key={skill.id} title={skill.description} onClick={() => { updateDraft(`/${skill.id}\n${draft}`); setShowSkills(false); if (addMenu.current) addMenu.current.open = false; }}>{skill.name}</button>)}{showSkills && !skills.length && <small>No installed skills</small>}</div></details>
-            <ModelMenu models={catalog?.models.models ?? []} model={model} effort={effort} disabled={sending || !!pending} unverified={verifyModelSurface} choose={(nextModel, nextEffort) => {
+            <ModelMenu models={catalog?.models.models ?? []} model={model} effort={effort} provider={actualProvider ?? undefined} disabled={sending || !!pending} unverified={verifyModelSurface} choose={(nextModel, nextEffort) => {
               const observed = resolveChatModel(catalog?.models.models ?? [], nextModel);
               setModelSurface(observed?.nativeSurface ?? (nextModel === model ? modelSurface : undefined));
               setModel(nextModel); setEffort(nextEffort); setModelEdited(true);
-            }} refresh={async () => { await mutate({ action: 'refreshModels', provider: actualProvider }); await refreshBootstrap(); }} />
+            }} refresh={async () => { await mutate({ action: 'refreshModels', provider: actualProvider }); await refreshBootstrap(); }}
+              requestEfforts={async model => { await mutate({ action: 'refreshModels', provider: actualProvider, model }); await refreshBootstrap(); }} loadingEfforts={catalog?.models.state === 'pending'} />
             {verifyModelSurface && <small role="status">This previously observed choice will be checked in the browser.</small>}
             <label className="chat-mode" title="Chat mode"><Icon name="chat" /><select aria-label="Chat mode" disabled={sending || !!pending} value={actualMode} onChange={event => { setMode(event.target.value as typeof mode); setModeChanged(true); }}><option value="off">Normal</option><option value="goal">Goal</option><option value="loop">Loop</option></select><Icon name="chevron" /></label>
             <button type="button" className="plan-control" aria-label="Plan" aria-pressed={!!activePlan} onClick={togglePlan}><Icon name="plan" /><span>Plan</span></button>

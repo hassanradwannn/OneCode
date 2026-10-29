@@ -1,5 +1,21 @@
 # OneCode changelog
 
+## [0.8.0] — 2026-10-29
+
+Add a third provider to new chats, Setup, Remote and the local API while preserving existing chat and worker identity. Discover account-available current/legacy models and effort metadata, guide custom MCP and optional native skill installation, and show observed account-limit resets without task replay. Extend exact local capability authorization and retained state to the added adapter. Render React/TSX components with bundled Tailwind, Lucide and Recharts inside the existing network-closed preview. See [release notes](docs/release-notes/v0.8.0.md) and [verification scope](docs/release-acceptance/v0.8.0.md).
+
+## [0.7.4] — 2026-10-29
+
+Support both native ChatGPT picker layouts, default new chats to Chat while retaining explicit Work choices, add Gemini Thinking levels and recheck its exact model after warm-up. Reduce avoidable preparation delays and repair a pending-frame Steer race. See [release notes](docs/release-notes/v0.7.4.md) and [verification](docs/release-acceptance/v0.7.4.md).
+
+## [0.7.3] — 2026-10-28
+
+Repair retained WSL custody cleanup and validate update preparation before shutdown, preventing a Windows update from exiting without reaching its install/relaunch handoff. See [release notes](docs/release-notes/v0.7.3.md) and [verification](docs/release-acceptance/v0.7.3.md).
+
+## [0.7.2] — 2026-10-28
+
+Improve guided public-connection setup, idle browser delivery, exact task authorization and steering state while preserving uncertain-send guards. See [release notes](docs/release-notes/v0.7.2.md) and [verification](docs/release-acceptance/v0.7.2.md).
+
 ## [0.6.17] — 2026-10-26
 
 Keep proved Gemini approval replies attached to their original task while partial chat history loads, and wait for approval receipts before confirming refresh readiness. Includes the Steer/local-poll and queued-follow-up repairs, durable authorization for long Compact & Resume tasks, independent chat pickup, native host pairing, Companion coexistence and updater cleanup fixes. Complete Windows/Linux downloads and compatible application capsules are built from one frozen source; Stable capsules retain the verified 0.5.9 minimum complete base. Automatic approval changes remain deferred. See [0.6.17 release notes](docs/release-notes/v0.6.17.md) and [acceptance](docs/release-acceptance/v0.6.17.md).

@@ -14,7 +14,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { logWarn } from './logger.js';
-import type { ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, type ChatProvider } from '../shared/chat-provider.js';
 
 /** The last answer Gemini gave there, kept as yes (`signedInAt`), no (`signedOutAt`) or neither. */
 type LoginProof = { signedInAt: number | null; signedOutAt: number | null };
@@ -42,9 +42,9 @@ export async function loadBrowserProof(): Promise<void> {
       const signedInAt = time(value.signedInAt);
       proof = { browserId: value.browserId, version: value.version, installedAt: time(value.installedAt)!, signedInAt,
         signedOutAt: signedInAt === null ? time(value.signedOutAt) : null,
-        ...(value.provider === 'chatgpt' ? { provider: 'chatgpt' as const } : {}) };
+        ...(value.provider && CHAT_PROVIDERS.includes(value.provider) ? { provider: value.provider } : {}) };
       const providers: Partial<Record<ChatProvider, LoginProof>> = {};
-      for (const provider of ['gemini', 'chatgpt'] as const) {
+      for (const provider of CHAT_PROVIDERS) {
         const row = value.providers?.[provider];
         if (!row || typeof row !== 'object') continue;
         const signedInAt = time(row.signedInAt), signedOutAt = signedInAt === null ? time(row.signedOutAt) : null;
@@ -112,7 +112,7 @@ export function externalBrowserProof(provider?: ChatProvider): { browserId: stri
   const login = proof.providers?.[selected] ?? ((proof.provider ?? 'gemini') === selected ? proof : null);
   return { browserId: proof.browserId, version: proof.version,
     signedIn: login?.signedInAt != null ? true : login?.signedOutAt != null ? false : null,
-    ...(selected === 'chatgpt' ? { provider: selected } : {}) };
+    ...(selected !== 'gemini' ? { provider: selected } : {}) };
 }
 
 /** For tests: wait for the file to settle. */

@@ -3,6 +3,7 @@ import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
 import type { AgentPlan } from '../shared/agent-plan.js';
 import { chronological } from '../shared/chronology.js';
+import { usageLimitResetText, usageLimitTitle } from '../shared/provider-usage-limit.js';
 import { hasProviderDirective, withoutProviderDirectives } from '../shared/content-reference.js';
 import { formatMessageContent, MESSAGE_TAGS, MESSAGE_DROP_TAGS, MAX_MESSAGE_MARKUP } from '../renderer/message-format.js';
 import { sanitizeHtmlTree } from '../renderer/sanitize-html.js';
@@ -80,7 +81,9 @@ export function Transcript({ events, sessionId, openRequestId }: { events: Contr
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
       {row.presentation || row.kind === 'native_image' || row.kind === 'native_video'
         ? <RichPresentation event={row} sessionId={sessionId} openRequestId={openRequestId} ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)} />
-        : row.kind === 'user_message' ? <div className="msg" dir="auto">{text}</div> : <><Markdown text={text} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
+        : row.kind === 'user_message' ? <div className="msg" dir="auto">{text}</div> : <>
+          {row.kind === 'chat_error' && row.usageLimit && <><strong>{usageLimitTitle(row.usageLimit)}</strong><p>{usageLimitResetText(row.usageLimit) ? `Reset reported: ${usageLimitResetText(row.usageLimit)}. Retry manually when access is available.` : 'The provider did not report a reset time. Retry manually when access is available.'}</p></>}
+          <Markdown text={text} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
     </article>;
   })}</>;
 }

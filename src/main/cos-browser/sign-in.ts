@@ -4,7 +4,9 @@
  * Gemini uses a bounded observation from the paired companion in the active built-in
  * session. No Google cookie is read or transferred. The legacy host has an explicit policy.
  */
+import type { ChatProvider } from '../../shared/chat-provider.js';
 let signedIn: boolean | null = null;
+let observedProvider: ChatProvider = 'gemini';
 const listeners = new Set<() => void>();
 let activeSession = false;
 let companion: string | null = null;
@@ -24,19 +26,20 @@ export function isGoogleSignIn(url: string): boolean {
   } catch { return false; }
 }
 
-export function cosBrowserSignedIn(): boolean | null {
+export function cosBrowserSignedIn(provider: ChatProvider = 'gemini'): boolean | null {
   if (observation && (Date.now() < observation.at || Date.now() >= observation.until)) forgetCosBrowserSignIn();
-  return signedIn;
+  return observedProvider === provider ? signedIn : null;
 }
 
-export function setCosBrowserSignedIn(next: boolean | null): void {
+export function setCosBrowserSignedIn(next: boolean | null, provider: ChatProvider = 'gemini'): void {
   clearObservation();
-  publish(next);
+  publish(next, provider);
 }
 
-function publish(next: boolean | null): void {
-  if (next === signedIn) return;
+function publish(next: boolean | null, provider: ChatProvider = observedProvider): void {
+  if (next === signedIn && observedProvider === provider) return;
   signedIn = next;
+  observedProvider = provider;
   for (const listener of listeners) listener();
 }
 
@@ -78,14 +81,14 @@ export function cosBrowserSignInLease(browserId: string): number | null {
 }
 
 /** Called only after bridge auth/protocol and same built-in browser presence validation. */
-export function noteCosBrowserLogin(browserId: string, next: boolean | null, lease = cosBrowserSignInLease(browserId)): boolean {
+export function noteCosBrowserLogin(browserId: string, next: boolean | null, lease = cosBrowserSignInLease(browserId), provider: ChatProvider = 'gemini'): boolean {
   if (lease === null || lease !== cosBrowserSignInLease(browserId)) return false;
   clearObservation();
   const at = Date.now();
   observation = { at, until: at + LOGIN_LEASE_MS };
   expiry = setTimeout(() => { forgetCosBrowserSignIn(); }, LOGIN_LEASE_MS);
   expiry.unref?.();
-  publish(next);
+  publish(next, provider);
   return true;
 }
 

@@ -28,7 +28,7 @@ export function initProviderCopy(): (provider: ChatProvider) => void {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (!/Gemini|ChatGPT/.test(node.data) ||
+    if (!/Gemini|ChatGPT|Claude/.test(node.data) ||
         node.parentElement?.closest(`script, style, option, code, [translate="no"], #chatProvider, #setupChatProvider, #composerProviderLabel, ${nativeCopy}`)) continue;
     copy.push({ node, source: node.data });
   }
@@ -37,7 +37,7 @@ export function initProviderCopy(): (provider: ChatProvider) => void {
     if (node.closest(`[translate="no"], #chatProvider, #setupChatProvider, ${nativeCopy}`)) continue;
     for (const property of ['title', 'placeholder', 'aria-label'] as const) {
       const source = node.getAttribute(property);
-      if (source && /Gemini|ChatGPT/.test(source)) attributes.push({ node, property, source });
+      if (source && /Gemini|ChatGPT|Claude/.test(source)) attributes.push({ node, property, source });
     }
   }
   return provider => {

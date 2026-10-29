@@ -184,7 +184,7 @@ const DEFAULT_MULTI_AGENT: MultiAgentSettings = {
   globalMaxWorkers: 0,
   allowUnattributedCalls: false,
   strictChatAllowlist: false,
-  strictChatAllowlistByProvider: { gemini: false, chatgpt: false },
+  strictChatAllowlistByProvider: { gemini: false, chatgpt: false, claude: false },
   // Off: Goal/Loop chats are always recovered, and reopening anything else — a worker, a prime,
   // a plain chat that once called a tool — is the user's choice to make.
   recoverAgentTabs: false,
@@ -284,7 +284,7 @@ const capabilitiesSchema = z
  * honour in front of the model.
  */
 export const MAX_MCP_INSTRUCTIONS_CHARS = 4000;
-const DEFAULT_MCP = { instructions: '', persistentUrls: true } as const;
+const DEFAULT_MCP = { instructions: '', persistentUrls: true, useClaudeWebSkill: false } as const;
 /** Off for fresh installs and for every config written before the switches existed. */
 const DEFAULT_CONTROL_API = { enabled: false, allowActions: false } as const;
 /** Experimental API: off unless explicitly enabled; its endpoint stays stable once configured. */
@@ -440,7 +440,7 @@ const configSchema = z.object({
       globalMaxWorkers: z.number().int().min(0).max(64).optional().default(DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0),
       allowUnattributedCalls: z.boolean().optional().default(DEFAULT_MULTI_AGENT.allowUnattributedCalls),
       strictChatAllowlist: z.boolean().optional().default(DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false),
-      strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional() }).optional(),
+      strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional(), claude: z.boolean().optional() }).optional(),
       recoverAgentTabs: z.boolean().optional().default(DEFAULT_MULTI_AGENT.recoverAgentTabs),
       waitForSubAgents: z.boolean().optional().default(DEFAULT_MULTI_AGENT.waitForSubAgents ?? false),
       autoWorktrees: z.boolean().optional().default(DEFAULT_MULTI_AGENT.autoWorktrees ?? false),
@@ -473,7 +473,7 @@ const configSchema = z.object({
       loopBackend: z.enum(['api', 'chatgpt']).optional().default('chatgpt'),
       helperModel: z.string().trim().min(1).max(80).optional().default(DEFAULT_HELPER_CHAT_MODEL).catch(DEFAULT_HELPER_CHAT_MODEL),
       helperModelAffinity: chatModelAffinitySchema,
-      helperReasoning: z.enum(REASONING_EFFORTS).optional().default('high').catch('high'),
+      helperReasoning: z.union([z.enum(REASONING_EFFORTS), z.literal('')]).optional().default('high').catch('high'),
       // Repaired rather than rejected for the same reason `reasoning` below is: a config
       // written by a version that knows one more mode than this one must not send every root
       // and permission in the file through conservative recovery over a single word.
@@ -553,6 +553,7 @@ const configSchema = z.object({
         .catch(DEFAULT_MCP.instructions),
       useGeminiWebSkill: z.boolean().optional().catch(false),
       useChatgptWebSkill: z.boolean().optional().catch(false),
+      useClaudeWebSkill: z.boolean().optional().default(false).catch(false),
       // Opt-in only: a malformed value repairs to off, the rotating default.
       persistentUrls: z.boolean().optional().default(false).catch(false)
     })

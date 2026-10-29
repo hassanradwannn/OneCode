@@ -33,7 +33,7 @@ import { authenticateGeminiBinding, geminiBindingsEnabled, GeminiBindingError, s
 import { pluginManager } from '../plugins/manager.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { withMcpProvider } from './provider-context.js';
-import { authenticateChatgptExec, ChatgptBindingError, type LocalBindingEvidence } from '../session/local-binding.js';
+import { authenticateLocalExec, usesLocalTaskCapability, LocalBindingError, type LocalBindingEvidence } from '../session/local-binding.js';
 import { sessionHistoryUnavailable } from '../session/journal-io.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -190,8 +190,13 @@ let requestSeenAt: number | null = null;
  * asks each surface for itself.
  */
 const surfaceRequestAt = new Map<SurfaceId, number>();
+const providerRequests = new Map<ChatProvider, Map<SurfaceId, number>>();
 
-export function lastRequestAt(surface?: SurfaceId): number | null {
+export function lastRequestAt(surface?: SurfaceId, provider?: ChatProvider): number | null {
+  if (provider) {
+    const rows = providerRequests.get(provider);
+    return surface === undefined ? rows?.size ? Math.max(...rows.values()) : null : rows?.get(surface) ?? null;
+  }
   if (surface === undefined) return requestSeenAt;
   return surfaceRequestAt.get(surface) ?? null;
 }
@@ -281,7 +286,8 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
   // caller passes each surface's stored token, and only a well-formed one is used.
   requestSeenAt = null;
   surfaceRequestAt.clear();
-  resetToolClock();
+  providerRequests.delete(provider);
+  resetToolClock(provider);
   selfTestToken = randomBytes(16).toString('hex');
   tunnelProbeToken = randomBytes(16).toString('hex');
   // One path per surface, each with its own token. Distinct tokens rather than one shared
@@ -361,6 +367,8 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
   let forceTimer: ReturnType<typeof setTimeout> | null = null;
   let forceDeadline = Infinity;
   let stopped = false;
+  // Local transport sequence only: never a provider request or caller identity.
+  let ingressSequence = 0;
   const server = http.createServer((req, res) => {
     if (stopping) {
       res.setHeader('connection', 'close');
@@ -380,21 +388,39 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     const prmRoute = routes.find((candidate) => safeEqual(pathOnly, candidate.prmPath)) ?? null;
 
     const startedAt = Date.now();
+    let ingress: { sequence: number; phase: string; rpc: string } | null = null;
+    const markIngress = (phase: 'headers' | 'body' | 'body-rejected' | 'adapter' | 'admission' | 'admitted' | 'dispatch' | 'refused', body?: unknown): void => {
+      if (!ingress || !route) return;
+      if (phase === 'body') {
+        const method = body && typeof body === 'object' && !Array.isArray(body) ? (body as { method?: unknown }).method : undefined;
+        // Methods outside this fixed vocabulary can themselves contain private text.
+        ingress.rpc = method === 'initialize' || method === 'tools/list' || method === 'tools/call' ||
+          method === 'notifications/initialized' || method === 'ping' ? method : 'other';
+      }
+      ingress.phase = phase;
+      logInfo(`MCP ingress provider=${provider} surface=${route.id} sequence=${ingress.sequence} phase=${phase} rpc=${ingress.rpc} elapsedMs=${Date.now() - startedAt}`);
+    };
+    const endIngress = (outcome: 'finished' | 'closed'): void => {
+      if (!ingress || !route) return;
+      logInfo(`MCP ingress provider=${provider} surface=${route.id} sequence=${ingress.sequence} phase=${outcome} last=${ingress.phase} rpc=${ingress.rpc} status=${res.statusCode} elapsedMs=${Date.now() - startedAt}`);
+    };
     const publication = { completedAt: null as number | null, failed: false };
     res.once('close', () => {
       if (publication.completedAt === null) {
         publication.failed = true;
+        if (!res.writableFinished) endIngress('closed');
         if (route && !res.writableFinished) logWarn(`MCP response closed before completion surface=${route.id} elapsedMs=${Date.now() - startedAt}`);
       }
     });
     res.on('finish', () => {
+      endIngress('finished');
       if (res.statusCode >= 200 && res.statusCode < 300 && !publication.failed) publication.completedAt = Date.now();
       else publication.failed = true;
       const shape = route
         ? `mcp/${route.id}`
         : prmRoute
           ? `oauth-metadata/${prmRoute.id}`
-          : pathOnly.slice(0, 40);
+          : 'unmatched';
       const method = req.method ?? '?';
       const who = selfTest ? ' (self-test)' : tunnelProbe ? ' (tunnel probe)' : '';
       const line = `${method} ${shape} → ${res.statusCode} in ${Date.now() - startedAt}ms${who}${formatInboundTiming(timing)}`;
@@ -436,9 +462,13 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // 404s, our own self-test and tunnel-client's startup initialize probe are not
     // evidence that ChatGPT itself reached the connector.
     if (!selfTest && !tunnelProbe) {
+      ingress = { sequence: ++ingressSequence, phase: 'headers', rpc: 'unread' };
+      markIngress('headers');
       requestSeenAt = Date.now();
       surfaceRequestAt.set(route.id, requestSeenAt);
-      noteConnectorUse(route.id, 'request', requestSeenAt);
+      if (!providerRequests.has(provider)) providerRequests.set(provider, new Map());
+      providerRequests.get(provider)!.set(route.id, requestSeenAt);
+      noteConnectorUse(route.id, 'request', requestSeenAt, provider);
     }
 
     const declaredHeader = req.headers['content-length'];
@@ -452,7 +482,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
     // it; see inbound.ts for why it cannot be taken from the MCP call context.
     // A Gemini client may send arbitrary/reused RPC ids and no request header. Never
     // convert a claimed header into browser proof when local capability routing is active.
-    const requestId = provider === 'gemini' && geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
+    const requestId = provider === 'claude' || provider === 'gemini' && geminiBindingsEnabled() ? null : requestIdFromHeader(req.headers['x-request-id']);
     const dispatch = (body?: unknown, geminiBinding?: LocalBindingEvidence, override?: ReturnType<typeof toNodeHandler>): void => {
       if (stopping || res.destroyed) {
         if (!res.destroyed) {
@@ -473,38 +503,48 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
       res.once('finish', release);
       res.once('close', release);
       const handler = override ?? ((body as { method?: unknown } | undefined)?.method === 'tools/call' ? route.toolHandler : route.handler);
+      markIngress('adapter');
       withMcpProvider(provider, () => withInboundRequestId(geminiBinding ? null : requestId, () => void handler(req, res, body), timing, publication, !selfTest && !tunnelProbe, geminiBinding));
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       void readBoundedJsonBody(req).then(async (parsed) => {
         if (res.destroyed) return;
         if (parsed.error === 'payload_too_large') {
+          markIngress('body-rejected');
           jsonError(res, 413, 'payload_too_large');
           return;
         }
         if (parsed.error === 'invalid_json') {
+          markIngress('body-rejected');
           jsonError(res, 400, 'invalid_json');
           return;
         }
+        markIngress('body', parsed.body);
         const message = parsed.body as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: { name?: unknown; arguments?: unknown } } | undefined;
-        if (provider === 'chatgpt' && message?.method === 'tools/call') {
+        if (usesLocalTaskCapability(provider) && message?.method === 'tools/call') {
           dispatch(message, undefined, toNodeHandler({ fetch: async (request, options) => admissionStream(request, async () => {
           try {
-            const authenticated = await withMcpProvider(provider, () => authenticateChatgptExec(message.params?.name, message.params?.arguments));
+            markIngress('admission');
+            const authenticated = await withMcpProvider(provider, () => authenticateLocalExec(provider, message.params?.name, message.params?.arguments));
+            if (provider === 'claude' && !authenticated.evidence) throw new LocalBindingError(provider, 'proof-unavailable');
             request.signal.throwIfAborted();
             if (stopping || res.destroyed) throw new Error('Request closed');
+            markIngress('admitted');
             const body = { ...message, params: { ...message.params, arguments: authenticated.args } };
+            markIngress('dispatch');
             return await withMcpProvider(provider, () => withInboundRequestId(authenticated.evidence ? null : requestId, () => route.toolWebHandler.fetch(request, { ...options, parsedBody: body }), timing, publication, !selfTest && !tunnelProbe, authenticated.evidence));
           } catch (error) {
             if (res.destroyed || request.signal.aborted) throw error;
+            markIngress('refused');
             const storage = sessionHistoryUnavailable(error);
             // Never log credentials, arguments or journal contents. A failed proof
             // read preserves the grant; reporting it as revoked hides recovery.
-            logWarn(`ChatGPT MCP admission refused: ${storage ? `session storage ${error.code}` :
-              error instanceof ChatgptBindingError ? `task authorization unavailable (${error.admissionReason})` : 'task authorization unavailable'}`);
+            logWarn(`${provider === 'chatgpt' ? 'ChatGPT' : 'Provider'} MCP admission refused${provider === 'claude' ? ' (claude)' : ''}: ${storage ? `session storage ${error.code}` :
+              error instanceof LocalBindingError ? `task authorization unavailable (${error.admissionReason})` : 'task authorization unavailable'}`);
+            const prefix = provider === 'claude' ? 'CLAUDE' : 'CHATGPT';
             const text = storage
-              ? `CHATGPT_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
-              : 'CHATGPT_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.';
+              ? `${prefix}_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
+              : `${prefix}_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.`;
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
               result: { isError: true, content: [{ type: 'text', text }] } });
             return new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
@@ -515,13 +555,17 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
         if (provider === 'gemini' && geminiBindingsEnabled() && message?.method === 'tools/call') {
           dispatch(message, undefined, toNodeHandler({ fetch: async (request, options) => admissionStream(request, async () => {
           try {
+            markIngress('admission');
             const binding = await authenticateGeminiBinding(message.params?.arguments);
             const body = { ...message, params: { ...message.params, arguments: stripGeminiRoutingArgs(message.params?.arguments) } };
             request.signal.throwIfAborted();
             if (stopping || res.destroyed) throw new Error('Request closed');
+            markIngress('admitted');
+            markIngress('dispatch');
             return await withMcpProvider(provider, () => withInboundRequestId(null, () => route.toolWebHandler.fetch(request, { ...options, parsedBody: body }), timing, publication, !selfTest && !tunnelProbe, binding));
           } catch (error) {
             if (res.destroyed || request.signal.aborted) throw error;
+            markIngress('refused');
             // Only fixed codes and bounded routing shape enter diagnostics. Unknown tool
             // names can themselves contain a credential/task, so log declared names only.
             const storage = sessionHistoryUnavailable(error);

@@ -10,7 +10,7 @@ import { getSessionProject } from '../projects.js';
 export function registerSkillsTool(reg: SurfaceRegistrar): void {
   reg.register('skills', {
     title: 'OneCode skills',
-    description: 'List OneCode local skills or import a requested skill into the visible Skills library. Create a package with apply_patch at /skills/<id>/SKILL.md (plus references/scripts), or import an approved local file/folder with path and kind. Workspace files alone are not an installed skill. Read the returned catalog to verify publication before claiming installation. onecode-chatgpt is the browser backend skill installed in ChatGPT; it is separate from this local library and need not appear here. Skills add no permissions. Import requires Read files and Create files; read-only mode refuses it.',
+    description: 'List OneCode local skills or import a requested skill into the visible Skills library. Create a package with apply_patch at /skills/<id>/SKILL.md (plus references/scripts), or import an approved local file/folder with path and kind. Workspace files alone are not an installed skill. Read the returned catalog to verify publication before claiming installation. Native provider backend skills are installed in the provider account; they are separate from this local library and need not appear here. Skills add no permissions. Import requires Read files and Create files; read-only mode refuses it.',
     inputSchema: z.object({ action: z.enum(['list', 'import']), path: z.string().min(1).max(4096).optional(),
       kind: z.enum(['file', 'folder']).optional() }).strict().pipe(z.discriminatedUnion('action', [
       z.object({ action: z.literal('list') }).strict(),

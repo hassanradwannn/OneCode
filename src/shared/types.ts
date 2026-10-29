@@ -316,7 +316,8 @@ export interface GoalSettings {
   includeToolCalls?: boolean;
   helperModel?: string;
   helperModelAffinity?: ChatModelAffinity;
-  helperReasoning?: ReasoningEffort;
+  /** Empty preference preserves the provider's current effort; absence keeps the legacy default. */
+  helperReasoning?: ReasoningEffort | '';
   backend?: GoalBackend;
   loopBackend?: 'api' | 'chatgpt';
   enabled: boolean;
@@ -412,6 +413,7 @@ export interface McpSettings {
   /** Use the user's installed native Gemini onecode-gemini skill for reusable opening guidance. */
   useGeminiWebSkill?: boolean;
   useChatgptWebSkill?: boolean;
+  useClaudeWebSkill?: boolean;
   /**
    * Keep each connector's secret URL path across restarts, for a tunnel of the user's own whose
    * URL Gemini stores (#924). Off by default: tokens rotate on every start. Stored only in the

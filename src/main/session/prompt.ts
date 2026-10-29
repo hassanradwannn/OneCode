@@ -57,6 +57,20 @@ function chatgptSkillInstructions(): string {
   ].join('\n\n');
 }
 
+/** Reusable MCP schemas/optional native skill carry the manual; openings carry live state only. */
+function claudeOpeningInstructions(): string {
+  const config = getConfig();
+  return [
+    'Use the connected OneCode tools through their declared schemas. Discover enabled integrations with Core plugins {action:"list"}. Verify results and never replay an uncertain mutation.',
+    `Current Core connector: ${JSON.stringify(configuredConnectorName('core'))}.`,
+    `Platform: ${process.platform}. Approved roots now: ${config.roots.map(root => `/${root.name} (${root.path})`).join(', ') || 'none'}. Folder grants apply immediately; cached roots may be stale.`,
+    ...(effectiveCapabilities(config).create ? [ARTIFACT_FLOW_REMINDER] : []),
+    ...(effectiveCapabilities(config).read ? ['Live local references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.'] : []),
+    'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
+    ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
+  ].join('\n\n');
+}
+
 /** One selected folder, never cwd inference, global discovery or a recursive document scan. */
 async function projectInstructions(scope: PromptScope): Promise<ProjectInstructions | null> {
   if (!scope.sessionId && !scope.projectId) return null;
@@ -167,11 +181,11 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const chatgptSkill = provider === 'chatgpt' && config.mcp.useChatgptWebSkill === true;
-  const compact = chatgptSkill || provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
+  const compact = provider === 'claude' || chatgptSkill || provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = [compact ? (chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
+  const core = [compact ? (provider === 'claude' ? claudeOpeningInstructions() : chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
     scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
@@ -187,12 +201,12 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
-  const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true;
+  const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true || provider === 'claude';
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
-    ...(provider === 'gemini' && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
+    ...((provider === 'gemini' || provider === 'claude') && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(effectiveCapabilities(getConfig()).read ? compactSkill
-      ? ['Use the installed onecode-chatgpt skill. Live references: /skills/.catalog.json and /sessions/.catalog.json.']
+      ? [`${provider === 'chatgpt' ? 'Use the installed onecode-chatgpt skill. ' : ''}Live references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.`]
       : [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),
     ...(pluginManager.tools().length ? [compactSkill
       ? `Current Core: ${JSON.stringify(configuredConnectorName('core'))}; discover enabled tools through plugins {action:"list"}.`

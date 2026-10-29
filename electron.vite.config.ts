@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import { resolve } from 'node:path';
+import { artifactRuntimePlugin } from './scripts/artifact-runtime-plugin.js';
 
 /** Fonts always ship as files; anything else keeps Vite's default inlining. */
 export const rendererAssetsInlineLimit = (file: string): boolean | undefined => /\.(?:woff2?|ttf|otf|eot)$/i.test(file) ? false : undefined;
@@ -33,6 +34,7 @@ export default defineConfig({
     }
   },
   renderer: {
+    plugins: [artifactRuntimePlugin()],
     define: channelDefine,
     root: resolve(__dirname, 'src/renderer'),
     // nixpkgs' development hook links dependencies from its immutable node_modules

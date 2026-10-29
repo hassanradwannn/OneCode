@@ -184,7 +184,7 @@ export type ToolOutcome = 'ok' | 'process_exit_nonzero' | 'tool_rejected' | 'too
  */
 export type CallAttribution =
   | 'request_id'
-  | 'gemini_session_capability' | 'chatgpt_session_capability'
+  | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability'
   | 'unattributed'
   | 'superseded'
   | 'turn'
@@ -215,6 +215,7 @@ export const ATTRIBUTION_LABELS: Record<CallAttribution, string> = {
   request_id: 'exact request id',
   gemini_session_capability: 'local Gemini session capability',
   chatgpt_session_capability: 'local ChatGPT session capability',
+  claude_session_capability: 'local provider session capability',
   unattributed: 'request id not resolved',
   superseded: 'retired conversation',
   agent: 'agent key',
@@ -222,6 +223,23 @@ export const ATTRIBUTION_LABELS: Record<CallAttribution, string> = {
   generation: 'the only chat generating',
   inferred: 'not placed in a chat'
 };
+
+/** Exact native model usage notice; not a history-rate-limit or resend authorization. */
+export interface ProviderUsageLimit {
+  kind: 'session' | 'weekly' | 'unknown';
+  resetAt?: number;
+  resetText?: string;
+}
+/** Invalid deadlines are omitted independently so the provider's native text is retained. */
+export function normalizeProviderUsageLimit(value: unknown, observedAt: number): ProviderUsageLimit | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Number.isFinite(observedAt)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== 'session' && row.kind !== 'weekly' && row.kind !== 'unknown') return undefined;
+  return { kind: row.kind,
+    ...(typeof row.resetAt === 'number' && Number.isFinite(row.resetAt) && row.resetAt > observedAt &&
+      row.resetAt - observedAt <= 8 * 24 * 60 * 60_000 ? { resetAt: Math.floor(row.resetAt) } : {}),
+    ...(typeof row.resetText === 'string' && row.resetText.trim() ? { resetText: row.resetText.slice(0, 160) } : {}) };
+}
 
 export interface ToolCallRecord {
   /** Internal code-mode invocation: retained for audit, never a separate model exchange. */
@@ -239,7 +257,7 @@ export interface ToolCallRecord {
   /** Conversation proven by that request id, or null when ownership was unresolved. */
   conversationId: string | null;
   /** Deterministic placement outcome for current, unresolved, or deliberately retired callers. */
-  attributionMethod: 'request_id' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'unattributed' | 'superseded';
+  attributionMethod: 'request_id' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability' | 'unattributed' | 'superseded';
   /** Exact arguments as JSON. Cut inline past the cap, with the whole text in an asset. */
   args: StoredText;
   result: StoredText;
@@ -539,7 +557,7 @@ export type SessionEvent =
    * `retryAt` is the first time ChatGPT said a blocking history limit may be retried, kept for the
    * timeline to show. The live hold follows each newer deadline; this one is never an authority.
    */
-  | (BaseEvent & { kind: 'chat_error'; message: StoredText; recoverable?: boolean; blocking?: boolean; retryAt?: number; reason?: 'thinking_failed' | 'stream_gone' })
+  | (BaseEvent & { kind: 'chat_error'; message: StoredText; usageLimit?: ProviderUsageLimit; recoverable?: boolean; blocking?: boolean; retryAt?: number; reason?: 'thinking_failed' | 'stream_gone' })
   | (BaseEvent & { kind: 'tool_call'; call: ToolCallRecord; origin?: number })
   /**
    * An app-authored line. `continuation` names the Compact & Resume it is about, so the

@@ -9,7 +9,7 @@ export interface ProviderEndpoints extends McpEndpoint {
   providers: Record<ChatProvider, McpEndpoint>;
 }
 
-/** Two independent MCP listeners behind one path-only HTTPS tunnel gateway.
+/** Independent provider MCP listeners behind one path-only HTTPS tunnel gateway.
  * The gateway does not interpret MCP or choose a provider from mutable UI state.
  * A URL's independent secret permanently selects its provider's listening server.
  */
@@ -18,14 +18,26 @@ export async function startProviderMcpServers(
   kept: Partial<Record<ChatProvider, Partial<Record<SurfaceId, string>>>>,
   selected: () => ChatProvider
 ): Promise<ProviderEndpoints> {
-  const gemini = await startMcpServer(context, kept.gemini, 'gemini');
-  let chatgpt: McpEndpoint;
+  const providers = {} as Record<ChatProvider, McpEndpoint>;
+  const started: McpEndpoint[] = [];
+  const tokens = new Set<string>();
   try {
-    const distinct = { ...kept.chatgpt };
-    for (const id of SURFACE_IDS) if (distinct[id] === kept.gemini?.[id]) delete distinct[id];
-    chatgpt = await startMcpServer(context, distinct, 'chatgpt');
-  } catch (error) { await gemini.stop(); throw error; }
-  const providers = { gemini, chatgpt };
+    for (const provider of CHAT_PROVIDERS) {
+      const distinct = { ...kept[provider] };
+      const reserved = new Set(tokens);
+      for (const id of SURFACE_IDS) if (distinct[id]) {
+        if (reserved.has(distinct[id]!)) delete distinct[id];
+        else reserved.add(distinct[id]!);
+      }
+      const endpoint = await startMcpServer(context, distinct, provider);
+      started.push(endpoint); providers[provider] = endpoint;
+      for (const value of Object.values(endpoint.urls)) {
+        const token = new URL(value).pathname.split('/').at(-1)!;
+        if (tokens.has(token)) throw new Error('Provider connector token collision');
+        tokens.add(token);
+      }
+    }
+  } catch (error) { await Promise.allSettled(started.map(endpoint => endpoint.stop())); throw error; }
   const routes = new Map<string, URL>();
   for (const provider of CHAT_PROVIDERS) for (const value of Object.values(providers[provider].urls)) {
     const target = new URL(value);
@@ -82,7 +94,7 @@ export async function startProviderMcpServers(
   gateway.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   try { await new Promise<void>((resolve, reject) => {
     gateway.once('error', reject); gateway.listen(0, '127.0.0.1', () => { gateway.off('error', reject); resolve(); });
-  }); } catch (error) { await Promise.all([gemini.stop(), chatgpt.stop()]); throw error; }
+  }); } catch (error) { await Promise.allSettled(started.map(endpoint => endpoint.stop())); throw error; }
   const port = (gateway.address() as AddressInfo).port;
   const urls = (provider: ChatProvider) => Object.fromEntries(SURFACE_IDS.map(id =>
     [id, `http://127.0.0.1:${port}${new URL(providers[provider].urls[id]).pathname}`])) as Record<SurfaceId, string>;
@@ -100,7 +112,7 @@ export async function startProviderMcpServers(
       stopped ??= (async () => {
         const closed = new Promise<void>(resolve => gateway.close(() => resolve()));
         gateway.closeIdleConnections();
-        await Promise.all([gemini.stop(options), chatgpt.stop(options)]);
+        await Promise.allSettled(started.map(endpoint => endpoint.stop(options)));
         await closed;
       })();
       return stopped;

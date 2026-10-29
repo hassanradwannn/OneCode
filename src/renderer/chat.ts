@@ -5762,7 +5762,7 @@ export function chatSettingsPatch(current: Config, provider: ChatProvider = curr
       loopBackend: $<HTMLSelectElement>('loopBackend').value as Config['goal']['loopBackend'],
       helperModel,
       helperModelAffinity: settingsModelAffinity(helperModel, current.goal.helperModelAffinity, provider, 'helperModel'),
-      helperReasoning: ($<HTMLSelectElement>('helperReasoning').value || current.goal.helperReasoning || 'high') as Config['goal']['helperReasoning'],
+      helperReasoning: $<HTMLSelectElement>('helperReasoning').value as Config['goal']['helperReasoning'],
       provider: {
         kind: ($<HTMLSelectElement>('goalProvider').value || current.goal.provider?.kind || 'openrouter') as Config['goal']['provider']['kind'],
         baseUrl: $<HTMLInputElement>('goalBaseUrl').value

@@ -32,7 +32,7 @@ import type {
   ToolOutcome,
   TurnOutcome
 } from '../../shared/session.js';
-import { estimateTokens, originTitle } from '../../shared/session.js';
+import { estimateTokens, originTitle, normalizeProviderUsageLimit } from '../../shared/session.js';
 import type { ArtifactKind } from '../../shared/artifact.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
 import { chatErrorMessageKey } from '../../shared/chat-error.js';
@@ -1205,7 +1205,7 @@ export interface ToolCallInput {
   /** Durable local session principal carried by the exact request correlation, when available. */
   sessionId?: string | null;
   /** Validated by MCP ingress/dispatcher; local authorization, never Google request proof. */
-  attributionMethod?: 'gemini_session_capability' | 'chatgpt_session_capability';
+  attributionMethod?: 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability';
   /** Captured before dispatch from this exact input's canonical ACK and actual native turn. */
   geminiInputTurn?: GeminiInputTurn;
   /** A successful worker finish report is a hard activity boundary, not fresh work. */
@@ -1456,7 +1456,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
 
     const call: ToolCallRecord = {
       ...(input.nested === true ? { nested: true } : {}),
-      ...((target.attribution === 'request_id' || target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
+      ...((target.attribution === 'request_id' || target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability' || target.attribution === 'claude_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
         ? { process: { sessionId: evidence.processSessionId } } : {}),
       ...callModel,
       callId: randomUUID(),
@@ -1467,7 +1467,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       attributionMethod:
         target.attribution === 'superseded'
           ? 'superseded'
-          : target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability'
+          : target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability' || target.attribution === 'claude_session_capability'
             ? target.attribution
           : target.conversationId && input.requestId
             ? 'request_id'
@@ -1861,6 +1861,7 @@ export interface ChatObservation {
   blocking?: boolean;
   /** chat_error only: provider Retry-After deadline for loading this exact conversation history. */
   retryAt?: number;
+  usageLimit?: import('../../shared/session.js').ProviderUsageLimit;
   /** tool_evidence only: the connector requests this turn's message model holds. */
   calls?: PageCallEvidence[];
 }
@@ -2504,6 +2505,7 @@ async function recordChatObservationsNow(
         // Reloads lose/remint document turn ids. A recoverable notice belongs to the
         // canonical question, not that document. Keep the original notice throughout
         // recovery; a genuinely new question gives the same error a new owner.
+        const usageLimit = item.blocking === true ? normalizeProviderUsageLimit(item.usageLimit, item.time) : undefined;
         const text = chatErrorMessageKey(item.text ?? '', item.recoverable === true);
         const question = item.recoverable === true ? await readLatestUserMessage(sessionId) : undefined;
         const recent = await readRecentEvents(sessionId, 32, { kinds: ['chat_error'], maxBytes: 256 * 1024 });
@@ -2515,10 +2517,11 @@ async function recordChatObservationsNow(
         // its Retry-After): the provider access dialog keeps being recorded again after 30 s, as before.
         const newest = recent.reduce<SessionEvent | undefined>((latest, event) =>
           event.kind === 'chat_error' && event.blocking === true && (!latest || event.seq > latest.seq) ? event : latest, undefined);
-        if (item.blocking === true && Number.isFinite(item.retryAt) && newest?.kind === 'chat_error' && newest.blocking === true &&
+        if (!usageLimit && item.blocking === true && Number.isFinite(item.retryAt) && newest?.kind === 'chat_error' && newest.blocking === true &&
             item.time - newest.time <= 30 * 60_000 &&
             chatErrorMessageKey(newest.message.text, newest.recoverable === true) === text) continue;
         if (recent.some(event => event.kind === 'chat_error' &&
+            (!usageLimit || JSON.stringify(event.usageLimit) === JSON.stringify(usageLimit)) &&
             ((question && event.recoverable === true && event.seq > (question.origin ?? question.seq)) ||
             ((Math.abs(item.time - event.time) <= 30_000 ||
               (item.reason === 'thinking_failed' && event.reason === item.reason && event.turnId === item.turnId)) &&
@@ -2533,8 +2536,9 @@ async function recordChatObservationsNow(
           ...(item.reason === 'thinking_failed' || item.reason === 'stream_gone' ? { reason: item.reason } : {}),
           ...(typeof item.recoverable === 'boolean' ? { recoverable: item.recoverable } : {}),
           ...(typeof item.blocking === 'boolean' ? { blocking: item.blocking } : {}),
+          ...(usageLimit ? { usageLimit, recoverable: false } : {}),
           // The same bounds the bridge applies before it honors a Retry-After.
-          ...(item.blocking === true && Number.isFinite(item.retryAt) && item.retryAt! > item.time &&
+          ...(!usageLimit && item.blocking === true && Number.isFinite(item.retryAt) && item.retryAt! > item.time &&
             item.retryAt! - item.time <= 24 * 60 * 60_000 ? { retryAt: item.retryAt } : {}),
           message: await storeText(sessionId, item.text ?? '', 2000)
         });

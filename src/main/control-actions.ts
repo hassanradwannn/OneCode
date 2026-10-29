@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHAT_PROVIDERS } from '../shared/chat-provider.js';
 import { serveWorkerAction } from './control-workers.js';
 import type { ControlApiCancelResult, ControlApiSendResult, ControlApiStopResult } from '../shared/control-api.js';
 import { stopSessionTurn } from './bridge.js';
@@ -46,6 +47,7 @@ const sendBody = z
     id: lowerUuid,
     // Without a session the message starts a new chat (#1349), whose id is the message id.
     sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/).optional(),
+    provider: z.enum(CHAT_PROVIDERS).optional(),
     // The project a new chat starts in. An existing chat keeps the one it has.
     projectId: lowerUuid.optional(),
     text: z.string().max(MAX_TEXT).refine((value) => value.trim().length > 0, 'text is empty'),
@@ -53,6 +55,7 @@ const sendBody = z
     interrupt: z.boolean().optional()
   })
   .strict()
+  .refine((body) => body.sessionId === undefined || body.provider === undefined, { path: ['provider'], message: 'a provider belongs to a new chat' })
   .refine((body) => body.sessionId === undefined || body.projectId === undefined, { path: ['projectId'], message: 'a project belongs to a new chat' });
 
 const cancelBody = z.object({}).strict();
@@ -116,7 +119,8 @@ async function send(rawBody: unknown): Promise<ActionReply> {
   const existing = await find(body.id);
   if (existing) {
     // A new chat's first message is filed under its own id.
-    if (existing.purpose === 'decision' || existing.sessionId !== (body.sessionId ?? body.id) || existing.text !== text) {
+    if (existing.purpose === 'decision' || existing.sessionId !== (body.sessionId ?? body.id) || existing.text !== text ||
+        body.provider !== undefined && body.provider !== (existing.chatProvider ?? existing.provider)) {
       throw new RequestError(409, 'id_conflict', 'this id belongs to a different message');
     }
     const replay: ControlApiSendResult = { input: projectInput(existing), replayed: true };
@@ -143,6 +147,7 @@ async function send(rawBody: unknown): Promise<ActionReply> {
     id: body.id,
     // The outbox opens a chat for a message without a session, exactly as the composer's New chat does.
     sessionId: body.sessionId ?? null,
+    ...(body.provider !== undefined ? { provider: body.provider } : {}),
     ...(body.projectId !== undefined ? { projectId: body.projectId } : {}),
     text,
     mode: 'auto',

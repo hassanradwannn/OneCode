@@ -1,7 +1,9 @@
+import { normalizeProviderUsageLimit } from '../shared/session.js';
 import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
 import { z } from 'zod';
-import { chatgptBindingInstructions, type LocalBindingStatus } from './session/local-binding.js';
-import { continuationReceipt } from '../shared/continuation-receipt.js';
+import { localBindingInstructions, usesLocalTaskCapability, type LocalBindingStatus, type LocalCapabilityProvider } from './session/local-binding.js';
+import { optionalNativeSkillGuidance, nativeSkillDelivery, type NativeSkillDelivery } from './session/native-skill.js';
+import { continuationReceipt, continuationSourceDocument, isProviderNativeQuestionId } from '../shared/continuation-receipt.js';
 import { handoffContinuationId, handoffMarkdownLimit } from './session/handoff.js';
 import { nextWorkerArchive, settleWorkerArchive } from './worker-archive.js';
 import { considerTurnRotation, type RotationDeps } from './turn-rotation.js';
@@ -20,9 +22,9 @@ import { MAX_BROWSER_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt
 import { isConversationDeleted } from '../shared/chat-error.js';
 import { prepareSessionPrompt } from './session/prompt.js';
 import { pendingChatModelRequest, observeChatModels, requestChatModels, observedModelSurface } from './chat-models.js';
-import { isDeliberateEffort, isProModel } from '../shared/chat-models.js';
+import { isNativeModelId, isDeliberateEffort, isProModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
-import { injectedUserMessage, recordedRequestTurn, responseTurnId, type TimelineTurns } from '../shared/chronology.js';
+import { positionOf, injectedUserMessage, recordedRequestTurn, responseTurnId, type TimelineTurns } from '../shared/chronology.js';
 import type { SessionSummary } from '../shared/session.js';
 import { messageReferences } from '../shared/session.js';
 import type { ArtifactKind } from '../shared/artifact.js';
@@ -33,7 +35,7 @@ import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pending
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, type ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 import { noteBrowserInputRouting } from './session/input.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
@@ -89,6 +91,7 @@ import {
   claimGoalRecoveryStopNow,
   ackGoalDraftNow,
   prepareGeminiGoalSend,
+  prepareGoalCapabilityReply,
   authorizeGeminiGoalSend,
   acknowledgeGeminiGoalSend,
   type GeminiGoalDocument,
@@ -527,6 +530,8 @@ type CommandReceiptOutcome = 'committed' | 'terminal-failure';
 
 interface CommandReceipt {
   id: string;
+  /** Exact native question accepted by this command, when the provider requires it. */
+  messageId?: string;
   client: string | null;
   conversationId: string | null;
   outcome: CommandReceiptOutcome;
@@ -577,6 +582,7 @@ export interface BridgeCommand {
   type: CommandSpec['type'];
   /** Text to type into the conversation. Short by design. */
   text: string;
+  nativeSkill?: NativeSkillDelivery;
   /** Agent this tab will be, when the command comes from multi-agent mode. */
   agent: string | null;
   /** Requested Gemini model slug for a worker's fresh chat, or null for the account default.
@@ -611,21 +617,23 @@ let commandReceipts: CommandReceipt[] = [];
 /** The paired worker supplies Chrome document proof; the existing lease owns the command. */
 type CommandCustody = {
   browser: string; owner: string; lease: string; tab?: number; document?: string; conversation?: string; sessionId?: string;
+  nativeQuestionId?: string;
   worker?: { runId: string; agent: string };
   resume?: { sessionId: string; token: string };
 };
 const geminiCommandCustody = new Map<string, CommandCustody>();
+let committedNativeCommandReceipts = new WeakSet<CommandCustody>();
 let commandAuthorityLoaded = false;
 let commandRestoreFlight: Promise<void> | null = null;
-type CommandBindingWait = 'command-receipt' | 'resume-send' | 'resume-question' | 'resume-source-question' | 'resume-turn' | 'worker-session';
+type CommandBindingWait = 'command-receipt' | 'resume-send' | 'resume-question' | 'resume-source-question' | 'resume-turn' | 'worker-session' | 'worker-question' | 'worker-turn';
 /** Bounded diagnostic transitions only; never participates in command authority. */
 const commandBindingWaits = new Map<string, CommandBindingWait>();
-function pendingCommandBinding(id: string, stage: CommandBindingWait): LocalBindingStatus {
+function pendingCommandBinding(id: string, stage: CommandBindingWait, provider: LocalCapabilityProvider = 'chatgpt'): LocalBindingStatus {
   if (commandBindingWaits.get(id) !== stage) {
     commandBindingWaits.delete(id);
     commandBindingWaits.set(id, stage);
     while (commandBindingWaits.size > 128) commandBindingWaits.delete(commandBindingWaits.keys().next().value!);
-    logInfo(`ChatGPT command authorization waiting: ${stage}`);
+    logInfo(`${provider === 'chatgpt' ? 'ChatGPT' : 'Provider'} command authorization waiting: ${stage}`);
   }
   return { state: 'pending' };
 }
@@ -635,7 +643,8 @@ function settledCommandBinding(id: string, result: LocalBindingStatus): LocalBin
 }
 
 /** A worker grant remains dormant until this exact leased command's Send ACK commits. */
-export async function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> {
+export function chatgptCommandBindingStatus(proof: { id: string; owner: string; lease: string }): Promise<LocalBindingStatus> { return localCommandBindingStatus(proof, 'chatgpt'); }
+export async function localCommandBindingStatus(proof: { id: string; owner: string; lease: string }, provider: LocalCapabilityProvider): Promise<LocalBindingStatus> {
   if (!commandAuthorityLoaded) await restoreCommands();
   const custody = geminiCommandCustody.get(proof.id);
   if (!custody || custody.owner !== proof.owner || custody.lease !== proof.lease ||
@@ -644,11 +653,11 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
   if (!receipt) {
     const command = commands.find(entry => entry.id === proof.id);
     return command?.owner === proof.owner && isLeased(command) && command.claimedAt !== null
-      ? pendingCommandBinding(proof.id, 'command-receipt') : settledCommandBinding(proof.id, { state: 'invalid' });
+      ? pendingCommandBinding(proof.id, 'command-receipt', provider) : settledCommandBinding(proof.id, { state: 'invalid' });
   }
   const conversation = receipt.conversationId;
   if (!receipt.committed || receipt.outcome !== 'committed' || receipt.client !== proof.owner || !conversation ||
-      chatProviderForConversation(conversation) !== 'chatgpt') return settledCommandBinding(proof.id, { state: 'invalid' });
+      !isChatProviderConversationId(conversation, provider)) return settledCommandBinding(proof.id, { state: 'invalid' });
   if (isChatBlocked(conversation)) return settledCommandBinding(proof.id, { state: 'blocked' });
   if (custody.resume) {
     // The original continuation and committed command receipt own this grant. The
@@ -656,20 +665,23 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
     // later question or Regenerate borrow the first successor turn's credential.
     const entry = continuationByToken(custody.resume.token);
     if (!entry || entry.sessionId !== custody.resume.sessionId || entry.state !== 'committed' || entry.to !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
-    if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return pendingCommandBinding(proof.id, 'resume-send');
+    if (entry.destinationSend.state !== 'sent' || !entry.destinationSend.messageId) return pendingCommandBinding(proof.id, 'resume-send', provider);
     const session = await getSession(entry.sessionId);
-    if (!session) return pendingCommandBinding(proof.id, 'resume-question');
+    if (!session) return pendingCommandBinding(proof.id, 'resume-question', provider);
     if (session.conversationId !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
     const question = await readLatestUserMessage(entry.sessionId);
-    if (!question) return pendingCommandBinding(proof.id, 'resume-question');
+    if (!question) return pendingCommandBinding(proof.id, 'resume-question', provider);
     if (question.messageId !== entry.destinationSend.messageId)
-      return question.messageId === entry.sourceSend.messageId ? pendingCommandBinding(proof.id, 'resume-source-question')
+      return question.messageId === entry.sourceSend.messageId ? pendingCommandBinding(proof.id, 'resume-source-question', provider)
         : settledCommandBinding(proof.id, { state: 'invalid' });
     const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === question.messageId);
     if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return settledCommandBinding(proof.id, { state: 'invalid' });
-    if (!session.activeTurnId || !turns.length) return pendingCommandBinding(proof.id, 'resume-turn');
+    if (!session.activeTurnId || !turns.length) return pendingCommandBinding(proof.id, 'resume-turn', provider);
     if (turns[0]?.[0] !== session.activeTurnId) return settledCommandBinding(proof.id, { state: 'invalid' });
-    return settledCommandBinding(proof.id, { state: 'ready', conversationId: conversation, sessionId: entry.sessionId });
+    if (provider === 'claude' && (!isProviderNativeQuestionId(provider, conversation, question.messageId) ||
+        custody.nativeQuestionId && custody.nativeQuestionId !== question.messageId)) return settledCommandBinding(proof.id, { state: 'invalid' });
+    return settledCommandBinding(proof.id, { state: 'ready', conversationId: conversation, sessionId: entry.sessionId,
+      ...(provider === 'claude' ? { turn: { inputId: proof.id, messageId: question.messageId, historySeq: positionOf(question), turnId: session.activeTurnId } } : {}) });
   }
   if (!custody.worker || agentConversation(custody.worker.agent, custody.worker.runId) !== conversation) return settledCommandBinding(proof.id, { state: 'invalid' });
   const worker = agentInfoForOwnedConversation(conversation);
@@ -677,9 +689,42 @@ export async function chatgptCommandBindingStatus(proof: { id: string; owner: st
   const session = await findSessionByConversation(conversation, { requireUnique: true });
   // The ACK owns the native destination; its first observation still owns creating
   // history. Do not turn that small observation gap into a permanent refusal.
-  if (!session) return pendingCommandBinding(proof.id, 'worker-session');
-  return settledCommandBinding(proof.id, session?.conversationId === conversation && session.origin?.kind === 'worker' && session.origin.agentId === custody.worker.agent
-    ? { state: 'ready', conversationId: conversation, sessionId: session.id } : { state: 'invalid' });
+  if (!session) return pendingCommandBinding(proof.id, 'worker-session', provider);
+  if (session.conversationId !== conversation || session.origin?.kind !== 'worker' || session.origin.agentId !== custody.worker.agent)
+    return settledCommandBinding(proof.id, { state: 'invalid' });
+  if (provider === 'claude') {
+    const messageId = receipt.messageId ?? custody.nativeQuestionId;
+    if (custody.nativeQuestionId && (custody.nativeQuestionId !== messageId || custody.conversation !== conversation))
+      return settledCommandBinding(proof.id, { state: 'invalid' });
+    if (!isProviderNativeQuestionId(provider, conversation, messageId) || !committedNativeCommandReceipts.has(custody))
+      return pendingCommandBinding(proof.id, 'worker-question', provider);
+    const question = await readLatestUserMessage(session.id);
+    if (!question) return pendingCommandBinding(proof.id, 'worker-question', provider);
+    if (question.messageId !== messageId) return settledCommandBinding(proof.id, { state: 'invalid' });
+    const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === messageId);
+    if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return settledCommandBinding(proof.id, { state: 'invalid' });
+    if (!session.activeTurnId || !turns.length) return pendingCommandBinding(proof.id, 'worker-turn', provider);
+    if (turns[0]?.[0] !== session.activeTurnId) return settledCommandBinding(proof.id, { state: 'invalid' });
+    return settledCommandBinding(proof.id, { state: 'ready', conversationId: conversation, sessionId: session.id,
+      turn: { inputId: proof.id, messageId, historySeq: positionOf(question), turnId: session.activeTurnId } });
+  }
+  return settledCommandBinding(proof.id, { state: 'ready', conversationId: conversation, sessionId: session.id });
+}
+
+/** The existing paired command ACK owns this extra native-question fence, never an MCP caller. */
+async function retainNativeCommandQuestion(command: Command, client: string, conversation: string, messageId: string): Promise<boolean> {
+  return writeCommandTransition(command, async () => {
+    const before = geminiCommandCustody.get(command.id);
+    if (!commands.includes(command) || command.owner !== client || !before || before.owner !== client ||
+        !isProviderNativeQuestionId('claude', conversation, messageId)) return false;
+    if (before.nativeQuestionId) return before.conversation === conversation && before.nativeQuestionId === messageId && committedNativeCommandReceipts.has(before);
+    const next = { ...before, conversation, nativeQuestionId: messageId };
+    geminiCommandCustody.set(command.id, next);
+    try { await writeDurableNow(COMMANDS_STATE, commandSnapshot()); }
+    catch (error) { if (geminiCommandCustody.get(command.id) === next) geminiCommandCustody.set(command.id, before); throw error; }
+    if (!commands.includes(command) || command.owner !== client || geminiCommandCustody.get(command.id) !== next) return false;
+    committedNativeCommandReceipts.add(next); return true;
+  });
 }
 
 /** Reads canonical command/receipt owners; a warmup never completes their transaction. */
@@ -1939,19 +1984,21 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
     if (item['authoredNow'] === true && kind === 'user_message') observation.authoredNow = true;
     if (typeof item['activeNow'] === 'boolean' && (kind === 'assistant_message' || kind === 'page_tool')) observation.activeNow = item['activeNow'];
     if (kind === 'model_selection') {
-      if (typeof item['model'] !== 'string' || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(item['model'])) continue;
+      if (typeof item['model'] !== 'string' || !(chatProviderForConversation(expectedConversationId) === 'claude'
+        ? isNativeModelId(item['model'], 'claude') : /^[a-zA-Z0-9 ._-]{1,80}$/.test(item['model']))) continue;
       observation.model = item['model'];
       if (isReasoningEffort(item['reasoningEffort'])) {
         observation.reasoningEffort = item['reasoningEffort'];
       }
-      if (item['modelSurface'] === 'chat' || item['modelSurface'] === 'work') observation.modelSurface = item['modelSurface'];
+      if (chatProviderForConversation(expectedConversationId) !== 'claude' && (item['modelSurface'] === 'chat' || item['modelSurface'] === 'work')) observation.modelSurface = item['modelSurface'];
     }
     // Long final handoff-style answers are valid transcript content too. Keep this aligned
     // with the page-side assistant bound so the bridge does not silently become the next
     // truncation point after Fiber/content.js accepted the whole message.
     if (typeof item['text'] === 'string') observation.text = item['text'].slice(0, 256_000);
     // The model the page's own send request named for this message: count proof for Usage.
-    if (kind === 'user_message' && typeof item['model'] === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(item['model'])) {
+    if (kind === 'user_message' && typeof item['model'] === 'string' && (chatProviderForConversation(expectedConversationId) === 'claude'
+      ? isNativeModelId(item['model'], 'claude') : /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(item['model']))) {
       observation.model = item['model'];
     }
     if (kind === 'user_message' && typeof item['messageId'] === 'string') {
@@ -2109,7 +2156,11 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
     if (kind === 'turn_end' && item['continued'] === true) observation.continued = true;
     if (typeof item['recoverable'] === 'boolean') observation.recoverable = item['recoverable'];
     if (item['blocking'] === true) observation.blocking = true;
-    if (kind === 'chat_error' && item['blocking'] === true && typeof item['retryAt'] === 'number' &&
+    if (kind === 'chat_error' && observation.blocking === true) {
+      const usageLimit = normalizeProviderUsageLimit(item['usageLimit'], observation.time);
+      if (usageLimit) { observation.usageLimit = usageLimit; observation.recoverable = false; }
+    }
+    if (kind === 'chat_error' && !observation.usageLimit && item['blocking'] === true && typeof item['retryAt'] === 'number' &&
         Number.isFinite(item['retryAt']) && item['retryAt'] > observation.time &&
         item['retryAt'] - observation.time <= 24 * 60 * 60_000) observation.retryAt = Math.floor(item['retryAt']);
     if (Array.isArray(item['calls'])) observation.calls = parseCallEvidence(item['calls']);
@@ -2237,8 +2288,7 @@ async function reconcileWorkerFinish(id: string, sessionId: string, observations
 
 function conversationId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  // Gemini conversation ids are uuid-shaped; anything else is not one.
-  return /^[0-9a-f-]{8,64}$/i.test(value) ? value : null;
+  return value.trim() === value && isChatProviderConversationId(value) ? value : null;
 }
 
 const MAX_ACTIVITY_CALL_ID_CHARS = 200;
@@ -2903,9 +2953,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (noteBrowserSeen(req)) changed();
   const cosLoginBrowser = req.headers['x-extension-host'] === 'cos' ? browserOf(req) : null;
   const cosLoginLease = cosLoginBrowser ? cosBrowserSignInLease(cosLoginBrowser) : null;
-  const publishCosLogin = (signedIn: boolean | null): void => {
+  const publishCosLogin = (signedIn: boolean | null, provider: ChatProvider): void => {
     if (cosLoginBrowser && cosLoginServer === server && server !== null && cosLoginCredentialEpoch === browserCredentialEpoch) {
-      noteCosBrowserLogin(cosLoginBrowser, signedIn, cosLoginLease);
+      noteCosBrowserLogin(cosLoginBrowser, signedIn, cosLoginLease, provider);
     }
   };
 
@@ -3042,10 +3092,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
         externalExtension.browserId === browserOf(req) && (typeof signedIn === 'boolean' || signedIn === null)) {
       noteExternalLogin(externalExtension.browserId, signedIn,
-        (body as Record<string, unknown>).provider === 'chatgpt' ? 'chatgpt' : 'gemini');
+        CHAT_PROVIDERS.includes((body as Record<string, unknown>).provider as ChatProvider) ? (body as Record<string, unknown>).provider as ChatProvider : DEFAULT_CHAT_PROVIDER);
     }
     if (req.headers['x-extension-host'] === 'cos' && (typeof signedIn === 'boolean' || signedIn === null)) {
-      publishCosLogin(signedIn);
+      publishCosLogin(signedIn, CHAT_PROVIDERS.includes((body as Record<string, unknown>).provider as ChatProvider)
+        ? (body as Record<string, unknown>).provider as ChatProvider : DEFAULT_CHAT_PROVIDER);
     }
     return json(res, 200, { ok: true }, origin);
   }
@@ -3222,10 +3273,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Whether this browser may open chatgpt.com at all; older extensions say nothing (unknown).
         const access = typeof body.chatgptAccess === 'boolean' ? body.chatgptAccess : undefined;
         if (externalExtension.chatgptAccess !== access) { externalExtension.chatgptAccess = access; changed(); }
-        noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null, body.provider === 'chatgpt' ? 'chatgpt' : 'gemini');
+        noteExternalLogin(externalExtension.browserId, typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null, CHAT_PROVIDERS.includes(body.provider as ChatProvider) ? body.provider as ChatProvider : DEFAULT_CHAT_PROVIDER);
       }
       if (req.headers['x-extension-host'] === 'cos') {
-        publishCosLogin(typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null);
+        publishCosLogin(typeof body.chatGptSignedIn === 'boolean' ? body.chatGptSignedIn : null,
+          CHAT_PROVIDERS.includes(body.provider as ChatProvider) ? body.provider as ChatProvider : DEFAULT_CHAT_PROVIDER);
       }
     }
     const openSet = new Set(openConversations);
@@ -3534,7 +3586,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (deferred) changed();
       return json(res, 200, { ok: deferred }, origin);
     }
-    if (body.authorize === true) return json(res, 200, { ok: await authorizeBrowserInput(body.id, body.owner, target) }, origin);
+    if (body.authorize === true) return json(res, 200, { ok: await authorizeBrowserInput(body.id, body.owner, target,
+      typeof body.nativeSkillSelected === 'boolean' ? body.nativeSkillSelected : undefined) }, origin);
     // claimBrowserInput rechecks the same outbox policy as /status and final Send.
     // Local request lifetime alone cannot veto a released native input boundary.
     // As /status: an existing chat waits until a new tunnel-client has taken over its route (#1220).
@@ -4357,19 +4410,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const checkpoint = continuationByToken(checkpointToken);
     // The companion derives these fields from Chrome's exact document and current URL.
     // They are not accepted on the public MCP tool arguments.
-    const sourceDocument = body['sourceDocument'] as Record<string, unknown> | undefined;
-    const sourceProof = sourceDocument ? continuationReceipt({ ...sourceDocument,
-      transport: sourceDocument.provider === 'gemini' ? 'native-question' : 'fiber-question',
+    const sourceDocument = continuationSourceDocument(body['sourceDocument'], body['conversationId']);
+    const sourceProof = sourceDocument && typeof body['sourceMessageId'] === 'string' ? continuationReceipt({ ...sourceDocument,
+      transport: sourceDocument.provider === 'chatgpt' ? 'fiber-question' : 'native-question',
       conversationId: body['conversationId'],
-      messageId: typeof body['sourceMessageId'] === 'string' ? body['sourceMessageId']
-        : sourceDocument.provider === 'gemini' ? `gemini:${body['conversationId']}:user:0000000000000000` : 'pending'
+      messageId: body['sourceMessageId']
     }) : null;
-    if (sourceDocument && !sourceProof) return json(res, 400, { error: 'invalid_source_document' }, origin);
+    if (body['sourceDocument'] !== undefined && (!sourceDocument || typeof body['sourceMessageId'] === 'string' && !sourceProof))
+      return json(res, 400, { error: 'invalid_source_document' }, origin);
+    if (chatProviderForConversation(body['conversationId']) === 'claude' && !sourceDocument &&
+        (body['sourceAttempt'] === true || body['sourceDispatch'] === true || typeof body['sourceMessageId'] === 'string' || typeof body['summary'] === 'string'))
+      return json(res, 400, { error: 'source_document_required' }, origin);
     const sourceBrowser = browserOf(req);
-    const sourceCustody = sourceProof?.provider === 'gemini' && sourceBrowser ? {
-      provider: 'gemini' as const, accountPath: sourceProof.accountPath,
+    const sourceCustody = sourceDocument?.provider === 'gemini' && sourceBrowser ? {
+      provider: 'gemini' as const, accountPath: sourceDocument.accountPath,
       id: handoffContinuationId(checkpointToken)!, browser: sourceBrowser,
-      tabId: sourceProof.tabId, documentId: sourceProof.documentId
+      tabId: sourceDocument.tabId, documentId: sourceDocument.documentId
     } : undefined;
     const ownsSourceCustody = !checkpoint?.sourceSend.custody ||
       !!sourceCustody && JSON.stringify(checkpoint.sourceSend.custody) === JSON.stringify(sourceCustody);
@@ -4508,7 +4564,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body['sourceAttempt'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
-      if (sourceProof?.provider === 'gemini' && !sourceCustody) return json(res, 409, { error: 'source_browser_required' }, origin);
+      if (sourceDocument?.provider === 'gemini' && !sourceCustody) return json(res, 409, { error: 'source_browser_required' }, origin);
       const result = await beginContinuationSourceSendNow(checkpointToken,
         Object.hasOwn(body, 'project') ? normalizeProjectId(body['project']) : undefined, sourceCustody);
       if (result?.allowed && sourceCustody) await prepareGeminiHandoffBinding(id, entry.sessionId, sourceCustody);
@@ -4526,7 +4582,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
       if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
       const anchor = body['sourceMessageId'].slice(0, 200);
-      if (entry.sourceSend.custody) {
+      if (entry.sourceSend.custody || sourceProof?.provider === 'claude') {
         const question = await readLatestUserMessage(entry.sessionId);
         const marker = question && continuationMarkerOf(question.message.text);
         if (question?.messageId !== anchor || marker?.kind !== 'HANDOFF' || marker.token !== checkpointToken)
@@ -4687,7 +4743,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const token = typeof body['token'] === 'string' ? body['token'] : '';
       const entry = continuationByToken(token);
       if (!entry || entry.sessionId !== sessionId) return json(res, 409, { error: 'no_such_continuation' }, origin);
-      if (entry.sourceSend.custody || entry.sourceSend.receipt?.provider === 'gemini') {
+      if (entry.sourceSend.custody || entry.sourceSend.receipt?.provider === 'gemini' || entry.sourceSend.receipt?.provider === 'claude') {
         if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
         // A rendered string is not a completed response. The same canonical
         // recorder used by source-anchor reconciliation must prove the final.
@@ -4944,6 +5000,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const draft = id && proof && goalViewFor(id, proof.client);
     if (!id || !proof || !session || !draft || draft.token !== proof.token || draft.stage !== 'ready' ||
         await goalInputPriority(id, session.id, draft.turnId)) return goalJson(res, 409, { authorized: false, error: 'gemini_goal_not_owned' }, origin);
+    if (body.prepare === true) {
+      if (chatProviderForConversation(id) !== 'claude') return goalJson(res, 400, { prepared: false, error: 'unsupported_goal_preparation' }, origin);
+      const goal = await prepareGoalCapabilityReply(id, proof, (sessionId, goal) =>
+        localBindingInstructions('claude', { kind: 'goal', conversationId: id, sessionId, goal }));
+      return goalJson(res, goal ? 200 : 409, { prepared: Boolean(goal), ...(goal ? { goal } : { error: 'goal_not_owned' }) }, origin);
+    }
     return goalJson(res, 200, { authorized: typeof body.text === 'string' && await authorizeGeminiGoalSend(id, proof, body.text) }, origin);
   }
 
@@ -5480,16 +5542,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (warmupAdoption?.conversationId) custody.conversation = warmupAdoption.conversationId;
       if (command.spec.type === 'resume') {
         custody.resume = { sessionId: command.spec.sessionId, token: command.spec.token };
-        if (liveResume && chatProviderForConversation(liveResume.from) === 'chatgpt') {
-          described.text += '\n\n' + await chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+        if (liveResume && usesLocalTaskCapability(chatProviderForConversation(liveResume.from))) {
+          described.text += '\n\n' + await localBindingInstructions(chatProviderForConversation(liveResume.from) as LocalCapabilityProvider, { kind: 'command', id: command.id, owner: client, lease: custody.lease });
           if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
         }
       }
       if (command.spec.type === 'worker' || command.spec.type === 'revive') {
         custody.worker = { runId: command.spec.runId, agent: command.spec.agent };
         const source = primeConversation(command.spec.runId);
-        if (source && chatProviderForConversation(source) === 'chatgpt') {
-          described.text += '\n\n' + await chatgptBindingInstructions({ kind: 'command', id: command.id, owner: client, lease: custody.lease });
+        if (source && usesLocalTaskCapability(chatProviderForConversation(source))) {
+          described.text += '\n\n' + await localBindingInstructions(chatProviderForConversation(source) as LocalCapabilityProvider, { kind: 'command', id: command.id, owner: client, lease: custody.lease });
           if (described.text.length > MAX_BROWSER_MESSAGE_CHARS) return json(res, 409, { error: 'command_text_too_large' }, origin);
         }
       }
@@ -5500,6 +5562,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       // receives its grant-bearing prompt. A new random lease cannot renew it.
       await writeDurableNow(COMMANDS_STATE, commandSnapshot());
     }
+    if (described.text && redeemingBrowser) {
+      const source = command.spec.type === 'resume' ? liveResume?.from : command.spec.type === 'worker' || command.spec.type === 'revive'
+        ? primeConversation(command.spec.runId) : null;
+      const provider = source ? chatProviderForConversation(source) : null;
+      const delivery = nativeSkillDelivery(described.text, provider ? await optionalNativeSkillGuidance(provider) : null);
+      described.text = delivery.text;
+      if (delivery.nativeSkill) described.nativeSkill = delivery.nativeSkill;
+    }
+    if (!commands.includes(command) || command.owner !== client) return json(res, 409, { error: 'command_taken' }, origin);
     return json(res, 200, { command: described }, origin);
   }
 
@@ -5545,6 +5616,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       : null;
     const client = typeof body['client'] === 'string' ? body['client'].slice(0, 64) : '';
     const conversation = conversationId(body['conversationId']);
+    const nativeMessageId = typeof body.messageId === 'string' ? body.messageId : undefined;
     const priorReceipt = receiptFor(id);
     if (priorReceipt) {
       // A receipt is the final answer to an ambiguous/lost ACK response. It is replayable only
@@ -5555,6 +5627,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if ((priorReceipt.conversationId ?? null) !== conversation) {
         return json(res, 409, { error: 'receipt_conversation_changed' }, origin);
       }
+      if (priorReceipt.messageId && priorReceipt.messageId !== nativeMessageId) return json(res, 409, { error: 'receipt_message_changed' }, origin);
       return json(res, 200, receiptReply(priorReceipt), origin);
     }
     const ownedCommand = commands.find((command) => command.id === id) ?? null;
@@ -5608,6 +5681,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!await finalizeCommand(ownedCommand, receipt)) return json(res, 503, { error: 'command_receipt_not_durable' }, origin);
       changed();
       return json(res, 200, receiptReply(receipt), origin);
+    }
+    if (status === 'sent' && conversation && chatProviderForConversation(conversation) === 'claude') {
+      if (!isProviderNativeQuestionId('claude', conversation, nativeMessageId)) return json(res, 409, { error: 'native_question_required' }, origin);
+      try {
+        if (!await retainNativeCommandQuestion(ownedCommand, client, conversation, nativeMessageId))
+          return json(res, 409, { error: 'native_question_changed' }, origin);
+      } catch { return json(res, 503, { error: 'native_question_not_durable', retryable: true }, origin); }
     }
     const agent = ownedCommand?.spec.type === 'worker' ? ownedCommand.spec.agent : null;
     // The one moment at which the queued command and the conversation it became are
@@ -5876,6 +5956,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         completedAt: Date.now()
       };
     }
+
+    if (receipt.committed && conversation && isProviderNativeQuestionId('claude', conversation, nativeMessageId)) receipt.messageId = nativeMessageId;
 
     if (command.spec.type === 'worker' || command.spec.type === 'revive') {
       // The browser command and the swarm snapshot are two durable files describing one
@@ -6932,7 +7014,8 @@ async function commandSendReceipt(id: string): Promise<CommandReceipt | null> {
 function deliveredRevivalReceipt(command: Command): CommandReceipt | null {
   if (command.spec.type !== 'revive' || !command.owner || !revivalDeliveryProven(command)) return null;
   return { id: command.id, client: command.owner, conversationId: command.spec.conversationId,
-    outcome: 'committed', committed: true, error: null, completedAt: Date.now() };
+    outcome: 'committed', committed: true, error: null, completedAt: Date.now(),
+    ...(geminiCommandCustody.get(command.id)?.nativeQuestionId ? { messageId: geminiCommandCustody.get(command.id)!.nativeQuestionId } : {}) };
 }
 
 function receiptReply(receipt: CommandReceipt): Record<string, unknown> {
@@ -7579,7 +7662,7 @@ async function captureCompactionBrief(
   const { sessionId, token } = entry;
   // The handoff owner freezes and budgets the brief with its saved plan and
   // exact replacement framing. No executor/project setup is added on resume.
-  const brief = entry.sourceSend.receipt?.provider === 'gemini' ? text : text.trim();
+  const brief = entry.sourceSend.receipt?.provider === 'gemini' || entry.sourceSend.receipt?.provider === 'claude' ? text : text.trim();
   // Refused here rather than deeper, because this is where the reason can still be said
   // in words the page will put on screen. A brief that cannot be a brief is a failed
   // compaction, and a failed compaction leaves the session exactly where it is — which
@@ -12020,7 +12103,8 @@ function restoredReceipt(raw: Partial<CommandReceipt>, now: number, custody?: Co
     typeof raw.committed !== 'boolean' ||
     !Number.isFinite(raw.completedAt) ||
     (now - Number(raw.completedAt) > COMMAND_TTL_MS && !(raw.committed && raw.client === custody?.owner)) ||
-    (raw.outcome === 'committed') !== raw.committed
+    (raw.outcome === 'committed') !== raw.committed ||
+    (raw.messageId !== undefined && (typeof raw.conversationId !== 'string' || !isProviderNativeQuestionId('claude', raw.conversationId, raw.messageId)))
   ) {
     return null;
   }
@@ -12028,6 +12112,7 @@ function restoredReceipt(raw: Partial<CommandReceipt>, now: number, custody?: Co
     id: raw.id,
     client: typeof raw.client === 'string' ? raw.client : null,
     conversationId: typeof raw.conversationId === 'string' ? raw.conversationId : null,
+    ...(typeof raw.messageId === 'string' && typeof raw.conversationId === 'string' && isProviderNativeQuestionId('claude', raw.conversationId, raw.messageId) ? { messageId: raw.messageId } : {}),
     outcome: raw.outcome,
     committed: raw.committed,
     error: typeof raw.error === 'string' ? raw.error.slice(0, 200) : null,
@@ -12076,9 +12161,9 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
       type: 'worker',
       agent: worker.agent,
       task: worker.task.slice(0, 512 * 1024),
-      model: isModelSlug(worker.model) ? worker.model : null,
+      model: isModelSlug(worker.model, chatProviderForConversation(primeConversation(worker.runId), selectedChatProvider())) ? worker.model : null,
       reasoningEffort: isReasoningEffort(worker.reasoningEffort) ? worker.reasoningEffort : null,
-      ...(isModelSlug(worker.model) && (worker.modelSurface === 'chat' || worker.modelSurface === 'work') ? { modelSurface: worker.modelSurface } : {}),
+      ...(isModelSlug(worker.model, chatProviderForConversation(primeConversation(worker.runId), selectedChatProvider())) && (worker.modelSurface === 'chat' || worker.modelSurface === 'work') ? { modelSurface: worker.modelSurface } : {}),
       runId: worker.runId
     };
   }
@@ -12147,12 +12232,14 @@ function restoredCommandCustody(value: unknown): Map<string, CommandCustody> {
     if ((row.tab !== undefined && (!Number.isSafeInteger(row.tab) || row.tab < 0)) ||
         (row.document !== undefined && (typeof row.document !== 'string' || !row.document || row.document.length > 256)) ||
         (row.conversation !== undefined && (typeof row.conversation !== 'string' || !conversationId(row.conversation))) ||
-        (row.sessionId !== undefined && (typeof row.sessionId !== 'string' || !/^[a-z0-9-]{8,64}$/i.test(row.sessionId)))) continue;
+        (row.sessionId !== undefined && (typeof row.sessionId !== 'string' || !/^[a-z0-9-]{8,64}$/i.test(row.sessionId))) ||
+        (row.nativeQuestionId !== undefined && (typeof row.conversation !== 'string' || !isProviderNativeQuestionId('claude', row.conversation, row.nativeQuestionId)))) continue;
     const item: CommandCustody = { browser: row.browser, owner: row.owner, lease: row.lease };
     if (Number.isSafeInteger(row.tab) && row.tab! >= 0) item.tab = row.tab;
     if (typeof row.document === 'string' && row.document.length > 0 && row.document.length <= 256) item.document = row.document;
     if (typeof row.conversation === 'string' && conversationId(row.conversation)) item.conversation = row.conversation;
     if (typeof row.sessionId === 'string' && /^[a-z0-9-]{8,64}$/i.test(row.sessionId)) item.sessionId = row.sessionId;
+    if (row.nativeQuestionId) { item.nativeQuestionId = row.nativeQuestionId; committedNativeCommandReceipts.add(item); }
     if (row.worker && typeof row.worker.runId === 'string' && row.worker.runId.length > 0 && row.worker.runId.length <= 128 &&
         typeof row.worker.agent === 'string' && row.worker.agent.length > 0 && row.worker.agent.length <= 128)
       item.worker = { runId: row.worker.runId, agent: row.worker.agent };

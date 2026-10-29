@@ -14,6 +14,7 @@ import type {
   ControlApiText
 } from '../shared/control-api.js';
 import { positionOf } from '../shared/chronology.js';
+import { chatProviderForStoredConversation } from '../shared/chat-provider.js';
 import { normalizedToolOutcome, toolCallSummary } from '../shared/session.js';
 import type { SessionEvent, SessionEventKind, SessionSummary, StoredText, SwarmState } from '../shared/session.js';
 import type { LogEntry } from '../shared/types.js';
@@ -149,6 +150,7 @@ export function projectSession(summary: SessionSummary): ControlApiSession {
     id: summary.id,
     title: line(summary.title, TITLE_CAP),
     conversationId: summary.conversationId,
+    provider: chatProviderForStoredConversation(summary.conversationId),
     projectId: summary.projectId ?? null,
     startedAt: summary.startedAt,
     updatedAt: summary.updatedAt,
@@ -329,7 +331,9 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
     case 'turn_end':
       return { ...base, outcome: event.outcome, detail: event.detail && line(event.detail, SUMMARY_CAP), reason: event.reason };
     case 'chat_error':
-      return { ...base, message: stored(event.message), recoverable: event.recoverable, blocking: event.blocking, retryAt: event.retryAt, reason: event.reason };
+      return { ...base, message: stored(event.message), recoverable: event.recoverable, blocking: event.blocking, retryAt: event.retryAt, reason: event.reason,
+        ...(event.usageLimit ? { usageLimit: { kind: event.usageLimit.kind, ...(event.usageLimit.resetAt ? { resetAt: event.usageLimit.resetAt } : {}),
+          ...(event.usageLimit.resetText ? { resetText: line(event.usageLimit.resetText, 160) } : {}) } } : {}) };
     case 'tool_call': {
       const call = event.call;
       const summary = toolCallSummary(call);
@@ -435,6 +439,7 @@ export function projectInput(entry: InputEntry): ControlApiInput {
     sessionId: entry.sessionId,
     deliveredSessionId: entry.deliveredSessionId ?? null,
     conversationId: entry.conversationId,
+    provider: entry.chatProvider ?? chatProviderForStoredConversation(entry.conversationId),
     state: entry.state,
     // What the row proves about delivery, from the one owner of that rule.
     delivery: deliveryProof(entry),

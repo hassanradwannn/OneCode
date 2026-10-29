@@ -1,3 +1,5 @@
+import { chatProviderForConversation } from '../../shared/chat-provider.js';
+import { isNativeModelId } from '../../shared/chat-models.js';
 /**
  * Durable session history.
  *
@@ -2150,7 +2152,7 @@ export async function turnHasMcpCall(sessionId: string, conversationId: string, 
     kinds: ['tool_call'], before: Number.POSITIVE_INFINITY,
     acceptEvent: call => call.kind === 'tool_call' && call.turnId === turnId && call.source === 'mcp' &&
       call.call?.conversationId === conversationId && (call.call.attribution === 'request_id' ||
-        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability') && call.call.attributionMethod === call.call.attribution))
+        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability' || call.call.attribution === 'claude_session_capability') && call.call.attributionMethod === call.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);
@@ -2229,7 +2231,7 @@ export async function questionHasMcpCall(sessionId: string, conversationId: stri
     kinds: ['tool_call'], before: Number.POSITIVE_INFINITY,
     acceptEvent: call => call.kind === 'tool_call' && !!call.turnId && siblings.has(call.turnId) && call.source === 'mcp' &&
       call.call?.conversationId === conversationId && (call.call.attribution === 'request_id' ||
-        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability') && call.call.attributionMethod === call.call.attribution))
+        (current && (call.call.attribution === 'gemini_session_capability' || call.call.attribution === 'chatgpt_session_capability' || call.call.attribution === 'claude_session_capability') && call.call.attributionMethod === call.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);
@@ -2249,7 +2251,7 @@ export async function conversationHasMcpCallSince(
     acceptEvent: event => event.kind === 'tool_call' && event.source === 'mcp' && event.time >= startedAt &&
       (!event.turnId || event.turnId === turnId) && event.call?.conversationId === conversationId &&
       (event.call.attribution === 'request_id' ||
-        (current && (event.call.attribution === 'gemini_session_capability' || event.call.attribution === 'chatgpt_session_capability') && event.call.attributionMethod === event.call.attribution))
+        (current && (event.call.attribution === 'gemini_session_capability' || event.call.attribution === 'chatgpt_session_capability' || event.call.attribution === 'claude_session_capability') && event.call.attributionMethod === event.call.attribution))
   });
   return calls.some(call => call.kind === 'tool_call' && call.call.attribution === 'request_id') ||
     (calls.length > 0 && (await getSession(sessionId))?.conversationId === conversationId);
@@ -3521,14 +3523,14 @@ export async function observeSessionModel(
   id: string, conversationId: string, model: string, observedAt: number,
   reasoningEffort?: ReasoningEffort, modelSurface?: import('../../shared/chat-models.js').NativeModelSurface
 ): Promise<void> {
-  if (!/^[a-zA-Z0-9 ._-]{1,80}$/.test(model) || !Number.isFinite(observedAt)) return;
+  if (!(chatProviderForConversation(conversationId) === 'claude' ? isNativeModelId(model, 'claude') : /^[a-zA-Z0-9 ._-]{1,80}$/.test(model)) || !Number.isFinite(observedAt)) return;
   const entry = await ensureOpen(id);
   await enqueueSessionOperation(entry, 'model-selection', async () => {
     // Late old-document reports cannot change the replacement's policy. Repeated observations
     // and delayed delivery receipts cannot overwrite a newer provider selection either.
     if (entry.summary.conversationId !== conversationId ||
         observedAt < (entry.summary.selectedModel?.observedAt ?? 0)) return;
-    const selectedModel = { conversationId, model, observedAt, ...(reasoningEffort ? { reasoningEffort } : {}), ...(['chat', 'work'].includes(modelSurface ?? '') ? { modelSurface } : {}) };
+    const selectedModel = { conversationId, model, observedAt, ...(reasoningEffort ? { reasoningEffort } : {}), ...(chatProviderForConversation(conversationId) !== 'claude' && ['chat', 'work'].includes(modelSurface ?? '') ? { modelSurface } : {}) };
     if (JSON.stringify(entry.summary.selectedModel) === JSON.stringify(selectedModel)) return;
     const staged = { ...entry.summary, selectedModel };
     await writeSummary(staged, entry.historySeq);

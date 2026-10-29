@@ -4,6 +4,7 @@ import { positionOf } from '../shared/chronology.js';
 import { chatErrorMessageKey, isConversationDeleted } from '../shared/chat-error.js';
 import { currentLanguage, t } from './i18n.js';
 import { HISTORY_RATE_LIMIT_TEXT, neutralChatErrorCopy } from '../shared/provider-copy.js';
+import { usageLimitResetText, usageLimitTitle } from '../shared/provider-usage-limit.js';
 
 type ChatError = Extract<SessionEvent, { kind: 'chat_error' }>;
 
@@ -42,6 +43,12 @@ const noticeKey = (error: ChatError): string => `${error.seq}:${error.time}:${er
 /** Presentation only: never infer send/reload authority from error prose. */
 export function chatErrorPresentation(error: ChatError, history: readonly SessionEvent[] = []) {
   const text = error.message.text.trim();
+  if (error.usageLimit) {
+    const reset = usageLimitResetText(error.usageLimit, currentLanguage());
+    return { title: t(usageLimitTitle(error.usageLimit)), message: text, resolved: false, reloaded: false,
+      next: reset ? t('Reset reported: {0}. Check the provider and retry manually when access is available.', [reset])
+        : t('The provider did not report a reset time. Check the chat and retry manually when access is available.') };
+  }
   if (isConversationDeleted(text)) return { title: providerText('Chat deleted in Gemini'),
     message: providerText('Gemini no longer has this chat, so nothing more can be sent to it.'),
     next: t('Start a new chat to continue. This history stays in the app.'), resolved: false, reloaded: false };

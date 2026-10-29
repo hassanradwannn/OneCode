@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.0': {
+    lead: () => t('More provider choices with the same workspace and local tools.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('A third provider'), text: () => t('Choose your provider in setup, new chats or the local API. Existing chats retain their account, tools and task history.') },
+      { icon: 'i-settings', title: () => t('Native account choices'), text: () => t('Shows available current and legacy models with their effort settings, and reports usage limits with the reset information supplied by your provider.') },
+      { icon: 'i-code', title: () => t('Interactive component previews'), text: () => t('Preview React and TypeScript components with bundled charts, icons and styles, alongside HTML and Mermaid diagrams.') }
+    ]
+  },
   '0.7.4': {
     lead: () => t('Keep native model choices and message preparation in sync.'),
     highlights: [

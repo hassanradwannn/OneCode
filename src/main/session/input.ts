@@ -1,3 +1,4 @@
+import { isProviderNativeQuestionId } from '../../shared/continuation-receipt.js';
 import { REASONING_EFFORTS, workSequence } from '../../shared/session.js';
 /** User-authored input has one durable owner across browser and MCP delivery.
  * A claimed browser send is never automatically retried: losing the ACK is ambiguous.
@@ -8,10 +9,10 @@ import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, type 
 import type { SessionSummary } from '../../shared/session.js';
 import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
-import { chatgptBindingInstructions, hasCurrentChatgptBinding, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
+import { localBindingInstructions, hasCurrentLocalBinding, usesLocalTaskCapability, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
 import { positionOf } from '../../shared/chronology.js';
 import { randomUUID } from 'node:crypto';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -34,6 +35,7 @@ import { SKILL_ID_PATTERN } from '../../shared/skills.js';
 import { autoSelectManagedSkills } from '../skill-routing.js';
 import { asksForImage } from './image-request.js';
 import { observedModelSurface } from '../chat-models.js';
+import { optionalNativeSkillGuidance, nativeSkillBudget, nativeSkillDelivery } from './native-skill.js';
 
 export const inputArgs = z.object({
   provider: z.enum(CHAT_PROVIDERS).optional(),
@@ -140,6 +142,8 @@ const entrySchema = inputArgs.extend({
   transportIntent: z.enum(['tool', 'browser']).optional(),
   text: z.string().min(1).max(240000),
   deliveryText: z.string().min(1).max(240000).optional(),
+  nativeSkill: z.object({ name: z.literal('onecode'), text: z.string().min(1).max(240000), fallbackText: z.string().min(1).max(240000) }).strict().optional(),
+  nativeSkillSelected: z.boolean().optional(),
   /** One checkpoint shares this browser send and its receipt with the user's correction. */
   companionInputId: z.string().uuid().optional(),
   /** `rotation`: the app's automatic continue that starts a fresh turn in a long one (#1402). */
@@ -152,7 +156,7 @@ const entrySchema = inputArgs.extend({
   /** Tool-result corrections remain inside their original generation in history. */
   toolTurnId: z.string().min(1).max(256).optional(),
   /** Local offer evidence only, never a Google request/generation identifier. */
-  toolGeminiOffer: z.object({ attribution: z.enum(['gemini_session_capability', 'chatgpt_session_capability']).optional(), bindingId: z.string().min(1).max(64), startedAt: z.number().nonnegative(),
+  toolGeminiOffer: z.object({ attribution: z.enum(['gemini_session_capability', 'chatgpt_session_capability', 'claude_session_capability']).optional(), bindingId: z.string().min(1).max(64), startedAt: z.number().nonnegative(),
     inputTurn: z.object({ inputId: z.string().uuid(), messageId: z.string().min(1).max(256),
       historySeq: z.number().int().positive(), turnId: z.string().min(1).max(256) }).optional() }).optional(),
   /** Explicit live Steer may not borrow a retained MCP window after native turn end. */
@@ -754,7 +758,7 @@ async function commit(next: InputEntry[], beforeChanged?: () => void): Promise<v
       ? row.createdAt : Date.now() } : row);
   // A temporary planner keeps only ownership metadata across restart, never its task or answer.
   const durableRows = (rows: InputEntry[]) => rows.map(row => row.lifetime === 'temporary-planner'
-    ? { ...row, text: '[Temporary planner]', deliveryText: undefined, response: undefined } : row);
+    ? { ...row, text: '[Temporary planner]', deliveryText: undefined, nativeSkill: undefined, nativeSkillSelected: undefined, response: undefined } : row);
   try { await writeDurableNow(STATE, durableRows(next)); }
   catch (error) {
     // durable.ts retries failed generations. Never let a rejected send claim or
@@ -802,23 +806,30 @@ async function prepare(entry: InputEntry, suffix = '', nativeMedia = false): Pro
       ? `Original user request:\n${entry.objective}\n\nOpening instruction:\n${entry.text}\n\nFollow the complete original request, including all constraints, throughout this task.`
       : entry.text;
   const mandatoryOverhead = `${TOOL_INPUT_HEADER}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
+  const provider = chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  const capabilityProvider = usesLocalTaskCapability(provider) ? provider : null;
   const proof = entry.state === 'browser' && entry.requiresAuthorization && entry.owner && entry.claimedBrowser && entry.offeredAt &&
-    chatProviderForConversation(entry.conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'chatgpt'
+    capabilityProvider !== null
     ? { kind: 'input' as const, input: { id: entry.id, owner: entry.owner, browser: entry.claimedBrowser, offeredAt: entry.offeredAt } } : null;
   // A reloaded preparation can replace an UNSENT document owner. Reuse a durable
   // key only when its exact outbox claim remains current; authorized/ambiguous
   // sends cannot enter this preparation path at all.
-  const frozen = entry.deliveryText && (!proof || hasCurrentChatgptBinding(entry.deliveryText, proof)) ? entry.deliveryText : undefined;
-  const routing = !frozen && proof ? await chatgptBindingInstructions(proof) : '';
-  const deliveryText = nativeMedia ? text + suffix : frozen ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, {
+  const frozen = entry.deliveryText && (!proof || capabilityProvider && hasCurrentLocalBinding(capabilityProvider, entry.deliveryText, proof)) ? entry.deliveryText : undefined;
+  const routing = !frozen && proof && capabilityProvider ? await localBindingInstructions(capabilityProvider, proof) : '';
+  const guidance = !frozen && proof ? await optionalNativeSkillGuidance(provider) : null;
+  const budget = {
     maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)
-  }, entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text, routing) ?? text + suffix + (routing ? '\n\n' + routing : '');
+  };
+  const preparedText = nativeMedia ? text + suffix : frozen ?? await deliveryHooks?.prepareText?.({ ...entry, text: text + suffix }, nativeSkillBudget(budget, guidance),
+    entry.authoredSource === 'none' ? '' : entry.authoredSource === 'objective' ? entry.objective ?? '' : entry.text, routing) ?? text + suffix + (routing ? '\n\n' + routing : '');
+  const delivery = frozen ? { text: frozen, nativeSkill: entry.nativeSkill } : nativeSkillDelivery(preparedText, guidance, budget);
+  const deliveryText = delivery.text;
   // A single input must fit the tool envelope by itself. Aggregate batching below
   // may defer a second input, but cannot silently defer an individually impossible one.
   const envelope = `${TOOL_INPUT_HEADER}${deliveryText}\n\n${finishInstruction(getConfig().ui.finishLeadMinutes)}`;
   if (!deliveryText || deliveryText.length > MAX_BROWSER_MESSAGE_CHARS || Buffer.byteLength(envelope) > TOOL_INPUT_TEXT_BYTES)
     throw new Error('Prepared message exceeds the delivery limit; shorten the request or plan');
-  return { ...entry, deliveryText };
+  return { ...entry, deliveryText, nativeSkill: delivery.nativeSkill, nativeSkillSelected: frozen ? entry.nativeSkillSelected : undefined };
 }
 function append(current: InputEntry[], entry: InputEntry, stackDirect = false): InputEntry[] {
   if (queuedFollowup(entry)) {
@@ -1322,7 +1333,7 @@ export function editQueuedInput(id: string, text: string, afterTurn?: boolean): 
     if (!row) return false;
     if (current.filter(entry => !terminal(entry)).reduce((sum, entry) => sum + Buffer.byteLength(entry === row ? value : entry.text), 0) > 1024000) throw new Error('Queued messages exceed the text limit');
     await commit(current.map(entry => entry === row ? { ...row, text: value, authoredSource: 'text',
-      ...(afterTurn === undefined ? {} : { afterTurn }), deliveryText: undefined, autoSkills: undefined } : entry));
+      ...(afterTurn === undefined ? {} : { afterTurn }), deliveryText: undefined, nativeSkill: undefined, nativeSkillSelected: undefined, autoSkills: undefined } : entry));
     return true;
   });
 }
@@ -1464,7 +1475,7 @@ export function permitGeminiWarmupInitialization(id: string, owner: string, brow
 }
 
 /** Revalidate the same durable claim immediately before sending; never hand out text again. */
-export function authorizeBrowserInput(id: string, owner: string, conversationId: string | null): Promise<boolean> {
+export function authorizeBrowserInput(id: string, owner: string, conversationId: string | null, nativeSkillSelected?: boolean): Promise<boolean> {
   return serial(async () => {
     const current = await load();
     const row = current.find(row => row.id === id && row.owner === owner && row.state === 'browser' && row.conversationId === conversationId);
@@ -1472,13 +1483,16 @@ export function authorizeBrowserInput(id: string, owner: string, conversationId:
         (row.warmupRecovery && (!row.conversationId || row.owner !== row.warmupRecovery.successorOwner)) ||
         (row.recovery && row.nativeRecovery?.phase !== 'ready') ||
         (row.nativeRecovery && row.nativeRecovery.phase !== 'ready')) return false;
+    if (nativeSkillSelected === true && (!row.nativeSkill || row.chatProvider !== 'claude')) return false;
     if (!(await browserInputAllowed(row)) || await target(row) !== conversationId) return false;
     if (row.companionInputId) {
       const companion = current.find(other => other.id === row.companionInputId && other.state === 'browser' && other.owner === owner && other.sessionId === row.sessionId);
       const session = row.sessionId ? await getSession(row.sessionId) : null;
       if (!companion || !session || !queuedAfterTurn({ ...companion, state: 'queued' }, session)) return false;
     }
-    await commit(current.map(entry => sameDelivery(row, entry) ? { ...entry, sendAuthorizedAt: Date.now() } : entry));
+    await commit(current.map(entry => sameDelivery(row, entry) ? { ...entry, sendAuthorizedAt: Date.now(),
+      ...(entry === row && row.nativeSkill ? { deliveryText: nativeSkillSelected === true ? row.nativeSkill.text : row.nativeSkill.fallbackText,
+        nativeSkillSelected: nativeSkillSelected === true } : {}) } : entry));
     // Recorder work is serialized independently and can arrive during the durable
     // claim write. Keep the spent claim, but never publish stale Send permission.
     if (row.recovery && !await recoveryCurrent(row)) return false;
@@ -1828,7 +1842,7 @@ export function advanceRecoveryInput(id: string, owner: string, conversationId: 
           error: 'Waiting for the exact provider chat to reopen and settle its Stop request.' }
       : action === 'reloaded'
       ? { ...row, state: 'queued', owner: null, offeredAt: undefined, completedTurnId: undefined,
-          deliveryText: undefined, recovery: { ...row.recovery, phase: 'resumed', reloadOwner: owner } }
+          deliveryText: undefined, nativeSkill: undefined, nativeSkillSelected: undefined, recovery: { ...row.recovery, phase: 'resumed', reloadOwner: owner } }
       : { ...row, recovery: { ...row.recovery, phase: action === 'stop' ? 'stopping' : 'reloading',
             ...(action === 'stop' ? { stopOwner: owner } : {}) },
           ...(action === 'stopped' || action === 'settled' ? { nativeRecovery: { turnId: row.silenceBoundary!.turnId,
@@ -1937,7 +1951,7 @@ function withoutSilenceClaim(row: InputEntry, preserveBoundary = false, recovery
   if (row.recovery) return { ...row, state: 'cancelled', error: `Automatic Continue cancelled: ${recoveryReason}.` };
   return { ...row, state: 'queued', owner: null, silenceBoundary: preserveBoundary ? row.silenceBoundary : undefined, completedTurnId: undefined,
     ...(manualInput(row) ? { transportIntent: 'tool' } : {}),
-    companionInputId: undefined, offeredAt: undefined, sendAuthorizedAt: undefined, requiresAuthorization: undefined, deliveryText: undefined, error: undefined };
+    companionInputId: undefined, offeredAt: undefined, sendAuthorizedAt: undefined, requiresAuthorization: undefined, deliveryText: undefined, nativeSkill: undefined, nativeSkillSelected: undefined, error: undefined };
 }
 /** New work revokes an unspent ticket. Authorized sends retain custody until their exact receipt/failure. */
 export function revokeSilenceInputs(sessionId: string, recoveryReason = 'new activity'): Promise<void> {
@@ -2209,12 +2223,14 @@ export function prepareGeminiInputClaim(id: string, owner: string, conversationI
 
 export type GeminiInputBindingStatus = { state: 'pending' | 'invalid'; accepted?: true } | { state: 'ready'; turn: GeminiInputTurn };
 /** Resolve only the exact claimed input's committed native Send/history receipt. */
-export async function chatgptInputBindingStatus(proof: GeminiBindingInput): Promise<LocalBindingStatus> {
+export function chatgptInputBindingStatus(proof: GeminiBindingInput): Promise<LocalBindingStatus> { return localInputBindingStatus(proof, 'chatgpt'); }
+export async function localInputBindingStatus(proof: GeminiBindingInput, provider: import('./local-binding.js').LocalCapabilityProvider): Promise<LocalBindingStatus> {
   const row = (await load()).find(entry => entry.id === proof.id);
   if (!row || row.owner !== proof.owner || row.claimedBrowser !== proof.browser || row.offeredAt !== proof.offeredAt ||
       !row.requiresAuthorization || !['browser', 'sent'].includes(row.state)) return { state: 'invalid' };
+  if (row.chatProvider && row.chatProvider !== provider) return { state: 'invalid' };
   if (!row.conversationId) return row.state === 'browser' ? { state: 'pending' } : { state: 'invalid' };
-  if (chatProviderForConversation(row.conversationId) !== 'chatgpt' || !row.sessionId) return { state: 'invalid' };
+  if (!isChatProviderConversationId(row.conversationId, provider) || !row.sessionId) return { state: 'invalid' };
   if (isChatBlocked(row.conversationId)) return { state: 'blocked' };
   const result = await geminiInputBindingStatus(proof, row.conversationId, row.sessionId);
   if (result.state === 'invalid' && isChatBlocked(row.conversationId)) return { state: 'blocked' };
@@ -2259,7 +2275,7 @@ export async function geminiInputBindingStatus(proof: GeminiBindingInput, conver
 /** Bind exact opening/project ownership before the document publishes request evidence. */
 export function bindBrowserInputProject(id: string, owner: string, conversationId: string): Promise<boolean> {
   return serial(async () => {
-    if (!owner || !/^[0-9a-z-]{8,256}$/i.test(conversationId)) return false;
+    if (!owner || !isChatProviderConversationId(conversationId)) return false;
     const current = await load();
     const entry = current.find(row => row.id === id && row.owner === owner);
     if (!entry || !['browser', 'sent'].includes(entry.state) || (!entry.opening && !entry.projectId) || entry.purpose === 'decision') return false;
@@ -2288,7 +2304,7 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
     if (entry && companionOf(current, entry)) return false;
     if (!owner || !entry || !['browser', 'sent', 'decision', 'cancelled'].includes(entry.state) ||
       (entry.state === 'cancelled' && entry.purpose === 'decision')) return false;
-    if (conversationId !== undefined && !(entry.lifetime === 'temporary-planner' && conversationId === null) && (!conversationId || !/^[0-9a-z-]{8,256}$/i.test(conversationId))) return false;
+    if (conversationId !== undefined && !(entry.lifetime === 'temporary-planner' && conversationId === null) && !isChatProviderConversationId(conversationId)) return false;
     if (conversationId && entry.conversationId && entry.conversationId !== conversationId) return false;
     // A fresh user send is not complete until Gemini assigns its exact conversation.
     // Keep the authored sessionId unchanged so retrying the original enqueue is idempotent.
@@ -2296,6 +2312,8 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
     if (messageId !== undefined && (!messageId || messageId.length > 256)) return false;
     if ((entry.state !== 'browser' && entry.state !== 'cancelled') || (entry.state === 'cancelled' && entry.deliveredAt !== undefined)) { await publishHistory(); return true; }
     const deliveredConversation = conversationId ?? entry.conversationId;
+    if (entry.purpose !== 'decision' && deliveredConversation && chatProviderForConversation(deliveredConversation) === 'claude' &&
+        !isProviderNativeQuestionId('claude', deliveredConversation, messageId)) return false;
     if (entry.opening && deliveredConversation) {
       if (entry.state === 'cancelled' && entry.requiresAuthorization && entry.sendAuthorizedAt === undefined) return false;
       if (!await bindOpening(entry, deliveredConversation)) return false;
@@ -2535,7 +2553,7 @@ export function failBrowserInput(id: string, owner: string, error: string, detai
       logWarn(`input ${entry.id}: The provider did not take the clicked Send; ${retry ? 'queued once more' : 'reported as not sent'}`);
       await commit(current.map(row => sameDelivery(entry, row) ? retry
         ? { ...row, state: 'queued', owner: null, offeredAt: undefined, sendAuthorizedAt: undefined, requiresAuthorization: undefined,
-          deliveryText: undefined, error: undefined, notTakenRetries: (row.notTakenRetries ?? 0) + 1 }
+          deliveryText: undefined, nativeSkill: undefined, nativeSkillSelected: undefined, error: undefined, notTakenRetries: (row.notTakenRetries ?? 0) + 1 }
         : { ...row, state: 'failed', error: NOT_TAKEN_FAILED } : row));
       if (!retry) {
         decisionWaiters.get(id)?.reject(new Error('goal_browser_send_failed: ' + NOT_TAKEN_FAILED));

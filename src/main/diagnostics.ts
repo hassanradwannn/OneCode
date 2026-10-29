@@ -1,3 +1,4 @@
+import { DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
 /**
  * A self-test that answers "where exactly is this broken", one hop at a time.
  *
@@ -431,7 +432,7 @@ export async function runDiagnostics(): Promise<Diagnosis> {
   }
 
   // 6. The only end-to-end proof there is.
-  const seen = lastRequestAt();
+  const seen = lastRequestAt(undefined, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   checks.push({
     name: 'Provider reaching this PC',
     status: seen === null ? 'not-run' : 'pass',
@@ -444,7 +445,7 @@ export async function runDiagnostics(): Promise<Diagnosis> {
 
   // 7. The failure that looks exactly like success: Gemini connects, this app
   //    answers, and the model is still not allowed to call anything.
-  checks.push(developerMode(seen, lastToolCallAt()));
+  checks.push(developerMode(seen, lastToolCallAt(undefined, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)));
 
   const broken = checks.filter((c) => c.status === 'fail');
   const incomplete = checks.filter((c) => c.status === 'not-run');

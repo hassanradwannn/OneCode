@@ -44,7 +44,8 @@
 
 import { requestBrowserDecision, authorizeBrowserHelperRetry } from './session/input.js';
 import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
-import { userPromptText } from '../shared/user-prompt.js';
+import { userPromptText, prependUserPrompt } from '../shared/user-prompt.js';
+import { optionalNativeSkillGuidance, nativeSkillDelivery, type NativeSkillDelivery } from './session/native-skill.js';
 import { planProgressText, type TaskProgressUpdate } from '../shared/task-progress.js';
 import { TaskRequestError } from './task-request.js';
 import { GOAL_MARKER_INSTRUCTION, templateGoalDecision } from '../shared/goal-templates.js';
@@ -60,6 +61,8 @@ export { GOAL_HELPER_SIZE_STATE, restoreGoalHelperSize } from './goal-helper-siz
 import { logInfo, logWarn } from './logger.js';
 import { getSecret } from './secrets.js';
 import { findSessionByConversation, getSession, readEvents, readHandoff, readRecentEvents, readLatestUserMessage, upsertMessageEvent, turnHasMcpCall } from './session/store.js';
+import { isProviderNativeQuestionId } from '../shared/continuation-receipt.js';
+import { chatProviderForConversation, isChatProviderConversationId, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { positionOf } from '../shared/chronology.js';
 import { isChatBlocked } from './session/blocked-chats.js';
 import type { GeminiBindingGoal } from './gemini/bindings.js';
@@ -341,6 +344,7 @@ export interface GoalDraftView {
   text: string;
   /** The message to type, present only at `ready`. */
   reply: string;
+  nativeSkill?: NativeSkillDelivery;
   /** Machine-readable reason, retained for diagnostics and retry classification. */
   error: string | null;
   /** Plain explanation for both browser and desktop presentation. */
@@ -392,6 +396,8 @@ interface GoalDraft extends Omit<GoalDraftView, 'retryable'> {
   acknowledged: boolean;
   /** Full exact authored continuation, including an existing draft prefix; never a credential frame. */
   geminiSendText?: { id: string; text: string };
+  /** One exact local capability prefix for this native Goal Send owner. */
+  localCapabilitySendId?: string;
   work: Promise<void> | null;
   abort: AbortController | null;
 }
@@ -465,7 +471,8 @@ function validGeminiGoalSend(value: unknown): value is GeminiGoalSend {
     (row.authorizedAt === undefined || Number.isSafeInteger(row.authorizedAt) && row.authorizedAt > 0) &&
     (row.textHash === undefined || typeof row.textHash === 'string' && /^[a-f0-9]{64}$/.test(row.textHash)) &&
     ((row.authorizedAt === undefined) === (row.textHash === undefined)) &&
-    (row.messageId === undefined || typeof row.messageId === 'string' && /^gemini:[a-f0-9]{16}:user:[a-f0-9]{16}$/.test(row.messageId)) &&
+    (row.messageId === undefined || typeof row.messageId === 'string' && (/^gemini:[a-f0-9]{16}:user:[a-f0-9]{16}$/.test(row.messageId) ||
+      /^claude:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}:user:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.messageId))) &&
     (row.historySeq === undefined || Number.isSafeInteger(row.historySeq) && row.historySeq > row.sourceHistorySeq) &&
     ((row.messageId === undefined) === (row.historySeq === undefined)) && (!row.messageId || row.authorizedAt !== undefined) &&
     (row.revoked === undefined || row.revoked === true);
@@ -529,7 +536,7 @@ export function restoreGoalReplies(snapshot: GoalRepliesSnapshot | null): void {
   for (const raw of snapshot.replies) {
     if (
       !raw ||
-      !/^[0-9a-z-]{8,256}$/i.test(raw.conversationId) ||
+      !isChatProviderConversationId(raw.conversationId) ||
       !raw.sessionId ||
       !raw.replyId ||
       !raw.turnId ||
@@ -558,7 +565,7 @@ export function restoreGoalReplies(snapshot: GoalRepliesSnapshot | null): void {
         : Number.isSafeInteger(raw.pickupAttempts) && raw.pickupAttempts! >= BROWSER_PICKUP_MAX_ATTEMPTS
           ? { pickupStoppedAt: raw.acceptedAt } : {}),
       ...(raw.explicitActivation === true ? { explicitActivation: true } : {}),
-      ...(validGeminiGoalSend(raw.geminiSend) && (!raw.geminiSend.messageId || raw.geminiSend.messageId.startsWith(`gemini:${raw.conversationId}:user:`))
+      ...(validGeminiGoalSend(raw.geminiSend) && (!raw.geminiSend.messageId || isProviderNativeQuestionId(chatProviderForConversation(raw.conversationId), raw.conversationId, raw.geminiSend.messageId))
         ? { geminiSend: { ...raw.geminiSend } } : {}),
       eventSeq: raw.eventSeq,
       acceptedAt: raw.acceptedAt,
@@ -627,12 +634,40 @@ export function prepareGeminiGoalSend(conversationId: string, proof: GeminiGoalD
     return accepted ? { sessionId: session.id, goal: { id: send.id, ...proof } } : null;
   });
 }
+/** The existing Goal Send owner freezes one capability-bearing reply before native insertion. */
+export async function prepareGoalCapabilityReply(conversationId: string, proof: GeminiGoalDocument,
+  issue: (sessionId: string, goal: GeminiBindingGoal) => Promise<string>): Promise<GoalDraftView | null> {
+  if (chatProviderForConversation(conversationId) !== 'claude') return null;
+  const prepared = await prepareGeminiGoalSend(conversationId, proof);
+  if (!prepared) return null;
+  return serialGoalSwitch(async () => {
+    const draft = readyGeminiGoal(conversationId, proof), obligation = goalReplies.get(conversationId), send = obligation?.geminiSend;
+    if (!draft || !send || send.id !== prepared.goal.id || !committedGeminiGoalSends.has(send) || send.revoked) return null;
+    if (draft.localCapabilitySendId === send.id) return view(draft);
+    // An already dispatched native Send is ambiguous. A restart cannot create a replacement task/key.
+    if (send.authorizedAt !== undefined || send.messageId) return null;
+    const original = draft.reply;
+    const routing = await issue(prepared.sessionId, prepared.goal);
+    if (readyGeminiGoal(conversationId, proof) !== draft || goalReplies.get(conversationId) !== obligation ||
+        draft.reply !== original || send.expiresAt <= Date.now() || send.authorizedAt !== undefined) return null;
+    const guidance = await optionalNativeSkillGuidance('claude');
+    if (readyGeminiGoal(conversationId, proof) !== draft || goalReplies.get(conversationId) !== obligation ||
+        draft.reply !== original || send.expiresAt <= Date.now() || send.authorizedAt !== undefined) return null;
+    const delivery = nativeSkillDelivery(prependUserPrompt(original, routing), guidance);
+    const reply = delivery.text;
+    if (reply.length > 96000) return null;
+    draft.reply = reply; draft.nativeSkill = delivery.nativeSkill; draft.localCapabilitySendId = send.id;
+    return view(draft);
+  });
+}
+
 export function authorizeGeminiGoalSend(conversationId: string, proof: GeminiGoalDocument, text: string): Promise<boolean> {
   return serialGoalSwitch(async () => {
     const before = goalReplies.get(conversationId), send = before?.geminiSend, draft = readyGeminiGoal(conversationId, proof);
     if (!before || !send || send.revoked || !committedGeminiGoalSends.has(send) || !draft || !sameGeminiGoalDocument(send, proof) || send.messageId || send.expiresAt <= Date.now()) return false;
+    const alternatives = [draft.reply, ...(draft.nativeSkill ? [draft.nativeSkill.text] : [])];
     if (typeof text !== 'string' || !text || text.length > 240000 || text.includes('[[GEMINI_LOCAL_SESSION]]') ||
-        !text.endsWith(draft.reply.replace(/\u00a0/g, ' ').trim())) return false;
+        !alternatives.some(reply => text.endsWith(reply.replace(/\u00a0/g, ' ').trim()))) return false;
     const textHash = createHash('sha256').update(text).digest('hex');
     const question = await readLatestUserMessage(before.sessionId), session = await getSession(before.sessionId);
     if (session?.conversationId !== conversationId || session.activeTurnId || question?.messageId !== send.sourceQuestionId ||
@@ -648,7 +683,7 @@ export function acknowledgeGeminiGoalSend(conversationId: string, proof: GeminiG
   return serialGoalSwitch(async () => {
     const before = goalReplies.get(conversationId), send = before?.geminiSend;
     if (!before || !send || send.revoked || !committedGeminiGoalSends.has(send) || !sameGeminiGoalDocument(send, proof) || send.authorizedAt === undefined ||
-        !new RegExp(`^gemini:${conversationId}:user:[a-f0-9]{16}$`).test(messageId)) return false;
+        !isProviderNativeQuestionId(chatProviderForConversation(conversationId), conversationId, messageId)) return false;
     if (send.messageId) return send.messageId === messageId && before.state === 'handled';
     const draft = readyGeminiGoal(conversationId, proof);
     const submitted = draft?.geminiSendText;
@@ -662,7 +697,7 @@ export function acknowledgeGeminiGoalSend(conversationId: string, proof: GeminiG
     if (readyGeminiGoal(conversationId, proof) !== draft || goalReplies.get(conversationId) !== before) return false;
     const canonical = await upsertMessageEvent(session.id, { kind: 'user_message', source: 'app', time: Date.now(),
       messageId, inputId: send.id, inputDelivery: 'confirmed',
-      message: { text: submitted.text, chars: submitted.text.length, truncated: false }, authoredText: submitted.text });
+      message: { text: submitted.text, chars: submitted.text.length, truncated: false }, authoredText: userPromptText(submitted.text) ?? submitted.text });
     if (positionOf(canonical.event) <= send.sourceHistorySeq) return false;
     const next = { ...before, state: 'handled' as const, geminiSend: { ...send, messageId, historySeq: positionOf(canonical.event) } };
     if (!await publishGeminiGoalSend(before, next, () => readyGeminiGoal(conversationId, proof) === draft)) return false;
@@ -1038,7 +1073,7 @@ export function restoreGoalObjectives(snapshot: GoalObjectivesSnapshot | null): 
   goalObjectives.clear();
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.objectives)) return;
   for (const raw of snapshot.objectives) {
-    if (!raw || typeof raw.conversationId !== 'string' || !/^[0-9a-z-]{8,256}$/i.test(raw.conversationId)) continue;
+    if (!raw || !isChatProviderConversationId(raw.conversationId)) continue;
     if (typeof raw.objective !== 'string') continue;
     const objective = raw.objective.trim();
     if (!objective) continue;
@@ -1209,7 +1244,7 @@ export function restoreGoalSwitches(snapshot: GoalSwitchesSnapshot | null): void
   goalSwitches.clear();
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.switches)) return;
   for (const raw of snapshot.switches) {
-    if (!raw || typeof raw.conversationId !== 'string' || !/^[0-9a-z-]{8,256}$/i.test(raw.conversationId)) continue;
+    if (!raw || !isChatProviderConversationId(raw.conversationId)) continue;
     if (typeof raw.enabled !== 'boolean' || (raw.mode !== 'goal' && raw.mode !== 'loop')) continue;
     const at = Number.isSafeInteger(raw.at) && raw.at > 0 ? raw.at : Date.now();
     const sourceSessionId = raw.role === 'decision' && typeof raw.sourceSessionId === 'string' && /^[\w-]{8,64}$/.test(raw.sourceSessionId)
@@ -1403,6 +1438,7 @@ function view(draft: GoalDraft): GoalDraftView {
     // The reply is handed over only while it is still the thing to do. Once acknowledged it
     // is history, and a page that polls again must not find a message to type a second time.
     reply: draft.stage === 'ready' && !draft.acknowledged ? draft.reply : '',
+    ...(draft.stage === 'ready' && !draft.acknowledged && draft.nativeSkill ? { nativeSkill: structuredClone(draft.nativeSkill) } : {}),
     error: draft.error,
     ...(draft.error ? { message: goalErrorMessage(draft.error), messageKey: goalErrorKey(draft.error) } : {}),
     retryable: draft.stage === 'failed' && retryableGoalFailure(draft.error ?? '')
@@ -1433,6 +1469,7 @@ function expireDraftPayload(draft: GoalDraft): void {
   draft.acknowledged = true;
   draft.text = '';
   draft.reply = '';
+  draft.nativeSkill = undefined;
   draft.error = null;
   draft.work = null;
 }
@@ -1920,13 +1957,15 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
     // Each decision owns one Temporary Chat and the complete bounded reference.
     // Historical helper identities remain fenced, but never receive new requests.
     const prompt = render(reference, direction);
+    const sourceSession = request.sourceSessionId ? await getSession(request.sourceSessionId) : null;
+    const helperProvider = chatProviderForConversation(sourceSession?.conversationId, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     const decision = normalizeGoalDecision(await requestBrowserDecision(prompt, request.signal, {
       sourceSessionId: request.sourceSessionId, conversationId: null,
       lifetime: 'temporary-planner',
       publish: request.publish,
       // Only a timeout teaches the size: a newer turn or Goal switched off also cancels a prompt.
       onSentUnanswered: () => { if (request.signal.reason?.name === 'TimeoutError') noteGoalHelperUnanswered(prompt.length); },
-      ...goalHelperSelection()
+      ...goalHelperSelection(helperProvider)
     }), false);
     request.signal.throwIfAborted();
     return decision;
@@ -2017,20 +2056,20 @@ let helperFallbackLogged = '';
 /** The helper model as it will actually run, for progress and logs; never a model it will not use. */
 function helperModelLabel(): string { return goalHelperSelection().model ?? "the provider’s current selection"; }
 
-export function goalHelperSelection(): { model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../shared/chat-models.js').NativeModelSurface } {
+export function goalHelperSelection(provider: ChatProvider = getConfig().ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER): { model: string | null; reasoningEffort: ReasoningEffort | null; modelSurface?: import('../shared/chat-models.js').NativeModelSurface } {
   const settings = getConfig().goal;
   let model: string | null = settings.helperModel ?? DEFAULT_HELPER_CHAT_MODEL;
-  let reasoningEffort: ReasoningEffort | null = settings.helperReasoning ?? 'high';
+  let reasoningEffort: ReasoningEffort | null = settings.helperReasoning === '' ? null : settings.helperReasoning ?? 'high';
   // This explicit Gemini choice means leave the native picker untouched, even
   // before discovery. Its historical High default is not a Gemini effort; sending
   // it made the first Goal/Loop/Plan helper fail the native settings admission.
   if (model === 'gemini-current') return { model: null, reasoningEffort: null };
-  const affinity = settings.helperModelAffinity, provider = getConfig().ui?.chatProvider ?? 'gemini';
+  const affinity = settings.helperModelAffinity;
   // A catalog from the other native mode cannot revoke an explicitly saved
   // model. The destination still has to prove this exact pair after activation.
   if (provider === 'chatgpt' && affinity?.provider === provider && affinity.model === model &&
       (affinity.surface === 'chat' || affinity.surface === 'work')) return { model, reasoningEffort, modelSurface: affinity.surface };
-  const catalog = getChatModels();
+  const catalog = getChatModels(provider);
   const models = catalog.models;
   // No readable picker at all (seen on Free plans, #1282): no model can ever be confirmed, so an
   // exact helper model failed every Goal and Loop decision. Use Gemini's current selection, as
@@ -2051,11 +2090,11 @@ export function goalHelperSelection(): { model: string | null; reasoningEffort: 
   if (model && !resolved) { notes.push(`model "${model}"`); model = null; }
   else if (resolved && resolved.id !== model && !resolved.aliases?.includes(model)) model = resolved.id;
   const offered = model ? (resolved ? [resolved] : models.filter(choice => choice.id === model || choice.aliases?.includes(model))) : models;
-  if (reasoningEffort && !offered.some(choice => choice.efforts.includes(reasoningEffort!))) {
+  if (reasoningEffort && !offered.some(choice => choice.effortsObserved === false || choice.efforts.includes(reasoningEffort!))) {
     notes.push(`reasoning "${reasoningEffort}"`); reasoningEffort = null;
   }
   const key = notes.join(',');
-  if (key) refreshForUnoffered(`goal helper ${key}`);
+  if (key) refreshForUnoffered(`goal helper ${key}`, provider);
   if (key && key !== helperFallbackLogged) {
     helperFallbackLogged = key;
     const line = `goal: the helper ${notes.join(' and ')} ${notes.length > 1 ? 'are' : 'is'} not offered by this provider account; using the provider’s current selection`;

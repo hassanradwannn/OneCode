@@ -195,7 +195,7 @@ export function newHandoffId(now: Date = new Date()): string {
  * its semantic state is durable; restart recovery repairs the tiny opposite crash window.
  */
 export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handoff> {
-  const exactMarkdown = input.sourceReceipt?.provider === 'gemini';
+  const exactMarkdown = input.sourceReceipt?.provider === 'gemini' || input.sourceReceipt?.provider === 'claude';
   let text = exactMarkdown ? input.text : input.text.trim();
   if (!text.trim()) throw new Error('A handoff cannot be empty');
   const summary = await getSession(input.sessionId);

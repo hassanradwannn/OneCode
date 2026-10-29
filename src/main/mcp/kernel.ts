@@ -1,3 +1,4 @@
+import type { ChatProvider } from '../../shared/chat-provider.js';
 import { offerToolInput, acknowledgeToolInput, TOOL_INPUT_HEADER } from '../session/input.js';
 import { noteConnectorUse } from '../connector-proof.js';
 import { beginPluginToolCall } from '../plugin-refresh.js';
@@ -129,7 +130,9 @@ import {
 import { sessionFinishDeadline } from '../session/finish.js';
 import type { ToolOutcome } from '../../shared/session.js';
 import { geminiBindingsEnabled, GeminiBindingError, consumeInheritedGeminiRouting } from '../gemini/bindings.js';
-import { localBindingIsCurrent, validateLocalBinding } from '../session/local-binding.js';
+import { localBindingIsCurrent, validateLocalBinding, type LocalBindingEvidence } from '../session/local-binding.js';
+import { sessionHistoryUnavailable } from '../session/journal-io.js';
+import { mcpProvider } from './provider-context.js';
 import { geminiToolSchema } from '../gemini/routing-schema.js';
 import { toolSchemaJson } from './tool-declarations.js';
 
@@ -352,14 +355,17 @@ export function friendlyError(err: unknown): string {
  */
 let toolCallSeenAt: number | null = null;
 const surfaceToolCallAt = new Map<SurfaceId, number>();
+const providerToolCalls = new Map<ChatProvider, { at: number | null; surfaces: Map<SurfaceId, number> }>();
 
-export function lastToolCallAt(surface?: SurfaceId): number | null {
+export function lastToolCallAt(surface?: SurfaceId, provider?: ChatProvider): number | null {
+  if (provider) { const row = providerToolCalls.get(provider); return surface === undefined ? row?.at ?? null : row?.surfaces.get(surface) ?? null; }
   if (surface === undefined) return toolCallSeenAt;
   return surfaceToolCallAt.get(surface) ?? null;
 }
 
 /** Cleared with the server, so the answer is always about the current session. */
-export function resetToolClock(): void {
+export function resetToolClock(provider?: ChatProvider): void {
+  if (provider) providerToolCalls.delete(provider); else providerToolCalls.clear();
   identityRecovery.clear();
   untrustedNoticeEpisodes.clear();
   toolCallSeenAt = null;
@@ -377,6 +383,9 @@ export async function guard(name: string, fn: () => Promise<ToolResult>): Promis
   // Counted before the work, and counted even when the tool is disabled or fails:
   // the question this answers is whether the model may call us at all.
   toolCallSeenAt = started;
+  const provider = mcpProvider();
+  if (!providerToolCalls.has(provider)) providerToolCalls.set(provider, { at: null, surfaces: new Map() });
+  providerToolCalls.get(provider)!.at = started;
   try {
     const result = await fn();
     const elapsed = Date.now() - started;
@@ -652,6 +661,8 @@ export async function dispatch(
   setupProfileId: string | null = null
 ): Promise<ToolResult> {
   const geminiBinding = parent?.caller.geminiBinding ?? inboundGeminiBinding();
+  if (mcpProvider() === 'claude' && (!geminiBinding || geminiBinding.attribution !== 'claude_session_capability'))
+    return fail('CLAUDE_SESSION_BINDING_REQUIRED: no local tool ran. This exact task needs its app-authored capability and native delivery receipt.');
   if (geminiBindingsEnabled() && !geminiBinding) {
     return fail('GEMINI_SESSION_BINDING_REQUIRED: no local tool ran. Refresh this chat\'s session binding through the paired companion.');
   }
@@ -708,6 +719,14 @@ export const COMPACTION_IN_PROGRESS_REFUSAL =
   'user message asks for the handoff brief: write that brief now, as plain text, and then stop. ' +
   'Work continues in the replacement chat.';
 
+/** Preserve the admitted provider and distinguish inaccessible proof storage from revocation. */
+function localBindingRefusal(error: unknown, evidence: LocalBindingEvidence): string {
+  const prefix = evidence.attribution === 'claude_session_capability' ? 'CLAUDE'
+    : evidence.attribution === 'chatgpt_session_capability' ? 'CHATGPT' : 'GEMINI';
+  if (sessionHistoryUnavailable(error)) return `${prefix}_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`;
+  return error instanceof GeminiBindingError ? error.code : `${prefix}_SESSION_NOT_AUTHORIZED: no local tool ran.`;
+}
+
 async function dispatchTracked(
   context: CallContext,
   name: string,
@@ -720,7 +739,7 @@ async function dispatchTracked(
 ): Promise<ToolResult> {
   if (context.caller.geminiBinding) {
     try { await validateLocalBinding(context.caller.geminiBinding); }
-    catch (error) { return fail(error instanceof GeminiBindingError ? error.code : 'GEMINI_SESSION_NOT_AUTHORIZED'); }
+    catch (error) { return fail(localBindingRefusal(error, context.caller.geminiBinding)); }
   }
   noteTransportIdentity(transportKey);
   const markTiming = beginToolTiming();
@@ -731,6 +750,9 @@ async function dispatchTracked(
   // that the separately configured native Plugins connector received any request.
   if (!nested) {
     surfaceToolCallAt.set(surface, Date.now());
+    const provider = mcpProvider();
+    if (!providerToolCalls.has(provider)) providerToolCalls.set(provider, { at: null, surfaces: new Map() });
+    providerToolCalls.get(provider)!.surfaces.set(surface, Date.now());
     noteConnectorUse(surface, 'tool');
     noteServedRequest(requestId, surface);
   }
@@ -1016,14 +1038,14 @@ async function dispatchTracked(
   }
   if (!admissionRefusal && context.caller.geminiBinding) {
     try { await validateLocalBinding(context.caller.geminiBinding); }
-    catch (error) { admissionRefusal = error instanceof GeminiBindingError ? error.code : 'GEMINI_SESSION_NOT_AUTHORIZED'; }
+    catch (error) { admissionRefusal = localBindingRefusal(error, context.caller.geminiBinding); }
   }
   if (admissionRefusal === STRICT_CHAT_REFUSAL) await recordUntrustedRefusalNotice(context);
   let handlerRan = false;
   markTiming('identity');
   const invokeHandler = (): Promise<ToolResult> => {
     if (context.caller.geminiBinding && !localBindingIsCurrent(context.caller.geminiBinding)) {
-      return Promise.resolve(fail('GEMINI_SESSION_NOT_AUTHORIZED: no local tool ran.'));
+      return Promise.resolve(fail(localBindingRefusal(undefined, context.caller.geminiBinding)));
     }
     handlerRan = true;
     return run();
@@ -1038,7 +1060,7 @@ async function dispatchTracked(
         : supersededConversation
         ? Promise.resolve(
             fail(
-              'CONVERSATION_SUPERSEDED: Compact & Resume replaced this ChatGPT conversation. Its transcript remains readable, but it can no longer execute local tools. Continue only in the replacement chat; no local tool was run.'
+              'CONVERSATION_SUPERSEDED: Compact & Resume replaced this provider conversation. Its transcript remains readable, but it can no longer execute local tools. Continue only in the replacement chat; no local tool was run.'
             )
           )
         : silentCeilingWorker

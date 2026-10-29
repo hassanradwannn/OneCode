@@ -22,11 +22,11 @@ The listener binds only to `127.0.0.1`. Requests must use its loopback Host, mus
 
 The experimental API supports these client-facing endpoints:
 
-- `GET /v1/models` — advertises `onecode`, `onecode-chatgpt`, and `onecode-gemini`.
+- `GET /v1/models` — advertises `onecode`, `onecode-chatgpt`, `onecode-gemini` and `onecode-claude`.
 - `POST /v1/chat/completions` — accepts text chat messages and returns an OpenAI-style chat completion. `stream: true` returns SSE after the native OneCode answer is complete.
 - `POST /v1/responses` — accepts text input or message items and returns an OpenAI Responses-style result. `stream: true` emits a completed-response SSE event.
 
-`onecode` uses the API's currently selected provider for a new chat. `onecode-chatgpt` and `onecode-gemini` explicitly select that provider for an unbound new chat. Once a OneCode chat is bound to a provider, that chat keeps its provider; switch provider by selecting it and opening a new chat rather than retargeting an existing conversation.
+`onecode` uses the API's currently selected provider for a new chat. The provider-specific models explicitly choose that provider for an unbound new chat; the short aliases `chatgpt`, `gemini` and `claude` are also accepted. These are routing choices, not native model IDs or provider API subscriptions. Once bound, a OneCode chat keeps its provider. Select a provider and open a new chat to switch; an explicit conflicting request with prior chat history is refused.
 
 The experimental API is text-in/text-out at the OpenAI HTTP boundary. Files, images and provider-native request features are not claimed as OpenAI API compatibility yet. The OneCode agent inside the selected browser chat can still use all OneCode capabilities that the user has enabled.
 
@@ -46,10 +46,10 @@ The API also exposes small local controls for clients that want OneCode chat sem
 
 ```text
 GET  /provider
-POST /provider          {"provider":"chatgpt" | "gemini"}
+POST /provider          {"provider":"chatgpt" | "gemini" | "claude"}
 
 POST /new               {}
-POST /new               {"provider":"chatgpt" | "gemini"}
+POST /new               {"provider":"chatgpt" | "gemini" | "claude"}
 
 GET  /session
 POST /session           {"session_id":"..."}
@@ -60,7 +60,7 @@ GET  /health
 
 `/new` creates a durable empty OneCode chat and makes it the API's current chat. The first completion uses the ordinary OneCode opening-input transaction to bind that reserved chat exactly once. `/session` selects an existing normal OneCode chat; worker/helper chats stay under their owning run and cannot be taken over by the API.
 
-`/provider` changes the default provider used by subsequent unbound/new chats. It does not migrate a conversation that already belongs to ChatGPT or Gemini.
+`/provider` changes the default for subsequent unbound/new chats. It does not migrate an existing provider conversation or an IDE thread. The text controls `/provider claude` and `/new claude` work through ordinary completion clients, as do the corresponding controls for the other provider choices.
 
 ## Live capabilities
 
@@ -80,4 +80,4 @@ If the HTTP client disconnects, OneCode stops waiting for that HTTP response. It
 
 The API enable switch, port, current API chat/default provider, and encrypted bearer key survive ordinary restarts. Application hotfix/capsule updates preserve the same profile, so the API identity survives compatible updates as well.
 
-Stable 0.6.3 is designed to ship as an application capsule when the published stable base has the same immutable runtime fingerprint. Packaging verifies that fingerprint before a capsule is accepted; a mismatch fails the release instead of weakening update compatibility.
+Application capsules preserve API identity when the published base and installed immutable runtime satisfy the compatibility contract. Packaging and the updater verify the runtime fingerprint and base descriptor; a mismatch requires a compatible complete base rather than weakening the check.

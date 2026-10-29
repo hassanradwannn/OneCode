@@ -37,7 +37,7 @@ export async function saveRemotePreferences(raw: unknown): Promise<ReturnType<ty
     if (affinity && (provider !== 'chatgpt' || affinity.provider !== provider || affinity.model !== ui.defaultChatModel)) delete ui.defaultChatModelAffinity;
     if (ui.defaultChatModel && (providerChanged || 'defaultChatModel' in changes || 'defaultChatReasoning' in changes)) {
       const model = resolveChatModel(getChatModels(provider).models, ui.defaultChatModel);
-      if ((!model || (ui.defaultChatReasoning && !model.efforts.includes(ui.defaultChatReasoning))) &&
+      if ((!model || (ui.defaultChatReasoning && model.effortsObserved !== false && !model.efforts.includes(ui.defaultChatReasoning))) &&
           (!ui.defaultChatModelAffinity || model?.nativeSurface === ui.defaultChatModelAffinity.surface)) throw new Error('Refresh models and choose an available model and thinking effort.');
       if (!ui.defaultChatModelAffinity && provider === 'chatgpt' && model?.nativeSurface) ui.defaultChatModelAffinity = { provider, model: ui.defaultChatModel, surface: model.nativeSurface };
     }

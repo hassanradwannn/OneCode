@@ -3,7 +3,7 @@ import { ui, t } from './i18n.js';
 import type { AppState } from '../shared/types.js';
 import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
 import { $, disclosureChevron, el, run, toast } from './dom.js';
-import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderConnectionsUrl, type ChatProvider } from '../shared/chat-provider.js';
 
 let snapshot: PluginSnapshot = { plugins: [], catalog: [], schemaRevision: 0 };
 let epoch = 0;
@@ -60,7 +60,7 @@ function pluginsConnectorName(): string {
 function provider(): ChatProvider { return appState?.config.ui?.chatProvider ?? DEFAULT_CHAT_PROVIDER; }
 function providerName(): string { return t("the provider"); }
 function providerPluginsUrl(): string {
-  return provider() === 'chatgpt' ? 'https://chatgpt.com/plugins' : 'https://gemini.google.com/customize/connectors';
+  return chatProviderConnectionsUrl(provider());
 }
 export async function refreshPlugins(): Promise<void> { await mutate(window.api.pluginsSnapshot(), false); }
 export function applyPluginsState(next: AppState): void {

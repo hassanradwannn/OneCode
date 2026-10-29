@@ -1,6 +1,22 @@
 # Multi-provider compatibility audit
 
-## 0.3.0 changes and acceptance
+## 0.8.0 provider audit
+
+The registered providers are `gemini`, `chatgpt` and `claude`. Shared product copy remains provider-generic; provider-specific setup names the native controls. Existing conversations, queued input, workers, terminal results, schedules, Goal/Loop obligations and resumed tasks retain their provider independently of the new-chat default.
+
+The third adapter stores `claude:<native UUID>` to avoid colliding with another service's UUID. Its local tool capability has a separate installation-bound ledger and endpoint. The exact original claim, native question and turn remain required even with unattributed calls enabled. A model choice, connector name, active tab or matching prose cannot identify a caller.
+
+The audit covered registry/extension routing, independent sign-in proofs, per-provider MCP paths and trust, current/legacy model catalogs, effort metadata, Desktop/Remote selectors, API/IDE routing, stored-chat opening/readiness, restart restoration and immutable update compatibility. It found and repaired shared paths that sent the added provider to another service's connector settings, rejected namespaced IDs, or discarded Goal/Loop state on restart.
+
+Native models and effort controls are read from the account's actual menus, including legacy submenus. Upgrade/disabled rows are excluded. Selected rows must be confirmed again before Send; cached catalog data is observation, not account entitlement. Usage-limit notices retain native reset text or an explicit deadline separately from history-backoff state, with no automatic replay.
+
+All adapters use the existing Chromium/Firefox Companion and the optional embedded host. Embedded Show/Sign-in follows the selected provider; auth popups follow their actual opener and sign-in proof cannot cross providers. Production native sign-in does not enable the preserved legacy cookie-transfer fixture path.
+
+Interactive component previews are provider-independent and share the offline React/TSX/Tailwind/Lucide/Recharts compiler with Desktop and Remote. Native artifact imports still require exact public message/surface evidence; missing source and unsupported provider-only runtime APIs remain visible limitations.
+
+Automated regressions and signed-in acceptance are separate. See [0.8.0 verification](release-acceptance/v0.8.0.md); paid accounts, every browser family and native Linux must not be marked accepted from source fixtures alone.
+
+## Historical 0.3.0 changes and acceptance
 
 - Provider selection is an identity/routing decision; generic provider/agent UI wording cannot change URLs, conversation identities, trust scopes or model catalogs. User-provided connector names, filenames and interpolation arguments are preserved.
 - Browser sign-in reads native rendered account controls on the page's own provider. A signed-out composer does not prove account authentication; hidden or contradictory controls remain unknown.
@@ -49,13 +65,13 @@ reopen an existing chat.
 - Setup and Plugins routes, labels and instructions repaint from the active provider.
 - Provider-specific handoff and receipt types are recorded in continuation provenance.
 
-## Known binary assumptions to remove before a third provider
+## Provider extension checklist
 
 ### Shared provider registry
 
-`src/shared/chat-provider.ts` currently uses a closed `gemini | chatgpt` union and binary branches.
-Adding a provider requires an explicit registry entry. Never let an `else` branch mean ChatGPT or
-Gemini; unknown providers must fail closed.
+`src/shared/chat-provider.ts` owns the closed registered-provider union. Every new provider requires
+an explicit entry. Never let a shared `else` branch silently mean one existing service; unknown
+providers fail closed.
 
 `extension/background.js` duplicates provider keys, home URLs, host parsing and conversation URL
 parsing because the MV3 worker cannot import the TypeScript module. Update it from the same provider
@@ -64,9 +80,8 @@ agree.
 
 ### Browser DOM and delivery state machine
 
-`extension/content.js` still contains many `CLF_DOM.provider === 'gemini'` and
-`CLF_DOM.provider !== 'gemini'` branches. The second form currently means ChatGPT. Replace binary
-branches with named capabilities/adapter methods before enabling a third provider, especially for:
+Provider-specific branches in `extension/content.js` must name their actual capability or adapter.
+An adapter that uses the native-question receipt flow must not enter the Fiber-only branch. Audit:
 
 - composer authorship and draft replacement;
 - new-chat bootstrap claims and accepted-Send receipts;
@@ -80,9 +95,8 @@ Provider DOM changes must fail closed when a native control or message boundary 
 ### Receipts, handoffs and correlation
 
 `src/main/bridge.ts`, `src/main/session/continuation.ts`, `src/main/session/handoff.ts` and
-`extension/content.js` currently distinguish Gemini's native-question/document custody from
-ChatGPT's Fiber/question receipt with binary branches. Extend the discriminated receipt union;
-never route a new provider through the ChatGPT `else` path.
+`extension/content.js` use the discriminated native-question/document and Fiber/question contracts.
+Extend that union explicitly; never inherit an existing adapter's proof through an unguarded branch.
 
 The main caller context still exposes names such as `geminiBinding`, and
 `src/main/gemini/*` is a Gemini-specific binding implementation. A future provider needing a local
@@ -92,6 +106,7 @@ Prompt text, model-authored IDs and the selected tab are not proof of ownership.
 ### Conversation identities and routes
 
 Gemini uses a 16-hex conversation ID. ChatGPT accepts its current alphanumeric/hyphen route ID.
+The third provider namespaces its native UUID rather than sharing another service's UUID syntax.
 All security boundaries must call `isChatProviderConversationId` with the proven or derived
 provider. Do not add another broad shared regex.
 
@@ -117,8 +132,9 @@ this to a provider-keyed link map before a second provider supports native proje
 
 Plugin/connector setup differs by provider:
 
-- Gemini uses Connected apps and an HTTPS MCP URL.
+- Gemini uses Customize → Connectors and an HTTPS MCP URL.
 - ChatGPT uses its Plugins route and native schema-refresh flow.
+- Claude uses Customize → Connectors → Add custom connector, with a Plugins rollout variant.
 
 `src/renderer/plugins.ts`, `src/renderer/main.ts`, `src/main/plugins-manager.ts`,
 `src/main/bridge.ts` and `extension/background.js` contain those provider-native paths. A future
@@ -157,10 +173,10 @@ when the implementation becomes neutral; cosmetic renames must not blur security
 
 ### Remote and mobile surfaces
 
-The provider's own mobile client is not a substitute for OneCode remote control: tool approval and
-browser-session custody can differ from desktop. The planned tailnet-only remote web app must call
-OneCode's provider-neutral control/session APIs and display the actual provider for each chat. It
-must not scrape Gemini or ChatGPT mobile pages or inherit a browser provider from the viewing device.
+The provider's own mobile client is not a substitute for OneCode Remote: tool approval and browser
+custody can differ. The shipped private Remote app calls the same control/session/input owners,
+displays every registered provider and preserves the actual provider for each chat. The viewing
+device supplies neither the model session nor execution authority.
 
 ## User-requested reliability acceptance (2026-10-17)
 
@@ -168,9 +184,9 @@ must not scrape Gemini or ChatGPT mobile pages or inherit a browser provider fro
 - Repeat with distinct file attachments in both concurrent chats. Verify exact attachment custody, native upload completion, correct contents in each response, no cross-chat file mixing, and durable history after relaunch.
 - Preserve the normal desktop profile, connector credentials, and existing history throughout installation and companion reloads.
 
-## Planned native model output support
+## Native model output contract
 
-Support provider-native features through OneCode's ordinary conversation and artifact owners, starting with images generated by Gemini. A generated image should reach its originating OneCode chat, render inline, and offer saving/export of the original available asset. Preserve multiple outputs and chat ownership during parallel generation and reconnects. Add equivalent adapters for other providers' native features as their capabilities are supported. This is planned work; text claiming an image was generated is not proof that its bytes reached OneCode.
+Provider-native features enter the ordinary conversation and artifact owners through explicit adapter contracts. Preserve the exact originating message and surface, source bytes and recorded ownership across parallel output and reconnects. Gemini image previews and rendered PNG export have Windows acceptance; that does not prove original-file export or every native media feature. The added generated-file adapter imports only an exactly owned public source viewer. Original export remains capability-gated, and a model's statement that it generated an image or artifact is not proof that its bytes reached OneCode.
 
 ## Required test matrix for every provider
 
@@ -196,8 +212,8 @@ Run these before declaring a new provider complete:
 
 ```powershell
 rg -n "provider !== 'gemini'|provider === 'chatgpt'|provider === 'gemini'" src extension
-rg -n "gemini\.google\.com|chatgpt\.com|chat\.openai\.com" src extension resources
-rg -n "Gemini|gemini|ChatGPT|chatgpt" src/main src/shared src/renderer extension
+rg -n "gemini\.google\.com|chatgpt\.com|chat\.openai\.com|claude\.ai" src extension resources
+rg -n "Gemini|gemini|ChatGPT|chatgpt|Claude|claude" src/main src/shared src/renderer extension
 rg -n "strictChatAllowlist|trustedChat|blockedChat" src test
 rg -n "nativeProjects|nativePluginRefresh|generatedImageExport|receipt:|handoff:" src
 ```
@@ -205,6 +221,6 @@ rg -n "nativeProjects|nativePluginRefresh|generatedImageExport|receipt:|handoff:
 Review every match. A provider-specific adapter match can be correct; an unguarded shared-path match
 is a release blocker.
 
-## Concurrent provider MCP servers (0.2.8.5)
+## Concurrent provider MCP servers
 
-Gemini and ChatGPT have separate loopback servers and secret URLs. Each server retains its provider identity for its lifetime. A small path-only gateway forwards each secret URL to its provider server, allowing both to share the existing Cloudflare or Tailscale transport while serving concurrent chats. Selecting a new default does not stop either listener. Add each provider's URL from its own setup page to that provider. Gemini routing capabilities remain required only on the Gemini server. The optional OpenAI Secure MCP Tunnel transport still publishes its configured single URL; use Cloudflare or Tailscale for concurrent providers.
+Every registered provider has a separate loopback server and secret URL. Each server retains its provider identity for its lifetime. A path-only gateway shares the existing Cloudflare or Tailscale transport while keeping endpoint identity independent of the selected default. Partial startup rolls back its already started listeners. Add each provider's own URL from its setup page. Adapter-specific capabilities remain confined to that endpoint. The optional OpenAI Secure MCP Tunnel still publishes its configured single URL; use Cloudflare or Tailscale for concurrent providers.

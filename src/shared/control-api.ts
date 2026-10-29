@@ -115,6 +115,7 @@ export interface ControlApiSession {
   id: string;
   title: string;
   conversationId: string | null;
+  provider?: import('./chat-provider.js').ChatProvider | null;
   projectId: string | null;
   startedAt: number;
   updatedAt: number;
@@ -264,6 +265,8 @@ export type ControlApiEvent = {
   blocking?: boolean;
   /** `chat_error` for a history limit: the first time Gemini said it may be retried (epoch ms). */
   retryAt?: number;
+  /** Observed model/account quota, distinct from a history retry deadline. */
+  usageLimit?: import('./session.js').ProviderUsageLimit;
   /** `page_tool`. */
   label?: string;
   /** `native_image`. */
@@ -314,6 +317,7 @@ export interface ControlApiInput {
   sessionId: string | null;
   deliveredSessionId: string | null;
   conversationId: string | null;
+  provider?: import('./chat-provider.js').ChatProvider | null;
   state: string;
   /**
    * What the row proves about delivery. `sent`: the receipt exists. `not_sent`: terminal and

@@ -20,6 +20,7 @@ import { CHATGPT_SESSION_COOKIE, beginCosBrowserSignInSession, endCosBrowserSign
 import { cosSignInTransfer, SignInTransferError, type SignInCookie } from './sign-in-transfer.js';
 import { EXTERNAL_BROWSER_LABELS, installedSignInBrowsers, openBrowserSignIn, type ExternalChatBrowser } from '../browser.js';
 import { cosBrowserPolicy, type CosBrowserProvider } from '../../shared/cos-browser-sites.js';
+import { DEFAULT_CHAT_PROVIDER, chatProviderConversationIdFromUrl } from '../../shared/chat-provider.js';
 import { TabModel, WINDOW_ID_NONE, type ModelEvent, type WindowState } from './tab-model.js';
 
 const PARTITION = 'persist:cos-browser';
@@ -168,7 +169,31 @@ export class CosBrowser {
   private signIn: SignInPanel | null = null;
   private browserEpoch = 0;
   private importingSignIn = false;
-  private readonly policy;
+  /** Production uses native sign-in; the old transfer path is explicit fixture policy only. */
+  private nativePolicy(provider: CosBrowserProvider) {
+    const policy = cosBrowserPolicy(provider);
+    return { ...policy, sessionTransfer: false, loginUrl: policy.homeUrl,
+      loginFor: (url: string) => provider === 'gemini' ? policy.loginFor(url) : policy.homeUrl };
+  }
+
+  private get policy() {
+    return this.assets.provider ? cosBrowserPolicy(this.assets.provider)
+      : this.nativePolicy(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  }
+
+  /** A popup belongs to its own opener even after the new-chat default changes. */
+  private policyFor(contents: WebContents) {
+    if (this.assets.provider) return this.policy;
+    try {
+      const url = new URL(contents.getURL());
+      if (url.protocol === 'https:') {
+        if (url.hostname === 'claude.ai') return this.nativePolicy('claude');
+        if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') return this.nativePolicy('chatgpt');
+        if (url.hostname === 'gemini.google.com') return this.nativePolicy('gemini');
+      }
+    } catch { /* An unknown opener uses only the selected provider policy. */ }
+    return this.policy;
+  }
 
   constructor(private readonly assets: {
     preloadDir: string; rendererUrl: () => string | null; rendererDir: string;
@@ -176,10 +201,9 @@ export class CosBrowser {
     onUserHide?: () => void;
     /** Where a window the user minimizes goes: the taskbar or Dock (default), or the tray. */
     minimizeTo?: () => 'taskbar' | 'tray';
-    /** Explicit legacy fixture policy; the production caller always uses Gemini. */
+    /** Explicit legacy fixture policy; production follows the selected provider. */
     provider?: CosBrowserProvider;
   }) {
-    this.policy = cosBrowserPolicy(assets.provider);
     cosSignInTransfer.onChange(change => this.signInEnded(change));
   }
 
@@ -361,8 +385,18 @@ export class CosBrowser {
    */
   async showSignIn(): Promise<void> {
     await this.start();
-    if (cosBrowserSignedIn() === true) return this.show();
-    const tab = this.model.query({}).find(candidate => this.policy.opens(candidate.url || candidate.pendingUrl || ''));
+    if ((this.assets.provider ? cosBrowserSignedIn() : cosBrowserSignedIn(this.policy.provider)) === true) return this.show();
+    const policy = this.policy;
+    const tab = this.model.query({}).find(candidate => {
+      const url = candidate.url || candidate.pendingUrl || '';
+      if (!policy.opens(url)) return false;
+      // Google auth is shared by several providers. An unowned auth page must
+      // not become another provider's sign-in merely because the default changed.
+      if (policy.provider === 'gemini' || !isGoogleSignIn(url)) return true;
+      const opener = candidate.openerTabId && this.views.get(candidate.openerTabId)?.webContents;
+      try { return !!opener && new URL(opener.getURL()).hostname === new URL(policy.homeUrl).hostname; }
+      catch { return false; }
+    });
     if (!tab) { this.control.createWindow({ url: this.policy.loginUrl, focused: true, state: 'normal', type: 'normal' }); return; }
     const current = tab.url || tab.pendingUrl || '';
     if (this.policy.sessionTransfer || !isGoogleSignIn(current)) this.control.navigate(tab.id, this.policy.loginFor(current));
@@ -558,7 +592,7 @@ export class CosBrowser {
         id: tab.id, title: tab.title || tab.pendingUrl || tab.url || 'New tab', url: tab.url || tab.pendingUrl || '',
         favicon: this.favicons.get(tabId) ?? null, active: tab.active, loading: tab.status === 'loading',
         // Answering, or being sent to: the companion holds a tab's debugger while it sends.
-        working: this.generating.has(this.policy.conversation(tab.url) ?? '') || this.views.get(tabId)?.webContents.debugger.isAttached() === true
+        working: this.generating.has(chatProviderConversationIdFromUrl(tab.url) ?? '') || this.views.get(tabId)?.webContents.debugger.isAttached() === true
       };
     });
     const history = activeId === null ? null : this.views.get(activeId)?.webContents.navigationHistory;
@@ -651,8 +685,9 @@ export class CosBrowser {
       if (!this.stopping) this.model.removeTab(id);
     });
     contents.setWindowOpenHandler(({ url }) => {
-      if (this.policy.sessionTransfer && isGoogleSignIn(url)) this.googleSignIn(contents);
-      else if (this.policy.opens(url)) {
+      const policy = this.policyFor(contents);
+      if (policy.sessionTransfer && isGoogleSignIn(url)) this.googleSignIn(contents);
+      else if (policy.opens(url)) {
         // The chosen policy's exact provider/auth hosts open beside their own opener.
         const windowId = this.model.tab(id)?.windowId;
         if (windowId !== undefined) this.control.createTab(windowId, url, { active: true, openerTabId: id });

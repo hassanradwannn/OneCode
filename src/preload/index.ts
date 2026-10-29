@@ -7,6 +7,7 @@ import type { DictationEvent } from '../shared/dictation.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
 import type { ChatgptSkillExportFormat, ChatgptSkillExportResult } from '../shared/chatgpt-web-skill.js';
 import type { GeminiSkillExportFormat, GeminiSkillExportResult } from '../shared/gemini-web-skill.js';
+import type { ClaudeSkillExportFormat, ClaudeSkillExportResult } from '../shared/claude-web-skill.js';
 import type { GoalModel } from '../shared/goal-reasoning.js';
 import type { TaskProgress } from '../shared/task-progress.js';
 import type { BrowserPreferences } from '../shared/browser-preferences.js';
@@ -266,6 +267,8 @@ const api = {
   exportChatgptSkill: (format: ChatgptSkillExportFormat) => call<ChatgptSkillExportResult>('chatgptSkill:export', { format }),
   openChatgptSkills: () => call<boolean>('chatgptSkill:open'),
   exportGeminiSkill: (format: GeminiSkillExportFormat) => call<GeminiSkillExportResult>('geminiSkill:export', { format }),
+  exportClaudeSkill: (format: ClaudeSkillExportFormat) => call<ClaudeSkillExportResult>('claudeSkill:export', { format }),
+  openClaudeSkills: () => call<boolean>('claudeSkill:open'),
   copyGeminiSkillInstructions: () => call<boolean>('geminiSkill:copy'),
   openGeminiSkills: () => call<boolean>('geminiSkill:open'),
   exportMarkdown: (request: { id: string; scope: 'answer' | 'session'; turnId?: string; target: 'clipboard' | 'file' }) =>
@@ -386,7 +389,8 @@ const api = {
   getChatModels: (provider?: import('../shared/chat-provider.js').ChatProvider) => call<ChatModelCatalog>('chatModels:get', provider),
   browserPreferences: (patch: Partial<BrowserPreferences> = {}) => call<BrowserPreferences>('browser:preferences', patch),
   companionDiagnostics: () => call<CompanionDiagnostics | null>('bridge:diagnostics'),
-  requestChatModels: (provider?: import('../shared/chat-provider.js').ChatProvider) => call<ChatModelCatalog>('chatModels:request', provider),
+  requestChatModels: (provider?: import('../shared/chat-provider.js').ChatProvider, model?: string) =>
+    call<ChatModelCatalog>('chatModels:request', model === undefined ? provider : { provider, model }),
   onToolApprovalNotice: (listener: () => void): (() => void) => {
     const wrapped = (): void => listener();
     ipcRenderer.on('setup:toolApprovalNotice', wrapped);

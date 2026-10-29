@@ -486,7 +486,7 @@ export function claimPluginRefresh(input: Identity & Enrollment & { alreadyCurre
     row.appId = input.appId; row.attempted = true;
     delete row.error;
     delete row.failure;
-    notePluginInstalled(row.surface);
+    notePluginInstalled(row.surface, Date.now(), 'chatgpt');
     // Enrollment/migration may find the installed declaration already current. Record
     // that observation without clicking Refresh or manufacturing a new plugin version.
     if (input.alreadyCurrent) { row.verifiedRun = runId; row.completedSchemaId = row.schemaId; row.manual = false; row.observe = false; delete row.parked; delete row.parkedBy; delete row.failures; }
@@ -516,7 +516,7 @@ export function requireManualPluginRefresh(input: Identity & Enrollment & { erro
     row.appId = input.appId;
     row.manual = true;
     delete row.failure;
-    notePluginInstalled(row.surface);
+    notePluginInstalled(row.surface, Date.now(), 'chatgpt');
     row.error = input.error.slice(0, 200);
     await save(current);
     logWarn(`plugin refresh requires manual action surface=${row.surface}: ${row.error}`);

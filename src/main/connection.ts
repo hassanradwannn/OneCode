@@ -24,7 +24,7 @@ import { desktopAutomationSupported } from './platform.js';
 import { publishPluginSurface, unpublishPluginSurface } from './plugin-refresh.js';
 import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
-import { DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { inFlightToolCalls } from './mcp/call-context.js';
 
 let endpoint: ProviderEndpoints | null = null;
@@ -216,8 +216,8 @@ export function getStatus(): ConnectionStatus {
     ...status,
     localUrl: endpoint?.url ?? null,
     publicUrl: endpoint && getConfig().tunnel.kind !== 'openai' ? siblingPublicUrl(status.publicUrl, endpoint.url) : status.publicUrl,
-    lastRequestAt: lastRequestAt(),
-    lastToolCallAt: lastToolCallAt(),
+    lastRequestAt: lastRequestAt(undefined, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+    lastToolCallAt: lastToolCallAt(undefined, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
     routeSettlingUntil: tunnelRouteSettlingUntil(),
     surfaces: describeSurfaces()
   };
@@ -269,8 +269,8 @@ function describeSurfaces(): SurfaceStatus[] {
       // Per connector, because a Core call proves nothing about whether the user ever
       // created the Desktop connector in Gemini. Publication is our side of the wire;
       // these two are the only evidence of the other side.
-      lastRequestAt: lastRequestAt(surface.id),
-      lastToolCallAt: lastToolCallAt(surface.id),
+      lastRequestAt: lastRequestAt(surface.id, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+      lastToolCallAt: lastToolCallAt(surface.id, config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
       // The same evidence from earlier runs, on the tunnel this connector uses now: Setup's
       // proof that the plugin exists in Gemini before it calls again this session.
       proof: connectorProof(surface.id)
@@ -426,10 +426,8 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
     setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null, tailscale: null });
     // Opt-in stable URLs for a tunnel of the user's own (#924): the stored tokens, else fresh ones.
     const keepUrls = config.tunnel.kind === 'tailscale' || getConfig().mcp?.persistentUrls === true;
-    const kept = keepUrls ? {
-      gemini: await loadSurfaceTokens('gemini').catch(() => ({})),
-      chatgpt: await loadSurfaceTokens('chatgpt').catch(() => ({}))
-    } : {};
+    const kept = keepUrls ? Object.fromEntries(await Promise.all(CHAT_PROVIDERS.map(async provider =>
+      [provider, await loadSurfaceTokens(provider).catch(() => ({}))]))) : {};
     const startedEndpoint = await startProviderMcpServers(() => {
       const live = getConfig();
       return {
@@ -440,8 +438,8 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
         privacyScreenshots: live.ui.privacyScreenshots
       };
     }, kept, () => getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
-    if (keepUrls && !(await Promise.all(['gemini', 'chatgpt'].map(provider =>
-      rememberSurfaceTokens(startedEndpoint.providers[provider as 'gemini' | 'chatgpt'].urls, provider as 'gemini' | 'chatgpt')))).every(Boolean)) {
+    if (keepUrls && !(await Promise.all(CHAT_PROVIDERS.map(provider =>
+      rememberSurfaceTokens(startedEndpoint.providers[provider].urls, provider)))).every(Boolean)) {
       if (config.tunnel.kind === 'tailscale') {
         await startedEndpoint.stop();
         throw new TunnelError('OneCode Funnel requires securely saved connector URLs. Restore secure storage before connecting. No Funnel route was changed.');
@@ -482,12 +480,13 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
       report: (report) => {
         if (generation !== connectionGeneration || !startupCurrent()) return;
         if (config.tunnel.kind === 'tailscale' && report.publicUrl !== undefined) {
-          setConnectorPublicRoute(setupProfileId, report.state === 'connected' ? report.publicUrl : null);
+          setConnectorPublicRoute(setupProfileId, report.state === 'connected' ? report.publicUrl : null,
+            Object.fromEntries(CHAT_PROVIDERS.map(provider => [provider, startedEndpoint.providers[provider].urls])));
         }
         setStatus({
           state: report.state,
           detail: report.detail,
-          lastRequestAt: lastRequestAt(),
+          lastRequestAt: lastRequestAt(undefined, getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
           ...(report.publicUrl === undefined ? {} : { publicUrl: report.publicUrl }),
           ...(report.handshakeAt === undefined ? {} : { handshakeAt: report.handshakeAt }),
           ...(report.health === undefined ? {} : { health: report.health }),
@@ -733,8 +732,8 @@ async function disconnectResources(endpointForceAfterMs?: number): Promise<void>
 
 /** Keeps the running connector URLs from now on (the option was just turned on); false if it could not. */
 export async function rememberRunningSurfaceTokens(): Promise<boolean> {
-  return endpoint ? (await Promise.all(['gemini', 'chatgpt'].map(provider =>
-    rememberSurfaceTokens(endpoint!.providers[provider as 'gemini' | 'chatgpt'].urls, provider as 'gemini' | 'chatgpt')))).every(Boolean) : true;
+  return endpoint ? (await Promise.all(CHAT_PROVIDERS.map(provider =>
+    rememberSurfaceTokens(endpoint!.providers[provider].urls, provider)))).every(Boolean) : true;
 }
 
 export function connect(current?: () => boolean): Promise<void> {

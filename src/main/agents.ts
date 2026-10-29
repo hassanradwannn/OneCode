@@ -20,8 +20,8 @@ import { getConfig } from './config.js';
 import { liveConnectorName } from './mcp/surfaces.js';
 import { workerBrief, workerOwnTask } from '../shared/worker-brief.js';
 import { getChatModels, refreshForUnoffered } from './chat-models.js';
-import { resolveChatModel, type ChatModelOption } from '../shared/chat-models.js';
-import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER } from '../shared/chat-provider.js';
+import { resolveChatModel, isNativeModelId, type ChatModelOption } from '../shared/chat-models.js';
+import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { logInfo, logWarn } from './logger.js';
 import { inheritWorkspace, releasePrimeWorkspace, bindAgentWorkspace } from './workspace.js';
 import { requestCorrelation } from './session/correlation.js';
@@ -81,7 +81,6 @@ const MAX_LABEL_CHARS = 60;
  * simply opens with the account default rather than failing the spawn.
  */
 const MAX_MODEL_CHARS = 80;
-const MODEL_SLUG_RE = /^[A-Za-z0-9._-]{1,80}$/;
 
 /** Real work renews this deadline; an open page, reload or status poll does not. */
 export const WORKER_SILENCE_MS = 3 * 60_000;
@@ -1778,13 +1777,14 @@ function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
  * rejection leaves zero workers behind. Account membership is checked separately once
  * both requested settings have been resolved.
  */
-function normalizeModel(index: number, value: string | null | undefined): string | null {
+function normalizeModel(index: number, value: string | null | undefined, provider: ChatProvider): string | null {
   if (value === undefined || value === null) return null;
   const model = value.trim();
   if (!model) return null;
-  if (!isModelSlug(model)) {
+  if (!isModelSlug(model, provider)) {
     throw new AgentError(
-      `Worker ${index + 1}'s model is not a model ID (letters, digits, dot, underscore, hyphen; limit ${MAX_MODEL_CHARS} characters)`
+      provider === 'claude' ? `Worker ${index + 1}'s model is not a valid observed model identifier (limit ${MAX_MODEL_CHARS} characters)`
+        : `Worker ${index + 1}'s model is not a model ID (letters, digits, dot, underscore, hyphen; limit ${MAX_MODEL_CHARS} characters)`
     );
   }
   return model;
@@ -1795,8 +1795,8 @@ function normalizeModel(index: number, value: string | null | undefined): string
  * worker models, shared by the broker and the bridge's durable restore. Syntax does not
  * prove availability; admission checks observed choices and the browser confirms at Send.
  */
-export function isModelSlug(value: unknown): value is string {
-  return typeof value === 'string' && MODEL_SLUG_RE.test(value);
+export function isModelSlug(value: unknown, provider?: ChatProvider): value is string {
+  return isNativeModelId(value, provider);
 }
 
 /**
@@ -1845,7 +1845,9 @@ function usableDefaults(
     model = null;
   } else if (resolved && resolved.id !== model && !resolved.aliases?.includes(model!)) model = resolved.id;
   const offered = model ? (resolved ? [resolved] : models.filter(choice => choice.id === model || choice.aliases?.includes(model!))) : models;
-  if (defaultEffort && effort && !offered.some(choice => choice.efforts.includes(effort!))) {
+  // An uninspected per-model effort menu is unknown, not an observed refusal.
+  // Retain the exact saved intent; its native preparation still must prove the pair.
+  if (defaultEffort && effort && !offered.some(choice => choice.effortsObserved === false || choice.efforts.includes(effort!))) {
     notes.add(`The default worker reasoning "${effort}" saved in Settings is not offered${model ? ` for model "${model}"` : ''} by this provider account, so workers use the provider’s current reasoning. Choose an available level in Settings → Agents & automation.`);
     effort = null;
   }
@@ -1858,11 +1860,11 @@ function validateWorkerModel(index: number, model: string | null, effort: Reason
   // native confirmation; never guess an account default or manufacture a model alias.
   if (!models.length) return;
   const choices = model ? models.filter(choice => choice.id === model || choice.aliases?.includes(model)) : models;
-  const available = models.map(choice => `${choice.id} (${choice.efforts.join(', ')})`).join('; ');
+  const available = models.map(choice => `${choice.id} (${choice.effortsObserved === false ? 'reasoning not inspected' : choice.efforts.join(', ')})`).join('; ');
   if (model && choices.length !== 1) {
     throw new AgentError(`Worker ${index + 1}'s model "${model}" is ${choices.length ? 'ambiguous' : 'not observed'} in the provider account. Observed model ids and reasoning: ${available}`);
   }
-  if (effort && !choices.some(choice => choice.efforts.includes(effort))) {
+  if (effort && !choices.some(choice => choice.effortsObserved === false || choice.efforts.includes(effort))) {
     throw new AgentError(`Worker ${index + 1}'s reasoning_effort "${effort}" is not observed${model ? ` for model "${model}"` : ' in the provider account'}. Observed model ids and reasoning: ${available}`);
   }
   // Keep provider aliases exact: reducing a lane-specific slug to its family without an
@@ -2092,7 +2094,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     if (label.length > MAX_LABEL_CHARS) {
       throw new AgentError(`Worker ${index + 1}'s label is too long (limit ${MAX_LABEL_CHARS} characters)`);
     }
-    const selectedModel = normalizeModel(index, worker.model === undefined ? getConfig().multiAgent.defaultModel : worker.model);
+    const selectedModel = normalizeModel(index, worker.model === undefined ? getConfig().multiAgent.defaultModel : worker.model, modelProvider);
     const selectedEffort = normalizeReasoningEffort(index, worker.reasoning_effort === undefined ? getConfig().multiAgent.defaultReasoning : worker.reasoning_effort);
     const affinity = getConfig().multiAgent.defaultModelAffinity;
     const modeBoundDefault = worker.model === undefined && modelProvider === 'chatgpt' && affinity?.provider === modelProvider &&

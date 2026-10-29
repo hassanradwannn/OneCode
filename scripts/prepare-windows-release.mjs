@@ -75,6 +75,10 @@ await fs.writeFile(path.join(output, 'OneCode-Gemini-Skill.zip'), zipSync({ 'SKI
 await fs.writeFile(path.join(output, 'OneCode-ChatGPT-Skill.zip'), zipSync({
   'onecode-chatgpt/SKILL.md': await fs.readFile(path.join(root, 'skills/onecode-chatgpt/SKILL.md'))
 }));
+const claudeSkill = await fs.readFile(path.join(root, 'resources/skills/onecode-claude/SKILL.md'));
+assert.deepEqual(claudeSkill, await fs.readFile(path.join(resources, 'skills/onecode-claude/SKILL.md')));
+assert.match(claudeSkill.toString('utf8'), /^---\r?\nname: onecode\r?\n/, 'The uploaded native skill must use its accepted generic name');
+await fs.writeFile(path.join(output, 'OneCode-Claude-Skill.zip'), zipSync({ 'onecode/SKILL.md': claudeSkill }));
 for (const name of ['WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md'])
   await fs.copyFile(path.join(root, 'docs', name), path.join(output, name));
 await writeUpdateMetadata(output, 'x64', version, channel);
@@ -89,7 +93,7 @@ const baseName = `${prefix}-Base-x64.json`;
 await fs.writeFile(path.join(output,baseName),JSON.stringify(contract.baseRelease({schema:1,version,platform:'win32',arch:'x64',runtime:runtime.id,installer:installerName,size:installer.length,sha256:createHash('sha256').update(installer).digest('hex'),...(channel==='beta'?{channel,tag}:{})})));
 const names = [
   installerName, `${installerName}.blockmap`, metadataName, companionName,
-  'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip', 'SKILL.md',
+  'OneCode-Gemini-Skill.zip', 'OneCode-ChatGPT-Skill.zip', 'OneCode-Claude-Skill.zip', 'SKILL.md',
   'WINDOWS-SETUP.md', 'MULTI-PROVIDER-COMPATIBILITY.md', baseName
 ];
 const sums = [];

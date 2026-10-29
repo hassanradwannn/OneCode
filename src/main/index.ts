@@ -48,6 +48,7 @@ import { sessionActivityExpiresAt, setBrowserOpener, setBrowserWorkArea, shutdow
 import { setStuckNotifier } from './stuck-notice.js';
 import { flushSessions, getSession, initSessionStore, listSessions, readRecentEvents, setRecordingStorageLimit } from './session/store.js';
 import { createTurnNotifier } from './turn-notifications.js';
+import { createUsageLimitNotifier } from './provider-usage-limit-notifications.js';
 import { DEFAULT_RECORDING_STORAGE_GIB } from '../shared/session.js';
 import { initSkillsPath } from './skills.js';
 import { initUvRuntime } from './plugins/uv-runtime.js';
@@ -489,8 +490,10 @@ void app.whenReady().then(async () => {
   initDurableStore(userData);
   try { await initializeExecSpool(userData); }
   catch (error) { logWarn(`Terminal output storage unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-  try { await initLocalBindings(); }
-  catch (error) { logWarn(`ChatGPT task authorization unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+  for (const provider of ['chatgpt', 'claude'] as const) {
+    try { await initLocalBindings(provider); }
+    catch (error) { logWarn(`Provider task authorization unavailable (${provider}): ${error instanceof Error ? error.message : String(error)}`); }
+  }
   try { await initGeminiBindings(userData); }
   catch (error) { logWarn(`Gemini task authorization unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   savedWindowBounds = await readDurable<unknown>(WINDOW_BOUNDS_STATE);
@@ -513,7 +516,7 @@ void app.whenReady().then(async () => {
   onWorkerChatsRetired((conversationIds) => queueWorkerArchives(conversationIds));
   await loadBrowserProof();
   // Plugins Gemini already showed the refresh feature are created: Setup need not wait for a call.
-  for (const surface of await enrolledPluginSurfaces()) notePluginInstalled(surface);
+  for (const surface of await enrolledPluginSurfaces()) notePluginInstalled(surface, Date.now(), 'chatgpt');
   await pluginManager.initialize(userData);
   // Codex's "Prevent sleep while running": a sleeping computer stops a long run (#1086).
   const keepAwake = createKeepAwake({
@@ -530,6 +533,17 @@ void app.whenReady().then(async () => {
   setInterval(() => void keepAwake.refresh(), 60_000).unref();
   void keepAwake.refresh();
   // Codex's turn-completion notifications: a finished answer in a background window.
+  const showSessionNotification = (title: string, body: string, sessionId: string): void => {
+      const notice = new Notification({ title, body });
+      notice.on('click', () => {
+        showWindow();
+        if (!window) return;
+        const target = window.webContents;
+        const open = (): void => { if (!target.isDestroyed()) target.send('session:write', sessionId); };
+        if (target.isLoadingMainFrame()) target.once('did-finish-load', open); else open();
+      });
+      notice.show();
+  };
   const turnNotifier = createTurnNotifier({
     getSession,
     lastAnswer: async id => {
@@ -540,20 +554,16 @@ void app.whenReady().then(async () => {
     focused: () => window?.isFocused() === true,
     automated: conversationId => goalSwitchEnabledFor(conversationId),
     recentlyNotified: id => Date.now() - (chatNoticeAt.get(id) ?? 0) < 120_000,
-    show: (title, body, sessionId) => {
-      const notice = new Notification({ title, body });
-      notice.on('click', () => {
-        showWindow();
-        if (!window) return;
-        const target = window.webContents;
-        const open = (): void => { if (!target.isDestroyed()) target.send('session:write', sessionId); };
-        if (target.isLoadingMainFrame()) target.once('did-finish-load', open); else open();
-      });
-      notice.show();
-    }
+    show: showSessionNotification
   });
   turnNotifier.seed(await listSessions().catch(() => []));
   onSessionChange(change => void turnNotifier.handle(change.sessionIds ?? []));
+  const usageLimitNotifier = createUsageLimitNotifier({
+    getSession, events: id => readRecentEvents(id, 64, { kinds: ['chat_error', 'assistant_message'] }),
+    enabled: () => getConfig().ui.turnNotifications !== false && Notification.isSupported(),
+    focused: () => window?.isFocused() === true, show: showSessionNotification
+  });
+  onSessionChange(change => void usageLimitNotifier.handle(change.sessionIds ?? []));
   // The app's own requests follow the system proxy too, not only the tunnel (#1255).
   configureAppProxy(url => session.defaultSession.resolveProxy(url), () => [
     ...(getConfig().goal.provider.kind === 'custom' ? [getConfig().goal.provider.baseUrl] : []),

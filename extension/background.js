@@ -37,19 +37,22 @@ function providerForUrl(value) {
     if (url.protocol !== 'https:' || url.port || url.username || url.password) return null;
     if (url.hostname === 'gemini.google.com') return 'gemini';
     if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') return 'chatgpt';
+    if (url.hostname === 'claude.ai') return 'claude';
   } catch { /* Invalid URLs have no provider. */ }
   return null;
 }
 function providerForConversation(value, fallback = selectedProvider) {
   const id = typeof value === 'string' ? value.trim() : '';
+  if (/^claude:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return 'claude';
   if (/^[0-9a-f]{16}$/i.test(id)) return 'gemini';
   if (/^[0-9a-f-]{8,64}$/i.test(id)) return 'chatgpt';
-  return fallback === 'chatgpt' ? 'chatgpt' : 'gemini';
+  return fallback === 'claude' || fallback === 'chatgpt' ? fallback : 'gemini';
 }
 function providerHome(provider = selectedProvider) {
-  return provider === 'chatgpt' ? 'https://chatgpt.com/' : 'https://gemini.google.com/app';
+  return provider === 'claude' ? 'https://claude.ai/new' : provider === 'chatgpt' ? 'https://chatgpt.com/' : 'https://gemini.google.com/app';
 }
 function providerConversationUrl(conversationId) {
+  if (providerForConversation(conversationId) === 'claude') return `https://claude.ai/chat/${encodeURIComponent(conversationId.slice('claude:'.length))}`;
   return providerForConversation(conversationId) === 'chatgpt'
     ? `https://chatgpt.com/c/${encodeURIComponent(conversationId)}`
     : `https://gemini.google.com/app/${encodeURIComponent(conversationId)}`;
@@ -58,7 +61,15 @@ function providerHomeDocument(value, provider = providerForUrl(value)) {
   try {
     const url = new URL(String(value || ''));
     if (provider === 'chatgpt') return url.origin === 'https://chatgpt.com' && url.pathname === '/' && !url.search && !url.hash;
+    if (provider === 'claude') return url.origin === 'https://claude.ai' && /^\/new\/?$/.test(url.pathname) && !url.search && !url.hash;
     return provider === 'gemini' && url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname) && !url.search && !url.hash;
+  } catch { return false; }
+}
+function providerLoginDocument(value) {
+  if (signInStage(value) === 'done') return true;
+  try {
+    const url = new URL(value);
+    return providerForUrl(value) === 'claude' && /^\/(?:new|chat\/[0-9a-f-]{36})\/?$/i.test(url.pathname);
   } catch { return false; }
 }
 async function resolveProviderUrl(url, options = {}) {
@@ -159,7 +170,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 20;
+const BRIDGE_PROTOCOL = 21;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -1555,7 +1566,7 @@ async function redeemCommand(id, client, conversationId = null, projectEntry = f
   return { ok: true, command, ...(command ? { identity: { connectorNames, connectorApps, ownCoreApp } } : {}) };
 }
 
-function commandAckPayload(id, status, error, conversationId, agent, client, turnId, detail) {
+function commandAckPayload(id, status, error, conversationId, agent, client, turnId, detail, messageId) {
   return {
     id,
     status,
@@ -1564,7 +1575,8 @@ function commandAckPayload(id, status, error, conversationId, agent, client, tur
     conversationId: conversationId || undefined,
     agent: agent || undefined,
     client: client || undefined,
-    ...(typeof turnId === 'string' && turnId.length <= 256 ? { turnId } : {})
+    ...(typeof turnId === 'string' && turnId.length <= 256 ? { turnId } : {}),
+    ...(typeof messageId === 'string' && /^[A-Za-z0-9:_-]{1,256}$/.test(messageId) ? { messageId } : {})
   };
 }
 
@@ -1600,7 +1612,8 @@ async function drainCommandAcks(targetId = null) {
         entry.agent,
         entry.client,
         entry.turnId,
-        entry.detail
+        entry.detail,
+        entry.messageId
       );
       const result = await call(inputReceipt ? '/input/ack' : '/commands/ack', { method: 'POST', body: JSON.stringify(payload) });
       if (entry.id === targetId) targetResult = result;
@@ -1640,10 +1653,10 @@ async function drainCommandAcks(targetId = null) {
   }
 }
 
-async function ackCommand(id, status, error, conversationId, agent, client, source = null, turnId, detail) {
+async function ackCommand(id, status, error, conversationId, agent, client, source = null, turnId, detail, messageId) {
   await load();
   if (!id) return { ok: false, status: 400, error: 'bad_command_id' };
-  const payload = commandAckPayload(id, status, error, conversationId, agent, client, turnId, detail);
+  const payload = commandAckPayload(id, status, error, conversationId, agent, client, turnId, detail, messageId);
   const queued = {
     ...payload,
     provisional: payload.conversationId ? null : tabKey(source),
@@ -2019,7 +2032,13 @@ async function markTerminal(id) {
 
 function cleanConversationId(value) {
   const id = typeof value === 'string' ? value.trim() : '';
+  if (/^claude:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return id.toLowerCase();
   return /^[0-9a-f-]{8,64}$/i.test(id) ? id.toLowerCase() : null;
+}
+function validClaudeQuestionId(conversationId, messageId) {
+  if (typeof conversationId !== 'string' || providerForConversation(conversationId, 'gemini') !== 'claude' || typeof messageId !== 'string') return false;
+  const prefix = `${conversationId}:user:`;
+  return messageId.startsWith(prefix) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId.slice(prefix.length));
 }
 
 /**
@@ -2274,7 +2293,7 @@ async function reconcileBackgroundWindow(policy) {
       const inputId = url.searchParams.get('cos-input') || new URLSearchParams(url.hash.slice(1)).get('cos-input');
       // Catalog markers retain ownership across browser restart so the warm empty
       // document can be handed to the first authored input without another window.
-      const catalogHelper = (provider === 'chatgpt' ? url.pathname === '/' : /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname)) &&
+      const catalogHelper = (provider === 'claude' ? /^\/new\/?$/.test(url.pathname) : provider === 'chatgpt' ? url.pathname === '/' : /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname)) &&
         /^[a-f0-9-]{36}$/i.test(url.searchParams.get('cos-model-catalog') || '');
       return (inputId && inputIds.has(inputId)) || catalogHelper;
     } catch { return false; }
@@ -2545,7 +2564,8 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
     // A prepare receipt can be lost after its exact document changes nothing. Do
     // not replay from elapsed time: only the still-elected, still-owned document
     // can prove that it is idle again and therefore no old preparation is live.
-    if (!tab && !target && elected?.stage === 'preparing' && Number.isInteger(elected.tab)) {
+    if (!tab && !target && providerForConversation(target, input.chatProvider ?? selectedProvider) !== 'claude' &&
+        elected?.stage === 'preparing' && Number.isInteger(elected.tab)) {
       const candidate = tabs.find(row => row.id === elected.tab);
       const reusable = new Set(reusableConversations);
       // A completed conversation registry entry can survive New Chat and an
@@ -2576,8 +2596,12 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
         const proof = await tabReply(tab.id, { type: 'clf-close-temporary-planner', id: input.id, owner: input.owner }, { documentId });
         const current = await chrome.tabs.get(tab.id);
         const currentUrl = new URL(current.url);
+        const nativeProvider = providerForUrl(current.url);
         const helperUrl = currentUrl.searchParams.get('temporary-chat') === 'true' &&
-          (currentUrl.searchParams.get('cos-input') === input.id || /^\/c\/[0-9a-f-]{36}$/i.test(currentUrl.pathname));
+          (currentUrl.searchParams.get('cos-input') === input.id || /^\/c\/[0-9a-f-]{36}$/i.test(currentUrl.pathname)) ||
+          ['gemini', 'claude'].includes(nativeProvider) &&
+          (currentUrl.searchParams.get('cos-helper') === 'planner' && currentUrl.searchParams.get('cos-input') === input.id ||
+            input.conversationId && conversationFromUrl(current.url) === input.conversationId);
         if (proof?.safe === true && ownsDocument(source) && !current.pinned && !current.pendingUrl && helperUrl) await chrome.tabs.remove(tab.id);
       } catch { /* only the exact still-owned temporary document may close */ }
       continue;
@@ -2610,7 +2634,11 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
         }
         await call('/input/routing', { method: 'POST', body: JSON.stringify({ id: input.id, provider, issue: null }) });
       } else if (!target) url = await resolveProviderUrl(url, { sourceTabId: recoveredReuse?.tab ?? null });
-      if (!target && !project && input.lifetime !== 'temporary-planner') {
+      // Fresh Claude tasks get their own marked /new document. A prior idle
+      // home or completed native chat is not an opening owner for this input.
+      // Existing UUID chats and exact same-input recovery stay above; other
+      // providers retain their native reusable-page preparation.
+      if (provider !== 'claude' && !target && !project && input.lifetime !== 'temporary-planner') {
         const reusable = new Set(reusableConversations);
         const choices = tabs.filter(candidate => !candidate.pinned && !candidate.pendingUrl && desktopInputReuseCandidate(candidate) &&
           providerForUrl(candidate.url) === provider && (provider !== 'gemini' || geminiRouting.sameAccount(candidate.url, url)) && modelCatalogTarget?.tab !== candidate.id &&
@@ -2756,6 +2784,8 @@ async function offerStopTurns(requests, background = false) {
 }
 
 let modelCatalogFlight = null;
+let modelCatalogFlightNonce = null;
+let modelCatalogQueuedRequest = null;
 let modelCatalogTarget = null;
 let pluginRefreshFlight = null;
 const MODEL_CATALOG_TARGET_KEY = 'modelCatalogTarget';
@@ -2932,7 +2962,7 @@ function catalogTabNonce(tab) {
   try {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
     const nonce = url.searchParams.get('cos-model-catalog');
-    const home = providerForUrl(url.href) === 'chatgpt'
+    const home = providerForUrl(url.href) === 'claude' ? url.origin === 'https://claude.ai' && /^\/new\/?$/.test(url.pathname) : providerForUrl(url.href) === 'chatgpt'
       ? url.origin === 'https://chatgpt.com' && url.pathname === '/'
       : url.origin === 'https://gemini.google.com' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname);
     return home && /^[a-f0-9-]{36}$/i.test(nonce || '') ? nonce : null;
@@ -2945,6 +2975,8 @@ function catalogCandidateTab(tab, provider = selectedProvider) {
     const url = new URL(tab?.pendingUrl || tab?.url || '');
     if (provider === 'chatgpt') {
       if (url.origin !== 'https://chatgpt.com' || !/^(?:\/(?:g\/[^/]+\/)?c\/[0-9a-f-]{8,64})?\/?$/i.test(url.pathname)) return false;
+    } else if (provider === 'claude') {
+      if (url.origin !== 'https://claude.ai' || !/^\/(?:new|chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.test(url.pathname)) return false;
     } else if (url.origin !== 'https://gemini.google.com' || !/^(?:\/u\/\d+)?\/app(?:\/[0-9a-f]{16})?\/?$/i.test(url.pathname)) return false;
   } catch { return false; }
   // Native setup pages can establish account presentation for createChatTab,
@@ -2954,10 +2986,18 @@ function catalogCandidateTab(tab, provider = selectedProvider) {
 }
 
 function inspectRequestedModels(request) {
-  if (modelCatalogFlight) return modelCatalogFlight;
+  if (modelCatalogFlight) {
+    // A new explicit Refresh may retire the old app nonce while its exact native
+    // inspector is still unwinding. Preserve the new read intent, then run it
+    // only after the predecessor releases its document/picker lease.
+    if (request && request.nonce !== modelCatalogFlightNonce && /^[a-f0-9-]{36}$/i.test(request.nonce) &&
+        Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt)
+      modelCatalogQueuedRequest = { request, epoch: connectionEpoch };
+    return modelCatalogFlight;
+  }
   const intent = connectionEpoch;
   const wanted = request && /^[a-f0-9-]{36}$/i.test(request.nonce) && Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt ? request : null;
-  const provider = wanted?.provider === 'gemini' || wanted?.provider === 'chatgpt' ? wanted.provider : selectedProvider;
+  const provider = ['gemini', 'chatgpt', 'claude'].includes(wanted?.provider) ? wanted.provider : selectedProvider;
   const current = () => wanted && intent === connectionEpoch && token && !disconnected && Date.now() < wanted.expiresAt;
   const waiting = async reason => {
     if (!current()) return;
@@ -2968,6 +3008,7 @@ function inspectRequestedModels(request) {
     catch { /* The original app deadline still owns a broken transport. */ }
   };
   let targetNonce = null;
+  modelCatalogFlightNonce = wanted?.nonce || null;
   modelCatalogFlight = (async () => {
     // A worker/resume tab gets command custody before it has a provider conversation. A passive
     // catalog refresh can arrive in the same maintenance pass that created that tab; borrowing
@@ -2983,7 +3024,11 @@ function inspectRequestedModels(request) {
     // navigated-away tab is an unfinished request, never another create instruction.
     if (owner?.nonce === wanted?.nonce && Number.isInteger(owner?.tab) &&
         (owner.handedToInput || !observed.some(tab => tab.id === owner.tab))) { await waiting('page_changed'); return; }
-    const tabs = wanted ? observed : observed.filter(tab => catalogTabNonce(tab));
+    const targeted = provider === 'claude' && typeof wanted?.model === 'string';
+    // Selecting a requested model is explicit preparation for the next OneCode
+    // choice, never permission to change an unrelated borrowed native chat.
+    const tabs = wanted ? targeted ? observed.filter(tab => owner?.nonce === wanted.nonce && owner.tab === tab.id && catalogTabNonce(tab) === wanted.nonce) : observed
+      : observed.filter(tab => catalogTabNonce(tab));
     if (!wanted && !tabs.length) return;
     // Reuse a loaded idle document without navigation. A dedicated helper marker
     // identifies cleanup ownership if its prior request ended before safe retirement.
@@ -3065,7 +3110,8 @@ function inspectRequestedModels(request) {
     }
     await waiting('inspecting');
     if (!current()) return;
-    const inspected = await send({ type: 'clf-model-catalog', nonce: wanted.nonce, expiresAt: wanted.expiresAt });
+    const inspected = await send({ type: 'clf-model-catalog', nonce: wanted.nonce, expiresAt: wanted.expiresAt,
+      ...(targeted ? { model: wanted.model } : {}) });
     // Work->Chat is an in-document transition owned by the content script.
     // Failure never grants navigation to New Chat or a replacement helper tab.
     if (inspected === true || inspected?.ok === true) await retireCatalogTabs();
@@ -3074,6 +3120,11 @@ function inspectRequestedModels(request) {
     if (targetNonce) await activeTabs?.set(`catalog:${targetNonce}`, []).catch(() => undefined);
     if (targetNonce) await releaseModelCatalogTarget(targetNonce);
     modelCatalogFlight = null;
+    modelCatalogFlightNonce = null;
+    const next = modelCatalogQueuedRequest;
+    modelCatalogQueuedRequest = null;
+    if (next && next.epoch === connectionEpoch && token && !disconnected && Date.now() < next.request.expiresAt)
+      void inspectRequestedModels(next.request);
   });
   return modelCatalogFlight;
 }
@@ -3676,7 +3727,7 @@ async function maintainOnce() {
   const openConversations = [...new Set(observedTabs.map(conversationForTab).filter(Boolean))];
   // Observe login in an existing regular-profile page; extension pairing alone is not login.
   const loginTab = observedTabs.find(tab => providerForUrl(tab.url) === selectedProvider && !tab.incognito && !tab.discarded && !tab.frozen && tab.status !== 'loading' &&
-    typeof tab.id === 'number' && typeof tabDocuments[String(tab.id)] === 'string' && signInStage(tab.url) === 'done');
+    typeof tab.id === 'number' && typeof tabDocuments[String(tab.id)] === 'string' && providerLoginDocument(tab.url));
   const loginEpoch = loginTab ? tabEpochs[String(loginTab.id)] : undefined;
   const loginDocument = loginTab ? tabDocuments[String(loginTab.id)] : undefined;
   phase('login-check');
@@ -3696,7 +3747,7 @@ async function maintainOnce() {
     .filter(Boolean))];
   // Without access to chatgpt.com no content script runs, so nothing on a page could ever answer:
   // a revoked Firefox permission, or Chrome's site access "On click". The app says so in Setup.
-  const selectedOrigin = selectedProvider === 'chatgpt' ? 'https://chatgpt.com/*' : 'https://gemini.google.com/*';
+  const selectedOrigin = selectedProvider === 'claude' ? 'https://claude.ai/*' : selectedProvider === 'chatgpt' ? 'https://chatgpt.com/*' : 'https://gemini.google.com/*';
   phase('site-access');
   const chatgptAccess = typeof chrome.permissions?.contains === 'function'
     ? await chrome.permissions.contains({ origins: [selectedOrigin] }).catch(() => undefined) : undefined;
@@ -3709,7 +3760,7 @@ async function maintainOnce() {
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { phase('render-release'); await activeTabs?.revoke(); return; }
-  const nextProvider = reply.data.provider === 'chatgpt' ? 'chatgpt' : 'gemini';
+  const nextProvider = ['chatgpt', 'gemini', 'claude'].includes(reply.data.provider) ? reply.data.provider : 'gemini';
   if (nextProvider !== selectedProvider) {
     selectedProvider = nextProvider;
     // Re-run this same owner with the newly selected provider; no app or extension restart.
@@ -4414,6 +4465,10 @@ function conversationFromUrl(value) {
       const match = /^(?:\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(url.pathname);
       return match ? match[1].toLowerCase() : null;
     }
+    if (url.hostname === 'claude.ai') {
+      const match = /^\/chat\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(url.pathname);
+      return match ? `claude:${match[1].toLowerCase()}` : null;
+    }
     if (url.hostname === 'chatgpt.com' || url.hostname === 'chat.openai.com') {
       const match = /^\/(?:g\/[^/]+\/)?c\/([0-9a-f-]{8,64})(?:\/|$)/i.exec(url.pathname);
       return match ? match[1].toLowerCase() : null;
@@ -5052,7 +5107,9 @@ const HANDLERS = {
       return permit;
     }
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
-      method: 'POST', body: JSON.stringify({ id, owner, conversationId, tab_id: source.tab, document_id: source.documentId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
+      method: 'POST', body: JSON.stringify({ id, owner, conversationId, tab_id: source.tab, document_id: source.documentId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true,
+        ...(message.authorize === true && providerForUrl(tab.url) === 'claude' && typeof message.nativeSkillSelected === 'boolean' ? { nativeSkillSelected: message.nativeSkillSelected } : {}),
+        partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
     });
     const claimed = result.ok && result.data?.input;
     if (!completed && message.authorize !== true && message.requiresAuthorization === true && claimed?.id === id &&
@@ -5098,7 +5155,12 @@ const HANDLERS = {
         }
       } catch { /* already closed; the accepted app-side answer remains authoritative */ }
     }
-    return result;
+    // The exact claim must not race this new document's asynchronous status
+    // restoration. Use the same app-owned identity projection as worker redeem;
+    // native selection still has to prove its exact configured checked row.
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    return !completed && message.authorize !== true && result.ok && claimed?.id === id && claimed.owner === owner
+      ? { ...result, identity: { connectorNames, connectorApps, ownCoreApp } } : result;
   },
   async i18n_catalog(message) {
     const messages = await globalThis.CLF_I18N?.catalogFor?.(String(message?.language || '')).catch(() => null);
@@ -5635,25 +5697,39 @@ const HANDLERS = {
     }
     return ownsDocument(source) ? { ok: true, focused: true } : { ok: false, error: 'stale_document' };
   },
-  /** An exact ready Gemini draft authorizes only this document's immediate Send. */
+  /** Prepare this exact Claude Goal question's capability before any native edit. */
+  async goal_prepare(message, _sender, source) {
+    const conversationId = cleanConversationId(message.conversationId);
+    if (!conversationId || providerForConversation(conversationId) !== 'claude' ||
+        typeof message.token !== 'string' || !/^goal-[a-z0-9-]{1,80}$/.test(message.token) ||
+        !await currentConversationDocument(source, conversationId)) return { ok: false, error: 'goal_claim_mismatch' };
+    const result = await call('/goal/authorize', { method: 'POST', body: JSON.stringify({ conversationId,
+      prepare: true, token: message.token, clientId: String(source.tab), tab_id: source.tab, document_id: source.documentId }) });
+    return await currentConversationDocument(source, conversationId) ? result : { ok: false, error: 'conversation_changed' };
+  },
+  /** An exact ready native draft authorizes only this document's immediate Send. */
   async goal_authorize(message, _sender, source) {
     const conversationId = cleanConversationId(message.conversationId);
     if (!conversationId || typeof message.token !== 'string' || !/^goal-[a-z0-9-]{1,80}$/.test(message.token) ||
         typeof message.text !== 'string' || !message.text || message.text.length > 240000)
       return { ok: false, error: 'goal_claim_mismatch' };
-    if (!await currentGeminiDocument(source, conversationId)) return { ok: false, error: 'conversation_changed' };
+    const current = () => providerForConversation(conversationId) === 'claude' ? currentConversationDocument(source, conversationId) : currentGeminiDocument(source, conversationId);
+    if (!await current()) return { ok: false, error: 'conversation_changed' };
     const result = await call('/goal/authorize', { method: 'POST', body: JSON.stringify({ conversationId,
       token: message.token, text: message.text, clientId: String(source.tab), tab_id: source.tab, document_id: source.documentId }) });
-    return await currentGeminiDocument(source, conversationId) ? result : { ok: false, error: 'conversation_changed' };
+    return await current() ? result : { ok: false, error: 'conversation_changed' };
   },
   /** Typed, or given up on. Actual Gemini Send receipts retain their exact native message. */
   async goal_ack(message, _sender, source) {
     await load();
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     const conversationId = cleanConversationId(message.conversationId);
+    const claude = providerForConversation(conversationId) === 'claude';
+    const current = () => claude ? currentConversationDocument(source, conversationId) : currentGeminiDocument(source, conversationId);
+    const nativeUser = claude ? validClaudeQuestionId(conversationId, message.messageId)
+      : typeof message.messageId === 'string' && new RegExp(`^gemini:${conversationId}:user:[a-f0-9]{16}$`).test(message.messageId);
     if (message.sent === true && (!conversationId || typeof message.token !== 'string' || !/^goal-[a-z0-9-]{1,80}$/.test(message.token) ||
-        typeof message.messageId !== 'string' || !new RegExp(`^gemini:${conversationId}:user:[a-f0-9]{16}$`).test(message.messageId) ||
-        !await currentGeminiDocument(source, conversationId))) return { ok: false, error: 'goal_receipt_mismatch' };
+        !nativeUser || !await current())) return { ok: false, error: 'goal_receipt_mismatch' };
     const result = await call('/goal/ack', {
       method: 'POST',
       body: JSON.stringify({
@@ -5664,7 +5740,7 @@ const HANDLERS = {
         clientId: String(source.tab)
       })
     });
-    if (message.sent === true && !await currentGeminiDocument(source, conversationId)) return { ok: false, error: 'conversation_changed' };
+    if (message.sent === true && !await current()) return { ok: false, error: 'conversation_changed' };
     return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
   },
   /**
@@ -5853,6 +5929,9 @@ const HANDLERS = {
     return { ok: true };
   },
   async ack(message, _sender, source) {
+    if (message.status !== 'failed' && providerForConversation(message.conversationId) === 'claude' &&
+        (!validClaudeQuestionId(message.conversationId, message.messageId) || !await currentConversationDocument(source, message.conversationId)))
+      return { ok: false, error: 'command_receipt_mismatch' };
     const result = await ackCommand(
       String(message.id || ''),
       message.status === 'failed' ? 'failed' : 'sent',
@@ -5862,7 +5941,8 @@ const HANDLERS = {
       message.client,
       source,
       undefined,
-      message.detail
+      message.detail,
+      message.messageId
     );
     // ackCommand first made this irreversible page result durable in the browser-owned outbox.
     // From that point recovery must never reopen the pre-send marker, even if the bridge HTTP
@@ -5951,6 +6031,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'compact',
     'goal_draft',
     'goal_authorize',
+    'goal_prepare',
     'focus_tab',
     'goal_ack',
     'goal_objective',
@@ -6135,7 +6216,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
       try {
         const url = new URL(targetUrl);
         const provider = providerForUrl(targetUrl);
-        rootReload = provider === 'chatgpt' ? url.pathname === '/' :
+        rootReload = provider === 'claude' ? /^\/new\/?$/.test(url.pathname) : provider === 'chatgpt' ? url.pathname === '/' :
           provider === 'gemini' && /^(?:\/u\/\d+)?\/app\/?$/.test(url.pathname);
       } catch {
         rootReload = false;
@@ -6177,8 +6258,8 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * isolated content script has its own one-instance guard because a newly loading page can
  * receive both its static manifest injection and this recovery injection.
  */
-const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*'];
-const PAGE_RECORDER_VERSION = 105;
+const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
+const PAGE_RECORDER_VERSION = 108;
 
 let deferredRecoveryWork = null;
 
@@ -6585,6 +6666,7 @@ async function restoreChatgptTabNow(id, current, documentId) {
       // idempotent because the helper keeps one listener per protocol version.
       try {
         if (provider === 'chatgpt') await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['usage.js', 'fiber.js'] });
+        if (provider === 'claude') await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['claude-native.js'] });
       } catch {
         // The tab can navigate between the ping and repair. Static injection covers it.
       }
@@ -6605,6 +6687,10 @@ async function restoreChatgptTabNow(id, current, documentId) {
       await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js'] });
       if (!current()) return false;
       await chrome.scripting.executeScript({ target, files: ['gemini-dom.js'] });
+    } else if (provider === 'claude') {
+      await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['claude-native.js'] });
+      if (!current()) return false;
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'claude-models.js', 'claude-dom.js'] });
     } else {
       await chrome.scripting.executeScript({ target, files: ['chatgpt-dom.js'] });
     }
@@ -6846,6 +6932,9 @@ async function askChatGptSignedIn(tabId) {
       if (login) return account ? null : false;
       return account ? true : null;
     }
+    // Claude's adapter owns its observed native account controls. This does not
+    // enter the separate Google/CoS account-transfer workflow or read cookies.
+    if (location.hostname === 'claude.ai') return typeof globalThis.CLF_DOM?.signedIn === 'function' ? globalThis.CLF_DOM.signedIn() : null;
     if (location.hostname !== 'gemini.google.com') return null;
     const box = document.querySelector('rich-textarea [contenteditable="true"][role="textbox"]');
     if (box && visible(box) && box.getAttribute('aria-disabled') !== 'true') return true;
@@ -6950,7 +7039,7 @@ function reportPresence() {
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS }); } catch { /* Report presence without a login answer. */ }
     const tab = tabs.find(candidate => providerForUrl(candidate.url) === selectedProvider && !candidate.incognito && !candidate.discarded && candidate.status === 'complete' &&
-      typeof candidate.id === 'number' && signInStage(candidate.url || '') === 'done');
+      typeof candidate.id === 'number' && providerLoginDocument(candidate.url || ''));
     const signedIn = tab ? await chatGptSignedIn(tab.id).catch(() => null) : null;
     await call('/browser/presence', { method: 'POST', body: JSON.stringify({ provider: selectedProvider, chatGptSignedIn: signedIn }) });
   })().catch(() => undefined).finally(() => { presenceFlight = null; });

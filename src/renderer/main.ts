@@ -9,10 +9,11 @@ import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
 import { settingsModelAffinity } from './chat-models.js';
 import { selectedBrowserConnected } from '../shared/browser-readiness.js';
-import { chatProviderLabel } from '../shared/chat-provider.js';
+import { chatProviderLabel, chatProviderConnectionsUrl } from '../shared/chat-provider.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, type ChatProvider } from '../shared/chat-provider.js';
 import { initChatgptSkillSetup } from './setup-chatgpt-skill.js';
 import { initGeminiSkillSetup } from './setup-gemini-skill.js';
+import { initClaudeSkillSetup } from './setup-claude-skill.js';
 import { currentLanguage, ui, uiText, t, initLanguage, onLanguageChange } from './i18n.js';
 import { chatgptNameLine } from './connector-name.js';
 import { CONNECTOR_SUFFIX_MAX, CONNECTOR_SUFFIX_PATTERN } from '../shared/connector-names.js';
@@ -128,6 +129,7 @@ const settingsSearch = initSettingsSearch({
 const paintProviderGuide = initSetupGuide();
 const chatgptSkillSetup = initChatgptSkillSetup(api);
 const geminiSkillSetup = initGeminiSkillSetup(api);
+const claudeSkillSetup = initClaudeSkillSetup(api);
 const paintProviderCopy = initProviderCopy();
 const browserSetup = initBrowserSetup({
   choose: async browser => {
@@ -790,7 +792,8 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; appearance?:
     ...chatPatch,
     // After the chat patch, which still carries the stored mcp settings it no longer edits.
     mcp: { instructions: previous.mcp?.instructions ?? '', persistentUrls: $<HTMLInputElement>('mcpPersistentUrls').checked,
-      useChatgptWebSkill: $<HTMLInputElement>('useChatgptWebSkill').checked, useGeminiWebSkill: $<HTMLInputElement>('useGeminiWebSkill').checked }
+      useChatgptWebSkill: $<HTMLInputElement>('useChatgptWebSkill').checked, useGeminiWebSkill: $<HTMLInputElement>('useGeminiWebSkill').checked,
+      useClaudeWebSkill: $<HTMLInputElement>('useClaudeWebSkill').checked }
   };
   requestedSettings = patch;
 
@@ -1807,6 +1810,9 @@ function apply(next: AppState): void {
   applyChecked($<HTMLInputElement>('mcpPersistentUrls'), config.mcp?.persistentUrls === true, previousState?.config.mcp?.persistentUrls);
   applyChecked($<HTMLInputElement>('useGeminiWebSkill'), config.mcp?.useGeminiWebSkill === true, previousState?.config.mcp?.useGeminiWebSkill);
   applyChecked($<HTMLInputElement>('useChatgptWebSkill'), config.mcp?.useChatgptWebSkill === true, previousState?.config.mcp?.useChatgptWebSkill);
+  applyChecked($<HTMLInputElement>('useClaudeWebSkill'), config.mcp?.useClaudeWebSkill === true, previousState?.config.mcp?.useClaudeWebSkill);
+  claudeSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
+  $('claudeSkillSetup').hidden = provider !== 'claude';
   chatgptSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
   $('chatgptSkillSetup').hidden = provider !== 'chatgpt';
   geminiSkillSetup.apply(config.ui.chatBrowser ?? 'chrome');
@@ -1821,10 +1827,8 @@ function apply(next: AppState): void {
   ui($('signInProviderLabel'), 'textContent', () => `Sign in to ${providerName}`);
   ui($('setupProviderConnectTitle'), 'textContent', () => `Add it in ${providerName}`);
   ui($('setupProviderConnectLead'), 'textContent', () => `Paste the MCP server URL below. ${providerName} reads the app name, description and tools from this service.`);
-  ui($('setupProviderPluginsOpenLabel'), 'textContent', () => `Open ${providerName} Plugins`);
-  $<HTMLButtonElement>('setupProviderPluginsOpen').dataset.link = provider === 'chatgpt'
-    ? 'https://chatgpt.com/plugins'
-    : 'https://gemini.google.com/customize/connectors';
+  ui($('setupProviderPluginsOpenLabel'), 'textContent', () => `Open ${providerName} connections`);
+  $<HTMLButtonElement>('setupProviderPluginsOpen').dataset.link = chatProviderConnectionsUrl(provider);
   ui($('providerBrowserTitle'), 'textContent', () => 'Provider browser');
   ui($('providerBrowserHint'), 'textContent', () => 'Choose the browser where your provider is signed in. Install the companion in its active profile. Tasks stay in OneCode; managed chats run in the browser in the background. Existing chats retain their provider, browser and account.');
   ui($('providerAccountHint'), 'textContent', () => 'Use the provider’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
@@ -2923,7 +2927,7 @@ for (const id of [
   'agentApiEnabled',
   'agentApiPort',
   'mcpPersistentUrls',
-  'useGeminiWebSkill', 'useChatgptWebSkill',
+  'useGeminiWebSkill', 'useChatgptWebSkill', 'useClaudeWebSkill',
   'privacyScreenshots',
   'tunnelKind',
   'tunnelId',

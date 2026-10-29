@@ -27,6 +27,8 @@ import { listSkillLibrary } from './skill-library.js';
 import { installRecommendedSkill, listRecommendedSkills } from './recommended-skills.js';
 import { copyBundledGeminiSkill, exportBundledGeminiSkill } from './gemini-web-skill.js';
 import { exportBundledChatgptSkill } from './chatgpt-web-skill.js';
+import { exportBundledClaudeSkill } from './claude-web-skill.js';
+import { CLAUDE_SKILLS_URL } from '../shared/claude-web-skill.js';
 import { CHATGPT_SKILLS_URL } from '../shared/chatgpt-web-skill.js';
 import { GEMINI_SKILLS_URL } from '../shared/gemini-web-skill.js';
 import { noteChatOrigin } from './session/recorder.js';
@@ -304,14 +306,14 @@ const settingsPatch = z.object({
     globalMaxWorkers: z.number().int().min(0).max(64).optional(),
     allowUnattributedCalls: z.boolean(),
     strictChatAllowlist: z.boolean().optional(),
-    strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional() }).optional(),
+    strictChatAllowlistByProvider: z.object({ gemini: z.boolean().optional(), chatgpt: z.boolean().optional(), claude: z.boolean().optional() }).optional(),
     recoverAgentTabs: z.boolean(),
     waitForSubAgents: z.boolean().optional(),
     autoWorktrees: z.boolean().optional(),
     endSleepingWorkerProcesses: z.boolean().optional(),
     archiveWorkerChats: z.boolean().optional()
   }),
-  mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS), persistentUrls: z.boolean().optional(), useGeminiWebSkill: z.boolean().optional(), useChatgptWebSkill: z.boolean().optional() }).strict().optional(),
+  mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS), persistentUrls: z.boolean().optional(), useGeminiWebSkill: z.boolean().optional(), useChatgptWebSkill: z.boolean().optional(), useClaudeWebSkill: z.boolean().optional() }).strict().optional(),
   controlApi: z.object({ enabled: z.boolean(), allowActions: z.boolean().optional() }).strict().optional(),
   agentApi: z.object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65535) }).strict().optional(),
   goal: z.object({
@@ -321,7 +323,7 @@ const settingsPatch = z.object({
       loopBackend: z.enum(['api', 'chatgpt']).optional(),
       helperModel: z.string().trim().min(1).max(80).optional(),
       helperModelAffinity: chatModelAffinity,
-      helperReasoning: z.enum(REASONING_EFFORTS).optional(),
+      helperReasoning: z.union([z.enum(REASONING_EFFORTS), z.literal('')]).optional(),
     enabled: z.boolean(),
     // Which of the two standing modes the switch runs. One field, so the renderer has no way
     // to describe a state where Goal and Loop are both on.
@@ -427,6 +429,10 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       ...(wanted.mcp.useChatgptWebSkill === undefined && current.mcp.useChatgptWebSkill === undefined ? {} : {
         useChatgptWebSkill: pick(current.mcp.useChatgptWebSkill === true, base.mcp?.useChatgptWebSkill === true,
           wanted.mcp.useChatgptWebSkill ?? current.mcp.useChatgptWebSkill === true)
+      }),
+      ...(wanted.mcp.useClaudeWebSkill === undefined && current.mcp.useClaudeWebSkill === undefined ? {} : {
+        useClaudeWebSkill: pick(current.mcp.useClaudeWebSkill === true, base.mcp?.useClaudeWebSkill === true,
+          wanted.mcp.useClaudeWebSkill ?? current.mcp.useClaudeWebSkill === true)
       }),
       persistentUrls: pick(current.mcp.persistentUrls === true, base.mcp?.persistentUrls === true, wanted.mcp.persistentUrls ?? current.mcp.persistentUrls === true) } : current.mcp,
     controlApi,
@@ -558,6 +564,11 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
           current.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? current.multiAgent.strictChatAllowlist ?? false,
           base.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? base.multiAgent.strictChatAllowlist ?? false,
           wanted.multiAgent.strictChatAllowlistByProvider?.chatgpt ?? wanted.multiAgent.strictChatAllowlist ?? false
+        ),
+        claude: pick(
+          current.multiAgent.strictChatAllowlistByProvider?.claude ?? current.multiAgent.strictChatAllowlist ?? false,
+          base.multiAgent.strictChatAllowlistByProvider?.claude ?? base.multiAgent.strictChatAllowlist ?? false,
+          wanted.multiAgent.strictChatAllowlistByProvider?.claude ?? wanted.multiAgent.strictChatAllowlist ?? false
         )
       },
       recoverAgentTabs: pick(
@@ -678,7 +689,7 @@ async function buildState(): Promise<AppState> {
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
     bridge,
-    cosBrowserSignedIn: cosBrowserSignedIn(),
+    cosBrowserSignedIn: cosBrowserSignedIn(getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
     update: updateStatus(),
     desktopAccess: getMacOSDesktopAccess(),
     settingsRecovered: settingsRecovered()
@@ -718,7 +729,7 @@ function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>, deskto
 export async function openSessionChat(id: string): Promise<void> {
   const summary = await getSession(id);
   const conversationId = summary?.conversationId;
-  if (!conversationId || !/^[0-9a-z-]{8,64}$/i.test(conversationId)) {
+  if (!isChatProviderConversationId(conversationId)) {
     throw new Error('This session has no valid provider conversation');
   }
   // The selected browser owns this explicit action. In particular, a connected companion in
@@ -1524,6 +1535,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { format } = z.object({ format: z.enum(['markdown', 'zip']) }).strict().parse(payload);
     return exportBundledChatgptSkill(format, getWindow());
   });
+  handle('claudeSkill:export', async payload => {
+    const { format } = z.object({ format: z.enum(['markdown', 'zip']) }).strict().parse(payload);
+    return exportBundledClaudeSkill(format, getWindow());
+  });
+  handle('claudeSkill:open', async payload => {
+    z.object({}).strict().parse(payload ?? {});
+    await openInPreferredBrowser(CLAUDE_SKILLS_URL, { reveal: true }); return true;
+  });
   handle('chatgptSkill:open', async payload => {
     z.object({}).strict().parse(payload ?? {});
     if (getConfig().ui.chatBrowser === 'cos') throw new Error('Choose a full browser in Setup before opening ChatGPT Skills help.');
@@ -1799,7 +1818,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
   handle('chatModels:get', async payload => getChatModels(z.enum(CHAT_PROVIDERS).optional().parse(payload)));
   handle('browser:preferences', async (payload) => requestBrowserPreferences(payload));
-  handle('chatModels:request', async payload => startChatModelDiscovery(true, z.enum(CHAT_PROVIDERS).optional().parse(payload)));
+  handle('chatModels:request', async payload => {
+    const parsed = z.union([z.enum(CHAT_PROVIDERS), z.object({ provider: z.enum(CHAT_PROVIDERS).optional(),
+      model: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/) }).strict()]).optional().parse(payload);
+    return parsed && typeof parsed === 'object' ? startChatModelDiscovery(true, parsed.provider, parsed.model)
+      : startChatModelDiscovery(true, parsed);
+  });
   handle('sessions:controls', async (payload) => sessionControlsFor(sessionIdArg.parse(payload).id));
   // #1032: the user keeps this answer from being reloaded; false once the browser claimed it.
   handle('sessions:cancelRecovery', async (payload) => cancelAssistantRecovery(sessionIdArg.parse(payload).id));
@@ -1947,7 +1971,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const selection = ++followSelection;
     const conversationId = (await getSession(id))?.conversationId;
     if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
-    if (conversationId && /^[0-9a-z-]{8,64}$/i.test(conversationId)) return ensureSelectedChatReady(id);
+    if (isChatProviderConversationId(conversationId)) return ensureSelectedChatReady(id);
     const opening = conversationId ? null : await pendingOpeningTabReadiness(id);
     if (selection !== followSelection) return { phase: 'refused' as const, reason: 'Selection changed.' };
     if (opening) return opening;

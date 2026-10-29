@@ -942,6 +942,17 @@
               </div>
             </details>
 
+            <details class="advanced" id="claudeSkillSetup" data-provider-only="claude" open>
+              <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Claude skill — optional</summary>
+              <div class="field">
+                <p>Install <b translate="no">onecode</b> in the account you use with OneCode to reduce repeated tool guidance. Keep this native skill name. Core works without the skill.</p>
+                <div class="step-actions"><button class="btn" id="saveClaudeSkillMarkdown" type="button">Save SKILL.md</button><button class="btn" id="saveClaudeSkillZip" type="button">Save skill ZIP</button><button class="btn" id="openClaudeSkills" type="button">Open Claude Skills</button></div>
+                <ol><li>Save the ZIP and open Claude's Skills page.</li><li>In Customize → Skills, choose + → Create skill → Upload a skill and select the ZIP.</li><li>Enable <b translate="no">onecode</b>, then turn on the option below.</li></ol>
+                <label class="setting"><span class="setting-text"><b>Use Claude's onecode skill</b><em>I uploaded and enabled this skill. OneCode uses shorter guidance when native selection is confirmed, otherwise its prepared full guidance. Fresh task authorization remains required. This option does not install the skill.</em></span><input id="useClaudeWebSkill" type="checkbox" /></label>
+                <p class="hint" id="claudeSkillResult" role="status">Skills require code execution to be enabled. If your account does not show Skills or permits no upload, leave this off.</p>
+              </div>
+            </details>
+
             <details class="advanced" id="geminiSkillSetup" data-provider-only="gemini" open>
               <summary><svg class="disclosure-chevron sum-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"></path></svg>Gemini skill — optional</summary>
               <div class="field">

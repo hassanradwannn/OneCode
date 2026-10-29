@@ -1,6 +1,7 @@
 import type { ChatSchedule } from '../shared/chat-schedules.js';
 import { el, run } from './dom.js';
 import { t } from './i18n.js';
+import { chatProviderLabel } from '../shared/chat-provider.js';
 
 export function initChatSchedules(): void {
   const host = document.getElementById('chatSchedules');
@@ -14,7 +15,7 @@ export function initChatSchedules(): void {
     for (const schedule of rows) {
       const row = el('div', 'setting'); const text = el('span', 'setting-text');
       text.append(el('b', '', schedule.title));
-      text.append(el('em', '', `${schedule.provider === 'gemini' ? 'Gemini' : 'ChatGPT'} · ${schedule.intervalMinutes} min · ${schedule.enabled ? new Date(schedule.nextRunAt).toLocaleString() : t('Cancelled')}`));
+      text.append(el('em', '', `${chatProviderLabel(schedule.provider)} · ${schedule.intervalMinutes} min · ${schedule.enabled ? new Date(schedule.nextRunAt).toLocaleString() : t('Cancelled')}`));
       const latest = schedule.runs.at(-1);
       if (schedule.lastError || latest?.detail) text.append(el('em', 'error', schedule.lastError || latest!.detail!));
       else if (latest) text.append(el('em', '', `${t('Last scheduled message')}: ${latest.state}`));

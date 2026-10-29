@@ -9,6 +9,9 @@ resources/skills/*
 !resources/skills/onecode-gemini/
 resources/skills/onecode-gemini/*
 !resources/skills/onecode-gemini/SKILL.md
+!resources/skills/onecode-claude/
+resources/skills/onecode-claude/*
+!resources/skills/onecode-claude/SKILL.md
 !resources/updater/
 resources/updater/*
 !resources/updater/windows-update-helper.cjs
@@ -25,6 +28,7 @@ resources/updater/*
 # Local profiles, acceptance evidence and generated scratch never enter source history.
 /.tmp*/
 /.test-temp/
+/tmp/
 /outputs/
 /.codex-remote-attachments/
 *.private.*

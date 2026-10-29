@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, type ChatProvider } from '../../shared/chat-provider.js';
 
 export const EXEC_SPOOL_VERSION = 1;
 export const MAX_EXEC_SPOOL_BYTES = 256 * 1024 * 1024;
@@ -438,7 +438,7 @@ function validateRecord(value: unknown): CompletedExecSpoolRecord {
       (row.outputInterrupted !== undefined && typeof row.outputInterrupted !== 'boolean') ||
       (row.outputCaptureIncomplete !== undefined && typeof row.outputCaptureIncomplete !== 'boolean') ||
       (!row.outputClosed && row.outputInterrupted !== true) || (row.outputClosed && row.outputInterrupted === true) ||
-      (row.provider !== undefined && row.provider !== 'chatgpt' && row.provider !== 'gemini') ||
+      (row.provider !== undefined && !CHAT_PROVIDERS.includes(row.provider)) ||
       (row.outputOffsetBasis !== undefined && row.outputOffsetBasis !== 'display') ||
       typeof row.rawOutput !== 'string' || typeof row.pendingOutput !== 'string' ||
       (row.displayOutput !== undefined && typeof row.displayOutput !== 'string') ||
@@ -474,7 +474,7 @@ function validateLiveRecord(value: unknown): LiveExecSpoolRecord {
       (row.ownerKind === 'anonymous' && row.principal !== null) ||
       (row.ownerKind === 'request' && !row.principal?.startsWith('request:')) ||
       (row.ownerKind === 'session' && (!row.principal || row.principal.startsWith('request:')) ) ||
-      (row.provider !== undefined && row.provider !== 'chatgpt' && row.provider !== 'gemini') ||
+      (row.provider !== undefined && !CHAT_PROVIDERS.includes(row.provider)) ||
       (row.requestId !== undefined && typeof row.requestId !== 'string') ||
       (row.sessionId !== undefined && typeof row.sessionId !== 'string') ||
       (row.conversationId !== undefined && typeof row.conversationId !== 'string') ||
