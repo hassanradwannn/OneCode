@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.1] — 2026-10-30
+
+Retain existing task identity through native refresh and reconnect, and reject historical completed footers as proof that a newer Gemini or Claude task ended. Capture exposed native inline diagrams, fit expanded charts within the screen, and preserve code blocks inside native lists and quotations. Show update bytes and verification/preparation phases, and distinguish Tailscale network waits from failed Funnel permission checks. Both platform builds retain compatible 0.5.9 bases. See [release notes](docs/release-notes/v0.8.1.md) and [verification scope](docs/release-acceptance/v0.8.1.md), including pending native acceptance.
+
 ## [0.8.0] — 2026-10-29
 
 Add a third provider to new chats, Setup, Remote and the local API while preserving existing chat and worker identity. Discover account-available current/legacy models and effort metadata, guide custom MCP and optional native skill installation, and show observed account-limit resets without task replay. Extend exact local capability authorization and retained state to the added adapter. Render React/TSX components with bundled Tailwind, Lucide and Recharts inside the existing network-closed preview. See [release notes](docs/release-notes/v0.8.0.md) and [verification scope](docs/release-acceptance/v0.8.0.md).
