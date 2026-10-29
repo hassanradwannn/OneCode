@@ -1,5 +1,6 @@
 import { marked } from 'marked';
-import type { ArtifactFile, ArtifactKind } from '../shared/artifact.js';
+import type { ArtifactFile, ArtifactKind, ArtifactOrigin } from '../shared/artifact.js';
+import { nativeWidgetStyle } from './native-widget-preview.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
 import { ARTIFACT_VIEWPORTS, fitArtifactViewport, type ArtifactViewport } from './artifact-viewport.js';
 
@@ -57,7 +58,7 @@ function svgDocument(file: ArtifactFile, channel: string): string {
     '<style>html,body{margin:0;min-height:100%;background:#fff}body{display:grid;place-items:center}</style>', channel);
 }
 
-function webDocument(files: ArtifactFile[], entrypoint: string, channel: string): string {
+function webDocument(files: ArtifactFile[], entrypoint: string, channel: string, widget = false, dark = false): string {
   const byPath = new Map(files.map(file => [file.path, file]));
   const entry = byPath.get(entrypoint) ?? files.find(file => /\.html?$/i.test(file.path)) ?? files[0]!;
   if (!/\.html?$/i.test(entry.path) && !/html/i.test(entry.mimeType ?? '')) {
@@ -101,10 +102,14 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string)
   `;
   const bridge = parsed.createElement('script'); bridge.textContent = (previewStorageScript() + consoleBridgeScript(channel)).replace(/<\/script/gi, '<\\/script');
   parsed.head.prepend(charset, csp, viewport, bridge); parsed.head.append(scrolling);
+  if (widget) {
+    const style = new DOMParser().parseFromString(nativeWidgetStyle(dark), 'text/html').querySelector('style');
+    if (style) parsed.head.insertBefore(parsed.importNode(style, true), bridge);
+  }
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
 
-export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint: string | undefined, kind: ArtifactKind, channel: string): Promise<string> {
+export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint: string | undefined, kind: ArtifactKind, channel: string, origin?: ArtifactOrigin, dark = document.documentElement.dataset.theme === 'dark'): Promise<string> {
   if (!files.length) return previewShell('<p>Artifact has no files.</p>', '', channel);
   const entry = files.find(file => file.path === entrypoint) ?? files[0]!;
   if (kind === 'markdown' || /\.(?:md|markdown)$/i.test(entry.path)) return markdownDocument(entry, channel);
@@ -122,12 +127,13 @@ export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint:
       return previewShell('<p role="alert">Component preview exceeds its size limit. The original files remain available in the editor.</p>', '', channel);
     return result;
   }
-  if (kind === 'web') return webDocument(files, entry.path, channel);
+  if (kind === 'web') return webDocument(files, entry.path, channel,
+    origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(origin.nativeSurface ?? ''), dark);
   return previewShell(`<pre>${htmlEscape(entry.text)}</pre>`, '<style>pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace}</style>', channel);
 }
 
 export function createArtifactPreview(options: {
-  parent: HTMLElement; files: ArtifactFile[]; entrypoint?: string; kind: ArtifactKind; onMessage?: (message: ArtifactPreviewMessage) => void;
+  parent: HTMLElement; files: ArtifactFile[]; entrypoint?: string; kind: ArtifactKind; origin?: ArtifactOrigin; onMessage?: (message: ArtifactPreviewMessage) => void;
   controls?: HTMLElement;
   createDocument?: (document: string) => Promise<{ id: string; url: string } | null>;
   releaseDocument?: (id: string) => void;
@@ -139,7 +145,8 @@ export function createArtifactPreview(options: {
   frame.setAttribute('referrerpolicy', 'no-referrer');
   frame.title = 'Artifact preview';
   let retired = false, documentId: string | null = null;
-  void artifactPreviewDocument(options.files, options.entrypoint, options.kind, channel).then(async documentSource => {
+  void artifactPreviewDocument(options.files, options.entrypoint, options.kind, channel, options.origin,
+    options.parent.ownerDocument.defaultView?.getComputedStyle(options.parent).colorScheme === 'dark').then(async documentSource => {
     if (retired) return;
     if (!options.createDocument) { frame.srcdoc = documentSource; return; }
     const value = await options.createDocument(documentSource);

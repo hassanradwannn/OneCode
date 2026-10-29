@@ -9,6 +9,7 @@ export async function receiveUpdateArtifact(options: {
   file: string; name: string; expected: string; size?: number; stallMs: number;
   fetch(signal: AbortSignal, headers: Record<string, string>): Promise<Response>;
   progress?(bytes: number, total?: number): void;
+  verifying?(): void;
 }): Promise<string> {
   const part = `${options.file}.part`;
   let received = 0, hash = createHash('sha256');
@@ -17,6 +18,7 @@ export async function receiveUpdateArtifact(options: {
     if (!saved.isFile() || saved.isSymbolicLink()) throw new Error('Update partial file must be a regular file');
     if (options.size !== undefined && saved.size > options.size) await rm(part);
     else {
+      options.verifying?.();
       for await (const chunk of createReadStream(part)) { hash.update(chunk); received += chunk.length; }
       if (hash.copy().digest('hex') === options.expected && (options.size === undefined || received === options.size)) {
         await rename(part, options.file); options.progress?.(received, options.size); return options.file;
@@ -68,6 +70,7 @@ export async function receiveUpdateArtifact(options: {
     // entire prefix again, validates Range and still verifies the completed digest.
     throw quiet.signal.aborted ? stalled : error;
   } finally { clearTimeout(watch); }
+  options.verifying?.();
   const digest = hash.digest('hex');
   if (digest !== options.expected || (options.size !== undefined && received !== options.size)) {
     await rm(part, { force: true });

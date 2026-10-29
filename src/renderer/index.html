@@ -144,6 +144,7 @@
       <div class="notice" id="updateNotice" hidden>
         <i class="ico ph ph-lightning" aria-hidden="true"></i>
         <span id="updateText"></span>
+        <progress id="updateProgress" max="100" aria-label="Update progress" hidden></progress>
         <button class="btn btn-quiet" id="updateGet" type="button" hidden>Get it</button>
         <button class="btn btn-quiet" id="updateInstall" type="button" hidden>Install when done</button>
         <button class="btn btn-quiet" id="updateNow" type="button" title="Stops active tools and commands, installs the verified update and restarts OneCode." hidden>Update now</button>
@@ -193,7 +194,7 @@
             <section class="appearance-section">
               <header class="settings-section-head"><div><h2>Updates</h2><p id="settingsUpdatesDescription">Check GitHub for the latest OneCode release.</p></div></header>
               <div class="settings-surface pane appearance-settings-card">
-                <div class="setting"><span class="setting-text"><b>OneCode updates</b><em id="settingsUpdateStatus" role="status" aria-live="polite"></em></span><button class="btn" id="checkForUpdates" type="button">Check for updates</button></div>
+                <div class="setting"><span class="setting-text"><b>OneCode updates</b><em id="settingsUpdateStatus" role="status" aria-live="polite"></em><progress id="settingsUpdateProgress" max="100" aria-label="Update progress" hidden></progress></span><button class="btn" id="checkForUpdates" type="button">Check for updates</button></div>
                 <div class="setting" id="settingsWhatsNewRow" hidden><span class="setting-text"><b>What's new</b><em>Review the changes in this version.</em></span><button class="btn" id="showWhatsNew" type="button">View changes</button></div>
                 <div class="setting" id="settingsInstallUpdateRow" hidden><span class="setting-text"><b id="settingsInstallUpdateTitle">Update ready</b><em id="settingsInstallUpdateHint">Install when work finishes, or choose Update now to stop active tools and commands and restart.</em></span><button class="btn btn-quiet" id="settingsUpdateWork" type="button">Show background work</button><button class="btn btn-quiet" id="settingsUpdateNow" type="button" title="Stops active tools and commands, installs the verified update and restarts OneCode.">Update now</button><button class="btn btn-solid" id="settingsInstallUpdate" type="button">Install when done</button></div>
                 <div class="setting"><span class="setting-text"><b>Background processes</b><em>Inspect and stop running commands from every chat, including stopped chats.</em></span><button class="btn" id="settingsBackgroundWork" type="button">View and stop</button></div>

@@ -21,6 +21,8 @@ The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, 
 
 See [0.8.0 release notes](docs/release-notes/v0.8.0.md) and [verification scope](docs/release-acceptance/v0.8.0.md). Automated checks and native acceptance are recorded separately; exhaustive paid-account, browser and native Linux coverage is not claimed.
 
+The [0.8.1 candidate](docs/release-acceptance/v0.8.1.md) repairs reconnect identity, captures exposed native inline widget source and adds download, verification and preparation progress. It is not yet the published Stable release.
+
 The preceding [0.7.4 release](docs/release-notes/v0.7.4.md) supports both ChatGPT picker layouts, opens new chats in Chat by default, retains explicit Work choices, adds Gemini Thinking levels and reduces avoidable browser preparation delays. These repairs are included.
 
 ## Earlier releases

@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 7;
+  const VERSION = 8;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -193,10 +193,40 @@
     if (!uuid.test(token || '')) { token = crypto.randomUUID(); box.setAttribute('data-clf-claude-composer-token', token); }
     return { token, files, uploadingFile: state.file, uploadingSync: state.sync, placeholderCount: state.count };
   }
+  /** Only a mounted public visualize frame can expose its authored widget source.
+   * Never walk message.content, tool-result payloads, stores or the frame's URL. */
+  function projectWidgets(conversation) {
+    const widgets = [];
+    for (const node of [...document.querySelectorAll('[id^="mcp-app-container-toolu_"]')].slice(-32)) {
+      if (!shown(node)) continue;
+      const toolUseId = node.id.slice('mcp-app-container-'.length);
+      if (!/^toolu_[A-Za-z0-9]{20,100}$/.test(toolUseId)) continue;
+      const frames = [...node.querySelectorAll('iframe')].filter(shown);
+      if (frames.length !== 1 || !frames[0].title.startsWith('visualize: ')) continue;
+      const message = node.closest('[data-testid="assistant-message"]');
+      const native = suffix.exec(message?.id || '')?.[1]?.toLowerCase();
+      if (!native || message.getAttribute('data-turn-key')?.toLowerCase() !== native) continue;
+      const source = uniqueValue(propsAt(node).flatMap(props => {
+        const input = own(props, 'input'), result = own(props, 'toolResult'), owner = own(props, 'message');
+        const content = own(input, 'widget_code'), streaming = own(props, 'isStreaming');
+        return own(props, 'toolName') === 'visualize:show_widget' && own(props, 'toolUseId') === toolUseId &&
+          own(props, 'conversationUuid') === conversation && own(owner, 'uuid') === native && own(owner, 'sender') === 'assistant' &&
+          own(result, 'type') === 'tool_result' && own(result, 'name') === 'visualize:show_widget' &&
+          own(result, 'tool_use_id') === toolUseId && own(result, 'is_error') === false &&
+          typeof streaming === 'boolean' && typeof content === 'string' && content.length > 0 && content.length <= 240000
+          ? [{ content, streaming }] : [];
+      }));
+      if (!source) continue;
+      let token = node.getAttribute('data-clf-claude-widget-token');
+      if (!uuid.test(token || '')) { token = crypto.randomUUID(); node.setAttribute('data-clf-claude-widget-token', token); }
+      widgets.push({ conversation, message: native, toolUseId, token, title: frames[0].title.slice(11, 211), ...source });
+    }
+    return widgets;
+  }
   function project() {
     const match = new RegExp(`^/chat/(${UUID})/?$`, 'i').exec(location.pathname);
     if (location.origin !== 'https://claude.ai' || !match) return { cards: [], viewer: null };
-    const conversation = match[1].toLowerCase(), cards = [];
+    const conversation = match[1].toLowerCase(), cards = [], widgets = projectWidgets(conversation);
     for (const node of [...document.querySelectorAll('[data-testid="file-card-open"][data-cds="CardLink"][role="button"]')].slice(-32)) {
       if (!shown(node) || !node.closest('[data-testid="file-card-block"][data-file-row-card]')) continue;
       const message = node.closest('[data-testid="assistant-message"]'), native = suffix.exec(message?.id || '')?.[1]?.toLowerCase();
@@ -215,7 +245,7 @@
         streaming: message.getAttribute('data-is-streaming') !== 'false' });
     }
     const content = [...document.querySelectorAll('[data-skill-file-viewer="true"] #wiggle-file-content')].filter(shown);
-    if (content.length !== 1) return { cards, viewer: null };
+    if (content.length !== 1) return { cards, widgets, viewer: null };
     const node = content[0], props = propsAt(node);
     const sources = uniqueValue(props.flatMap(value => {
       const body = own(value, 'content'), path = safePath(own(value, 'filePath')), mimeType = own(value, 'mimeType'), language = own(value, 'language'), name = own(value, 'fileName');
@@ -223,7 +253,7 @@
         typeof language === 'string' && language.length <= 40 && typeof name === 'string' && name.length > 0 && name.length <= 256
         ? [{ path, name, content: body, mimeType, language }] : [];
     }));
-    if (!sources) return { cards, viewer: null };
+    if (!sources) return { cards, widgets, viewer: null };
     const owner = uniqueValue(props.flatMap(value => {
       const file = fileOf(value), chat = own(value, 'conversationUuid'), messageId = own(value, 'messageId');
       if (!file || typeof chat !== 'string' || chat.toLowerCase() !== conversation || typeof messageId !== 'string') return [];
@@ -232,10 +262,10 @@
       const message = (messageId.startsWith('new-assistant-message-uuid-') ? messageId.slice('new-assistant-message-uuid-'.length) : messageId).toLowerCase();
       return uuid.test(message) ? [{ ...file, message, conversation }] : [];
     }));
-    if (!owner || owner.path !== sources.path || owner.name !== sources.name) return { cards, viewer: null };
+    if (!owner || owner.path !== sources.path || owner.name !== sources.name) return { cards, widgets, viewer: null };
     const selected = cards.filter(card => card.selected && card.path === owner.path && card.name === owner.name && card.message === owner.message);
-    if (selected.length !== 1) return { cards, viewer: null };
-    return { cards, viewer: { ...sources, ...owner, token: selected[0].token } };
+    if (selected.length !== 1) return { cards, widgets, viewer: null };
+    return { cards, widgets, viewer: { ...sources, ...owner, token: selected[0].token } };
   }
   const receive = event => {
     if (event.source !== window || event.origin !== location.origin || !['onecode-claude-file-read', 'onecode-claude-composer-read', 'onecode-claude-user-read'].includes(event.data?.type) ||

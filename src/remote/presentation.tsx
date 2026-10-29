@@ -60,7 +60,7 @@ export function RichPresentation({ event, sessionId, ended = false, openRequestI
     void request<ArtifactSnapshot | null>(`sessions/${sessionId}/artifacts/${artifactId}?revision=${presentation.revision ?? 1}`).then(snapshot => {
       if (!alive) return;
       if (!snapshot) { setError('Artifact preview unavailable'); return; }
-      handle = createArtifactPreview({ parent, controls: previewControls.current ?? undefined, files: snapshot.revision.files, kind: snapshot.artifact.kind, entrypoint: snapshot.artifact.entrypoint,
+      handle = createArtifactPreview({ parent, controls: previewControls.current ?? undefined, files: snapshot.revision.files, kind: snapshot.artifact.kind, entrypoint: snapshot.artifact.entrypoint, origin: snapshot.artifact.origin,
         createDocument: document => request<{ id: string; url: string }>('previews', { sessionId, artifactId, revision: snapshot.revision.revision, document }),
         releaseDocument: id => { void request('previews/release', { id }).catch(() => undefined); } });
     }).catch(error => alive && setError(error.message));

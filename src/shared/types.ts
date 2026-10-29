@@ -832,9 +832,12 @@ export interface UpdateStatus {
   /** A version handed to its installer that this start is still older than: it did not install. */
   notInstalled?: string | null;
   downloadPercent?: number;
-  /** Exact bytes received when a release branch has no trustworthy published total yet. */
+  /** Transport presentation only; readiness still requires release verification and staging. */
+  downloadPhase?: 'transfer' | 'verifying' | 'extracting';
+  downloadTotalBytes?: number;
+  /** Received bytes across the selected payload plan; the total may be unknown. */
   downloadBytes?: number;
-  /** Coarse UI projection of downloadBytes for full Linux AppImage downloads. */
+  /** Compatibility projection of received bytes, in whole MiB. */
   downloadMegabytes?: number;
   /** Explicit, cancellable user intent for this exact staged version. Never restored at startup. */
   installRequested?: boolean;

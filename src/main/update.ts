@@ -224,7 +224,23 @@ export function updateStatus(): UpdateStatus {
 
 function set(next: Partial<UpdateStatus>): void {
   status = { ...status, ...next };
+  if (status.stage !== 'downloading') {
+    delete status.downloadPhase;
+    delete status.downloadTotalBytes;
+  }
   for (const listener of listeners) listener();
+}
+
+/** One progress projection for capsules, composite plans and full-image transfers. */
+function reportDownload(bytes: number, total?: number): void {
+  const percent = total ? Math.min(99, Math.floor(bytes / total * 100)) : undefined;
+  // Publish small/unknown transfers too, without pushing every network chunk over IPC.
+  if (status.downloadPhase !== 'transfer' || status.downloadBytes === undefined ||
+      Math.abs(bytes - status.downloadBytes) >= 64 * 1024 || status.downloadPercent !== percent ||
+      status.downloadTotalBytes !== total || bytes === total) {
+    set({ downloadPhase: 'transfer', downloadBytes: bytes, downloadTotalBytes: total,
+      downloadMegabytes: Math.floor(bytes / (1024 * 1024)), downloadPercent: percent });
+  }
 }
 
 /**
@@ -392,10 +408,11 @@ async function runPass(): Promise<void> {
     const compatible = await compatibleHotfix(manifestFile, release.version);
     if (compatible) {
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
-      set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
+      set({ latest: release.version, stage: 'downloading', downloadPhase: 'verifying', downloadPercent: undefined, downloadBytes: undefined, downloadMegabytes: undefined });
       const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => {
-        const percent = Math.min(99, Math.floor(bytes / manifest.size * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent });
+        reportDownload(bytes, manifest.size);
       });
+      set({ downloadPhase: 'extracting', downloadBytes: manifest.size, downloadTotalBytes: manifest.size });
       const hotfix = await stageHotfix(file, manifest);
       const hotfixDigest = await fileDigest(hotfix);
       staged = process.platform === 'linux'
@@ -412,17 +429,18 @@ async function runPass(): Promise<void> {
       if (manifest.base.platform !== process.platform) throw Error('The hotfix names a base for another platform');
       if (digests.get(manifest.archive) !== manifest.sha256) throw Error('The hotfix manifest differs from release checksums');
       if (!isNewer(release.version, manifest.base.version)) throw Error('A hotfix-only release requires an earlier complete base');
-      set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
+      set({ latest: release.version, stage: 'downloading', downloadPhase: 'verifying', downloadPercent: undefined, downloadBytes: undefined, downloadMegabytes: undefined });
       const base = manifest.base, baseDigests = await releaseDigests(base.version), channelPrefix = BUILD_CHANNEL === 'beta' ? 'OneCode-Beta-' : 'OneCode-', descriptorName = `${channelPrefix}${process.platform === 'linux' ? 'Linux-Base' : 'Base'}-${process.arch}.json`, descriptorDigest = baseDigests.get(descriptorName);
       if (!descriptorDigest || baseDigests.get(base.installer) !== base.sha256) throw Error('The required full release does not publish its verified base');
       const descriptorFile = await adopt(base.version, descriptorName, descriptorDigest) ?? await download(base.version, descriptorName, descriptorDigest);
       const descriptor = baseRelease(JSON.parse(await readFile(descriptorFile, 'utf8')));
       for (const key of ['version','platform','arch','runtime','installer','size','sha256','channel','tag'] as const) if ((descriptor[key] ?? (key === 'channel' ? 'stable' : undefined)) !== (base[key] ?? (key === 'channel' ? 'stable' : undefined))) throw Error('The full release descriptor differs from the hotfix base');
       const total = manifest.size + base.size;
-      const report = (bytes: number) => { const percent = Math.min(99, Math.floor(bytes / total * 100)); if (status.downloadPercent !== percent) set({ downloadPercent: percent }); };
+      const report = (bytes: number) => reportDownload(bytes, total);
       const baseFile = await adopt(base.version, base.installer, base.sha256) ?? await download(base.version, base.installer, base.sha256, base.size, report);
       if ((await stat(baseFile)).size !== base.size) throw Error('The base installer size differs');
       const file = await adopt(release.version, manifest.archive, manifest.sha256) ?? await download(release.version, manifest.archive, manifest.sha256, manifest.size, bytes => report(base.size + bytes));
+      set({ downloadPhase: 'extracting', downloadBytes: total, downloadTotalBytes: total });
       const hotfix = await stageHotfix(file, manifest);
       staged = { version: release.version, file: baseFile, kind: base.platform === 'linux' ? 'linux-composite' : 'composite', target: artifact.target,
         digest: base.sha256, hotfix, hotfixDigest: await fileDigest(hotfix), baseVersion: base.version, patchFile: file, patchDigest: manifest.sha256,
@@ -442,6 +460,7 @@ async function runPass(): Promise<void> {
     set({ latest: null, stage: 'idle' });
     return;
   }
+  set({ latest: release.version, stage: 'downloading', downloadPhase: 'verifying', downloadPercent: undefined, downloadBytes: undefined, downloadMegabytes: undefined });
   const carried = await adopt(release.version, artifact.name, expected);
   if (carried) {
     staged = { version: release.version, file: carried, kind: artifact.kind, target: artifact.target, digest: expected,
@@ -450,18 +469,16 @@ async function runPass(): Promise<void> {
     logInfo(`update: ${release.version} was already downloaded and is ready to install`);
     return;
   }
-  set({ latest: release.version, stage: 'downloading', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
+  set({ latest: release.version, stage: 'downloading', downloadPhase: 'transfer', downloadPercent: 0, downloadBytes: undefined, downloadMegabytes: undefined });
   const file = artifact.kind === 'installer'
     ? await windowsDownload(release.version, artifact.name, downloadPercent => set({ downloadPercent }), release.tag)
     : await download(release.version, artifact.name, expected, undefined, (bytes, transportTotal) => {
       // Full AppImage releases do not publish their byte count in SHA256SUMS. Content-Length is
       // presentation only: SHA-256 remains the release authority and the completed file is never
       // accepted merely because it reached this transport-reported total.
-      const mib = Math.floor(bytes / (1024 * 1024));
-      const percent = transportTotal ? Math.min(99, Math.floor(bytes / transportTotal * 100)) : 0;
-      if (status.downloadBytes === undefined || status.downloadMegabytes !== mib || status.downloadPercent !== percent)
-        set({ downloadBytes: bytes, downloadMegabytes: mib, downloadPercent: percent });
+      reportDownload(bytes, transportTotal);
     });
+  set({ downloadPhase: 'verifying' });
   if ((await fileDigest(file)) !== expected) throw new Error('The downloaded update does not match the OneCode release checksum');
   const imageIdentity = appImageEvidence(artifact);
   if (artifact.kind === 'installer') {
@@ -682,7 +699,8 @@ async function download(version: string, name: string, expected: string, size?: 
   // Versioned staging never removes the download engine's current-installer/blockmap cache.
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
-  return receiveUpdateArtifact({ file, name, expected, size, progress, stallMs: DOWNLOAD_STALL_MS,
+  return receiveUpdateArtifact({ file, name, expected, size, progress,
+    ...(progress ? { verifying: () => set({ downloadPhase: 'verifying' }) } : {}), stallMs: DOWNLOAD_STALL_MS,
     fetch: (signal, headers) => get(assetUrl(version, name), signal, headers) });
 }
 

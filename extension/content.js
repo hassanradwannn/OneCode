@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 114;
+  const RECORDER_VERSION = 115;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1483,7 +1483,14 @@
     if (!reply) return false;
     if (reply.ok === true) return true;
     if (reply.retryable === true || (reply.data && reply.data.retryable === true)) return false;
-    return reply.error !== 'app_not_found' && reply.error !== 'not_paired' && reply.error !== 'disconnected';
+    // A worker/transport refusal is not an application identity verdict. In
+    // particular a connection reset returns status 0 with the native error
+    // text. Treating that as an answer lets a reloaded page invent a second
+    // generation for the original question before its durable turn is known.
+    // Only an actual HTTP refusal can settle this read negatively.
+    return Number.isInteger(reply.status) && reply.status >= 400 && reply.status < 500 &&
+      ![401, 408, 425, 426, 429].includes(reply.status) &&
+      reply.error !== 'not_paired' && reply.error !== 'disconnected';
   }
 
   // ------------------------------------------------------------- observing
@@ -4869,7 +4876,7 @@
     }
     if(typeof CLF_DOM.readNativeArtifacts==='function'&&!nativeArtifactSnapshotBusy){
       nativeArtifactSnapshotBusy=true;
-      const heldEpoch=epoch,heldConversation=conversationId,current=()=>epoch===heldEpoch&&conversationId===heldConversation&&CLF_DOM.conversationId()===heldConversation;
+      const heldEpoch=epoch,heldConversation=conversationId,current=()=>alive&&epoch===heldEpoch&&conversationId===heldConversation&&CLF_DOM.conversationId()===heldConversation;
       void CLF_DOM.readNativeArtifacts(current).then(artifacts=>{
         if(!current())return;
         for(const artifact of artifacts){
@@ -8093,7 +8100,7 @@
     pulling = true;
     const forId = conversationId;
     const forEpoch = epoch;
-    const current = () => alive && conversationId === forId && epoch === forEpoch;
+    const current = () => alive && conversationId === forId && epoch === forEpoch && CLF_DOM.conversationId() === forId;
     const approvalCard = currentApprovalCard();
     const sentResult = approvalResult;
     try {
@@ -8118,7 +8125,7 @@
         // not reachable yet". A structured application refusal is an answer to the identity
         // question, so it must release the gate rather than freezing this page forever.
         if (current()) { operationProgress = null; injectStage(); }
-        if (resumeIdentityPending && appAnswered(reply)) resumeIdentityPending = false;
+        if (current() && resumeIdentityPending && appAnswered(reply)) resumeIdentityPending = false;
         return;
       }
       if (!current()) return;

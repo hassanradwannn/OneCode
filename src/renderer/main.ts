@@ -1286,7 +1286,17 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
           ? updateInstallWaitingText(update)
           : t("{0} {1} is downloaded and ready. Choose Install when done to restart after your work finishes.", [PRODUCT_LABEL, displayBuildVersion(update.latest!)])
         : update.stage === 'downloading'
-          ? update.downloadPercent !== undefined && update.downloadPercent > 0
+          ? update.downloadPhase === 'verifying'
+            ? t('Verifying {0} {1}…', [PRODUCT_LABEL, displayBuildVersion(update.latest)])
+            : update.downloadPhase === 'extracting'
+              ? t('Preparing {0} {1}…', [PRODUCT_LABEL, displayBuildVersion(update.latest)])
+              : update.downloadBytes !== undefined
+                ? t('{0} {1} is downloading ({2}). Keep working; you can install it when it lands.',
+                  [PRODUCT_LABEL, displayBuildVersion(update.latest),
+                    (update.downloadPercent === undefined ? '' : `${update.downloadPercent}% · `) +
+                    `${(update.downloadBytes / (1024 * 1024)).toFixed(2)} MiB` +
+                    (update.downloadTotalBytes ? ` / ${(update.downloadTotalBytes / (1024 * 1024)).toFixed(2)} MiB` : '')])
+                : update.downloadPercent !== undefined && update.downloadPercent > 0
             ? t("{0} {1} is downloading ({2}%). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadPercent)])
             : update.downloadMegabytes !== undefined && update.downloadMegabytes > 0
               ? t("{0} {1} is downloading ({2} MiB received). Keep working; you can install it when it lands.", [PRODUCT_LABEL, displayBuildVersion(update.latest), String(update.downloadMegabytes)])
@@ -1370,6 +1380,12 @@ function paintUpdate(next: AppState): void {
     return;
   }
   const { update } = next;
+  for (const id of ['updateProgress', 'settingsUpdateProgress']) {
+    const progress = $<HTMLProgressElement>(id);
+    progress.hidden = update.stage !== 'downloading';
+    if ((!update.downloadPhase || update.downloadPhase === 'transfer') && update.downloadPercent !== undefined) progress.value = update.downloadPercent;
+    else progress.removeAttribute('value');
+  }
   $('updateShowTerminals').hidden = !update.installRequested || !update.busyReasons?.includes('terminals');
   $('updateShowWork').hidden = !update.installRequested || !update.busyReasons?.length || update.installMode === 'now';
   ui($('updateText'), 'textContent', () => updateSummary(next)?.text ?? '');

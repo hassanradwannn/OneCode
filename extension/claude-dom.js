@@ -473,6 +473,19 @@ var CLF_DOM = (() => {
       node.closest('[data-testid="file-card-block"][data-file-row-card]') ? node : null;
   };
   let nativeFiles = null;
+  const widgetNode = widget => {
+    if (!widget || !uuid.test(widget.token || '') || !uuid.test(widget.message || '') ||
+        !/^toolu_[A-Za-z0-9]{20,100}$/.test(widget.toolUseId || '') || `claude:${widget.conversation}` !== conversationId() ||
+        typeof widget.streaming !== 'boolean' || typeof widget.content !== 'string' || !widget.content || widget.content.length > 240000 ||
+        typeof widget.title !== 'string' || widget.title.length > 200) return null;
+    const nodes = all('[id^="mcp-app-container-toolu_"]').filter(node => node.id === `mcp-app-container-${widget.toolUseId}` &&
+      node.getAttribute('data-clf-claude-widget-token') === widget.token);
+    const node = nodes.length === 1 ? nodes[0] : null, message = node?.closest('[data-testid="assistant-message"]');
+    const id = `${conversationId()}:assistant:${widget.message}`, owner = turns().filter(turn => turn.id === id);
+    const frames = node ? all('iframe', node) : [];
+    return message && owner.length === 1 && owner[0].node === message && turnIdOf(message) === id && frames.length === 1 &&
+      frames[0].title === `visualize: ${widget.title}` ? node : null;
+  };
   function readNativeFiles(current) {
     if (!current()) return Promise.resolve(null);
     const route = location.pathname, nonce = crypto.randomUUID();
@@ -483,7 +496,8 @@ var CLF_DOM = (() => {
         if (event.source !== window || event.origin !== location.origin || event.data?.type !== 'onecode-claude-file-read-result' || event.data.nonce !== nonce) return;
         if (!current() || location.pathname !== route || event.data.path !== route || !Array.isArray(event.data.cards) || event.data.cards.length > 32) return finish(null);
         const cards = event.data.cards.filter(card => fileCardNode(card));
-        const snapshot = { route, cards, viewer: event.data.viewer };
+        const widgets = Array.isArray(event.data.widgets) && event.data.widgets.length <= 32 ? event.data.widgets.filter(widget => widgetNode(widget)) : [];
+        const snapshot = { route, cards, widgets, viewer: event.data.viewer };
         nativeFiles = snapshot; finish(snapshot);
       };
       window.addEventListener('message', receive);
@@ -500,16 +514,28 @@ var CLF_DOM = (() => {
     : /\.(?:md|markdown)$/i.test(name) || language === 'markdown' ? 'markdown'
       : /\.(?:jsx|tsx|html?|svg)$/i.test(name) || ['jsx', 'tsx', 'html', 'svg'].includes(language) || mimeType === 'application/vnd.ant.react' ? 'web'
         : /\.(?:json|csv|tsv)$/i.test(name) ? 'data' : /\.(?:js|ts|py|sh|css)$/i.test(name) ? 'code' : 'document';
-  const nativeOutputs = () => ({ images: [], videos: [], artifacts: nativeFiles?.route === location.pathname ? nativeFiles.cards
+  const nativeOutputs = () => ({ images: [], videos: [], artifacts: nativeFiles?.route === location.pathname ? [...nativeFiles.cards
     // A .js/.ts or extensionless output may be a React/web artifact. Do not
     // create an immutable pending presentation with a guessed code/document
     // kind before this exact viewer exposes its native source type.
     .filter(card => card.streaming === true && /\.(?:jsx|tsx|html?|svg|mermaid|mmd|md|markdown)$/i.test(card.name) && fileCardNode(card))
     .map(card => ({ messageId: `${conversationId()}:assistant:${card.message}`,
-      nativeSurface: `artifact:${card.path}`, title: card.title || card.name, kind: fileKind(card.name), entrypoint: card.name })) : [] });
+      nativeSurface: `artifact:${card.path}`, title: card.title || card.name, kind: fileKind(card.name), entrypoint: card.name })),
+      ...(nativeFiles.widgets || []).filter(widget => widget.streaming && widgetNode(widget)).map(widget => ({
+        messageId: `${conversationId()}:assistant:${widget.message}`, nativeSurface: `widget:${widget.toolUseId}`,
+        title: widget.title, kind: 'web', entrypoint: 'widget.html' }))] : [] });
   const capturedFiles = new WeakMap();
   async function readNativeArtifacts(current) {
     const first = await readNativeFiles(current); if (!first || !current()) return [];
+    const widgets = first.widgets.filter(widget => !widget.streaming && widgetNode(widget) &&
+      widgetNode(widget).closest('[data-testid="assistant-message"]').getAttribute('data-is-streaming') === 'false').map(widget => ({
+      messageId: `${conversationId()}:assistant:${widget.message}`, nativeSurface: `widget:${widget.toolUseId}`,
+      title: widget.title, kind: 'web', entrypoint: 'widget.html',
+      files: [{ path: 'widget.html', text: widget.content, language: 'html', mimeType: 'text/html' }] }));
+    const files = await readNativeFileArtifacts(current, first);
+    return current() && nativeFiles?.route === location.pathname ? [...widgets, ...files] : [];
+  }
+  async function readNativeFileArtifacts(current, first) {
     const cards = first.cards.filter(card => card.selected === true && fileCardNode(card)?.getAttribute('aria-current') === 'true');
     if (cards.length !== 1) return [];
     const card = cards[0], node = fileCardNode(card), route = location.href;

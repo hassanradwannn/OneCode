@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.1': {
+    lead: () => t('Keep existing chats connected and bring native diagrams into your workspace.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Recover the existing task'), text: () => t('Connection resets keep the recorded question and generation while the browser reconnects, preserving exact task authorization.') },
+      { icon: 'i-browser', title: () => t('Native inline diagrams'), text: () => t('Capture exposed diagram source with its exact response and show it in the isolated Desktop and Remote preview.') },
+      { icon: 'i-gear', title: () => t('Visible update progress'), text: () => t('Follow received bytes and known totals, then verification and preparation before an update becomes ready to install.') }
+    ]
+  },
   '0.8.0': {
     lead: () => t('More provider choices with the same workspace and local tools.'),
     highlights: [

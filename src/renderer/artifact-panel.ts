@@ -184,7 +184,7 @@ export function createArtifactPanel(options: {
     if (token !== generation || !current) return;
     const previewSession = current.artifact.sessionId, previewArtifact = current.artifact.id, previewRevision = current.revision.revision;
     const messages = el('div', 'artifact-preview-console');
-    preview = createArtifactPreview({ parent: content, controls: actions, files: workingFiles(), entrypoint: current.artifact.entrypoint, kind: current.artifact.kind,
+    preview = createArtifactPreview({ parent: content, controls: actions, files: workingFiles(), entrypoint: current.artifact.entrypoint, kind: current.artifact.kind, origin: current.artifact.origin,
       createDocument: document => run(window.api.createArtifactPreviewDocument(previewSession, previewArtifact, previewRevision, document)),
       releaseDocument: id => { void window.api.releaseArtifactPreviewDocument(previewSession, id); },
       onMessage: message => {
