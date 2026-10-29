@@ -20,14 +20,14 @@ const RELEASES: Readonly<Record<string, Release>> = {
     lead: () => t('More provider choices with the same workspace and local tools.'),
     highlights: [
       { icon: 'i-chat', title: () => t('A third provider'), text: () => t('Choose your provider in setup, new chats or the local API. Existing chats retain their account, tools and task history.') },
-      { icon: 'i-settings', title: () => t('Native account choices'), text: () => t('Shows available current and legacy models with their effort settings, and reports usage limits with the reset information supplied by your provider.') },
-      { icon: 'i-code', title: () => t('Interactive component previews'), text: () => t('Preview React and TypeScript components with bundled charts, icons and styles, alongside HTML and Mermaid diagrams.') }
+      { icon: 'i-gear', title: () => t('Native account choices'), text: () => t('Shows available current and legacy models with their effort settings, and reports usage limits with the reset information supplied by your provider.') },
+      { icon: 'i-browser', title: () => t('Interactive component previews'), text: () => t('Preview React and TypeScript components with bundled charts, icons and styles, alongside HTML and Mermaid diagrams.') }
     ]
   },
   '0.7.4': {
     lead: () => t('Keep native model choices and message preparation in sync.'),
     highlights: [
-      { icon: 'i-settings', title: () => t('Updated model picker'), text: () => t('Reads the current native model menu, including recommended model groups and their reasoning settings. Choices remain scoped to the selected account.') },
+      { icon: 'i-gear', title: () => t('Updated model picker'), text: () => t('Reads the current native model menu, including recommended model groups and their reasoning settings. Choices remain scoped to the selected account.') },
       { icon: 'i-chat', title: () => t('Smoother chat preparation'), text: () => t('Rechecks the requested model after fresh-chat preparation and prevents unrelated idle-tab checks from delaying queued input.') },
       { icon: 'i-retry', title: () => t('Steer through native redraws'), text: () => t('Keeps the exact accepted source while native message rows are absent, then waits for the pending frame before sending your direction.') }
     ]
@@ -36,7 +36,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
     lead: () => t('Recover Windows updates blocked by process records from before a reboot.'),
     highlights: [
       { icon: 'i-retry', title: () => t('Reliable update shutdown'), text: () => t('Windows boot evidence reconciles old process records before the ordinary exact WSL checks. Unresolved records now show an update error while the app remains open.') },
-      { icon: 'i-settings', title: () => t('First-time connection guidance'), text: () => t('Allow up to 15 minutes for first-time Funnel provisioning and public verification. Keep OneCode and Tailscale running while the checks continue.') }
+      { icon: 'i-gear', title: () => t('First-time connection guidance'), text: () => t('Allow up to 15 minutes for first-time Funnel provisioning and public verification. Keep OneCode and Tailscale running while the checks continue.') }
     ]
   },
   '0.7.27': {
@@ -65,7 +65,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
     highlights: [
       { icon: 'i-chat', title: () => t('Recover after inactivity'), text: () => t('Browser maintenance keeps its fallback wake running and recovers from a stalled tab query. Confirmed delivery clears stale readiness warnings.') },
       { icon: 'i-retry', title: () => t('Keep task connections alive'), text: () => t('Tool connections stream keepalives while waiting for the exact task receipt. Temporary session recovery no longer permanently retires that task grant.') },
-      { icon: 'i-settings', title: () => t('Clearer connection setup'), text: () => t('Tailscale setup links directly to DNS and Funnel controls. A temporary public check failure keeps an established connector visible with an explanation.') }
+      { icon: 'i-gear', title: () => t('Clearer connection setup'), text: () => t('Tailscale setup links directly to DNS and Funnel controls. A temporary public check failure keeps an established connector visible with an explanation.') }
     ]
   },
   '0.7.1': {
@@ -152,7 +152,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
     lead: () => t('Keep ready chats moving while another chat recovers.'),
     highlights: [
       { icon: 'i-retry', title: () => t('Independent chat delivery'), text: () => t('A slow recovery in another chat no longer holds the shared input pickup. The document being repaired keeps its own delivery fence.') },
-      { icon: 'i-plugin', title: () => t('Plugin discovery'), text: () => t('An unattributed installed-plugin inventory stays recorded without triggering a conversation reload. Scoped work keeps its existing identity checks.') },
+      { icon: 'i-plug', title: () => t('Plugin discovery'), text: () => t('An unattributed installed-plugin inventory stays recorded without triggering a conversation reload. Scoped work keeps its existing identity checks.') },
       { icon: 'i-terminal', title: () => t('Process cleanup and long tasks'), text: () => t('Includes the shutdown cleanup and resumed-task authorization repairs from the previous Beta candidates.') }
     ]
   },
