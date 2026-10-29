@@ -44,19 +44,38 @@ var CLF_DOM = (() => {
     return clean(read(node));
   }
   const nativeSkillSelections = new WeakMap();
+  let activeNativeSkill = null;
   const acceptedSkillQuestions = new Map();
   let outgoingSkill = null;
   const skillChipSelector = 'span.react-renderer.node-skillChip[data-skill-id="onecode"][contenteditable="false"]';
   const sentSkillGroup = ':scope > p.whitespace-pre-wrap > span[class~="group/chip"]';
+  function skillBody(box, token) {
+    const copy = box.cloneNode(true), candidates = all(skillChipSelector, box), index = candidates.indexOf(token);
+    if (index < 0) return null; all(skillChipSelector, copy)[index]?.remove(); return blockText(copy);
+  }
   function skillSelection(box = composer()) {
-    const proof = box && nativeSkillSelections.get(box);
-    return proof && proof.route === location.href && proof.token.isConnected && proof.token.closest(BOX) === box &&
-      proof.token.matches(skillChipSelector) && compact(proof.token.textContent) === '/onecode' ? proof : null;
+    const proof = box && (nativeSkillSelections.get(box) || activeNativeSkill);
+    if (!proof || proof.revoked || proof.route !== location.href || !proof.current() || composer() !== box ||
+        document.querySelector('button[data-testid="user-menu-button"]') !== proof.account) return null;
+    const tokens = all('span.react-renderer.node-skillChip[data-skill-id]', box);
+    const token = tokens.length === 1 ? tokens[0] : null;
+    if (!token?.matches(skillChipSelector) || !shown(token) || compact(token.textContent) !== '/onecode' ||
+        all('[data-node-view-wrapper][contenteditable="false"]', token).length !== 1) return null;
+    const leading = document.createRange(); leading.selectNodeContents(box); leading.setEndBefore(token);
+    if (compact(leading.toString())) return null;
+    if (token !== proof.token || box !== proof.box) {
+      // ProseMirror can replace the chip or editor after accepting insertText.
+      // Only the original positive selection, unchanged question set and exact
+      // frozen body can carry that proof across its native render.
+      if (proof.expected === null || skillBody(box, token) !== proof.expected ||
+          messages().filter(row => row.role === 'user').map(row => row.id).join('\u0000') !== proof.questions) return null;
+      proof.token = token; proof.box = box; nativeSkillSelections.set(box, proof);
+    }
+    return proof;
   }
   const composerAuthoredText = () => {
     const box = composer(), proof = skillSelection(box); if (!proof) return blockText(box);
-    const copy = box.cloneNode(true), candidates = all(skillChipSelector, box), index = candidates.indexOf(proof.token);
-    if (index < 0) return blockText(box); all(skillChipSelector, copy)[index]?.remove(); return blockText(copy);
+    return skillBody(box, proof.token) ?? blockText(box);
   };
   function userPromptText(value) {
     if (typeof value !== 'string') return null;
@@ -154,11 +173,13 @@ var CLF_DOM = (() => {
       range.selectNodeContents(box);
       const skill = preserveSkill && skillSelection(box); if (skill) range.setStartAfter(skill.token);
       selection.removeAllRanges(); selection.addRange(range);
-      document.execCommand?.('insertText', false, next);
+      if (skill) { skill.expected = clean(next); skill.editing = true; }
+      try { document.execCommand?.('insertText', false, next); }
+      finally { if (skill) skill.editing = false; }
       // Do not manufacture a native editor document by setting textContent.
       // ProseMirror must accept the editor-native edit and expose its full readback.
       const applied = composer() === box && composerAuthoredText() === clean(next);
-      if (applied && !preserveSkill) nativeSkillSelections.delete(box);
+      if (applied && !preserveSkill) nativeSkillSelections.get(box)?.dispose();
       return applied;
     }, false);
   }
@@ -166,8 +187,17 @@ var CLF_DOM = (() => {
   const clearPromptExact = expected => composerAuthoredText() === clean(expected) && editPrompt('', true, null, false);
   function captureComposerDraft(expected, current = () => true) {
     let box = composer(), retired = false, attached = null;
-    const owns = () => !retired && current() && composer() === box && box?.isConnected && composerAuthoredText() === clean(expected) &&
-      (!attached || attachmentRows().length === attached.length && attached.every(row => row.node.isConnected && attachmentRows().includes(row.node) && attachmentName(row.node) === row.name));
+    const selectedSkill = skillSelection(box);
+    const owns = () => {
+      if (retired || !current()) return false;
+      const next = composer();
+      // A selected skill has its own stronger native-render continuity proof.
+      // Carry only that exact proof across a host replacement, including Goal
+      // and command drafts; ordinary and human-authored drafts stay node-bound.
+      if (next !== box && selectedSkill && skillSelection(next) === selectedSkill && composerAuthoredText() === clean(expected)) box = next;
+      return next === box && box?.isConnected && composerAuthoredText() === clean(expected) &&
+        (!attached || attachmentRows().length === attached.length && attached.every(row => row.node.isConnected && attachmentRows().includes(row.node) && attachmentName(row.node) === row.name));
+    };
     return { current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
       dispose: () => { retired = true; }, attachments: nodes => { attached = nodes.map(node => ({ node, name: attachmentName(node) })); },
       rebind: () => { if (retired || !current() || composerAuthoredText() !== clean(expected)) return false; box = composer(); return Boolean(box); } };
@@ -199,11 +229,23 @@ var CLF_DOM = (() => {
         return candidates.length === 1 ? candidates[0] : null;
       }, owns, 2500);
       if (!token || !owns()) return { selected: false };
-      const proof = { name, token, route };
+      const proof = { name, token, box, route, questions, current, expected: '', revoked: false, editing: false,
+        account: document.querySelector('button[data-testid="user-menu-button"]') };
+      const editTypes = ['beforeinput', 'input', 'keydown', 'pointerdown'];
+      const noteEdit = event => { if (!proof.editing && event.isTrusted && event.target?.closest?.(BOX)) proof.dispose(); };
+      proof.dispose = () => {
+        proof.revoked = true;
+        for (const type of editTypes) document.removeEventListener(type, noteEdit, true);
+        nativeSkillSelections.delete(proof.box);
+        if (activeNativeSkill === proof) activeNativeSkill = null;
+      };
+      activeNativeSkill?.dispose();
+      activeNativeSkill = proof;
+      for (const type of editTypes) document.addEventListener(type, noteEdit, true);
       nativeSkillSelections.set(box, proof);
-      if (composerAuthoredText()) { nativeSkillSelections.delete(box); return { selected: false }; }
+      if (composerAuthoredText()) { proof.dispose(); return { selected: false }; }
       success = true;
-      return { selected: true, current: () => current() && composer() === box && skillSelection(box) === proof };
+      return { selected: true, current: () => skillSelection() === proof, dispose: proof.dispose };
     } finally {
       if (!success && owns() && !all(skillChipSelector, box).length) {
         const residue = composerAuthoredText();

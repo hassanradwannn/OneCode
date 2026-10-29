@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 108;
+  const RECORDER_VERSION = 109;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -12634,6 +12634,7 @@
       if (!sendAttempted && preparedDraft?.current())
         CLF_DOM.insertPrompt(composerBefore, true);
       preparedDraft?.dispose();
+      nativeSkillChoice?.dispose?.();
       if (!onDocument()) return;
       if (!sendAttempted && (workResumed || sourceBusy())) await deferGoalDraftForWork(draft);
       goalBusy = false;
@@ -12838,7 +12839,8 @@
     }
     if (!current()) return null;
     if (selected?.selected === true && typeof selected.current === 'function' && selected.current())
-      return { text: skill.text, selected: true, current: selected.current };
+      return { text: skill.text, selected: true, current: selected.current, dispose: selected.dispose };
+    selected?.dispose?.();
     if (CLF_DOM.composerAuthoredText() !== before || CLF_DOM.hasComposerAttachments() !== attached) return null;
     return { text: skill.fallbackText, selected: false, current };
   }
@@ -13373,7 +13375,7 @@
       reportClaim(false);
       return;
     }
-    let ownsGeminiCommandClaim = false;
+    let ownsGeminiCommandClaim = false, bootstrapNativeSkill = null;
     try {
     // This runs before the first status reply: the command brings this install's Core identity,
     // so the bootstrap mentions this computer's own Core (see applyCoreIdentity).
@@ -13607,7 +13609,6 @@
         ...(selectionSurface ? { modelSurface: selectionSurface } : {}), time: selectionConfirmedAt });
     };
     if (await failIfRetargeted()) return;
-    let bootstrapNativeSkill = null;
     if (CLF_DOM.provider === 'claude' && boot.nativeSkill) {
       bootstrapNativeSkill = await prepareOptionalNativeSkill(boot.nativeSkill, stillOnTarget);
       if (!bootstrapNativeSkill) return void (await fail('The optional native skill changed the protected draft. Nothing was submitted.'));
@@ -13886,6 +13887,7 @@
       bootstrapDraft.dispose();
     }
     } finally {
+      bootstrapNativeSkill?.dispose?.();
       if (ownsGeminiCommandClaim) CLF_DOM.setCommandClaim?.(null);
     }
   }
@@ -15604,6 +15606,7 @@
         finally { draft.dispose(); }
       }
       if (!sent && decision && desktopDecision === decision) desktopDecision = null;
+      inputNativeSkill?.dispose?.();
       if (CLF_DOM.provider === 'gemini') { CLF_DOM.setOpeningClaim?.(null); CLF_DOM.setInputClaim?.(null); }
       desktopInputBusy = false;
       if (message.directTurn && !sendAttempted && userSendReceipt === sourcePreparedReceipt && alive && epoch === forEpoch &&
