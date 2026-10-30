@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.8': {
+    lead: () => t('Testing the next chat reliability fixes.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Live reply ordering'), text: () => t('Keeps earlier public paragraphs with their original question during Steer.') },
+      { icon: 'i-retry', title: () => t('Desktop and Remote'), text: () => t('Carries the same transcript ordering into Remote while preserving task and process ownership.') }
+    ]
+  },
   '0.8.4': {
     lead: () => t('More reliable chats and clearer plugin setup.'),
     highlights: [
