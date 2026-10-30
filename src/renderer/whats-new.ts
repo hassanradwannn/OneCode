@@ -16,6 +16,17 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.7': {
+    lead: () => t('More reliable chats and clearer plugin setup.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Keep Steer connected'), text: () => t('Preserves exact task receipts while importing older history and keeps correction replies in their own place.') },
+      { icon: 'i-gear', title: () => t('Normal ChatGPT model choices'), text: () => t('Opens model discovery in Chat mode and verifies native model choices through the current picker.') },
+      { icon: 'i-retry', title: () => t('Recover the same chat'), text: () => t('Waits for the replacement provider document after reconnecting without repeating an uncertain message.') },
+      { icon: 'i-plug', title: () => t('Visible plugin installation'), text: () => t('Shows installation progress and a clear result, including plugins that still need sign-in or connection setup.') },
+      { icon: 'i-file', title: () => t('Blender add-on included'), text: () => t('Download the matching Blender add-on from the installed plugin and follow its setup steps in OneCode.') },
+      { icon: 'i-plug', title: () => t('OneCode tray icon'), text: () => t('Uses the OneCode logo in the Windows notification area and keeps the familiar in-app status dot.') }
+    ]
+  },
   '0.8.4': {
     lead: () => t('More reliable chats and clearer plugin setup.'),
     highlights: [
