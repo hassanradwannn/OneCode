@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 37;
+  const VERSION = 38;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2283,13 +2283,19 @@
       }
       reference.metadataId = reference.id;
     }
-    for (const id of new Set([...ids, ...invocationIds, ...shellCurrentPath(live, entry)])) {
+    const publicSourceIds = shell.messages.filter(message => message?.author?.role === 'assistant' &&
+      !requestOf(message) && !resultOf(message) && !thoughtMessage(message) && !analysisMessage(message) &&
+      (!message.recipient || message.recipient === 'all')).map(message => str(message.id)).filter(Boolean);
+    // The mounted public item can outlive its entry in messageIds. Its exact id
+    // permits metadata joins only; it does not widen cache-derived body exports.
+    const requestMetadataIds = new Set([...ids, ...invocationIds, ...shellCurrentPath(live, entry)]);
+    for (const id of new Set([...requestMetadataIds, ...publicSourceIds])) {
       if (typeof id !== 'string' || !id || id.length > MAX_TEXT || !own.call(mapping, id)) continue;
       const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
       if (node?.id !== id || message?.id !== id) continue;
       // The stripped entries below carry no app identity; read it here, ids only (sightingsOf).
-      for (const sighting of sightingsOf([message])) if (sightings.length < 50 && !sightings.some(prior => prior.requestId === sighting.requestId && prior.appId === sighting.appId)) sightings.push(sighting);
-      const request = str(message.metadata?.request_id), cached = data?.mapping?.[id]?.message;
+      if (requestMetadataIds.has(id)) for (const sighting of sightingsOf([message])) if (sightings.length < 50 && !sightings.some(prior => prior.requestId === sighting.requestId && prior.appId === sighting.appId)) sightings.push(sighting);
+      const request = requestMetadataIds.has(id) ? str(message.metadata?.request_id) : null, cached = data?.mapping?.[id]?.message;
       if (live && cached?.id === id && request && cached.metadata?.request_id && cached.metadata.request_id !== request) return [];
       const publicMessage = selected.has(id) && message.author?.role === 'assistant' && !hiddenMessage(message) &&
         message.metadata?.is_visually_hidden_reasoning_group !== true && message.metadata?.summary_type !== 'raw_cot';
@@ -2297,10 +2303,11 @@
         ? message.content.thoughts.at(-1)?.summary : null;
       const preamble = publicMessage && channelOf(message) === 'commentary' &&
         (!message.recipient || message.recipient === 'all') ? authoredText(message) : null;
+      const responseToQuestionId = message.author?.role === 'assistant' ? publicQuestionOf(id) : null;
       out.push({ id, create_time: num(message.create_time), metadata: { request_id: request },
+        ...(responseToQuestionId ? { responseToQuestionId } : {}),
         ...(typeof thought === 'string' ? { thought: budgetedText(thought, publicBudget, MAX_RENDERED_TEXT) } : {}),
         ...(preamble ? { preamble: budgetedText(preamble, publicBudget, MAX_RENDERED_TEXT),
-          responseToQuestionId: publicQuestionOf(id),
           publicIdentity: { parent_id: str(message.metadata?.parent_id), working_turn_id: str(message.metadata?.working_turn_id),
             turn_exchange_id: str(message.metadata?.turn_exchange_id) } } : {}) });
     }
@@ -2762,6 +2769,18 @@
         const renderedMessages = renderedMessagesOf(group.sections, messages, turnBudget, exactAnchors, conversation.conversationId);
         const currentBranch = shell ? shellCurrentBranch(fiber, shell, conversation, turnBudget) : null;
         const nativeActivities = shell ? shellPublicActivity(shell, metadata, renderedMessages, turnBudget, section, exactAnchors) : nativeActivitiesOf(group.sections, messages, exactThoughtRows);
+        // Typed assistant-message rows can retain earlier public prose just as
+        // reasoning preambles do. Their presentation channel is not a question
+        // relation; join every public output to its exact selected source id.
+        if (shell) {
+          const questions = new Map(metadata.filter(source => source.responseToQuestionId).map(source => [source.id, source.responseToQuestionId]));
+          for (let index = renderedMessages.length - 1; index >= 0; index--) {
+            const message = renderedMessages[index], question = message.role === 'assistant' && questions.get(message.rawMessageId);
+            if (!question) continue;
+            if (message.responseToQuestionId && message.responseToQuestionId !== question) renderedMessages.splice(index, 1);
+            else message.responseToQuestionId = question;
+          }
+        }
         responseBudget.remaining -= before - turnBudget.remaining;
         const generatedImages = generatedImagesOf(group.sections, messages, exactImageNodes, shell?.images);
         generatedImages.push(...nativeFileImagesOf(group.sections, messages, exactImageNodes, exactFileButtons, Boolean(shell)));

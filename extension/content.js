@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 121;
+  const RECORDER_VERSION = 122;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4071,7 +4071,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 37;
+  const FIBER_VERSION = 38;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
