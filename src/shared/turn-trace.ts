@@ -13,6 +13,8 @@
  * each call's start. Gemini can show a call that never reached this app, so not every item has a
  * recorded call. An `exec` is Gemini's code mode, one item for any number of this app's calls.
  */
+import type { TimelineTurns } from './chronology.js';
+
 export type TurnTraceItem =
   | { kind: 'say'; id?: string; text: string; done: boolean }
   | { kind: 'call'; id: string; tool?: string; done: boolean; at?: number }
@@ -24,6 +26,54 @@ export type TurnTraceItem =
   | { kind: 'now'; text: string };
 
 export type TurnTrace = TurnTraceItem[];
+
+/** A native aggregate may retain the prior correction's entire outline. Trim
+ * only a witnessed prefix within an explicitly continued recorded response.
+ * Native call IDs anchor that prefix; matching words alone never remove it.
+ * This is a reading projection: saved outlines and task ownership stay intact. */
+export function scopeContinuedTraces(traces: Readonly<Record<string, TurnTrace>>, turns: TimelineTurns = {}): Record<string, TurnTrace> {
+  const out = { ...traces };
+  const callKey = (item: TurnTraceItem): string | undefined => item.kind === 'call' || item.kind === 'exec'
+    ? JSON.stringify([item.kind, item.id, item.kind === 'call' ? item.tool ?? null : null]) : undefined;
+  let previous: TimelineTurns[string] | undefined;
+  let calls = new Set<string>(), sayings = new Set<string>();
+  const ordered = Object.entries(turns).filter(([, turn]) => !turn.responseTurnId || !turns[turn.responseTurnId] ||
+    turns[turn.responseTurnId]!.origin >= turn.origin).sort((a, b) => a[1].origin - b[1].origin);
+  for (const [id, turn] of ordered) {
+    const continues = previous?.continued === true && previous.questionId && turn.questionId &&
+      previous.questionId.toLowerCase() !== turn.questionId.toLowerCase() &&
+      previous.endOrigin !== undefined && previous.endOrigin < turn.origin &&
+      previous.endTime !== undefined && previous.endTime <= turn.time;
+    if (!continues) { calls = new Set(); sayings = new Set(); }
+    const trace = traces[id];
+    if (trace) {
+      let lastShared = -1, newCall = false, ambiguous = false;
+      const seen = new Set<string>();
+      trace.forEach((item, index) => {
+        const key = callKey(item);
+        if (!key) return;
+        if (seen.has(key)) ambiguous = true;
+        seen.add(key);
+        if (calls.has(key)) { if (newCall) ambiguous = true; lastShared = index; }
+        else newCall = true;
+      });
+      if (lastShared >= 0 && !ambiguous && trace.slice(0, lastShared).every(item =>
+        item.kind !== 'answer' && (item.kind !== 'say' || sayings.has(item.text)))) {
+        // A recap closes the already witnessed old call. The next sentence or
+        // new call starts the correction's own round, including identical words.
+        let first = lastShared + 1;
+        while (first < trace.length && ['recap', 'now'].includes(trace[first]!.kind)) first++;
+        out[id] = trace.slice(first);
+      }
+      for (const item of trace) {
+        const key = callKey(item); if (key) calls.add(key);
+        if (item.kind === 'say') sayings.add(item.text);
+      }
+    }
+    previous = turn;
+  }
+  return out;
+}
 
 export const MAX_TRACE_ITEMS = 400;
 export const MAX_TRACE_SAY_CHARS = 8000;

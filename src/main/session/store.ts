@@ -50,7 +50,7 @@ import { applyTurnIdentity, authoredTimeOf, chronological, injectedUserMessage, 
   recordedRequestTurn, responseTurnId, type Chronological, type TimelineTurns } from '../../shared/chronology.js';
 import { automaticTitle, firstTitleMessage, legacyContextTitle, legacyLabelPending, projectPageTitle, providerTitleIgnored, refreshUserTitle, userTitle } from './title.js';
 import { agentPlanSchema, agentPlanUpdateSchema, MAX_AGENT_PLAN_BYTES, type AgentPlan, type AgentPlanUpdate } from '../../shared/agent-plan.js';
-import { turnTrace, type TurnTrace } from '../../shared/turn-trace.js';
+import { scopeContinuedTraces, turnTrace, type TurnTrace } from '../../shared/turn-trace.js';
 import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 
@@ -3457,13 +3457,33 @@ export async function writeTurnTrace(id: string, turnId: string, input: unknown,
 export async function readTurnTraces(id: string, turnIds: Iterable<string>): Promise<Record<string, TurnTrace>> {
   assertSessionId(id);
   await open.get(id)?.queue;
-  const out: Record<string, TurnTrace> = {};
-  for (const turnId of new Set(turnIds)) {
-    if (!TRACE_TURN_ID.test(turnId)) continue;
-    const found = await readTraceFile(id, turnId);
-    if (found) out[turnId] = found.trace;
+  const wanted = new Set([...turnIds].filter(turnId => TRACE_TURN_ID.test(turnId)));
+  const turns = (open.get(id)?.summary ?? await readMeta(id))?.timelineTurns ?? {};
+  const ordered = Object.entries(turns).filter(([, turn]) => !turn.responseTurnId || !turns[turn.responseTurnId] ||
+    turns[turn.responseTurnId]!.origin >= turn.origin).sort((a, b) => a[1].origin - b[1].origin);
+  const predecessors = new Map<string, string>();
+  for (let at = 1; at < ordered.length; at++) {
+    const [previousId, previous] = ordered[at - 1]!, [turnId, turn] = ordered[at]!;
+    if (previous.continued && previous.questionId && turn.questionId && previous.questionId.toLowerCase() !== turn.questionId.toLowerCase() &&
+        previous.endOrigin !== undefined && previous.endOrigin < turn.origin && previous.endTime !== undefined && previous.endTime <= turn.time)
+      predecessors.set(turnId, previousId);
   }
-  return out;
+  const needed = new Set(wanted);
+  // A paged tail still needs the preceding outline to recognize retained native
+  // calls. Never amend the saved outline or infer another response's ownership.
+  for (const turnId of wanted) {
+    let previous = predecessors.get(turnId);
+    for (let count = 0; previous && count < 400 && !needed.has(previous); count++) {
+      needed.add(previous); previous = predecessors.get(previous);
+    }
+  }
+  const held: Record<string, TurnTrace> = {};
+  for (const turnId of needed) {
+    const found = await readTraceFile(id, turnId);
+    if (found) held[turnId] = found.trace;
+  }
+  const projected = scopeContinuedTraces(held, turns);
+  return Object.fromEntries([...wanted].flatMap(turnId => projected[turnId] ? [[turnId, projected[turnId]!]] : []));
 }
 
 export async function endSession(id: string, dismissBrowserRecovery = false, expectedConversationId?: string): Promise<void> {
