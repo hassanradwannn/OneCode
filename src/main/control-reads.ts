@@ -291,6 +291,10 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
     // newest seq, so `before` and `after` take this, not `seq`.
     position: positionOf(event),
     time: event.time,
+    authoredAt: event.authoredAt,
+    turnOrigin: event.turnOrigin,
+    exchangeOrigin: event.exchangeOrigin,
+    displayTurnOrigin: event.displayTurnOrigin,
     kind: event.kind,
     source: event.source,
     agent: event.agent,

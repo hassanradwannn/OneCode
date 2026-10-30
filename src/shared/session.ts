@@ -389,6 +389,8 @@ interface BaseEvent {
   authoredAt?: number;
   /** Read projection: owning start outside this page, or null for an unowned row. */
   turnOrigin?: number | null;
+  /** Row-only reading group; never canonical turn or execution ownership. */
+  displayTurnOrigin?: number;
   /** Read projection of an exact native question/answer pair, never lifecycle ownership. */
   exchangeOrigin?: number | null;
   source: EventSource;

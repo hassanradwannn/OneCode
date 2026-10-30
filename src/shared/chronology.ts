@@ -38,6 +38,9 @@ export interface Chronological {
   authoredAt?: number;
   /** Recorded owning start, supplied before pagination; null means no proven group. */
   turnOrigin?: number | null;
+  /** Row-only reading group, independent of canonical turn and activity ownership. */
+  displayTurnOrigin?: number;
+  responseToQuestionId?: string;
   /** Exact native exchange display anchor; never execution or turn ownership. */
   exchangeOrigin?: number | null;
   messageId?: string;
@@ -293,12 +296,22 @@ export function projectTimeline<T extends Chronological>(
   const responseParents = new Map<string, Set<string>>();
   const steeredResponses = new Map<string, Set<string>>();
   const nativeQuestions = new Set<string>();
+  const questionAgents = new Map<string, Set<string>>();
+  const questionDates = new Map<string, number | null>();
   const exchanges = new Map<string, GeminiExchange>();
   const recordedTurns = new Set(Object.keys(turns));
   for (const message of messages) {
     collectGeminiExchange(exchanges, message, recordedTurns);
-    if (message.kind === 'user_message' && (message.source === 'app' || message.source === 'extension') && message.messageId)
+    if (message.kind === 'user_message' && (message.source === 'app' || message.source === 'extension') && message.messageId) {
       nativeQuestions.add(`${message.agent ?? ''}\u0000${message.messageId.toLowerCase()}`);
+      const id = message.messageId.toLowerCase(), agent = message.agent ?? '';
+      const agents = questionAgents.get(id) ?? new Set<string>(); agents.add(agent); questionAgents.set(id, agents);
+      const at = authoredTimeOf(message);
+      if (at !== undefined) {
+        const key = `${agent}\u0000${id}`, previous = questionDates.get(key);
+        questionDates.set(key, previous === undefined || previous === at ? at : null);
+      }
+    }
     const key = assistantResponseKey(message);
     if (!key) continue;
     const parent = message.messageId!.split(':')[1]!;
@@ -325,8 +338,35 @@ export function projectTimeline<T extends Chronological>(
         ...(boundary?.questionId ? [boundary.questionId.toLowerCase()] : [])]));
     }
   }
+  type ReadingMember = { id: string; origin: number; at: number };
+  const readingFamilies = new Map<string, { members: ReadingMember[]; index: number }>();
+  let previous: { turn: TimelineTurns[string]; agent: string; members: ReadingMember[] } | undefined;
+  for (const [id, turn] of Object.entries(turns).filter(([id]) => responseTurnId(turns, id) === id).sort((a, b) => a[1].origin - b[1].origin)) {
+    const question = turn.questionId?.toLowerCase(), agents = question ? questionAgents.get(question) : undefined;
+    const agent = agents?.size === 1 ? [...agents][0] : undefined;
+    const at = agent !== undefined && question ? questionDates.get(`${agent}\u0000${question}`) : undefined;
+    if (agent === undefined || at === undefined || at === null) { previous = undefined; continue; }
+    const continues = previous?.agent === agent && previous.turn.continued === true &&
+      previous.turn.questionId !== turn.questionId && previous.turn.endOrigin !== undefined && previous.turn.endOrigin < turn.origin &&
+      previous.turn.endTime !== undefined && previous.turn.endTime <= turn.time && previous.members.at(-1)!.at <= at;
+    const members = continues ? previous!.members : [];
+    members.push({ id, origin: turn.origin, at }); readingFamilies.set(id, { members, index: members.length - 1 });
+    previous = { turn, agent, members };
+  }
   return entries.map(entry => {
     let boundary = entry.turnId ? turns[responseTurnId(turns, entry.turnId)] : undefined;
+    let displayTurnOrigin: number | undefined;
+    // Early public prose can arrive after a Steer before its native parent graph
+    // hydrates. Exact provider-authored question dates can place that row inside
+    // an explicitly continued response without changing its canonical turn.
+    const family = entry.turnId && !entry.responseToQuestionId && assistantResponseKey(entry) ? readingFamilies.get(responseTurnId(turns, entry.turnId)) : undefined;
+    const writtenInFamily = family ? authoredTimeOf(entry) : undefined;
+    if (family && writtenInFamily !== undefined && writtenInFamily < family.members[family.index]!.at) {
+      let low = 0, high = family.index;
+      while (low < high) { const mid = (low + high) >>> 1; if (family.members[mid]!.at <= writtenInFamily) low = mid + 1; else high = mid; }
+      const earlier = family.members[low - 1];
+      if (earlier) displayTurnOrigin = earlier.origin;
+    }
     if (!entry.turnId) {
       const response = assistantResponseKey(entry);
       if (response) {
@@ -368,6 +408,7 @@ export function projectTimeline<T extends Chronological>(
     const exchangeOrigin = !boundary && (!entry.turnId || geminiQuestionHint(entry, recordedTurns)) && exchange
       ? lateGeminiExchangeOrigin(exchanges.get(exchange)) : undefined;
     return { ...entry, turnOrigin: boundary?.origin ?? null, exchangeOrigin: exchangeOrigin ?? null,
+      displayTurnOrigin,
       ...(authoredAt !== undefined ? { authoredAt } : {}) };
   });
 }
@@ -549,7 +590,9 @@ export function chronological<T extends Chronological>(entries: readonly T[]): T
       else nativeGroups.set(exchange, { origin: exchangeOrigin, entries: [entry] });
       continue;
     }
-    const anchor = (entry.turnId ? anchors.get(entry.turnId) : undefined) ?? entry.turnOrigin ?? inferredAnchor ?? entryPosition;
+    const displayAnchor = Number.isFinite(entry.displayTurnOrigin) && entry.displayTurnOrigin! >= 0 && entry.displayTurnOrigin! <= entryPosition
+      ? entry.displayTurnOrigin : undefined;
+    const anchor = displayAnchor ?? (entry.turnId ? anchors.get(entry.turnId) : undefined) ?? entry.turnOrigin ?? inferredAnchor ?? entryPosition;
     const held = groups.get(anchor);
     if (held) held.push(entry);
     else groups.set(anchor, [entry]);

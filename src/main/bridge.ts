@@ -4171,6 +4171,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (earlierChatRepair(event)) return [];
       const base = { seq: event.seq, time: event.time, turnId: event.turnId ?? null, agent: event.agent ?? null,
         ...(event.turnOrigin !== undefined ? { turnOrigin: event.turnOrigin } : {}),
+        ...(event.displayTurnOrigin !== undefined ? { displayTurnOrigin: event.displayTurnOrigin } : {}),
         ...(event.authoredAt !== undefined ? { authoredAt: event.authoredAt } : {}) };
       switch (event.kind) {
         case 'tool_call':

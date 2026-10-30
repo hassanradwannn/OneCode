@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 38;
+  const VERSION = 39;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2305,6 +2305,7 @@
         (!message.recipient || message.recipient === 'all') ? authoredText(message) : null;
       const responseToQuestionId = message.author?.role === 'assistant' ? publicQuestionOf(id) : null;
       out.push({ id, create_time: num(message.create_time), metadata: { request_id: request },
+        ...(['user', 'assistant'].includes(message.author?.role) ? { authoredRole: message.author.role } : {}),
         ...(responseToQuestionId ? { responseToQuestionId } : {}),
         ...(typeof thought === 'string' ? { thought: budgetedText(thought, publicBudget, MAX_RENDERED_TEXT) } : {}),
         ...(preamble ? { preamble: budgetedText(preamble, publicBudget, MAX_RENDERED_TEXT),
@@ -2773,9 +2774,11 @@
         // reasoning preambles do. Their presentation channel is not a question
         // relation; join every public output to its exact selected source id.
         if (shell) {
-          const questions = new Map(metadata.filter(source => source.responseToQuestionId).map(source => [source.id, source.responseToQuestionId]));
+          const sources = new Map(metadata.map(source => [source.id, source]));
           for (let index = renderedMessages.length - 1; index >= 0; index--) {
-            const message = renderedMessages[index], question = message.role === 'assistant' && questions.get(message.rawMessageId);
+            const message = renderedMessages[index], source = sources.get(message.rawMessageId), at = authoredTime(source);
+            if (at && source.authoredRole === message.role && !message.createTime) message.createTime = at;
+            const question = message.role === 'assistant' && source?.responseToQuestionId;
             if (!question) continue;
             if (message.responseToQuestionId && message.responseToQuestionId !== question) renderedMessages.splice(index, 1);
             else message.responseToQuestionId = question;

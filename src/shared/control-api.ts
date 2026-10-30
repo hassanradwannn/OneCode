@@ -236,6 +236,11 @@ export type ControlApiEvent = {
   /** Where the row sits in history. `before` and `after` take this, not `seq`. */
   position: number;
   time: number;
+  /** Store-owned transcript presentation, independent of cursor and task identity. */
+  authoredAt?: number;
+  turnOrigin?: number | null;
+  exchangeOrigin?: number | null;
+  displayTurnOrigin?: number;
   kind: string;
   source: string;
   agent?: string;
