@@ -1997,6 +1997,9 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
       observation.authoredAt = item['authoredAt'];
     }
     if (item['authoredNow'] === true && kind === 'user_message') observation.authoredNow = true;
+    if (kind === 'assistant_message' && chatProviderForConversation(expectedConversationId) === 'chatgpt' &&
+        typeof item['responseToQuestionId'] === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(item['responseToQuestionId']))
+      observation.responseToQuestionId = item['responseToQuestionId'];
     if (kind === 'user_message' && item['authoredNow'] !== true &&
         typeof item['historyBeforeQuestionId'] === 'string' && item['historyBeforeQuestionId'].length > 0 &&
         item['historyBeforeQuestionId'].length <= 256 && item['historyBeforeQuestionId'] !== item['messageId'])

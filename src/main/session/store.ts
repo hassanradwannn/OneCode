@@ -358,6 +358,20 @@ interface MetaCheckpoint {
   activityBoundaryMissing: boolean;
 }
 
+// A rebuildable index over the existing immutable timeline projection, not authority storage.
+const replyQuestionTurns = new WeakMap<TimelineTurns, Map<string, Set<string>>>();
+function replyTurns(turns: TimelineTurns, question: string): Set<string> {
+  let index = replyQuestionTurns.get(turns);
+  if (!index) {
+    index = new Map();
+    for (const [id, turn] of Object.entries(turns)) if (turn.questionId) {
+      const ids = index.get(turn.questionId) ?? new Set<string>(); ids.add(id); index.set(turn.questionId, ids);
+    }
+    replyQuestionTurns.set(turns, index);
+  }
+  return index.get(question) ?? new Set<string>();
+}
+
 function messageKey(event: SessionEvent | Omit<MessageEvent, 'seq'> | NewNativeImageEvent | NewNativeVideoEvent): string | null {
   if (event.kind === 'progress' && event.presentation) return `presentation\u0000${event.presentation.id}`;
   if (event.kind === 'tool_call') return event.call?.callId ? `tool_call\u0000${event.call.callId}` : null;
@@ -1350,11 +1364,26 @@ export function upsertMessageEvent(
       const providerMessageId = event.kind === 'assistant_message' ? event.providerMessageId : undefined;
       const providerMatches = providerMessageId
         ? [...entry.messages.entries()].filter(([, candidate]) => candidate.kind === 'assistant_message' &&
-            candidate.providerMessageId === providerMessageId)
+            (!candidate.agent || !event.agent || candidate.agent === event.agent) &&
+            (candidate.providerMessageId === providerMessageId || candidate.messageId === providerMessageId))
         : [];
       const key = !entry.messages.has(directKey) && providerMatches.length === 1 ? providerMatches[0]![0] : directKey;
       const candidate = entry.messages.get(key);
       const previous = candidate?.kind === 'user_message' || candidate?.kind === 'assistant_message' ? candidate : undefined;
+      if (event.kind === 'assistant_message') {
+        const question = previous?.kind === 'assistant_message' ? previous.responseToQuestionId ?? event.responseToQuestionId : event.responseToQuestionId;
+        if (question) {
+          const turns = entry.summary.timelineTurns ?? {};
+          const matches = replyTurns(turns, question);
+          const exact = event.turnId && matches.has(event.turnId) ? event.turnId : undefined;
+          const owners = new Set([...matches].map(id => responseTurnId(turns, id)));
+          // A native aggregate can span several Steers. Only an already recorded
+          // question can place its public prose; this never creates a turn or grant.
+          const owner = exact ?? (owners.size === 1 ? [...owners][0] : undefined);
+          event = { ...event, responseToQuestionId: question, turnId: owner };
+        }
+      }
+
       // A changed provider timestamp caused this alias; it is not a correction of
       // the original anchor. Same-key DOM-to-Fiber timestamp promotion still applies.
       let preferTime = options.preferTime === true && key === directKey;
@@ -1369,7 +1398,10 @@ export function upsertMessageEvent(
         event.final !== true &&
         event.state !== 'final'
       ) {
-        return { event: previous, changed: false, contentChanged: false };
+        if (!event.responseToQuestionId || previous.responseToQuestionId) return { event: previous, changed: false, contentChanged: false };
+        // A stronger native question relation can repair attribution while the
+        // already accepted terminal body/state remain immutable.
+        event = { ...event, message: previous.message, renderedHtml: previous.renderedHtml, state: 'final', final: true };
       }
 
       // A resident historical snapshot may arrive after the active page has already
@@ -1409,6 +1441,7 @@ export function upsertMessageEvent(
               messageId: previous.messageId,
               authoredAt: authoredTimeOf(previous) ?? event.authoredAt,
               providerMessageId: event.providerMessageId ?? previous.providerMessageId,
+              responseToQuestionId: previous.responseToQuestionId ?? event.responseToQuestionId,
               resolvedModel: event.resolvedModel ?? previous.resolvedModel,
               references: event.references ?? previous.references,
               // `final` is a compatibility mirror of state, not an independent truth.
@@ -1466,8 +1499,11 @@ export function upsertMessageEvent(
       // no longer prove its reconstruction of that turn complete and drops the whole response
       // back to Gemini's native rendering, and the desktop timeline draws an empty turn with
       // a five-minute-old message inside it.
+      const nativeRelationRepair = previous?.kind === 'assistant_message' && nextEvent.kind === 'assistant_message' &&
+        !previous.responseToQuestionId && !!nextEvent.responseToQuestionId &&
+        (!previous.turnId || entry.summary.timelineTurns?.[previous.turnId]?.questionId !== nextEvent.responseToQuestionId);
       const settledTurnId =
-        previous?.kind === 'assistant_message' && nextEvent.kind === 'assistant_message'
+        previous?.kind === 'assistant_message' && nextEvent.kind === 'assistant_message' && !nativeRelationRepair
           ? previous.turnId ?? nextEvent.turnId ?? undefined
           : nextEvent.turnId ?? undefined;
       if (
@@ -1484,6 +1520,7 @@ export function upsertMessageEvent(
             previous.final === nextEvent.final &&
             previous.goalEligible === nextEvent.goalEligible &&
             previous.providerMessageId === nextEvent.providerMessageId &&
+            previous.responseToQuestionId === nextEvent.responseToQuestionId &&
             previous.resolvedModel === nextEvent.resolvedModel &&
             JSON.stringify(previous.references) === JSON.stringify(nextEvent.references))) &&
         (options.activeContent !== true || previous.kind !== 'assistant_message' || previous.activeContentRevision === true) &&
@@ -1497,7 +1534,7 @@ export function upsertMessageEvent(
       }
       const full = {
         ...nextEvent,
-        presentationSeq: !previous || !sameMessage ||
+        presentationSeq: !previous || !sameMessage || nativeRelationRepair ||
           (nextEvent.kind === 'assistant_message' && previous.kind === 'assistant_message' &&
             (!storedTextEqual(previous.renderedHtml, nextEvent.renderedHtml) ||
               JSON.stringify(previous.references) !== JSON.stringify(nextEvent.references))) ||

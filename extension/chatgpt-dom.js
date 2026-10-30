@@ -3187,7 +3187,10 @@ var CLF_DOM = (() => {
       (!ownedSurface || value.nativeSurface === undefined || value.nativeSurface === ownedSurface) && (!predicate || predicate(value)) ? value : null; });
     // The shell trigger needs MAIN ownership proof. A cold account can hydrate
     // after the first reply, so DOM readiness must refresh that proof as well.
-    const readyTrigger = () => wait(async () => { await readPickerState(); return trigger(); }, 15000);
+    const readyTrigger = () => wait(async () => {
+      await readPickerState(); const button = trigger();
+      return shown(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null;
+    }, 15000);
     const key = (node, value) => { if (!node || !stillCurrent()) return false; node.focus(); node.dispatchEvent(new KeyboardEvent('keydown', { key: value, code: value, bubbles: true, cancelable: true })); return true; };
     return {
       state,
@@ -3208,12 +3211,20 @@ var CLF_DOM = (() => {
         // A retained exit-animation node is not an open native menu.
         if (!openPicker()) { const button = await readyTrigger();
           // Synthetic Enter does not produce a button's browser-default click.
-          // The current native picker opens on click; activate its exact observed
-          // trigger once, then require the owned panel. No second activation retry.
+          // Activate the native trigger's observed handler once, then require its
+          // owned panel. No second activation retry.
           if (!button || !shown(button) || button.disabled || button.getAttribute('aria-disabled') === 'true' || !stillCurrent()) {
             failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null;
           }
-          button.focus(); button.click();
+          const activation = button.getAttribute('data-clf-picker-activation');
+          if (!['pointerdown','mousedown','click','keydown'].includes(activation)) { failure('picker-activation-unconfirmed'); return null; }
+          // The current Radix trigger can open on pointerdown rather than click.
+          // MAIN reports only which native handler exists; activate that one once.
+          button.focus();
+          if (activation === 'pointerdown') button.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, bubbles: true, cancelable: true }));
+          else if (activation === 'mousedown') button.dispatchEvent(new MouseEvent('mousedown', { button: 0, buttons: 1, bubbles: true, cancelable: true }));
+          else if (activation === 'keydown') key(button, 'Enter');
+          else button.click();
           if (!await wait(openPicker)) { failure(stillCurrent() ? 'picker-open-unconfirmed' : 'page-changed'); return null; }
         }
         const observed = await state();

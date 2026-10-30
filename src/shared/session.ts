@@ -445,6 +445,8 @@ export type SessionEvent =
       renderedHtml?: StoredText;
       /** Public provider object UUID. Evidence for identity drift; not a canonical key or turn owner. */
       providerMessageId?: string;
+      /** Native public question/answer relation; never MCP execution authority. */
+      responseToQuestionId?: string;
       /**
        * The model ChatGPT's server says produced this reply (`resolved_model_slug`). Proof for
        * counting sends per model; deliberately not `model`, which drives token attribution.

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 119;
+  const RECORDER_VERSION = 120;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4071,7 +4071,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 35;
+  const FIBER_VERSION = 36;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4315,6 +4315,8 @@
       const message = {
         messageId,
         rawMessageId: cap(entry.rawMessageId, 200),
+        ...(entry.role === 'assistant' && typeof entry.responseToQuestionId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(entry.responseToQuestionId)
+          ? { responseToQuestionId: entry.responseToQuestionId } : {}),
         role: entry.role === 'user' ? 'user' : 'assistant',
         stable: entry.stable === true,
         order:
@@ -4346,6 +4348,10 @@
       }
       const prior = messages[priorAt];
       if (prior.rawText === rawText && prior.renderedHtml === renderedHtml && JSON.stringify(prior.attachments || []) === JSON.stringify(attachments)) {
+        if (prior.responseToQuestionId && message.responseToQuestionId && prior.responseToQuestionId !== message.responseToQuestionId) {
+          conflictingMessages.add(messageId); continue;
+        }
+        if (message.responseToQuestionId) prior.responseToQuestionId = message.responseToQuestionId;
         if (message.stable) prior.stable = true;
         continue;
       }
@@ -4354,6 +4360,17 @@
       // this scan is transitional. Drop that logical item and let the next scan reconcile it
       // rather than guessing which sibling is newer by order or text length.
       conflictingMessages.add(messageId);
+    }
+    const orderedQuestions = messages.filter(message => message.role === 'user' && message.stable && Number.isInteger(message.order) &&
+      !conflictingMessages.has(message.messageId)).sort((a, b) => a.order - b.order);
+    for (const message of messages) if (message.role === 'assistant' && Number.isInteger(message.order)) {
+      const prior = orderedQuestions.filter(question => question.order < message.order);
+      const latestOrder = prior.at(-1)?.order;
+      const nearest = prior.filter(question => question.order === latestOrder);
+      const question = nearest.length === 1 ? nearest[0].rawMessageId || nearest[0].messageId : null;
+      if (!question || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(question)) continue;
+      if (message.responseToQuestionId && message.responseToQuestionId !== question) conflictingMessages.add(message.messageId);
+      else message.responseToQuestionId = question;
     }
     const keptMessages = messages.filter((message) => !conflictingMessages.has(message.messageId));
 
@@ -5963,8 +5980,10 @@
         // The shared native wrapper also contains old A/B history. Retaining C's
         // exact section cannot relabel that history, aggregate trace or old calls.
         const priorOwner = item.type === 'message' ? messagesReported.get(item.value.messageId)?.owner : null;
-        const localOwner = !acceptedQuestion || item.type === 'message' && currentMessages.has(item.value.messageId) &&
-          (!priorOwner || priorOwner === frameLocalOwner) ? frameLocalOwner : null;
+        const ownsCurrentQuestion = item.type !== 'message' || item.value.role !== 'assistant' || !item.value.responseToQuestionId ||
+          frameLocalOwner !== activeLocalTurnId || item.value.responseToQuestionId === openedUserMessageId;
+        const localOwner = ownsCurrentQuestion && (!acceptedQuestion || item.type === 'message' && currentMessages.has(item.value.messageId) &&
+          (!priorOwner || priorOwner === frameLocalOwner)) ? frameLocalOwner : null;
         if (item.type === 'artifact') {
           // ChatGPT only: current Gemini adapters expose no stable provider artifact/revision id.
           // Do not synthesize one from a Gemini DOM card, filename, code block, or visible label.
@@ -6132,7 +6151,7 @@
         // claim is different and fails closed instead of choosing either generation.
         const signature =
           `${state}\u0000${message.rawText}\u0000${message.renderedHtml}\u0000${owner}` +
-          `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}` +
+          `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}\u0000${message.responseToQuestionId || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
         if (refusedSettledOwner === turnId && index === answer.turns.length - 1 &&
             state === 'final' && exactTerminal && message.stable === true && turn.terminalState === 'complete' &&
@@ -6203,6 +6222,7 @@
           kind: 'assistant_message',
           messageId: message.messageId,
           providerMessageId: message.rawMessageId,
+          ...(message.responseToQuestionId ? { responseToQuestionId: message.responseToQuestionId } : {}),
           ...(message.resolvedModel ? { resolvedModel: message.resolvedModel } : {}),
           ...(message.references ? { references: message.references } : {}),
           ...(message.createTime ? { authoredAt: message.createTime } : {}),
@@ -6234,7 +6254,7 @@
       // The provider's outline of this turn's rounds, for the timeline only. It needs a local turn
       // to be filed under, so an unowned historical section sends none; an unchanged outline sends
       // nothing, and a settled turn read after a reload refreshes the outline its recaps came late to.
-      if (frameLocalOwner && !acceptedQuestion && turn.trace) {
+      if (frameLocalOwner && !acceptedQuestion && turn.trace && (turn.messages || []).filter(message => message.role === 'user').length <= 1) {
         const localOwner = frameLocalOwner;
         if (index === activeTurnIndex && generating) {
           const now = Date.now();

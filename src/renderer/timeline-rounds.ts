@@ -321,6 +321,24 @@ function shareOut(parts: RoundPart[], runOf: ReadonlyMap<string, number>, count:
  */
 export function structureTimeline(rows: readonly FlowRow[], traces: Readonly<Record<string, TurnTrace>>, working: boolean,
   liveTurnId?: string | null): RoundPart[] {
+  // A retained aggregate outline can contain an earlier Steer's public paragraph.
+  // Exact native IDs now owned by a different recorded turn must not render twice.
+  const nativeOwners = new Map<string, Set<string>>();
+  const turnAgents = new Map<string, string>();
+  for (const row of rows) {
+    const event = row.event;
+    if (event?.turnId && !turnAgents.has(event.turnId)) turnAgents.set(event.turnId, event.agent ?? '');
+    if (event?.kind !== 'assistant_message' || !event.turnId) continue;
+    for (const id of [event.messageId, event.providerMessageId]) if (id) {
+      const key = `${event.agent ?? ''}\u0000${id}`;
+      const owners = nativeOwners.get(key) ?? new Set<string>(); owners.add(event.turnId); nativeOwners.set(key, owners);
+    }
+  }
+  traces = Object.fromEntries(Object.entries(traces).map(([turn, trace]) => {
+    const agent = turnAgents.get(turn) ?? '';
+    return [turn, trace.filter(item => item.kind !== 'say' || !item.id || !nativeOwners.has(`${agent}\u0000${item.id}`) ||
+      nativeOwners.get(`${agent}\u0000${item.id}`)!.has(turn))];
+  }));
   const out: RoundPart[] = [];
   const runs: Array<{ start: number; rows: FlowRow[] }> = [];
   let current: FlowRow[] | null = null;

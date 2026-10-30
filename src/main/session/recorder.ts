@@ -1808,6 +1808,8 @@ export interface ChatObservation {
   messageId?: string;
   /** Raw public provider message UUID, retained as evidence, never used to guess ownership. */
   providerMessageId?: string;
+  /** Exact preceding public native question in the same ordered provider capture. */
+  responseToQuestionId?: string;
   /** Server-reported model of an assistant reply; see SessionEvent.resolvedModel. */
   resolvedModel?: string;
   /** Sources an assistant reply cites inline; see SessionEvent.references. */
@@ -2208,6 +2210,7 @@ async function recordSupersededMessages(
           messageId: item.messageId,
           state,
           ...(item.providerMessageId ? { providerMessageId: item.providerMessageId } : {}),
+          ...(item.responseToQuestionId ? { responseToQuestionId: item.responseToQuestionId } : {}),
           ...(item.resolvedModel ? { resolvedModel: item.resolvedModel } : {}),
           ...(item.references ? { references: item.references } : {}),
           final: state === 'final'
@@ -2394,6 +2397,7 @@ async function recordChatObservationsNow(
           state,
           final: state === 'final',
           ...(item.providerMessageId ? { providerMessageId: item.providerMessageId } : {}),
+          ...(item.responseToQuestionId ? { responseToQuestionId: item.responseToQuestionId } : {}),
           ...(item.resolvedModel ? { resolvedModel: item.resolvedModel } : {}),
           ...(item.references ? { references: item.references } : {}),
           ...(goalEligible && state === 'final' ? { goalEligible: true } : {})

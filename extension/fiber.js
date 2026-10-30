@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 35;
+  const VERSION = 36;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -644,6 +644,7 @@
     const logicalIds = new Set();
     const thoughtParents = new Map();
     if (!Array.isArray(messages)) return out;
+    let responseToQuestionId = null;
     const terminalId = turnEndMessageId(messages);
     for (const candidate of messages) {
       if (thoughtMessage(candidate)) thoughtParents.set(str(candidate.id), candidate);
@@ -653,6 +654,7 @@
       const message = messages[index];
       if (!message || typeof message !== 'object') continue;
       const author = message.author;
+      if (author?.role === 'user' && !hiddenMessage(message)) responseToQuestionId = str(message.id);
       if (!author || author.role !== 'assistant') continue;
       // ChatGPT visually hides public preambles even while their text still grows.
       // That presentation flag must not freeze or discard these typed public updates.
@@ -720,6 +722,7 @@
       out.push({
         id,
         messageId: logicalId,
+        ...(responseToQuestionId ? { responseToQuestionId } : {}),
         role: 'assistant',
         stable,
         rawText,
@@ -1334,6 +1337,7 @@
         stable: assistantCandidates[c].stable,
         order: assistantCandidates[c].order,
         createTime: assistantCandidates[c].createTime,
+        ...(assistantCandidates[c].responseToQuestionId ? { responseToQuestionId: assistantCandidates[c].responseToQuestionId } : {}),
         ...(assistantCandidates[c].resolvedModel ? { resolvedModel: assistantCandidates[c].resolvedModel } : {}),
         ...(references ? { references } : {}),
         rawText: assistantCandidates[c].rawText,
@@ -3081,7 +3085,13 @@
     const selected = state ? state.choices.find(choice => choice.bucket === state.currentBucket && choice.available)
       : (node && node === fallback ? closedPickerSelection(node) : null);
     const provenTrigger = identified?.node || (selected && node === fallback ? fallback : null);
+    const activationOwner = provenTrigger || (fallback && !fallback.matches(reported) ? fallback : null);
     for (const trigger of triggers) {
+      const props = trigger === activationOwner ? fiberOf(trigger)?.memoizedProps : null;
+      const activation = typeof props?.onPointerDown === 'function' ? 'pointerdown' : typeof props?.onMouseDown === 'function' ? 'mousedown'
+        : typeof props?.onClick === 'function' ? 'click' : typeof props?.onKeyDown === 'function' ? 'keydown' : null;
+      if (!activation) trigger.removeAttribute('data-clf-picker-activation');
+      else if (trigger.getAttribute('data-clf-picker-activation') !== activation) trigger.setAttribute('data-clf-picker-activation', activation);
       if (trigger !== provenTrigger) trigger.removeAttribute('data-clf-picker-route');
       else if (trigger.getAttribute('data-clf-picker-route') !== location.pathname) trigger.setAttribute('data-clf-picker-route', location.pathname);
       if (trigger !== node) for (const attribute of ['data-clf-selected-model', 'data-clf-selected-effort', 'data-clf-selected-route', 'data-clf-selected-surface']) trigger.removeAttribute(attribute);
