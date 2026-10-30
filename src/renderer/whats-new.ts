@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.2': {
+    lead: () => t('Keep your existing setup when updating OneCode.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Reliable Linux relaunch'), text: () => t('Opening the shortcut joins the running app without changing update rollback state. Linux window grouping follows the installed launcher.') },
+      { icon: 'i-gear', title: () => t('Recover saved setup'), text: () => t('Recover validated settings lost when an older application reset them, including your browser and provider. Later access changes stay intact.') },
+      { icon: 'i-chat', title: () => t('Keep existing connectors'), text: () => t('Saved connector use remains verified after restart. An update does not require deleting and adding your provider connector again.') }
+    ]
+  },
   '0.8.1': {
     lead: () => t('Keep existing chats connected and bring native diagrams into your workspace.'),
     highlights: [

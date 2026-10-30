@@ -137,6 +137,8 @@ import { editContextMenuTemplate } from './edit-context-menu.js';
 import { observeWindowPresentation } from './window-presentation.js';
 import { showConnectionLossNotice } from './connection-loss-notice.js';
 import { repairWindowsShortcuts } from './windows-shortcuts.js';
+import { repairLinuxShortcuts } from './linux/shortcuts.js';
+import { currentAppImageIdentity, installationKind } from './installation.js';
 import { APP_ID, PRODUCT_NAME } from './app-identity.js';
 import { confirmActiveApplicationLayer } from './application-resources.js';
 
@@ -166,7 +168,7 @@ try {
   const existing = existingInstalledProfile(profileOptions);
   if (existing !== profileOptions.current) { app.setPath('userData', existing); app.setPath('sessionData', existing); }
 } catch (error) { profileMigrationError = (error as Error).message; }
-let hasSingleInstanceLock = app.requestSingleInstanceLock();
+let hasSingleInstanceLock = app.hasSingleInstanceLock() || app.requestSingleInstanceLock();
 if (hasSingleInstanceLock) {
   const previous = app.getPath('userData');
   try {
@@ -464,6 +466,13 @@ void app.whenReady().then(async () => {
   startRuntimeHealth();
   const userData = app.getPath('userData');
   initLogFile(path.join(userData, 'app.log'));
+  if (process.platform === 'linux' && app.isPackaged) {
+    const kind = installationKind(), executable = kind === 'appimage' ? currentAppImageIdentity()?.target : kind === 'deb' ? process.execPath : null;
+    if (executable) {
+      try { await repairLinuxShortcuts(executable); }
+      catch { logWarn('Linux launcher identity could not be updated; existing launchers were retained.'); }
+    }
+  }
   if (profileMigrationError) logWarn(`Installation data migration was not activated; existing profile retained: ${profileMigrationError}`);
   if (process.platform === 'win32' && app.isPackaged) {
     try { repairWindowsShortcuts(shell, { appData: app.getPath('appData'), desktop: app.getPath('desktop'), executable: process.execPath, resources: process.resourcesPath }); }

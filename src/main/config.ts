@@ -44,8 +44,9 @@ import {
   SUPERSEDED_GOAL_SYSTEM_PROMPTS
 } from '../shared/goal.js';
 import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, HANDOFF_LENGTHS, MAX_HANDOFF_PROMPT_CHARS } from '../shared/handoff.js';
-import { logError } from './logger.js';
+import { logError, logInfo } from './logger.js';
 import { APP_VERSION } from './version.js';
+import { recoverDowngradedSetup } from './setup-recovery.js';
 import { RESERVED_ROOT_NAMES } from './sandbox.js';
 import { capabilitiesForPlatform } from './platform.js';
 import {
@@ -349,6 +350,7 @@ const configSchema = z.object({
     language: z.enum(UI_LANGUAGES).optional(),
     // The version this install last started as; What's New shows once per real update (#1172).
     lastSeenVersion: z.string().trim().min(1).max(40).optional().catch(undefined),
+    setupRecoveryBackup: z.string().regex(/^[a-f0-9]{64}$/).optional().catch(undefined),
     browserPreferences: z.object({ overwrite: z.boolean(), durations: z.boolean() }).strict().optional(),
     cosBrowserTrayHint: z.boolean().optional(),
     finishTool: z.boolean().optional(),
@@ -719,6 +721,18 @@ export async function loadConfig(): Promise<Config> {
       recovered = true;
     } else {
       current = adoptCurrentGoalPrompt(adoptWiderWindow(adoptAutoCompaction(recalibrateTokens(parsed.data))));
+      try {
+        const restored = await recoverDowngradedSetup(configPath, current, conservativeRecoveryConfig(), value => {
+          const result = configSchema.safeParse(value); return result.success ? result.data : null;
+        }, APP_VERSION);
+        if (restored) {
+          // Preserve both sides before publishing a recovered setup. Credentials,
+          // connector proof and all other installation state remain with their owners.
+          await fs.copyFile(configPath, `${configPath}.before-setup-recovery-${Date.now()}`);
+          await persistConfig(restored.config);
+          logInfo(`Restored saved setup after an older application reset settings; source backup: ${restored.backup}`);
+        }
+      } catch (error) { logError(`Saved setup recovery was unavailable: ${(error as Error).message}`); }
       // Duplicate root names would make a virtual path ambiguous.
       const seen = new Set<string>();
       current.roots = current.roots.filter((r) => {

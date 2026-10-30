@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.2] — 2026-10-30
+
+Repair Linux duplicate-launch rollback before it can fall back to an older application and reset setup. Preserve desktop launcher identity, recover validated settings from proven downgrade resets, and recognize saved exact-route connector evidence after restart. Linux needs one complete package to replace its immutable bootstrap; Windows retains its compatible capsule path. See [release notes](docs/release-notes/v0.8.2.md) and [verification scope](docs/release-acceptance/v0.8.2.md).
+
 ## [0.8.1] — 2026-10-30
 
 Retain existing task identity through native refresh and reconnect, and reject historical completed footers as proof that a newer Gemini or Claude task ended. Capture exposed native inline diagrams, fit expanded charts within the screen, and preserve code blocks inside native lists and quotations. Show update bytes and verification/preparation phases, and distinguish Tailscale network waits from failed Funnel permission checks. Both platform builds retain compatible 0.5.9 bases. See [release notes](docs/release-notes/v0.8.1.md) and [verification scope](docs/release-acceptance/v0.8.1.md), including pending native acceptance.

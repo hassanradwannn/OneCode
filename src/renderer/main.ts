@@ -7,6 +7,7 @@ import { initProviderCopy, initProviderSettings } from './provider-settings.js';
 import { initRemoteSettings } from './remote-settings.js';
 import { providerCopy } from '../shared/provider-copy.js';
 import { initBrowserSetup } from './setup-browser.js';
+import { pluginCreated } from './connector-presence.js';
 import { settingsModelAffinity } from './chat-models.js';
 import { selectedBrowserConnected } from '../shared/browser-readiness.js';
 import { chatProviderLabel, chatProviderConnectionsUrl } from '../shared/chat-provider.js';
@@ -1844,7 +1845,7 @@ function apply(next: AppState): void {
   ui($('extensionStepChatGpt'), 'textContent', () => `Open ${providerName} in your browser`);
   ui($('openProviderBrowserLabel'), 'textContent', () => `Open ${providerName}`);
   ui($('signInProviderLabel'), 'textContent', () => `Sign in to ${providerName}`);
-  ui($('setupProviderConnectTitle'), 'textContent', () => `Add it in ${providerName}`);
+  ui($('setupProviderConnectTitle'), 'textContent', () => `Connect with ${providerName}`);
   ui($('setupProviderConnectLead'), 'textContent', () => `Paste the MCP server URL below. ${providerName} reads the app name, description and tools from this service.`);
   ui($('setupProviderPluginsOpenLabel'), 'textContent', () => `Open ${providerName} connections`);
   $<HTMLButtonElement>('setupProviderPluginsOpen').dataset.link = chatProviderConnectionsUrl(provider);
@@ -1999,8 +2000,8 @@ function apply(next: AppState): void {
           ? // One connector working is not the whole setup. Naming the missing one is the
             // difference between "something is off" and knowing what to go and create.
             providerT(unverified.length === 1
-              ? "Gemini ran a tool {0}, but {1} has never been called — create it in Gemini to use it."
-              : "Gemini ran a tool {0}, but {1} have never been called — create them in Gemini to use them.",
+              ? "Gemini ran a tool {0}, but {1} is not verified. Use the existing connector if already added; add it only if missing."
+              : "Gemini ran a tool {0}, but {1} are not verified. Use existing connectors if already added; add them only if missing.",
             [ago(ranAt), new Intl.ListFormat(currentLanguage(), { type: 'conjunction' })
               .format(unverified.map((surface) => `“${surface.chatgptName || surface.connectorName}”`))])
           : providerT("Gemini ran a tool {0} — the whole chain works.", [ago(ranAt)]));
@@ -2211,7 +2212,7 @@ function connectorCards(next: AppState): HTMLElement[] {
         lastRequestAt === null
           ? pluginCreated(surface)
             ? el('p', 'hint', () => providerT("Added in Gemini. Its tools have not run yet."))
-            : el('p', 'hint is-warn', () => providerT("Not created in Gemini yet — Gemini has never called this plugin."))
+            : el('p', 'hint', () => providerT("Not verified yet. If already added in Gemini, keep the existing connector and use it; add it only if missing."))
           : el(
               'p',
               'hint',
@@ -2396,11 +2397,6 @@ function withEvidence(surface: SurfaceStatus): SurfaceStatus {
     lastRequestAt: surface.lastRequestAt ?? surface.proof?.requestAt ?? null,
     lastToolCallAt: surface.lastToolCallAt ?? surface.proof?.toolCallAt ?? null
   };
-}
-
-/** Whether this connector's plugin exists in Gemini: Gemini reached it, or Gemini listed it. */
-function pluginCreated(surface: SurfaceStatus): boolean {
-  return surface.lastRequestAt !== null || (surface.proof?.installedAt ?? null) !== null;
 }
 
 /** Shows Setup on one step, out of the finished summary if need be, and brings it into view. */

@@ -128,6 +128,7 @@ const appDataDirectory = (): string => {
 
 app.setName(PRODUCT_NAME);
 app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.development`);
+if (process.platform === 'linux') app.setDesktopName(BUILD_CHANNEL === 'beta' ? `${APP_ID}.desktop` : APP_ID);
 app.commandLine.appendSwitch('force-renderer-accessibility');
 app.setPath('userData', appDataDirectory());
 
@@ -226,10 +227,17 @@ function activeLinuxLayer(): { root: string; appAsar: string; version: string; r
   return { root, appAsar, version: active.version, runtime: active.runtime };
 }
 
-const layer = activeLinuxLayer();
-if (layer) {
-  (globalThis as typeof globalThis & { __onecodeApplicationLayer?: typeof layer }).__onecodeApplicationLayer = layer;
-  requireHere(path.join(layer.appAsar, 'out', 'main', 'index.js'));
+// A shortcut activation must reach the existing instance before touching shared
+// rollback state. A secondary formerly created/recovered launching.json before
+// index.js acquired its lock, falsely rolling a healthy updated app back.
+if (process.platform === 'linux' && !app.requestSingleInstanceLock()) {
+  app.quit();
 } else {
-  requireHere(baseEntry);
+  const layer = activeLinuxLayer();
+  if (layer) {
+    (globalThis as typeof globalThis & { __onecodeApplicationLayer?: typeof layer }).__onecodeApplicationLayer = layer;
+    requireHere(path.join(layer.appAsar, 'out', 'main', 'index.js'));
+  } else {
+    requireHere(baseEntry);
+  }
 }

@@ -175,6 +175,8 @@ export interface UiPrefs {
   language?: import('./ui-language.js').UiLanguage;
   /** The version this install last started as; What's New shows once per real update (#1172). */
   lastSeenVersion?: string;
+    /** One-time recovery of a validated pre-downgrade settings backup. */
+    setupRecoveryBackup?: string;
   /**
    * The extension's own preferences as it last reported them stored. The app keeps them so a
    * reinstalled extension, which starts with empty storage under a new id, gets them back.
