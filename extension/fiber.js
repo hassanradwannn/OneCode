@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 36;
+  const VERSION = 37;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2238,6 +2238,20 @@
       const node = id && Object.getOwnPropertyDescriptor(mapping, id)?.value;
       return node?.id === id && node.message?.id === id ? node.message : null;
     };
+    // A typed aggregate can retain a public preamble from before a Steer while
+    // omitting that earlier user from its messages. Follow this selected source's
+    // exact native parent chain; intermediate nodes contribute identity only.
+    const publicQuestionOf = sourceId => {
+      const seen = new Set(); let id = sourceId;
+      for (let at = 0; at < MAX_ROWS && typeof id === 'string' && id.length <= MAX_TEXT && !seen.has(id); at++) {
+        const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
+        if (node?.id !== id || message?.id !== id) return null;
+        seen.add(id);
+        if (message.author?.role === 'user') return !hiddenMessage(message) && !analysisMessage(message) ? id : null;
+        id = node.parent;
+      }
+      return null;
+    };
     // Native dynamic-tool-call.callId explicitly names the functions.exec
     // invocation (811613 / L). Its source can disappear from messageIds when
     // paired results replace sourceMessage. Read metadata, never its code.
@@ -2286,6 +2300,7 @@
       out.push({ id, create_time: num(message.create_time), metadata: { request_id: request },
         ...(typeof thought === 'string' ? { thought: budgetedText(thought, publicBudget, MAX_RENDERED_TEXT) } : {}),
         ...(preamble ? { preamble: budgetedText(preamble, publicBudget, MAX_RENDERED_TEXT),
+          responseToQuestionId: publicQuestionOf(id),
           publicIdentity: { parent_id: str(message.metadata?.parent_id), working_turn_id: str(message.metadata?.working_turn_id),
             turn_exchange_id: str(message.metadata?.turn_exchange_id) } } : {}) });
     }
@@ -2333,9 +2348,16 @@
       const publicText = kind === 'thought' ? budgetedText(visibleText(text), budget, 300) : authored?.rawText;
       if (!publicText) continue;
       if (kind === 'thought') events.push({ messageId: source.id, label: publicText, order: order.get(source.id) });
-      else if (!rendered.some(message => message.rawMessageId === source.id)) rendered.push({ messageId: authored.messageId,
-        rawMessageId: source.id, role: 'assistant', stable: authored.stable, rawText: publicText, renderedHtml: '',
-        order: order.get(source.id), createTime: authoredTime(source) });
+      else {
+        const priorAt = rendered.findIndex(message => message.rawMessageId === source.id), prior = rendered[priorAt];
+        if (prior && prior.responseToQuestionId && source.responseToQuestionId && prior.responseToQuestionId !== source.responseToQuestionId)
+          rendered.splice(priorAt, 1);
+        else if (prior && source.responseToQuestionId) prior.responseToQuestionId = source.responseToQuestionId;
+        else if (!prior) rendered.push({ messageId: authored.messageId,
+          rawMessageId: source.id, role: 'assistant', stable: authored.stable, rawText: publicText, renderedHtml: '',
+          ...(source.responseToQuestionId ? { responseToQuestionId: source.responseToQuestionId } : {}),
+          order: order.get(source.id), createTime: authoredTime(source) });
+      }
       if (kind === 'preamble') {
         // Native ChatGptMarkdown is owned by the exact typed reasoning item.
         // Text equality above selects public content; only this object relation
