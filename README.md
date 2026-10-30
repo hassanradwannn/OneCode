@@ -2,7 +2,7 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.8.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.1)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.8.2](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.2)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
@@ -10,7 +10,20 @@ The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, 
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
 
-## What's new in 0.8.1
+## What's new in 0.8.2
+
+- Linux shortcut activation joins the running application before touching update rollback state, preventing a false rollback to an older application and a setup reset.
+- Recover saved browser/provider preferences from a valid backup when native logs prove an older application reset a newer setup. Preserve current settings first and retain later access changes.
+- Recognize saved exact-route provider connector evidence after restart. Existing connectors do not need to be deleted and added again merely because OneCode updated.
+- Keep Linux launcher/window identity and the existing dock position associated with the same verified installation.
+
+**Linux 0.8.2 needs one complete package update** to replace the immutable bootstrap. AppImage users can download it through the internal updater; full DEB/native replacement remains package-manager-owned. Compatible Windows installations retain the smaller application capsule and verified 0.5.9 base.
+
+See [0.8.2 release notes](docs/release-notes/v0.8.2.md) and [verification scope](docs/release-acceptance/v0.8.2.md). Both platform builds and payload audits passed. Production Ubuntu remains unchanged for manual installation and verification.
+
+## Earlier releases
+
+### 0.8.1
 
 - Retain the existing question and generation through reconnect and native-tab refresh, without replaying an uncertain Send.
 - Require the current native question and answer before a completed Gemini or Claude response can end the task; historical footers cannot close a newer task while its command runs.
@@ -23,7 +36,6 @@ See [0.8.1 release notes](docs/release-notes/v0.8.1.md) and [verification scope]
 
 The preceding [0.7.4 release](docs/release-notes/v0.7.4.md) supports both ChatGPT picker layouts, opens new chats in Chat by default, retains explicit Work choices, adds Gemini Thinking levels and reduces avoidable browser preparation delays. These repairs are included.
 
-## Earlier releases
 
 ### 0.8.0
 
@@ -155,7 +167,7 @@ Component previews support the bundled React, Tailwind, Lucide and Recharts libr
 
 ## Install
 
-1. **Windows x64:** run the [0.8.1 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Setup-x64.exe). **Linux x64:** download the [0.8.1 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Linux-x64.AppImage) or [0.8.1 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.1/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
+1. **Windows x64:** run the [0.8.2 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Setup-x64.exe). **Linux x64:** download the [0.8.2 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Linux-x64.AppImage) or [0.8.2 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.2/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** in Chrome, Edge or Brave using Setup's instructions. Firefox detection/staging does not supply a signed package; see its [availability status](docs/WINDOWS-SETUP.md#firefox). The optional OneCode browser uses the same adapters.
@@ -198,7 +210,7 @@ Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses t
 
 OneCode's local session, each queued input and the provider's native conversation have separate identities. New chats do not borrow another task's UUID or tool authority, and parallel chats retain separate claims, documents and turns. Compact & Resume keeps the task family and saved results while binding its successor through a fresh exact receipt. See [browser conversations and local sessions](docs/PROVIDER-SESSIONS.md).
 
-Developers can follow the current release in the [changelog](CHANGELOG.md), [0.8.1 release notes](docs/release-notes/v0.8.1.md), [verification record](docs/release-acceptance/v0.8.1.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
+Developers can follow the current release in the [changelog](CHANGELOG.md), [0.8.2 release notes](docs/release-notes/v0.8.2.md), [verification record](docs/release-acceptance/v0.8.2.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 
