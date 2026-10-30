@@ -102,10 +102,7 @@
               aria-label="Not connected"
               title="Not connected"
             >
-              <span class="sidebar-connection-brand" aria-hidden="true">
-                <svg class="ico" viewBox="0 0 24 24"><use href="#i-mark" /></svg>
-                <span class="sidebar-connection-dot"></span>
-              </span>
+              <span class="sidebar-connection-dot" aria-hidden="true"></span>
               <span class="sidebar-connection-label" aria-hidden="true"><span id="sidebarConnectionLabel">Connect</span></span>
             </button>
             <span class="sr-only" id="connectionAnnounce" role="status" aria-live="polite"></span>
@@ -318,6 +315,7 @@
           </section>
           <div class="plugin-refresh-guide"><p>Ask <span id="pluginsProviderName">your provider</span> to list installed integrations through <strong id="pluginsRefreshName" translate="no">OneCode Core</strong>. Its plugins tool discovers current tools immediately in existing chats.</p><button class="btn" id="pluginsOpenGemini" type="button">Open provider connections</button></div>
           <div class="plugin-section-head"><h2>Installed <span id="pluginsCount" class="plugin-count">Loading…</span></h2><button class="btn" id="pluginsRefresh" type="button">Check local status</button></div>
+          <div id="pluginsInstallStatus" class="plugin-install-status" data-plugin-install-status role="status" aria-live="polite" hidden></div>
           <div id="pluginsInstalled" aria-live="polite"></div>
           <div class="plugin-section-head"><h2>Explore plugins</h2><span class="muted">Made for your workflow</span></div>
           <div id="pluginsExplore" class="plugin-directory"></div>

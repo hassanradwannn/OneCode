@@ -28,8 +28,9 @@ export const pluginCatalog: PluginCatalogEntry[] = [
     tools: ['get_scene_info', 'get_object_info', 'get_viewport_screenshot', 'execute_blender_code'],
     instructions: [
       'Install this plugin. OneCode provides uv and Python automatically if they are missing.',
-      'Then install the Blender addon: run uvx blender-mcp==1.9.1 install-addon in a terminal (needs uv on your PATH), or install addon.py from the source repository.',
-      'In Blender: Preferences → Add-ons → enable Interface: MCP for Blender. Press N in the 3D viewport, open MCP for Blender, and click Start MCP Server.',
+      'Open this installed plugin and choose Download Blender add-on. Save the matching Python file supplied with the plugin.',
+      'In Blender: Edit → Preferences → Add-ons → Install from Disk (or Install…), choose the downloaded blender_mcp.py file, and enable Interface: MCP for Blender.',
+      'In the Blender 3D viewport, press N, open MCP for Blender, and click Start MCP Server. Keep Blender open.',
       'Restart this plugin. Ready requires tool discovery and a successful read-only scene probe.',
     ],
   },

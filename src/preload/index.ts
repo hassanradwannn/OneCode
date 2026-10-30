@@ -142,6 +142,7 @@ const api = {
   pluginsSetEnabled: (id: string, enabled: boolean) => call<PluginSnapshot>('plugins:enabled', { id, enabled }),
   pluginsSetToolEnabled: (id: string, name: string, enabled: boolean) => call<PluginSnapshot>('plugins:tool', { id, name, enabled }),
   pluginsImportBundle: () => call<string | null>('plugins:importBundle'),
+  pluginsExportCompanion: (id: string) => call<string | null>('plugins:exportCompanion', { id }),
   onPluginsChanged: (listener: (snapshot: PluginSnapshot) => void): (() => void) => {
     const wrapped = (_event: unknown, snapshot: PluginSnapshot): void => listener(snapshot);
     ipcRenderer.on('plugins:changed', wrapped);

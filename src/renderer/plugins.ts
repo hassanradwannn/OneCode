@@ -1,7 +1,7 @@
 import { providerText } from './provider-text.js';
 import { ui, t } from './i18n.js';
 import type { AppState } from '../shared/types.js';
-import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
+import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource, PluginInstallRequest } from '../shared/plugins.js';
 import { $, disclosureChevron, el, run, toast } from './dom.js';
 import { DEFAULT_CHAT_PROVIDER, chatProviderConnectionsUrl, type ChatProvider } from '../shared/chat-provider.js';
 
@@ -13,11 +13,86 @@ function button(label: string | (() => string), action: () => void | Promise<voi
   const node = el('button', `btn${primary ? ' btn-solid' : ''}`, label) as HTMLButtonElement;
   node.type = 'button';
   node.addEventListener('click', async () => {
+    if (node.disabled) return;
     node.disabled = true;
     try { await action(); } catch (error) { toast(error instanceof Error ? error.message : t('Plugin operation failed')); }
     finally { node.disabled = false; }
   });
   return node;
+}
+interface Installation {
+  key: string;
+  name: string;
+  state: 'installing' | 'success' | 'error';
+  detail?: string;
+  plugin?: PluginView;
+}
+let installation: Installation | undefined;
+const installLabels = new WeakMap<HTMLButtonElement, () => string>();
+function paintInstallation(): void {
+  const state = installation;
+  for (const node of document.querySelectorAll<HTMLButtonElement>('[data-plugin-install]')) {
+    node.disabled = state?.state === 'installing';
+    node.setAttribute('aria-busy', String(state?.state === 'installing' && state.key === node.dataset.pluginInstall));
+    ui(node, 'textContent', () => state?.state === 'installing' && state.key === node.dataset.pluginInstall
+      ? t('Installing…') : installLabels.get(node)!());
+  }
+  const message = () => !state ? '' : state.state === 'installing' ? t('Installing {0}…', [state.name])
+    : state.state === 'error' ? t('Could not install {0}. {1}', [state.name, state.detail ?? t('Plugin operation failed')])
+    : state.plugin?.status === 'needs-auth' ? t('{0} installed. Sign in to finish connecting.', [state.name])
+    : state.plugin?.status === 'error' ? t('{0} installed, but could not connect. Open the plugin for details.', [state.name])
+    : state.plugin?.status === 'ready' && state.plugin.tools.length ? t('{0} installed and ready.', [state.name])
+    : t('{0} installed. Check its connection in the plugin details.', [state.name]);
+  for (const region of document.querySelectorAll<HTMLElement>('[data-plugin-install-status]')) {
+    region.hidden = !state;
+    region.dataset.state = state?.state ?? '';
+    region.replaceChildren();
+    if (!state) continue;
+    if (state.state === 'installing') {
+      const progress = document.createElement('progress');
+      ui(progress, 'aria-label', () => t('Installing {0}', [state.name]));
+      region.append(progress);
+    }
+    region.append(el('span', '', message));
+    if (state.state !== 'installing' && region.id === 'pluginsInstallStatus') region.append(button(() => t('Dismiss'), () => {
+      installation = undefined; paintInstallation();
+    }));
+  }
+}
+function installButton(label: () => string, key: string, action: () => Promise<void>): HTMLButtonElement {
+  const node = button(label, action, true);
+  node.dataset.pluginInstall = key; installLabels.set(node, label);
+  node.disabled = installation?.state === 'installing';
+  return node;
+}
+function installationStatus(body: HTMLElement): void {
+  const region = el('div', 'plugin-install-status');
+  region.dataset.pluginInstallStatus = ''; region.setAttribute('role', 'status'); region.setAttribute('aria-live', 'polite');
+  body.append(region);
+}
+async function installPlugin(key: string, name: string, request: PluginInstallRequest): Promise<boolean> {
+  // The existing manager serializes installations. Keep one visible UI operation
+  // through dialog closure/reopening instead of enqueuing a second install.
+  if (installation?.state === 'installing') return false;
+  const before = new Set(snapshot.plugins.map(plugin => plugin.id));
+  const ownEpoch = ++epoch;
+  const own: Installation = { key, name, state: 'installing' };
+  installation = own; paintInstallation();
+  try {
+    const reply = await window.api.pluginsInstall(request);
+    if (!reply.ok) throw new Error(t(reply.error));
+    own.plugin = reply.data.plugins.find(plugin => !before.has(plugin.id));
+    if (ownEpoch === epoch) snapshot = reply.data;
+    else await refreshPlugins();
+    own.name = own.plugin?.name ?? name;
+    own.state = 'success';
+    renderInstalled();
+    toast(own.plugin?.status === 'needs-auth' ? t('{0} installed. Sign in to finish connecting.', [own.name]) : t('{0} installed.', [own.name]));
+    return true;
+  } catch (error) {
+    own.state = 'error'; own.detail = error instanceof Error ? error.message : t('Plugin operation failed');
+    return false;
+  } finally { paintInstallation(); }
 }
 /**
  * A disclosure headline with the app's chevron, the only sign it opens once the native marker is
@@ -143,6 +218,7 @@ function renderInstalled(): void {
   }
   if (snapshot.plugins.length && !list.children.length) list.append(el('p', 'plugin-no-results muted', () => t("No installed plugins match your search.")));
   renderCatalog($('pluginsExplore'), query);
+  paintInstallation();
   const catalog = document.querySelector<HTMLElement>('#pluginDialog [data-plugin-catalog]');
   if (catalog) renderCatalog(catalog);
   // Keep an open detail view on the same plugin after a tool or status change.
@@ -200,6 +276,24 @@ function showPlugin(plugin: PluginView): void {
   const configure = button(() => t("Configure Plugin"), () => showConfigure(plugin), true); configure.classList.add('plugin-configure');
   intro.append(el('p', '', () => recipe ? t(recipe.description) : t("Your own MCP server, available in your conversations.")), configure);
   hero.append(art(recipe?.icon ?? plugin.catalogId ?? 'custom'), intro); body.append(hero);
+  if (recipe?.instructions.length) {
+    const setup = el('section', 'plugin-setup'); setup.append(el('h3', '', () => t('Finish setup')));
+    if (recipe.id === 'blender') {
+      const saved = el('p', 'hint'); saved.setAttribute('role', 'status');
+      const download = button(() => t('Download Blender add-on'), async () => {
+        ui(download, 'textContent', () => t('Saving add-on…'));
+        try {
+          const file = await run(window.api.pluginsExportCompanion(plugin.id));
+          if (file) ui(saved, 'textContent', () => t('Add-on saved to {0}. Install this file in Blender, then follow the steps below.', [file]));
+        } finally { ui(download, 'textContent', () => t('Download Blender add-on')); }
+      }, true);
+      setup.append(download, saved);
+    }
+    const steps = el('ol', 'plugin-steps');
+    for (const step of recipe.instructions) steps.append(el('li', '', () => t(step)));
+    setup.append(steps, button(() => t('Check connection'), async () => { await mutate(window.api.pluginsRestart(plugin.id), false); }));
+    body.append(setup);
+  }
   const tools = el('section', 'plugin-detail-tools'); tools.dataset.pluginDetail = plugin.id; renderPluginTools(tools, plugin); body.append(tools);
   const about = document.createElement('details'); about.className = 'plugin-about'; about.append(disclosureSummary(() => t("About this plugin")));
   about.append(el('p', 'plugin-source', plugin.source.url ?? plugin.source.package ?? plugin.source.command ?? plugin.source.kind), el('p', 'muted', () => `${plugin.version || t("Custom version")} · ${plugin.license || t("License not supplied")}`), el('p', '', () => t("Runs while installed and enabled, including after reopening the app. Disable or uninstall it to stop its connection. Restart reconnects and refreshes its tools.")));
@@ -265,15 +359,17 @@ function showRecipe(recipe: PluginCatalogEntry): void {
   body.append(el('p', 'hint', () => remote
     ? t("{0}. Connect your account through the provider. Its plan and usage limits apply.", [recipe.license])
     : t("License: {0}. Installation downloads and runs third-party code as your OS user. “Ready” requires a successful connection and tool discovery.", [recipe.license])));
-  actions.append(button(() => remote ? t("Add connection") : t("Install and connect"), async () => {
+  installationStatus(body);
+  actions.append(installButton(() => remote ? t("Add connection") : t("Install and connect"), recipe.id, async () => {
     for (const item of recipe.fields) if (item.required && !values.get(item.key)!.value.trim()) { values.get(item.key)!.focus(); throw new Error(t("{0} is required.", [item.label])); }
     const config: Record<string,string> = {}; const credentials: Record<string,string> = {};
     for (const item of recipe.fields) (item.secret ? credentials : config)[item.key] = values.get(item.key)!.value;
-    if (await mutate(window.api.pluginsInstall({ catalogId: recipe.id, config, credentials }))) {
+    if (await installPlugin(recipe.id, recipe.name, { catalogId: recipe.id, config, credentials })) {
       box.close();
-      if (remote) { const installed = snapshot.plugins.find(plugin => plugin.catalogId === recipe.id); if (installed) showPlugin(installed); }
+      const installed = snapshot.plugins.find(plugin => plugin.catalogId === recipe.id); if (installed) showPlugin(installed);
     }
-  }, true), button(() => t("Back to plugins"), showCatalog));
+  }), button(() => t("Back to plugins"), showCatalog));
+  paintInstallation();
 }
 function showCustom(kind: PluginSource['kind'], path = ''): void {
   const { box, body } = dialog(() => t("Connect your MCP server")); const name = field(body, () => t("Display name"), t("My MCP server"));
@@ -291,19 +387,20 @@ function showCustom(kind: PluginSource['kind'], path = ''): void {
   const oauth = () => select.value === 'remote' && auth.value === 'oauth';
   const sync = () => { authLabel.hidden = select.value !== 'remote'; key.parentElement!.hidden = credential.parentElement!.hidden = oauth(); };
   select.addEventListener('change', sync); auth.addEventListener('change', sync); sync();
-  body.append(el('p', 'hint', () => t("Remote servers must support MCP Streamable HTTP. GitHub links require a known recipe or supported manifest. Local servers run outside the OneCode folder sandbox.")), button(() => t("Install and connect"), async () => {
+  body.append(el('p', 'hint', () => t("Remote servers must support MCP Streamable HTTP. GitHub links require a known recipe or supported manifest. Local servers run outside the OneCode folder sandbox.")), installButton(() => t("Install and connect"), 'custom', async () => {
     const selected = select.value as PluginSource['kind']; const value = location.value.trim(); if (!value) throw new Error(t("Enter the server location first."));
     const parsed: unknown = JSON.parse(args.value); if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) throw new Error(t("Arguments must be a JSON array of strings."));
     const source: PluginSource = { kind: selected, args: parsed };
     if (selected === 'remote' || selected === 'github') source.url = value; else if (selected === 'mcpb') source.path = value; else if (selected === 'command') source.command = value; else { source.package = value; if (version.value.trim()) source.version = version.value.trim(); }
     const signIn = oauth(); if (signIn) source.auth = 'oauth';
     const before = new Set(snapshot.plugins.map(plugin => plugin.id));
-    if (await mutate(window.api.pluginsInstall({ name: name.value, source, credentials: !signIn && key.value.trim() && credential.value ? { [key.value.trim()]: credential.value } : {} }))) {
+    if (await installPlugin('custom', name.value, { name: name.value, source, credentials: !signIn && key.value.trim() && credential.value ? { [key.value.trim()]: credential.value } : {} })) {
       box.close();
       // Like a catalog OAuth recipe: land on the new plugin, where its Sign in button is.
       const installed = signIn ? snapshot.plugins.find(plugin => !before.has(plugin.id)) : undefined; if (installed) showPlugin(installed);
     }
-  }, true));
+  }));
+  installationStatus(body); paintInstallation();
 }
 export function initPlugins(): void {
   $('pluginsAdd').addEventListener('click', showCatalog); $('pluginsRefresh').addEventListener('click', () => void refreshPlugins());

@@ -1,5 +1,6 @@
 import { app, dialog, shell, type BrowserWindow } from 'electron';
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { z } from 'zod';
 import { pluginManager } from './plugins/manager.js';
 import { refreshPluginPublication } from './connection.js';
@@ -49,6 +50,18 @@ export function registerPluginIpc(
   handle('plugins:tool', async payload => {
     const input = identity.extend({ name: z.string().min(1).max(256), enabled: z.boolean() }).strict().parse(payload);
     await pluginManager.setToolEnabled(input.id, input.name, input.enabled); return pluginManager.snapshot();
+  });
+  handle('plugins:exportCompanion', async payload => {
+    const { id } = identity.strict().parse(payload);
+    const companion = await pluginManager.companionFile(id);
+    const options = { title: 'Save Blender MCP add-on', defaultPath: path.join(app.getPath('downloads'), companion.filename),
+      filters: [{ name: 'Blender Python add-on', extensions: ['py'] }] };
+    const window = getWindow();
+    const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+    await fs.writeFile(result.filePath, companion.bytes);
+    shell.showItemInFolder(result.filePath);
+    return result.filePath;
   });
   handle('plugins:importBundle', async () => {
     const result = await dialog.showOpenDialog({ title: 'Import MCP bundle', properties: ['openFile'], filters: [{ name: 'MCP bundles', extensions: ['mcpb'] }] });

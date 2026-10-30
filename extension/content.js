@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 118;
+  const RECORDER_VERSION = 119;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -16084,7 +16084,10 @@
     // before binding the exact Chat composer used by the remaining inspection.
     const switchCurrent = () => current() && !generating && !CLF_DOM.generating() && !desktopInputBusy &&
       !CLF_DOM.hasComposerAttachments() && !composerHasDraft();
-    if (!await CLF_DOM.prepareChatModelSurface(switchCurrent) || !switchCurrent()) {
+    // This empty discovery helper is ours; select Chat before reading its catalog.
+    // Existing authored conversations retain their native mode and account affinity.
+    const catalogSurface = CLF_DOM.provider === 'chatgpt' && catalogHelper() ? 'chat' : undefined;
+    if (!await CLF_DOM.prepareChatModelSurface(switchCurrent, catalogSurface) || !switchCurrent()) {
       if (switchCurrent()) await ask({ type: 'model_catalog', nonce: message.nonce, models: null, error: 'picker_unavailable' });
       return false;
     }

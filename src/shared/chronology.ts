@@ -290,16 +290,35 @@ export function projectTimeline<T extends Chronological>(
   // Resolve from all canonical messages, including anchors/conflicts outside this
   // page. This neither coalesces sibling messages nor grants a lifecycle turnId.
   const responses = new Map<string, TimelineTurns[string] | null>();
+  const responseParents = new Map<string, Set<string>>();
+  const nativeQuestions = new Set<string>();
   const exchanges = new Map<string, GeminiExchange>();
   const recordedTurns = new Set(Object.keys(turns));
   for (const message of messages) {
     collectGeminiExchange(exchanges, message, recordedTurns);
-    if (!message.turnId) continue;
+    if (message.kind === 'user_message' && (message.source === 'app' || message.source === 'extension') && message.messageId)
+      nativeQuestions.add(`${message.agent ?? ''}\u0000${message.messageId.toLowerCase()}`);
     const key = assistantResponseKey(message);
     if (!key) continue;
+    const parent = message.messageId!.split(':')[1]!;
+    // The legacy assistant key starts with its native parent. ChatGPT can retain
+    // the working/exchange pair across Steers: that pair alone then spans several
+    // native questions and cannot move unowned prose back into the source turn.
+    if (!/^\d{13}$/.test(message.messageId!.split(':')[3]!)) {
+      const parents = responseParents.get(key) ?? new Set<string>();
+      parents.add(`${message.agent ?? ''}\u0000${parent.toLowerCase()}`);
+      responseParents.set(key, parents);
+    }
+    if (!message.turnId) continue;
     const boundary = turns[responseTurnId(turns, message.turnId)] ?? null;
     if (!responses.has(key)) responses.set(key, boundary);
     else if (!boundary || responses.get(key)?.origin !== boundary.origin) responses.set(key, null);
+  }
+  for (const [key, parents] of responseParents) {
+    const questions = [...parents].filter(parent => nativeQuestions.has(parent));
+    const boundary = responses.get(key);
+    if (questions.length > 1 || questions.length === 1 && boundary?.questionId &&
+        !questions[0]!.endsWith(`\u0000${boundary.questionId.toLowerCase()}`)) responses.set(key, null);
   }
   return entries.map(entry => {
     let boundary = entry.turnId ? turns[responseTurnId(turns, entry.turnId)] : undefined;

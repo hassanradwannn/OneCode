@@ -3148,6 +3148,13 @@ var CLF_DOM = (() => {
       }
       return panel;
     };
+    const ensureMotion = () => {
+      if (motion) return;
+      motion = document.createElement('style');
+      motion.textContent = `[data-clf-picker-motion="${motionToken}"]{animation:none!important}` +
+        '[role="menu"]:has(> [data-testid="composer-intelligence-picker-content"]),[role="dialog"]:has([data-testid="composer-intelligence-picker-content"]),[role="menu"]:has([data-model-picker-view]),[role="menu"][data-model-picker-view]{animation:none!important}';
+      document.head.append(motion);
+    };
     const openPicker = () => {
       const panel = ownMotion(picker());
       return panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : null;
@@ -3190,10 +3197,7 @@ var CLF_DOM = (() => {
         // that animation in a hidden window, retaining a closed picker and its
         // focus scope indefinitely. Suppress only this owned picker animation for
         // this operation; native state still closes/unmounts it and proves release.
-        motion = document.createElement('style');
-        motion.textContent = `[data-clf-picker-motion="${motionToken}"]{animation:none!important}` +
-          '[role="menu"]:has(> [data-testid="composer-intelligence-picker-content"]),[role="dialog"]:has([data-testid="composer-intelligence-picker-content"]),[role="menu"]:has([data-model-picker-view]),[role="menu"][data-model-picker-view]{animation:none!important}';
-        document.head.append(motion);
+        ensureMotion();
         // The read-only helper identifies the exact native owner when another menu
         // shares the composer. Never select by translated captions or button order.
         // A cold home editor mounts before its native Chat/Work picker. Workers
@@ -3203,7 +3207,13 @@ var CLF_DOM = (() => {
         if (!await prepareChatModelSurface(stillCurrent, modelSurface)) { failure(stillCurrent() ? 'chat-surface-unconfirmed' : 'page-changed'); return null; }
         // A retained exit-animation node is not an open native menu.
         if (!openPicker()) { const button = await readyTrigger();
-          if (!key(button, 'Enter')) { failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null; }
+          // Synthetic Enter does not produce a button's browser-default click.
+          // The current native picker opens on click; activate its exact observed
+          // trigger once, then require the owned panel. No second activation retry.
+          if (!button || !shown(button) || button.disabled || button.getAttribute('aria-disabled') === 'true' || !stillCurrent()) {
+            failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null;
+          }
+          button.focus(); button.click();
           if (!await wait(openPicker)) { failure(stillCurrent() ? 'picker-open-unconfirmed' : 'page-changed'); return null; }
         }
         const observed = await state();
@@ -3214,8 +3224,9 @@ var CLF_DOM = (() => {
       async close() {
         try {
         if (!stillCurrent()) return false;
+        if (!picker()) return true;
+        ensureMotion();
         const panel = ownMotion(picker());
-        if (!panel) return true;
         const dialog = panel.closest('[role="dialog"]'), active = document.activeElement;
         if (!shown(panel) && !shown(dialog)) return true;
         // Escape belongs inside the picker focus trap, not to its outside trigger.
@@ -3417,7 +3428,18 @@ var CLF_DOM = (() => {
     // selection authority or make a failed native proof successful.
     const report = reason => { if (!reported) { reported = true; try { failure(reason); } catch {} } };
     const refused = reason => { report(stillCurrent() ? reason : 'page-changed'); return false; };
-    const ui = modelPickerAccess(stillCurrent, report, modelSurface), original = await ui.open();
+    const ui = modelPickerAccess(stillCurrent, report, modelSurface);
+    // A reloaded native composer can expose its complete evaluated selection while
+    // its popup is not yet interactive. An exact available pair needs no menu
+    // mutation. Caption-only passive selection is deliberately insufficient here.
+    if (!await prepareChatModelSurface(stillCurrent, modelSurface) || !stillCurrent()) return refused('chat-surface-unconfirmed');
+    const observed = await readPickerState();
+    const already = observed?.choices.find(choice => choice.bucket === observed.currentBucket);
+    if (stillCurrent() && (!modelSurface || !observed?.nativeSurface || observed.nativeSurface === modelSurface) &&
+        already?.available && (already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
+      return await ui.close() && stillCurrent() || refused('picker-close-unconfirmed');
+    }
+    const original = await ui.open();
     if (!original) { await ui.close(); return refused('picker-unavailable'); }
     // Account-evaluated exact selection is already proof; visiting unrelated
     // versions can reset it or fail unnecessarily. Captions and denied choices

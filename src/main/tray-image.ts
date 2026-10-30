@@ -1,4 +1,5 @@
 import { deflateSync } from 'node:zlib';
+import { WINDOWS_TRAY_BRAND } from './tray-brand.js';
 
 export interface TrayRepresentation {
   /** Logical-to-physical pixel scale represented by this PNG. */
@@ -74,13 +75,13 @@ function edgeCoverage(distance: number, radius: number): number {
 /**
  * Pure RGBA raster used by the tray image factory and its tests.
  *
- * Windows keeps the old green/grey status dot. Linux gets the same familiar colored mark but
- * through a portable PNG rather than a platform-dependent raw bitmap. macOS intentionally uses
+ * Linux retains its colored status dot through a portable PNG. Windows uses the product artwork
+ * in trayImageSpec instead. macOS intentionally uses
  * only black + alpha, as required for menu-bar template images; disconnected is a ring so status
  * remains visible even though template images cannot carry semantic color.
  */
 export function trayRgba(
-  platform: NodeJS.Platform,
+  platform: Exclude<NodeJS.Platform, 'win32'>,
   running: boolean,
   scaleFactor: 1 | 2
 ): { size: number; rgba: Buffer } {
@@ -116,6 +117,8 @@ export function trayImageSpec(
   running: boolean
 ): TrayImageSpec {
   const representations = ([1, 2] as const).map((scaleFactor) => {
+    // Windows status stays in the tooltip/menu; the notification area identifies the app.
+    if (platform === 'win32') return { scaleFactor, png: Buffer.from(WINDOWS_TRAY_BRAND[scaleFactor], 'base64') };
     const { size, rgba } = trayRgba(platform, running, scaleFactor);
     return { scaleFactor, png: encodePng(size, rgba) };
   }) as [TrayRepresentation, TrayRepresentation];

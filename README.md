@@ -10,18 +10,19 @@ The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, 
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
 
-## What's new in 0.8.3
+## What's new in 0.8.4
 
 - Progressively import older native public reasoning/activity in long ChatGPT conversations and preserve long native observations beyond the former premature 400 KiB recorder cutoff.
 - Recover Compact & Resume after a network/provider disconnect only after the replacement browser document proves the same chat is ready, instead of leaving the extension stranded until manual browser activity.
 - Preserve the provider-observed model identity across fresh-chat preparation on ChatGPT, Gemini and Claude while still requiring one exact native choice.
 - Keep Steer anchored at the exact correction boundary in long chats instead of jumping to the absolute top or end.
 - Preserve provider block code when native markup omits a traditional code wrapper, without swallowing adjacent explanation text into the fence.
-- Show the OneCode mark in the sidebar connection control with its existing connected/connecting/offline/error state, and carry the Linux dock-identity repair prepared after 0.8.2.
+- Show plugin installation progress and clear results, retain setup guidance after installation, and provide the matching Blender add-on as a direct download.
+- Show the OneCode logo in the Windows notification area while retaining the in-app status dot, and carry the Linux dock-identity repair prepared after 0.8.2.
 
-0.8.3 is an application/Companion hotfix. Compatible Windows installations retain the verified 0.5.9 complete base; compatible Linux installations retain the verified 0.8.2 complete base. Published capsule manifests and runtime receipts remain the authority for whether the internal updater can use the smaller payload. Full DEB/native replacement remains package-manager-owned.
+0.8.4 is an application/Companion hotfix. Compatible Windows installations retain the verified 0.5.9 complete base; compatible Linux installations retain the verified 0.8.2 complete base. Published capsule manifests and runtime receipts remain the authority for whether the internal updater can use the smaller payload. Full DEB/native replacement remains package-manager-owned.
 
-See [0.8.3 release notes](docs/release-notes/v0.8.3.md) and [verification scope](docs/release-acceptance/v0.8.3.md) for frozen-source tests, platform build receipts, bases, checksums and publication evidence.
+See [0.8.4 release notes](docs/release-notes/v0.8.4.md) and [verification scope](docs/release-acceptance/v0.8.4.md) for frozen-source tests, platform build receipts, bases, checksums and publication evidence.
 
 ## Earlier releases
 

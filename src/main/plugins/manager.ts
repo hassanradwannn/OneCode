@@ -15,6 +15,7 @@ import { DEFAULT_PLUGIN_LONGEST_CALL_SECONDS, MAX_PLUGIN_LONGEST_CALL_SECONDS } 
 import { installSource, pluginEnvironment, resolveGithub, stopInstallers, type InstalledLaunch } from './installer.js';
 import { terminateProcessTree } from '../exec.js';
 import { pluginCatalog, reviewedPluginLicense } from './catalog.js';
+import { blenderAddonFile } from './blender-addon.js';
 import { loadNativePackage } from '../native-package.js';
 const sharp = loadNativePackage('sharp');
 import { pluginExposure } from './exposure.js';
@@ -307,6 +308,12 @@ export class PluginManager {
     // The plugin UUID owns identity; a generation only needs an exclusively created
     // directory. Another UUID consumes 28 avoidable characters of Windows MAX_PATH.
     return fs.mkdtemp(path.join(parent, 'g-'));
+  }
+  async companionFile(id: string): Promise<{ filename: string; bytes: Buffer }> {
+    const row = this.row(id);
+    if (row.catalogId !== 'blender' || row.source.kind !== 'python' || row.source.package !== 'blender-mcp')
+      throw new Error('This plugin does not provide a downloadable companion.');
+    return { filename: 'blender_mcp.py', bytes: await blenderAddonFile(row.directory, row.launch.version) };
   }
   install(request: PluginInstallRequest): Promise<PluginSnapshot> {
     return this.serial('install', async () => {

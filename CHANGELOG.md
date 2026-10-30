@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.4] — 2026-10-30
+
+Carry the 0.8.3 reliability repairs into a new acceptance candidate. Activate the current ChatGPT picker through its native click, default empty discovery helpers to Chat mode, avoid unnecessary picker mutations for an exact account-available selection, and keep response identifiers reused across Steers from moving commentary above its correction. Restore the in-app connection dot and identify OneCode in the Windows tray. Show plugin installation progress, explicit completion/error state and visible setup instructions; export Blender MCP's verified matching bundled add-on through a Save dialog. Companion protocol 22 and recorder 119. See [release notes](docs/release-notes/v0.8.4.md) and [acceptance](docs/release-acceptance/v0.8.4.md).
+
 ## [0.8.3] — 2026-10-30
 
 Restore progressive long-chat import and remove the premature 400 KiB native-observation cutoff, preserve Steer receipts until delivery ACK, keep late historical questions from replacing current task identity, recover Compact & Resume only after a replacement provider document is actually ready, keep fresh-chat model verification stable across provider ID churn without weakening native proof, keep Steer anchored at its insertion point, repair provider code-block capture, brand the sidebar connection state as OneCode, and carry the verified Linux dock-identity follow-up. Companion protocol 22 and recorder 118 force older loaded browser code to reload the new contracts. See [release notes](docs/release-notes/v0.8.3.md) and [verification scope](docs/release-acceptance/v0.8.3.md).
