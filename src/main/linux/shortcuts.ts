@@ -15,13 +15,15 @@ function executable(text: string): string | null {
   const value = match && (match[1] ?? match[2])?.replace(/\\(["\\$`])/g, '$1').replaceAll('%%', '%');
   return value && path.isAbsolute(value) ? value : null;
 }
-function grouped(text: string): string {
+function grouped(text: string, hiddenAlias = false): string {
   const lines = text.split(/\r?\n/), start = lines.indexOf('[Desktop Entry]');
   if (start < 0) return text;
-  let end = lines.findIndex((line, index) => index > start && line.startsWith('['));
-  if (end < 0) end = lines.length;
-  const field = lines.findIndex((line, index) => index > start && index < end && line.startsWith('StartupWMClass='));
-  if (field >= 0) lines[field] = `StartupWMClass=${wmClass}`; else lines.splice(start + 1, 0, `StartupWMClass=${wmClass}`);
+  for (const [key, value] of [['StartupWMClass', wmClass], ...(hiddenAlias ? [['NoDisplay', 'true']] : [])]) {
+    let end = lines.findIndex((line, index) => index > start && line.startsWith('['));
+    if (end < 0) end = lines.length;
+    const field = lines.findIndex((line, index) => index > start && index < end && line.startsWith(`${key}=`));
+    if (field >= 0) lines[field] = `${key}=${value}`; else lines.splice(start + 1, 0, `${key}=${value}`);
+  }
   return lines.join('\n');
 }
 
@@ -49,7 +51,7 @@ export async function repairLinuxShortcuts(target: string, options: { home?: str
     owned.set(canonical, grouped(owned.get(legacy)!));
   }
   for (const [name, text] of owned) {
-    const next = grouped(text); if (text === next) continue;
+    const next = grouped(text, name === legacy && legacy !== canonical); if (text === next) continue;
     const file = path.join(directory, name);
     try { await fs.copyFile(file, `${file}.before-0.8.2`, constants.COPYFILE_EXCL); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }

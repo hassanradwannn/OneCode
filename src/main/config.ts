@@ -729,7 +729,7 @@ export async function loadConfig(): Promise<Config> {
           // Preserve both sides before publishing a recovered setup. Credentials,
           // connector proof and all other installation state remain with their owners.
           await fs.copyFile(configPath, `${configPath}.before-setup-recovery-${Date.now()}`);
-          await persistConfig(restored.config);
+          await persistConfig(adoptCurrentGoalPrompt(adoptWiderWindow(adoptAutoCompaction(recalibrateTokens(restored.config)))));
           logInfo(`Restored saved setup after an older application reset settings; source backup: ${restored.backup}`);
         }
       } catch (error) { logError(`Saved setup recovery was unavailable: ${(error as Error).message}`); }
