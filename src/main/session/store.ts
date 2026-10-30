@@ -834,7 +834,8 @@ async function rebuildSummaryFromHistory(
     if (!['user_message', 'turn_start', 'turn_end', 'tool_call'].includes(event.kind)) return;
     identities.push({ seq: event.seq, origin: positionOf(event), time: event.time, kind: event.kind,
       source: event.source, turnId: event.turnId,
-      ...(event.kind === 'user_message' ? { messageId: event.messageId, inputId: event.inputId } : {}),
+      ...(event.kind === 'user_message' ? { messageId: event.messageId, inputId: event.inputId,
+        historyBeforeQuestionId: event.historyBeforeQuestionId } : {}),
       ...(event.kind === 'turn_end' && event.continued === true ? { continued: true } : {}),
       ...(event.kind === 'tool_call' ? { call: { requestId: event.call.requestId,
         conversationId: event.call.conversationId, attribution: event.call.attribution } } : {}) });
@@ -1427,6 +1428,7 @@ export function upsertMessageEvent(
             }
           : previous?.kind === 'user_message' && event.kind === 'user_message'
             ? { ...event, inputId: event.inputId ?? previous.inputId,
+                historyBeforeQuestionId: previous.historyBeforeQuestionId ?? event.historyBeforeQuestionId,
                 authoredAt: previous.authoredAt ?? event.authoredAt,
                 authoredText: event.authoredText ?? previous.authoredText,
                 wireTokenEstimate: event.wireTokenEstimate ?? previous.wireTokenEstimate,
@@ -1486,7 +1488,7 @@ export function upsertMessageEvent(
             JSON.stringify(previous.references) === JSON.stringify(nextEvent.references))) &&
         (options.activeContent !== true || previous.kind !== 'assistant_message' || previous.activeContentRevision === true) &&
         (nextEvent.kind !== 'user_message' || previous.kind !== 'user_message' ||
-          (nextEvent.reaction === previous.reaction && nextEvent.inputId === previous.inputId && nextEvent.authoredText === previous.authoredText && nextEvent.wireTokenEstimate === previous.wireTokenEstimate && nextEvent.inputDelivery === previous.inputDelivery && JSON.stringify(nextEvent.assets) === JSON.stringify(previous.assets) && JSON.stringify(nextEvent.retiredImageAssetIds) === JSON.stringify(previous.retiredImageAssetIds) && JSON.stringify(nextEvent.attachments) === JSON.stringify(previous.attachments))) &&
+          (nextEvent.historyBeforeQuestionId === previous.historyBeforeQuestionId && nextEvent.reaction === previous.reaction && nextEvent.inputId === previous.inputId && nextEvent.authoredText === previous.authoredText && nextEvent.wireTokenEstimate === previous.wireTokenEstimate && nextEvent.inputDelivery === previous.inputDelivery && JSON.stringify(nextEvent.assets) === JSON.stringify(previous.assets) && JSON.stringify(nextEvent.retiredImageAssetIds) === JSON.stringify(previous.retiredImageAssetIds) && JSON.stringify(nextEvent.attachments) === JSON.stringify(previous.attachments))) &&
         (previous.turnId ?? undefined) === settledTurnId &&
         (nextEvent.agent === undefined || previous.agent === nextEvent.agent) &&
         (!preferTime || previous.time === nextEvent.time)
@@ -1962,7 +1964,8 @@ export async function readLatestUserMessage(sessionId: string, _turnId?: string 
   await flushSession(sessionId);
   const summary = await readAuthoritativeSummary(sessionId);
   const [message] = await readRecentEventsFromDisk(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true,
-    before: Number.POSITIVE_INFINITY, acceptEvent: (event: SessionEvent) => !injectedUserMessage(event, summary?.timelineTurns) });
+    before: Number.POSITIVE_INFINITY, acceptEvent: (event: SessionEvent) =>
+      !(event.kind === 'user_message' && event.historyBeforeQuestionId) && !injectedUserMessage(event, summary?.timelineTurns) });
   return message?.kind === 'user_message' ? message : undefined;
 }
 
@@ -1984,7 +1987,7 @@ export async function readRecoveryBoundary(sessionId: string, turnId?: string | 
     const [boundary] = await readRecentEventsFromDisk(sessionId, 1, {
       kinds: ['turn_start', 'turn_end', 'user_message'], orderByOrigin: true,
       before: Number.POSITIVE_INFINITY,
-      acceptEvent: event => !isTurnCorrection(event, turnId, entry.summary.timelineTurns)
+      acceptEvent: event => !(event.kind === 'user_message' && event.historyBeforeQuestionId) && !isTurnCorrection(event, turnId, entry.summary.timelineTurns)
     });
     return boundary;
   });
@@ -2004,7 +2007,7 @@ export async function readCompletedFinal(sessionId: string, conversationId: stri
   const [recent, questions] = await Promise.all([
     readRecentEventsFromDisk(sessionId, 256, { kinds: ['turn_start', 'turn_end', 'user_message', 'assistant_message', 'native_image', 'tool_call', 'page_tool'] }),
     readRecentEventsFromDisk(sessionId, 1, { kinds: ['user_message'], orderByOrigin: true,
-      before: Infinity, acceptEvent: event => !injectedUserMessage(event, entry.summary.timelineTurns) })
+      before: Infinity, acceptEvent: event => !(event.kind === 'user_message' && event.historyBeforeQuestionId) && !injectedUserMessage(event, entry.summary.timelineTurns) })
   ]);
   if (entry.nextSeq !== revision || entry.summary.conversationId !== conversationId) return null;
   const sameTurn = (left: string | null | undefined, right: string | null | undefined) => !!left && !!right &&
@@ -2110,7 +2113,7 @@ export async function readHandoffResponse(sessionId: string, conversationId: str
   });
   if (entry.nextSeq !== revision || events.length >= MAX_EVENT_TAIL) return pending;
   const turns = entry.summary.timelineTurns;
-  const next = events.findIndex(event => event.kind === 'user_message' && !injectedUserMessage(event, turns));
+  const next = events.findIndex(event => event.kind === 'user_message' && !event.historyBeforeQuestionId && !injectedUserMessage(event, turns));
   // The source turn can end after the handoff was sent: an interrupted or stopped turn whose end
   // the page reports only on its next load. That end belongs to the turn before the request, so a
   // bare `turn_end` of a turn with no start and no answer in this interval is not a second answer.

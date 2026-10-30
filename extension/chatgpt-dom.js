@@ -3410,7 +3410,7 @@ var CLF_DOM = (() => {
     if (!closed) failure('picker_close_failed');
     return restored && closed && stillCurrent() && result.size ? [...result.values()] : null;
   }
-  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}, modelSurface) {
+  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}, modelSurface, modelLabel) {
     if (!model && !effort) return true;
     let reported = false;
     // Fixed diagnostic stages only. A caller's diagnostic callback cannot change
@@ -3432,9 +3432,10 @@ var CLF_DOM = (() => {
     try {
       // Exact provider slug is preferred. Existing saved display slugs may resolve
       // only to an actually observed, available pair; never to an account default.
-      const name = normalizeModelLabel(model);
-      const modelRank = choice => !model || choice.familyId === model || choice.id === model ? 2
-        : name && normalizeModelLabel(choice.familyLabel) === name ? 1 : 0;
+      const names = [...new Set([modelLabel, model].map(normalizeModelLabel).filter(Boolean))];
+      const modelRank = choice => !model || choice.familyId === model || choice.id === model ? 3
+        : modelLabel && normalizeModelLabel(choice.familyLabel) === normalizeModelLabel(modelLabel) ? 2
+        : names.includes(normalizeModelLabel(choice.familyLabel)) ? 1 : 0;
       // Every available choice of the requested model, read once across versions, so the effort
       // can be resolved against what the account actually offers before anything is moved.
       const offered = [];

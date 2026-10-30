@@ -16,6 +16,18 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.3': {
+    lead: () => t('Keep long chats, model choices and Steer exactly where they belong.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Keep Steer connected'), text: () => t('Keeps delivery receipts through Steer and preserves the current task while older chat history is imported.') },
+      { icon: 'i-chat', title: () => t('Complete long-chat import'), text: () => t('Progressively captures older native public reasoning and activity while keeping the newest turn boundary live.') },
+      { icon: 'i-retry', title: () => t('Recover after a browser disconnect'), text: () => t('Compact & Resume waits for the replacement provider document to be ready instead of getting stranded after a reload or network timeout.') },
+      { icon: 'i-gear', title: () => t('Stable native model identity'), text: () => t('Keeps the provider-observed model identity through fresh-chat preparation while still requiring one exact native choice.') },
+      { icon: 'i-retry', title: () => t('Steer stays at the correction'), text: () => t('Keeps the reader anchored at the exact Steer insertion point instead of jumping to the top or end of a long chat.') },
+      { icon: 'i-file-text', title: () => t('Cleaner native code blocks'), text: () => t('Preserves block code when provider markup changes without pulling neighboring explanation text into the code fence.') },
+      { icon: 'i-plug', title: () => t('OneCode connection identity'), text: () => t('Shows the OneCode mark beside the existing connected, connecting, offline or error state.') }
+    ]
+  },
   '0.8.2': {
     lead: () => t('Keep your existing setup when updating OneCode.'),
     highlights: [

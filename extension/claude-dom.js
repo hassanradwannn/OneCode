@@ -585,11 +585,11 @@ var CLF_DOM = (() => {
   const picker = CLF_CLAUDE_MODELS.create({ current: () => pickerCurrent() });
   const inspectModelSettings = async (current, failure, model = null) => { pickerCurrent = current; const choices = await picker.inspect(model); if (!choices) failure?.(picker.failureCode() || 'picker_unavailable'); return choices; };
   const prepareModelInspection = async (model, current) => { pickerCurrent = current; return picker.prepare(model); };
-  const selectModelSettings = async (model, effort, current, failure) => {
+  const selectModelSettings = async (model, effort, current, failure, _modelSurface, modelLabel) => {
     // Automatic preserves the provider's native choice without reopening its
     // model and legacy submenus on every ordinary message.
     if (!model && !effort) return current() && Boolean(composer());
-    pickerCurrent = current; return picker.select(model, effort, failure);
+    pickerCurrent = current; return picker.select(model, effort, failure, modelLabel);
   };
   const visibleModelSelection = () => picker.currentSelection();
   async function send({ stillCurrent = () => true, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,

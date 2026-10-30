@@ -42,6 +42,8 @@ export interface Chronological {
   exchangeOrigin?: number | null;
   messageId?: string;
   inputId?: string;
+  /** Native ordered history proved this question precedes another question in the same scan. */
+  historyBeforeQuestionId?: string;
   kind: string;
   source?: string;
   agent?: string;
@@ -139,7 +141,7 @@ export function turnOpenAt(turns: TimelineTurns | undefined, at: number): string
 /** Store-owned, rebuildable identity projection. Raw events and MCP attribution stay intact. */
 export function applyTurnIdentity(identity: TurnIdentity, event: Chronological): void {
   const origin = positionOf(event);
-  if (event.kind === 'user_message' && event.messageId && !injectedUserMessage(event, identity.timelineTurns) &&
+  if (event.kind === 'user_message' && event.messageId && !event.historyBeforeQuestionId && !injectedUserMessage(event, identity.timelineTurns) &&
       (!identity.nativeQuestion || origin > identity.nativeQuestion.origin)) {
     identity.nativeQuestion = { messageId: event.messageId, origin };
   }

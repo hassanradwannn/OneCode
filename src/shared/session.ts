@@ -406,6 +406,8 @@ export type SessionEvent =
       messageId?: string;
       /** Exact app outbox identity, attached after a tool handout or proven native delivery. */
       inputId?: string;
+      /** Exact later native question witnessed in the same ordered transcript capture. History only. */
+      historyBeforeQuestionId?: string;
       /** Tool handout remains unconfirmed until a later exact invocation proves receipt. */
       inputDelivery?: 'offered' | 'confirmed';
       /** Original app-authored text, excluding transport-only control instructions. */

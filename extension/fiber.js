@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 34;
+  const VERSION = 35;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2615,7 +2615,7 @@
     return false;
   }
 
-  function turnsOf(scanToken) {
+  function turnsOf(scanToken, turnCursor = 0) {
     const out = [];
     let sections;
     try {
@@ -2625,7 +2625,7 @@
           !onKeptPage(section);
       });
     } catch {
-      return out;
+      return { turns: out, nextTurnCursor: 0 };
     }
     // A descriptor index is valid for one scan only. Stale stamps must disappear when a
     // still-mounted section becomes unreadable, but clearing every stamp up front is not
@@ -2658,14 +2658,24 @@
       if (id && previous && previous.turnId === id) previous.sections.push(section);
       else groups.push({ turnId: id, sections: [section], fiberSection: section, search: false });
     }
-    // Keep the latest user/assistant boundary even while reading older history.
-    // Visible groups share the remaining slots; no additional scan lifecycle.
+    // Keep the latest user/assistant boundary on every scan, then page the bounded remainder
+    // backwards through mounted history. The old implementation always filled all six slots
+    // from the newest groups, so an already-long source-native conversation could never expose
+    // Fiber-only public thoughts/activity from turn seven and older unless the user happened to
+    // scroll them into a later mount. A cursor makes history import progressive without making
+    // one MAIN->isolated reply unbounded or evicting the live response needed for ownership.
     const selected = new Set();
     for (let at = Math.max(0, groups.length - 2); at < groups.length; at++) selected.add(at);
+    const olderCount = Math.max(0, groups.length - 2);
+    const cursor = Number.isInteger(turnCursor) && turnCursor >= 0 && turnCursor < olderCount ? turnCursor : 0;
     const width = window.innerWidth;
     const height = window.innerHeight;
     if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
-      for (let at = groups.length - 1; at >= 0 && selected.size < MAX_TURNS; at--) {
+      // Visible old history is useful immediately, but reserve at least one slot for cursor
+      // progress so a permanently visible viewport cannot pin the importer to the same turns.
+      const visibleLimit = Math.max(0, MAX_TURNS - 3);
+      let visibleAdded = 0;
+      for (let at = olderCount - 1; at >= 0 && selected.size < MAX_TURNS && visibleAdded < visibleLimit; at--) {
         if (selected.has(at)) continue;
         const visible = groups[at].sections.some(section => {
           try {
@@ -2675,10 +2685,16 @@
               rect.bottom > 0 && rect.top < height && rect.right > 0 && rect.left < width;
           } catch { return false; }
         });
-        if (visible) selected.add(at);
+        if (visible) { selected.add(at); visibleAdded += 1; }
       }
     }
-    for (let at = groups.length - 1; at >= 0 && selected.size < MAX_TURNS; at--) selected.add(at);
+    let consumed = 0;
+    while (selected.size < MAX_TURNS && cursor + consumed < olderCount) {
+      const at = olderCount - 1 - (cursor + consumed);
+      consumed += 1;
+      selected.add(at);
+    }
+    const nextTurnCursor = olderCount === 0 || cursor + consumed >= olderCount ? 0 : cursor + consumed;
     const responseBudget = { remaining: MAX_RESPONSE_TEXT };
     for (const at of [...selected].sort((a, b) => a - b)) {
       const group = groups[at];
@@ -2930,7 +2946,7 @@
         // One hostile/stale DOM node must not cost the remaining turns their evidence.
       }
     }
-    return out;
+    return { turns: out, nextTurnCursor };
   }
 
   /**
@@ -2940,7 +2956,7 @@
    * agree on which descriptor belongs to which row without relying on both querying the
    * DOM at the same instant — React can re-render between the two.
    */
-  function scan(nonce) {
+  function scan(nonce, turnCursor = 0) {
     // The existing scan also refreshes mounted-picker evidence; no new poll timer.
     try { pickerSnapshot(); } catch { /* An unknown picker cannot affect recording. */ }
     try { temporaryModeSnapshot(); } catch { /* Unknown mode leaves no stamp, never a false one. */ }
@@ -2952,6 +2968,7 @@
     const scanToken = nonce;
     const rows = [];
     let turns = [];
+    let nextTurnCursor = 0;
     let scanOk = true;
     let found;
     try {
@@ -2960,7 +2977,7 @@
       found = [...document.querySelectorAll(TOOL)].filter(row => !row.closest(OWN_SURFACES));
       for (const old of document.querySelectorAll(CONNECTOR)) old.removeAttribute('data-clf-fiber');
     } catch {
-      return post({ source: REPLY, nonce, scanToken, v: VERSION, scanOk: false, rows: [], turns }, location.origin);
+      return post({ source: REPLY, nonce, scanToken, v: VERSION, scanOk: false, rows: [], turns, nextTurnCursor: 0 }, location.origin);
     }
     const limit = Math.min(found.length, MAX_ROWS);
     for (let index = 0; index < limit; index++) {
@@ -2983,12 +3000,15 @@
     }
     // Row stamps must exist before native activity projection excludes connectors.
     try {
-      turns = turnsOf(scanToken);
+      const page = turnsOf(scanToken, turnCursor);
+      turns = page.turns;
+      nextTurnCursor = page.nextTurnCursor;
     } catch {
       turns = [];
+      nextTurnCursor = 0;
       scanOk = false;
     }
-    post({ source: REPLY, nonce, scanToken, v: VERSION, scanOk, rows, turns }, location.origin);
+    post({ source: REPLY, nonce, scanToken, v: VERSION, scanOk, rows, turns, nextTurnCursor }, location.origin);
   }
 
   /**
@@ -3377,10 +3397,11 @@
       return;
     }
     try {
-      scan(nonce);
+      const turnCursor = Number.isInteger(data.turnCursor) && data.turnCursor >= 0 ? data.turnCursor : 0;
+      scan(nonce, turnCursor);
     } catch {
       try {
-        post({ source: REPLY, nonce, scanToken: nonce, v: VERSION, scanOk: false, rows: [], turns: [] }, location.origin);
+        post({ source: REPLY, nonce, scanToken: nonce, v: VERSION, scanOk: false, rows: [], turns: [], nextTurnCursor: 0 }, location.origin);
       } catch {
         // Nothing further to try. The other side times out and keeps ChatGPT's labels.
       }

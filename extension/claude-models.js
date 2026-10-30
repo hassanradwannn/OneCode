@@ -3,6 +3,7 @@
 var CLF_CLAUDE_MODELS = (() => {
   const OWN = '[data-clf-root],.clf-stream,.clf-stage,.clf-composer,.clf-boot,[data-clf-user-text]';
   const compact = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const modelIdentity = value => compact(value).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}.]/gu, '');
   const shown = node => Boolean(node?.isConnected && !node.closest(`${OWN},[hidden],[aria-hidden="true"],[inert]`) &&
     node.getClientRects().length && getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden');
   const enabled = node => shown(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
@@ -279,7 +280,7 @@ var CLF_CLAUDE_MODELS = (() => {
       } finally { if (!await close()) success = false; }
       return success;
     }
-    async function select(wantedModel, wantedEffort, failure = () => {}) {
+    async function select(wantedModel, wantedEffort, failure = () => {}, wantedLabel = undefined) {
       const refuse = reason => { failure?.(reason); return false; };
       let success = false, original = null, originalEffort = null;
       try {
@@ -289,7 +290,10 @@ var CLF_CLAUDE_MODELS = (() => {
         original = prior[0];
         const priorPowers = wantedEffort ? await efforts() : null;
         originalEffort = priorPowers?.find(row => row.selected)?.effort || null;
-        const matches = choices.filter(row => wantedModel ? row.id === wantedModel : row.selected);
+        const exact = wantedModel ? choices.filter(row => row.id === wantedModel) : [];
+        const labelIdentity = modelIdentity(wantedLabel || wantedModel);
+        const byLabel = wantedModel && !exact.length && labelIdentity ? choices.filter(row => modelIdentity(row.label) === labelIdentity) : [];
+        const matches = wantedModel ? exact.length ? exact : byLabel : choices.filter(row => row.selected);
         if (matches.length !== 1 || !await model(matches[0])) return refuse('model-unconfirmed');
         if (!await effort(wantedEffort)) return refuse('effort-unconfirmed');
         if (!await proveModel(matches[0])) return refuse('model-unconfirmed');

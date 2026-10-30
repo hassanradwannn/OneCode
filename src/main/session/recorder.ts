@@ -1795,6 +1795,8 @@ export interface ChatObservation {
   authoredAt?: number;
   /** True only for the newest DOM user row that this document proved was just sent. */
   authoredNow?: boolean;
+  /** A later native question in the same ordered capture makes this row historical. */
+  historyBeforeQuestionId?: string;
   /** True only when the current page generation owns this assistant revision now. */
   activeNow?: boolean;
   text?: string;
@@ -2187,7 +2189,8 @@ async function recordSupersededMessages(
           ...(item.attachments?.length ? { attachments: item.attachments } : {}),
           ...(item.reaction !== undefined ? { reaction: item.reaction } : {}),
           ...(item.model ? { model: item.model } : {}),
-          messageId: item.messageId
+          messageId: item.messageId,
+          ...(item.historyBeforeQuestionId ? { historyBeforeQuestionId: item.historyBeforeQuestionId } : {})
         },
         { preferTime: item.authoredTime === true, work: false }
       );
@@ -2337,7 +2340,8 @@ async function recordChatObservationsNow(
           ...(item.attachments?.length ? { attachments: item.attachments } : {}),
           ...(item.reaction !== undefined ? { reaction: item.reaction } : {}),
           ...(item.model ? { model: item.model } : {}),
-          messageId: item.messageId
+          messageId: item.messageId,
+          ...(item.historyBeforeQuestionId ? { historyBeforeQuestionId: item.historyBeforeQuestionId } : {})
         }, { preferTime: item.authoredTime === true, work: item.authoredNow === true });
         if (!written.changed) continue;
         if (item.authoredNow === true) {

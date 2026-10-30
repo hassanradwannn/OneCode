@@ -666,13 +666,14 @@ code {
 .sidebar-bottom > .btn.is-sel { background: var(--hover); color: var(--ink); }
 .connection-anchor { position: relative; flex: none; }
 /*
- * The connection capsule. Connected: a 36px square with a green dot. Otherwise its label column
+ * The connection capsule. Its OneCode mark is always visible, with a small state badge owned by the
+ * same connection state that supplies the button's accessible name. Otherwise its label column
  * opens (grid track 0fr → 1fr, so any translation's length animates) to say Connect, Connecting… or
- * what went wrong. Neutral while simply disconnected; red only marks a failure, and only the dot.
+ * what went wrong. Neutral while simply disconnected; red only marks a failure, and only the badge.
  */
 .sidebar-connection {
-  position: relative; height: 36px; min-width: 36px; display: grid; grid-template-columns: 8px 0fr; column-gap: 0;
-  align-items: center; justify-content: center; padding: 0 13px;
+  position: relative; height: 36px; min-width: 36px; display: grid; grid-template-columns: 18px 0fr; column-gap: 0;
+  align-items: center; justify-content: center; padding: 0 8px;
   border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--soft); cursor: pointer;
   font: inherit; font-size: calc(13px * var(--text-scale, 1)); font-weight: 500; white-space: nowrap;
   /* Closing: the words leave first (below), then the capsule draws in. */
@@ -681,7 +682,7 @@ code {
 }
 /* Opening: the capsule widens first, then its words arrive. */
 .sidebar-connection.has-label {
-  grid-template-columns: 8px 1fr; column-gap: 8px; padding: 0 12px 0 11px; color: var(--ink); border-color: var(--edge);
+  grid-template-columns: 18px 1fr; column-gap: 8px; padding: 0 12px 0 9px; color: var(--ink); border-color: var(--edge);
   transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1), column-gap 380ms cubic-bezier(.22, 1, .36, 1),
     padding 380ms cubic-bezier(.22, 1, .36, 1), background-color 160ms ease, border-color 400ms ease, color 160ms ease;
 }
@@ -689,25 +690,24 @@ code {
   transition: opacity 90ms ease, transform 90ms ease; }
 .sidebar-connection.has-label .sidebar-connection-label { opacity: 1; transform: none;
   transition: opacity 260ms cubic-bezier(.22, 1, .36, 1) 150ms, transform 360ms cubic-bezier(.22, 1, .36, 1) 150ms; }
-/* Disconnected or connecting: the words alone (connecting has the border light and the sheen). The dot
-   means a settled state, so it shows only for a failure, and is the whole capsule once connected. */
-.sidebar-connection-dot { transition: transform 260ms cubic-bezier(.22, 1, .36, 1), opacity 200ms ease, background-color 260ms ease, box-shadow 260ms ease; }
-.sidebar-connection.has-label:not(.is-offline, .is-error) { grid-template-columns: 0px 1fr; column-gap: 0; padding: 0 14px; }
-.sidebar-connection.has-label:not(.is-offline, .is-error) .sidebar-connection-dot { transform: scale(0); opacity: 0; }
+/* The product mark never disappears into a bare status dot. The badge is secondary visual state;
+   aria-label/title/live-region text remain the accessible connection authority. */
+.sidebar-connection-brand { position: relative; width: 18px; height: 18px; display: grid; place-items: center; color: var(--soft); }
+.sidebar-connection-brand > .ico { --ico: 18px; }
+.sidebar-connection-dot { position: absolute; right: -2px; bottom: -2px; width: 7px; height: 7px; border: 1.5px solid var(--sidebar-color, var(--sunk));
+  border-radius: 50%; background: var(--faint); transition: transform 260ms cubic-bezier(.22, 1, .36, 1), opacity 200ms ease, background-color 260ms ease, box-shadow 260ms ease; }
 .sidebar-connection.has-label:not(.is-offline, .is-error):hover { border-color: var(--accent-edge); background: var(--hover); }
-/* A narrow sidebar keeps the dot alone; its title and the details still say everything. */
+/* A narrow sidebar keeps the branded mark alone; its title and the details still say everything. */
 .sidebar-bottom { container-type: inline-size; }
 @container (max-width: 200px) {
-  .sidebar-connection.has-label, .sidebar-connection.has-label:not(.is-offline, .is-error) { grid-template-columns: 8px 0fr; column-gap: 0; padding: 0 13px; }
+  .sidebar-connection.has-label, .sidebar-connection.has-label:not(.is-offline, .is-error) { grid-template-columns: 18px 0fr; column-gap: 0; padding: 0 8px; }
   .sidebar-connection.has-label .sidebar-connection-label { opacity: 0; }
-  /* Without its word, the capsule needs its dot again. */
-  .sidebar-connection.has-label .sidebar-connection-dot, .sidebar-connection.has-label:not(.is-offline, .is-error) .sidebar-connection-dot { transform: none; opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar-connection, .sidebar-connection-label { transition: none; } }
 .sidebar-connection:hover, .sidebar-connection[aria-expanded='true'] { background: var(--hover); border-color: var(--edge); }
 .sidebar-connection:focus-visible { outline: 1px solid var(--accent-edge); outline-offset: 1px; }
-.sidebar-connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .sidebar-connection.is-connected .sidebar-connection-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 12%, transparent); }
+.sidebar-connection.is-busy .sidebar-connection-dot { background: var(--accent); }
 /* Working: a thin light travels around the border, as if searching, and the word carries the sheen
    running turns wear. */
 @property --capsule-arc { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
@@ -736,9 +736,6 @@ code {
 .sidebar-connection-ghost { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
 .sidebar-connection-ghost > span { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; }
 .sidebar-connection-ghost > .is-busy { color: var(--soft); }
-/* The dot keeps out of the words' way: a leaving dot goes at once, an arriving one waits for the old words to fade. */
-.sidebar-connection.is-morphing.has-label:not(.is-offline, .is-error) .sidebar-connection-dot { transition: none; }
-.sidebar-connection.is-morphing:is(.is-offline, .is-error) .sidebar-connection-dot { transition-delay: 140ms; }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-connection::before, .sidebar-connection.is-busy::before { animation: none; opacity: 0; }
   .sidebar-connection.is-busy .sidebar-connection-label { animation: none; }

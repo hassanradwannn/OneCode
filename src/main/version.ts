@@ -12,7 +12,7 @@
  * extension does nothing" into a diagnosable mismatch.
  */
 
-export const APP_VERSION = '0.8.2';
+export const APP_VERSION = '0.8.3';
 
 /**
  * Standalone extension recovery must stay on the app's own release. Using GitHub's moving
@@ -79,6 +79,11 @@ export function extensionDownloadUrl(_version = APP_VERSION): string {
 // 19 — provider artifacts and native video are durable journal content. Old apps cannot ACK and discard them.
 // 20 — exact model settings retain their observed native Chat/Work surface. An older
 // companion can ignore that intent and use another surface with the same model id.
-// 21 — third-provider routing, namespaced native receipts and public usage-limit
+// 21 – third-provider routing, namespaced native receipts and public usage-limit
 // evidence. A previous companion cannot deliver Claude tasks or acknowledge them.
-export const BRIDGE_PROTOCOL = 21;
+// 22 – fresh-chat model preparation carries the provider-observed display identity beside
+// its exact native id. A 21 companion silently discards that fallback and can reject the
+// same visible model after the provider rotates an opaque execution id.
+// Ordered native history also retains its exact later question so old backfill
+// cannot replace the current task merely by receiving a newer journal sequence.
+export const BRIDGE_PROTOCOL = 22;

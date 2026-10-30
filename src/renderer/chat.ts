@@ -2294,8 +2294,8 @@ async function loadDetail(navigate = false, olderBefore?: number, newerFrom?: nu
   }
   // A selection opens at the latest message; the previous chat's viewport is not
   // a reading position in this one. Apply only after the current load has rendered.
-  if (opening) $('chatBody').scrollTop = $('chatBody').scrollHeight;
-  if (opening) requestHistory(-1, true);
+  if (opening && !currentSteerAnchor()) $('chatBody').scrollTop = $('chatBody').scrollHeight;
+  if (opening && !currentSteerAnchor()) requestHistory(-1, true);
   void loadHandoff();
   // A burst can contain more than one renderer-sized page between coalesced notifications.
   // Drain it page by page rather than silently jumping the cursor or lifting the payload cap.
@@ -3051,7 +3051,21 @@ const rowCache = new Map<string, { sig: string; row: HTMLElement }>();
  */
 const SEND_TOP_GAP = 16, JUMP_DISTANCE = 150, SEND_GLIDE_MS = 700;
 const USER_MESSAGE_KEY = 'message:user_message\u0000';
-let sendAnchor: { key: string; inputId: string; messageId?: string; before: Set<string>; session: string | null; seen: boolean; smoothUntil: number } | null = null;
+interface SendAnchor {
+  key: string;
+  inputId: string;
+  messageId?: string;
+  before: Set<string>;
+  session: string | null;
+  selection: number;
+  seen: boolean;
+  smoothUntil: number;
+  /** Steer belongs at its canonical in-turn history row, never at the temporary outbox row. */
+  kind: 'send' | 'steer';
+  locating?: boolean;
+  triedCanonicalPage?: boolean;
+}
+let sendAnchor: SendAnchor | null = null;
 /** The reader scrolled away from a held message: they are reading, not following the end. */
 let readingAfterSend = false;
 /**
@@ -3076,13 +3090,81 @@ function scrollPane(pane: HTMLElement, top: number, smooth: boolean): void {
   else pane.scrollTop = top;
 }
 
+function currentSteerAnchor(anchor: SendAnchor | null = sendAnchor): anchor is SendAnchor {
+  return !!anchor && anchor.kind === 'steer' && anchor.session === selectedId && anchor.selection === selectionGeneration;
+}
+
+/**
+ * Steer is accepted before the provider's canonical user row necessarily reaches the resident page.
+ * Hold the viewport where it is until that exact row exists; once the durable receipt proves history
+ * ownership, return to the live page (and, only if necessary, fetch a bounded page around its exact
+ * history position). This changes presentation only — delivery/ACK authority remains in the backend.
+ */
+function locateSteerAnchor(anchor: SendAnchor): void {
+  if (!currentSteerAnchor(anchor) || anchor.locating) return;
+  const receipt = pendingComposerInputs.find(entry => entry.id === anchor.inputId);
+  anchor.messageId ??= receipt?.messageId;
+  if (!receipt || (!receipt.historyAnchored && !receipt.historyRecorded) || !Number.isSafeInteger(receipt.historySeq) || receipt.historySeq! <= 0) return;
+  anchor.locating = true;
+  // An opening/history-fill no longer owns the viewport once the user has deliberately Steered.
+  historyDemand = null;
+  const exactPosition = receipt.historySeq!;
+  const locate = async (): Promise<void> => {
+    // First return to the live tail: the usual case contains the just-accepted Steer and its
+    // continuation, while also leaving future live deltas enabled.
+    historyBefore = null;
+    await loadDetail(true);
+    if (!currentSteerAnchor(anchor)) return;
+    const exact = [...$('timeline').querySelectorAll<HTMLElement>('[data-timeline-key]')]
+      .find(row => row.dataset.timelineKey === `input:${anchor.inputId}`);
+    if (exact || anchor.triedCanonicalPage) return;
+    // A very long continuation can push the receipt outside the last renderer page before the UI
+    // learns its ACK. Fetch one bounded window around the durable history position, retaining the
+    // already loaded live tail so the next assistant continuation can remain directly below it.
+    anchor.triedCanonicalPage = true;
+    const boundary = exactPosition + Math.ceil(TIMELINE_BATCH_SIZE / 2);
+    await loadDetail(true, boundary);
+    if (currentSteerAnchor(anchor)) historyBefore = null;
+  };
+  void locate().finally(() => {
+    if (!currentSteerAnchor(anchor)) return;
+    anchor.locating = false;
+    holdSentMessage();
+  });
+}
+
+function armSteerAnchor(inputId: string, session: string, selection: number, before: Set<string>, messageId?: string): void {
+  if (selectedId !== session || selectionGeneration !== selection) return;
+  historyDemand = null;
+  sendAnchor = { key: `input:${inputId}`, inputId, messageId, before, session, selection, seen: false, smoothUntil: 0, kind: 'steer' };
+  readingAfterSend = false;
+}
+
+function retireTerminalSteerAnchor(): void {
+  const anchor = sendAnchor;
+  if (!currentSteerAnchor(anchor)) return;
+  const receipt = pendingComposerInputs.find(entry => entry.id === anchor.inputId);
+  if (!receipt || !['failed', 'cancelled'].includes(receipt.state)) return;
+  const canonical = events.some(event => event.kind === 'user_message' &&
+    (event.inputId === anchor.inputId || (!!anchor.messageId && event.messageId === anchor.messageId)));
+  if (canonical) return;
+  const pane = $('chatBody'), content = $('timelineContent');
+  const restore = timelineShown() ? preserveTimelineViewport(pane, content, false) : () => {};
+  sendAnchor = null;
+  content.style.removeProperty('--timeline-scroll-reserve');
+  restore();
+  paintJumpLatest();
+}
+
 /** Keeps the sent message at the top of the view, reserving room below it for the answer. */
 function holdSentMessage(): boolean {
   const anchor = sendAnchor;
   if (!anchor) return false;
-  if (anchor.session !== selectedId) { sendAnchor = null; return false; }
+  if (anchor.session !== selectedId || anchor.selection !== selectionGeneration) { sendAnchor = null; return false; }
   const pane = $('chatBody'), content = $('timelineContent');
-  const rows = [...content.querySelectorAll<HTMLElement>('[data-timeline-key]')];
+  // A direct Steer's temporary inputQueue row is at the absolute tail, not where the provider
+  // inserted the message into the running response. Only its canonical timeline row can anchor it.
+  const rows = [...(anchor.kind === 'steer' ? $('timeline') : content).querySelectorAll<HTMLElement>('[data-timeline-key]')];
   let row = rows.find(node => node.dataset.timelineKey === anchor.key);
   // Gemini records the sent message under its own id, without the input id, and the pending row
   // leaves. Follow the recorded row: by the id the input learned, else as the user message that
@@ -3090,11 +3172,13 @@ function holdSentMessage(): boolean {
   anchor.messageId ??= pendingComposerInputs.find(entry => entry.id === anchor.inputId)?.messageId;
   if (!row) {
     const key = anchor.messageId && `${USER_MESSAGE_KEY}${anchor.messageId}`;
-    row = (key && rows.find(node => node.dataset.timelineKey === key)) ||
-      rows.findLast(node => node.dataset.timelineKey!.startsWith(USER_MESSAGE_KEY) && !anchor.before.has(node.dataset.timelineKey!));
+    row = (key && rows.find(node => node.dataset.timelineKey === key)) || (anchor.kind === 'send'
+      ? rows.findLast(node => node.dataset.timelineKey!.startsWith(USER_MESSAGE_KEY) && !anchor.before.has(node.dataset.timelineKey!))
+      : undefined);
     if (row) anchor.key = row.dataset.timelineKey!;
   }
-  if (!row || !row.getClientRects().length) return false;
+  if (!row) { if (anchor.kind === 'steer') locateSteerAnchor(anchor); return false; }
+  if (!row.getClientRects().length) return false;
   // The glide starts when the message appears, which for one queued behind a running turn is
   // well after it was sent.
   if (!anchor.seen) { anchor.seen = true; anchor.smoothUntil = Date.now() + SEND_GLIDE_MS; }
@@ -3386,7 +3470,7 @@ async function fillTimelineHistory(): Promise<void> {
       const next = demand.direction < 0
         ? events.reduce((oldest, event) => Math.min(oldest, residenceOf(event)), Infinity)
         : events.reduce((newest, event) => Math.max(newest, residenceOf(event)), 0);
-      if (demand === historyDemand && demand.opening) {
+      if (demand === historyDemand && demand.opening && !currentSteerAnchor()) {
         // Filling a newly selected tail has not navigated away from live work.
         // User input replaces the demand and owns its position from then on.
         historyBefore = null;
@@ -4670,7 +4754,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   const pane = $('chatBody');
   // Released by the reader, the reserve still fills the view to its bottom; that is a reading
   // position, not the end to follow.
-  const restoreViewport = preserveTimelineViewport(pane, $('timelineContent'), followBottom && !readingAfterSend,
+  const restoreViewport = preserveTimelineViewport(pane, $('timelineContent'), followBottom && !readingAfterSend && !currentSteerAnchor(),
     followOutput() ? readerAtEnd : undefined);
   const timelineRows: HTMLElement[] = [];
   const keep = new Set<string>();
@@ -6508,6 +6592,7 @@ async function refreshInputQueue(): Promise<void> {
   const [all, pausedHelpers] = await Promise.all([run(api.listInputs()), run(api.listPausedHelpers())]);
   if (!all || selection !== selectionGeneration || request !== inputQueueGeneration) return;
   pendingComposerInputs = all;
+  retireTerminalSteerAnchor();
   for (const id of dismissedInputNotices) if (!all.some(entry => entry.id === id)) dismissedInputNotices.delete(id);
   paintDeliveryControls();
   const accepted = pendingNewInput && all.find(entry => entry.id === pendingNewInput!.id);
@@ -6584,10 +6669,15 @@ async function refreshInputQueue(): Promise<void> {
           const delivery = queuedNowDelivery(entry);
           if (!delivery) return;
           const intent = { delivery, turnId: delivery === 'idle' ? null : controlledTurnId };
+          const steerBefore = delivery === 'direct' ? userMessageKeys() : null;
+          const steerSession = selectedId;
+          const steerSelection = selectionGeneration;
           now.disabled = true;
           const sent = await run(api.sendQueuedInputNow(entry.id, intent));
           if (!card.isConnected || selection !== selectionGeneration) return;
           if (sent === false) toast(t("The turn ended before this message could join it. It stays queued."));
+          if (sent === true && delivery === 'direct' && steerBefore && steerSession)
+            armSteerAnchor(entry.id, steerSession, steerSelection, steerBefore, entry.messageId);
           if (sent !== true) now.disabled = false;
           inputQueueGeneration++;
           void refreshInputQueue();
@@ -6808,6 +6898,23 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
   // An explicit immediate follow-up must still stop that exact unresolved turn.
   // Admission rechecks this durable ID; a newer question cannot inherit the request.
   const steerTurnId = controlledSessionId === sessionId && controlledSelection === generation ? controlledUnfinishedTurnId : null;
+  const isSteer = mode === 'auto' && chosenMode !== 'tool' && !plan && !!sessionId && !!steerTurnId;
+  const sentBefore = mode !== 'finish' ? userMessageKeys() : new Set<string>();
+  const acceptedViewport = (entry: InputEntry): void => {
+    if (!isSteer || !sessionId || selectedId !== sessionId || selectionGeneration !== generation) return;
+    // Admission can preserve a raced/stale Steer as an ordinary message by removing steerTurnId.
+    // Only the durable exact-turn acceptance gets Steer's canonical insertion anchor.
+    if (entry.steerTurnId === steerTurnId) {
+      armSteerAnchor(entry.id, sessionId, generation, sentBefore, entry.messageId);
+      return;
+    }
+    if (followOutput()) { sendAnchor = null; readingAfterSend = false; readerAtEnd = true; }
+    else {
+      sendAnchor = { key: `input:${entry.id}`, inputId: entry.id, messageId: entry.messageId, before: sentBefore,
+        session: selectedId, selection: generation, seen: false, smoothUntil: 0, kind: 'send' };
+      readingAfterSend = false;
+    }
+  };
   const attachmentPayload = { ...(sessionId === null ? { provider: sendProvider } : {}),
     ...(mode === 'auto' && chosenMode !== 'tool' && !plan && sessionId && steerTurnId
       ? { steerTurnId } : {}),
@@ -6824,8 +6931,11 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
   skillPicker?.restore();
   imageDrafts.delete(key); paintComposerImages();
   if (sessionId === null) pendingNewInput = { id, generation };
-  if (mode !== 'finish' && followOutput()) { sendAnchor = null; readingAfterSend = false; readerAtEnd = true; }
-  else if (mode !== 'finish') { sendAnchor = { key: `input:${id}`, inputId: id, before: userMessageKeys(), session: selectedId, seen: false, smoothUntil: 0 }; readingAfterSend = false; }
+  if (mode !== 'finish' && !isSteer && followOutput()) { sendAnchor = null; readingAfterSend = false; readerAtEnd = true; }
+  else if (mode !== 'finish' && !isSteer) {
+    sendAnchor = { key: `input:${id}`, inputId: id, before: sentBefore, session: selectedId, selection: generation, seen: false, smoothUntil: 0, kind: 'send' };
+    readingAfterSend = false;
+  }
   void refreshInputQueue();
   paintDeliveryControls();
   try {
@@ -6838,6 +6948,7 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
       if (retained) {
         pendingComposerInputs = [...pendingComposerInputs.filter(row => row.id !== id), retained];
         showAutoSkillReceipt(retained);
+        acceptedViewport(retained);
         await adoptAcceptedOpening(retained);
         return true;
       }
@@ -6855,6 +6966,7 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
     inputQueueGeneration++;
     pendingComposerInputs = [...pendingComposerInputs.filter(row => row.id !== result.id), result];
     showAutoSkillReceipt(result);
+    acceptedViewport(result);
     if (sessionId === null && selectionGeneration === generation && pendingNewInput?.id === id && result.automation &&
         ($<HTMLSelectElement>('chatAutomation').value !== result.automation || openingLoopDelivery() !== result.loopAfterTurn))
       await run(api.setInputAutomation(result.id, $<HTMLSelectElement>('chatAutomation').value as InputAutomation, openingLoopDelivery()));

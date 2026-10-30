@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 116;
+  const RECORDER_VERSION = 118;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1101,10 +1101,14 @@
     // observing that question until its whole answer is already on screen; a rolling
     // observation baseline would then misclassify the answer as pre-existing history.
     const sections = assistantSections();
+    const deferTurnUntilAck = desktopInputBusy && userSendReceipt?.deferTurnUntilAck === true &&
+      userSendReceipt.text === text && userSendReceipt.conversationId === CLF_DOM.conversationId() &&
+      userSendReceipt.previousMessageId === previousMessageId && Date.now() - userSendReceipt.at <= USER_SEND_RECEIPT_MS;
     userSendReceipt = {
       text,
       authoredText,
       inserted,
+      ...(deferTurnUntilAck ? { deferTurnUntilAck: true } : {}),
       attachmentNames,
       conversationId: CLF_DOM.conversationId(),
       previousMessageId,
@@ -1510,12 +1514,17 @@
     // character counts badly understate UTF-8 (emoji/CJK). Share one byte budget between
     // prose and rendered HTML; otherwise a single 413 can never be halved and blocks every
     // later observation for this conversation.
-    let wireBudget = 400 * 1024;
+    // The local bridge accepts a 2 MiB request and the service worker already halves
+    // multi-observation batches after a 413. Keep one observation comfortably below
+    // that singleton ceiling, but do not clip ordinary long native messages merely
+    // because an older conservative 400 KiB budget predated the batching repair.
+    const observationWireBudget = 1536 * 1024;
+    let wireBudget = observationWireBudget;
+    const truncationMarker = '\n\n[OneCode: browser observation truncated to fit transport.]';
     const takeUtf8 = (value, budget) => {
       if (typeof value !== 'string') return value;
       if (utf8Bytes(value) <= budget) return value;
-      const marker = '\n\n[OneCode: browser observation truncated to fit transport.]';
-      const markerBytes = utf8Bytes(marker);
+      const markerBytes = utf8Bytes(truncationMarker);
       let low = 0;
       let high = value.length;
       while (low < high) {
@@ -1523,7 +1532,7 @@
         if (utf8Bytes(value.slice(0, middle)) + markerBytes <= budget) low = middle;
         else high = middle - 1;
       }
-      return value.slice(0, low) + marker;
+      return value.slice(0, low) + truncationMarker;
     };
     if (typeof bounded.text === 'string') {
       bounded.text = takeUtf8(bounded.text, wireBudget);
@@ -1536,6 +1545,23 @@
       // ChatGPT's presentation of it, and half a presentation is worth less than none.
       const room = Math.max(0, wireBudget);
       bounded.renderedHtml = utf8Bytes(bounded.renderedHtml) <= room ? bounded.renderedHtml : '';
+    }
+    // JSON quoting can expand an otherwise in-budget string (notably backslashes, quotes and
+    // control characters). Measure the actual event envelope before custody leaves the page.
+    // Presentation is optional, so discard it first; only then shorten canonical prose, with
+    // the same explicit marker, if the serialized singleton still cannot fit safely.
+    const serializedBytes = (candidate) => utf8Bytes(JSON.stringify({ time: 0, ...candidate }));
+    if (serializedBytes(bounded) > observationWireBudget && typeof bounded.renderedHtml === 'string')
+      bounded.renderedHtml = '';
+    if (serializedBytes(bounded) > observationWireBudget && typeof observation.text === 'string') {
+      let low = 0, high = observation.text.length;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        const candidate = { ...bounded, text: observation.text.slice(0, middle) + truncationMarker };
+        if (serializedBytes(candidate) <= observationWireBudget) low = middle;
+        else high = middle - 1;
+      }
+      bounded.text = observation.text.slice(0, low) + truncationMarker;
     }
     const queued = {
       conversationId,
@@ -2102,6 +2128,7 @@
     fiberRows = new Map();
     fiberTurns = new Map();
     fiberScanToken = null;
+    fiberTurnCursor = 0;
     fiberPresent = null;
   }
 
@@ -2774,6 +2801,12 @@
           // A verified bootstrap or durable desktop ACK may precede the activity pull
           // that releases transcript custody. Reuse its exact native send identity.
           if (matchesUserSendReceipt(message, receipt)) {
+            // Public history can arrive before the native Send observer finishes.
+            // Keep this app-owned receipt and its source turn until the exact ACK
+            // transfers custody. Consuming it here loses the receipt metadata and
+            // can invalidate a successive Steer while its own Send is still settling.
+            // A different human message does not match and retains the ordinary veto.
+            if (desktopInputBusy && receipt.deferTurnUntilAck === true && !receipt.accepted) return false;
             userSendReceipt = null;
             return { messageId: message.id, baseline: receipt.baseline };
           }
@@ -2855,6 +2888,7 @@
           ...(reaction !== undefined ? { reaction } : {}),
           ...(source.attachments?.length ? { attachments: source.attachments } : {}),
           messageId: message.id,
+          ...(!justAuthored && newestUserId && message.id !== newestUserId ? { historyBeforeQuestionId: newestUserId } : {}),
           turnId: message.turnId || undefined,
           ...(sentModel ? { model: sentModel } : {}),
           ...(justAuthored ? { authoredNow: true } : {})
@@ -4035,7 +4069,9 @@
   //     presentation suppression. Caption text and per-call adjacency remain non-authority.
   // 12: adds exact provider-message/sediment generated-image descriptors and DOM pixel stamps.
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
-  const FIBER_VERSION = 34;
+  // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
+  //     thoughts/activity instead of permanently rereading only the newest six turn groups.
+  const FIBER_VERSION = 35;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4059,6 +4095,8 @@
   let generationDiagnostic = '';
   /** Exact scan frame those two descriptor maps came from. */
   let fiberScanToken = null;
+  /** Number of older mounted Fiber turns already considered by this conversation's import pass. */
+  let fiberTurnCursor = 0;
   let fiberAsking = null;
   let fiberCommitFlights = 0;
   /** Off until the helper answers once, so a browser without it behaves exactly as before. */
@@ -5123,7 +5161,9 @@
             if (turn) turns.push(turn);
           }
         }
-        if (!Array.isArray(data.rows)) return finish({ rows: new Map(), turns, scanToken: data.scanToken });
+        const nextTurnCursor = Number.isInteger(data.nextTurnCursor) && data.nextTurnCursor >= 0 && data.nextTurnCursor <= 1_000_000
+          ? data.nextTurnCursor : 0;
+        if (!Array.isArray(data.rows)) return finish({ rows: new Map(), turns, scanToken: data.scanToken, nextTurnCursor });
         const rows = new Map();
         for (const raw of data.rows.slice(0, FIBER_MAX_ROWS)) {
           const row = readDescriptor(raw);
@@ -5133,12 +5173,13 @@
           else rows.set(row.index, row);
         }
         for (const [index, row] of rows) if (row === null) rows.delete(index);
-        finish({ rows, turns, scanToken: data.scanToken });
+        finish({ rows, turns, scanToken: data.scanToken, nextTurnCursor });
       };
       window.addEventListener('message', onMessage);
       setTimeout(() => finish(null), FIBER_TIMEOUT_MS);
       try {
-        window.postMessage({ source: FIBER_ASK, nonce, apps: CLF_DOM.connectorNames(), appIds: CLF_DOM.connectorApps() }, location.origin);
+        window.postMessage({ source: FIBER_ASK, nonce, turnCursor: fiberTurnCursor,
+          apps: CLF_DOM.connectorNames(), appIds: CLF_DOM.connectorApps() }, location.origin);
       } catch {
         finish(null);
       }
@@ -5396,6 +5437,7 @@
           fiberRows = new Map();
           fiberTurns = new Map();
           fiberScanToken = null;
+          fiberTurnCursor = 0;
         }
         return false;
       }
@@ -5405,6 +5447,9 @@
     // state. Epoch/conversation checks alone therefore are not enough: in that window they
     // still both say A while the Fiber tree already belongs to B.
     if (askedConversation && CLF_DOM.conversationId() !== askedConversation) return false;
+    // Advance only after this exact route/epoch accepted the reply. A late answer from the
+    // conversation being left behind must never consume the new chat's history cursor.
+    fiberTurnCursor = answer.nextTurnCursor;
     const concreteConversation = (value) =>
       typeof value === 'string' && /^[0-9a-f-]{8,64}$/i.test(value) ? value : null;
     // Capture the one page turn this document owns before filtering by Fiber's own conversation
@@ -5540,6 +5585,17 @@
       else fiberTurns.set(turn.index, turn);
     }
     for (const [index, value] of fiberTurns) if (value === null) fiberTurns.delete(index);
+    // These groups retain native document order, even when the importer pages
+    // older mounted groups. Importing their questions later is history, not a
+    // new task boundary. Retain the exact later question rather than using time.
+    const orderedQuestions = answer.turns.flatMap(turn => {
+      if (turn.conversationConflict || turn.conversationId !== askedConversation) return [];
+      return orderedNativeUsers(turn) || [];
+    });
+    const latestCapturedQuestion = orderedQuestions.at(-1);
+    const latestCapturedQuestionId = latestCapturedQuestion?.rawMessageId || latestCapturedQuestion?.messageId;
+    const earlierCapturedQuestions = new Set(orderedQuestions.slice(0, -1)
+      .map(row => row.rawMessageId || row.messageId).filter(id => id && id !== latestCapturedQuestionId));
     // Apply the current live response's presentation before journal writes yield.
     // Historical scans keep their caller's coalesced paint/viewport boundary;
     // they must not repaint another response halfway through feed restoration.
@@ -6022,6 +6078,8 @@
           emit({
             kind: 'user_message',
             messageId: message.messageId,
+            ...(latestCapturedQuestionId && earlierCapturedQuestions.has(message.messageId)
+              ? { historyBeforeQuestionId: latestCapturedQuestionId } : {}),
             text: shownUserText(message.rawText, message.markdown === true, renderedUserTexts.get(message.messageId)),
             ...(message.attachments?.length ? { attachments: message.attachments } : {}),
             ...(sentModel ? { model: sentModel } : {}),
@@ -13569,7 +13627,7 @@
     if (boot.model || boot.reasoningEffort) step('model');
     let bootstrapModelFailure = '';
     if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget,
-      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }, boot.modelSurface))) {
+      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }, boot.modelSurface, boot.modelLabel))) {
       return void (await fail(t(
         'content_bootstrap_model_unavailable',
         "The requested model or reasoning is unavailable or could not be confirmed in the provider"
@@ -13609,7 +13667,7 @@
           // Re-run the picker proof on the concrete destination route. The requested model may
           // be a saved family/display alias, so only the route-stamped native execution id that
           // ChatGPT exposes after successful selection is valid destination evidence.
-          if (!(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, ownsDestination, null, boot.modelSurface))) return;
+          if (!(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, ownsDestination, null, boot.modelSurface, boot.modelLabel))) return;
           if (!ownsDestination()) return;
           const selected = CLF_DOM.visibleModelSelection?.();
           if (!selected) return;
@@ -15033,7 +15091,7 @@
         'content_delivery_model_unconfirmed', 'Requested model or reasoning could not be confirmed'), 'surface-unconfirmed');
       let modelFailure = '';
       intakeStage('model');
-      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }, input.modelSurface))) return fail(
+      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }, input.modelSurface, input.modelLabel))) return fail(
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
           'Requested model or reasoning could not be confirmed'
@@ -15355,6 +15413,7 @@
         for (const row of frame.messages || []) if (row.role === 'user' && row.stable === true) receiptPriorSnapshot.add(row.rawMessageId || row.messageId);
       rememberUserSend();
       sourcePreparedReceipt = userSendReceipt;
+      if (CLF_DOM.provider === 'chatgpt' && sourcePreparedReceipt) sourcePreparedReceipt.deferTurnUntilAck = true;
       const submittedText = sendText(CLF_DOM.composerAuthoredText());
       const nativeAliasAtReceipt = (user, conversation) => {
         const section = sectionOf(user.node) || user.node, frame = fiberTurnForNode(user.node) || fiberTurnForNode(section);

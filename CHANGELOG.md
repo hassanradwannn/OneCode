@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.3] — 2026-10-30
+
+Restore progressive long-chat import and remove the premature 400 KiB native-observation cutoff, preserve Steer receipts until delivery ACK, keep late historical questions from replacing current task identity, recover Compact & Resume only after a replacement provider document is actually ready, keep fresh-chat model verification stable across provider ID churn without weakening native proof, keep Steer anchored at its insertion point, repair provider code-block capture, brand the sidebar connection state as OneCode, and carry the verified Linux dock-identity follow-up. Companion protocol 22 and recorder 118 force older loaded browser code to reload the new contracts. See [release notes](docs/release-notes/v0.8.3.md) and [verification scope](docs/release-acceptance/v0.8.3.md).
+
 ## [0.8.2] — 2026-10-30
 
 Repair Linux duplicate-launch rollback before it can fall back to an older application and reset setup. Preserve desktop launcher identity, recover validated settings from proven downgrade resets, and recognize saved exact-route connector evidence after restart. Linux needs one complete package to replace its immutable bootstrap; Windows retains its compatible capsule path. See [release notes](docs/release-notes/v0.8.2.md) and [verification scope](docs/release-acceptance/v0.8.2.md).

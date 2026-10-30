@@ -21,8 +21,8 @@ import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
 import { MAX_BROWSER_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
 import { isConversationDeleted } from '../shared/chat-error.js';
 import { prepareSessionPrompt } from './session/prompt.js';
-import { pendingChatModelRequest, observeChatModels, requestChatModels, observedModelSurface } from './chat-models.js';
-import { isNativeModelId, isDeliberateEffort, isProModel } from '../shared/chat-models.js';
+import { getChatModels, pendingChatModelRequest, observeChatModels, requestChatModels, observedModelSurface } from './chat-models.js';
+import { isNativeModelId, isDeliberateEffort, isProModel, resolveChatModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
 import { positionOf, injectedUserMessage, recordedRequestTurn, responseTurnId, type TimelineTurns } from '../shared/chronology.js';
 import type { SessionSummary } from '../shared/session.js';
@@ -404,8 +404,11 @@ type CommandSpec =
        * Requested Gemini model slug for the worker's fresh chat, or null for the account
        * default. URL-level only: it selects which model the opened chat uses and is never
        * typed into the chat or shown to the model.
-       */
+      */
       model: string | null;
+      /** Provider-observed display identity frozen with the requested model. It is only a
+       * unique native-picker fallback if the opaque execution id changes before this chat opens. */
+      modelLabel?: string;
       modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
       /**
        * Requested reasoning level for the worker's fresh chat, or null to inherit.
@@ -453,7 +456,7 @@ type CommandSpec =
    * move happened. Keyed by session, because compacting the same chat twice is one job whose
    * brief got newer — not two fresh chats, which is what keying on the handoff produced.
    */
-  | { type: 'resume'; sessionId: string; token: string }
+  | { type: 'resume'; sessionId: string; token: string; modelLabel?: string }
   | { type: 'stop'; sessionId: string; conversationId: string; turnId: string; userMessageId?: string; continuationInputId?: string };
 
 interface Command {
@@ -590,6 +593,9 @@ export interface BridgeCommand {
    * Null for every other command kind.
    */
   model: string | null;
+  /** Display identity observed with model. Used only as a unique native-picker fallback when a
+   * provider rotates an opaque execution id before this fresh chat opens. */
+  modelLabel?: string;
   modelSurface?: import('../shared/chat-models.js').NativeModelSurface;
   /**
    * Requested reasoning level for a worker's fresh chat, or null to inherit.
@@ -1991,6 +1997,10 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
       observation.authoredAt = item['authoredAt'];
     }
     if (item['authoredNow'] === true && kind === 'user_message') observation.authoredNow = true;
+    if (kind === 'user_message' && item['authoredNow'] !== true &&
+        typeof item['historyBeforeQuestionId'] === 'string' && item['historyBeforeQuestionId'].length > 0 &&
+        item['historyBeforeQuestionId'].length <= 256 && item['historyBeforeQuestionId'] !== item['messageId'])
+      observation.historyBeforeQuestionId = item['historyBeforeQuestionId'];
     if (typeof item['activeNow'] === 'boolean' && (kind === 'assistant_message' || kind === 'page_tool')) observation.activeNow = item['activeNow'];
     if (kind === 'model_selection') {
       if (typeof item['model'] !== 'string' || !(chatProviderForConversation(expectedConversationId) === 'claude'
@@ -3577,7 +3587,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (ok) { retire(command!, 'a guarded refresh of the exact continuation page was authorized'); changed(); }
       return json(res, 200, { ok }, origin);
     }
-    if (body.refreshAction === 'dispatch' || body.refreshAction === 'ready') {
+    if (body.refreshAction === 'dispatch' || body.refreshAction === 'ready' || body.refreshAction === 'retry') {
       const ok = !!target && await advanceInputRefresh(body.id, body.owner, target, body.refreshAction);
       if (ok) changed();
       return json(res, 200, { ok }, origin);
@@ -7360,8 +7370,11 @@ export function queueWorkerBootstrap(agent: string, task: string, model: string 
   if (!runId || !swarmRunning(runId)) return null;
   // Broker replay supplies null for legacy unknown mode, so a newer catalog can
   // never lend a different mode to an older accepted worker assignment.
-  const modelSurface = frozenSurface === null ? undefined : frozenSurface ?? observedModelSurface(model, chatProviderForConversation(primeConversation(runId), selectedChatProvider()), getConfig().multiAgent.defaultModelAffinity);
-  const command = queue({ type: 'worker', agent, task, model, reasoningEffort, runId, ...(modelSurface ? { modelSurface } : {}) });
+  const provider = chatProviderForConversation(primeConversation(runId), selectedChatProvider());
+  const modelSurface = frozenSurface === null ? undefined : frozenSurface ?? observedModelSurface(model, provider, getConfig().multiAgent.defaultModelAffinity);
+  const modelLabel = model ? resolveChatModel(getChatModels(provider).models, model)?.label : undefined;
+  const command = queue({ type: 'worker', agent, task, model, reasoningEffort, runId,
+    ...(modelLabel ? { modelLabel } : {}), ...(modelSurface ? { modelSurface } : {}) });
   // Start the clock at broker admission, exactly as a revival does. A bootstrap that never
   // reaches a page is the case that has no other clock at all.
   armDeadline(command);
@@ -7445,7 +7458,11 @@ export function queueResume(sessionId: string, token: string): BridgeCommand | n
 
 function queueResumeCommand(sessionId: string, token: string): Command {
   rememberToken(sessionId, token);
-  const command = queue({ type: 'resume', sessionId, token });
+  const continuation = continuationByToken(token);
+  const requested = continuation?.requestedModel?.model ?? null;
+  const provider = chatProviderForConversation(continuation?.from, selectedChatProvider());
+  const modelLabel = requested ? resolveChatModel(getChatModels(provider).models, requested)?.label : undefined;
+  const command = queue({ type: 'resume', sessionId, token, ...(modelLabel ? { modelLabel } : {}) });
   changed();
   return command;
 }
@@ -11804,7 +11821,10 @@ function revivalFor(agent: string, runId: string): WorkerRevival | null {
  */
 function describe(command: Command, client: string | null, claimedSummary?: string): BridgeCommand {
   const spec = command.spec;
-  const selection = spec.type === 'resume' ? continuationByToken(spec.token)?.requestedModel : null;
+  const continuation = spec.type === 'resume' ? continuationByToken(spec.token) : null;
+  const selection = continuation?.requestedModel ?? null;
+  const requestedModel = spec.type === 'worker' ? spec.model : selection?.model ?? null;
+  const modelLabel = spec.type === 'worker' || spec.type === 'resume' ? spec.modelLabel : undefined;
   const expiresAt = Date.now() + Math.max(1, commandDeadlineDelay(command));
   if (spec.type === 'stop') return { id: command.id, expiresAt, kind: 'stop-turn', type: 'stop', text: '', agent: null, model: null, reasoningEffort: null, conversationId: spec.conversationId, turnId: spec.turnId,
     ...(spec.continuationInputId ? { continuationInputId: spec.continuationInputId } : {}), ...(spec.userMessageId ? { userMessageId: spec.userMessageId } : {}) };
@@ -11826,7 +11846,8 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
     type: spec.type,
     text,
     agent: spec.type === 'resume' ? null : spec.agent,
-    model: spec.type === 'worker' ? spec.model : selection?.model ?? null,
+    model: requestedModel,
+    ...(modelLabel ? { modelLabel } : {}),
     reasoningEffort: spec.type === 'worker' ? spec.reasoningEffort : selection?.reasoningEffort ?? null,
     ...((spec.type === 'worker' ? spec.modelSurface : selection?.modelSurface) ? { modelSurface: spec.type === 'worker' ? spec.modelSurface : selection?.modelSurface } : {}),
     // The fence the page enforces before it types. Only a revival has one: the other two
@@ -12174,6 +12195,8 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
       agent: worker.agent,
       task: worker.task.slice(0, 512 * 1024),
       model: isModelSlug(worker.model, chatProviderForConversation(primeConversation(worker.runId), selectedChatProvider())) ? worker.model : null,
+      ...(typeof worker.modelLabel === 'string' && worker.modelLabel.length <= 80 && worker.modelLabel.trim() === worker.modelLabel && worker.modelLabel
+        ? { modelLabel: worker.modelLabel } : {}),
       reasoningEffort: isReasoningEffort(worker.reasoningEffort) ? worker.reasoningEffort : null,
       ...(isModelSlug(worker.model, chatProviderForConversation(primeConversation(worker.runId), selectedChatProvider())) && (worker.modelSurface === 'chat' || worker.modelSurface === 'work') ? { modelSurface: worker.modelSurface } : {}),
       runId: worker.runId
@@ -12210,7 +12233,9 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
     const resume = raw as Extract<CommandSpec, { type: 'resume' }>;
     const continuation = continuationByToken(resume.token);
     if (!continuation || continuation.sessionId !== resume.sessionId || continuation.state === 'aborted') return null;
-    return { type: 'resume', sessionId: resume.sessionId, token: resume.token };
+    return { type: 'resume', sessionId: resume.sessionId, token: resume.token,
+      ...(typeof resume.modelLabel === 'string' && resume.modelLabel.length <= 80 && resume.modelLabel.trim() === resume.modelLabel && resume.modelLabel
+        ? { modelLabel: resume.modelLabel } : {}) };
   }
   return null;
 }

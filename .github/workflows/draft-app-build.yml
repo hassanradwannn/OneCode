@@ -25,7 +25,15 @@ on:
           - stable-release
           - stable-full-backfill
       base_version:
-        description: Required published compatible base version for capsule operations
+        description: Legacy shared compatible base version (used when a platform-specific value is blank)
+        required: false
+        type: string
+      base_version_win32:
+        description: Published compatible Windows base version for capsule/release operations
+        required: false
+        type: string
+      base_version_linux:
+        description: Published compatible Linux base version for capsule/release operations
         required: false
         type: string
       platform:
@@ -57,7 +65,7 @@ jobs:
       SOURCE_REF: ${{ inputs.source_ref }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       BUILD_OPERATION: ${{ inputs.operation }}
-      BASE_VERSION: ${{ inputs.base_version }}
+      BASE_VERSION: ${{ matrix.platform == 'win32' && (inputs.base_version_win32 || inputs.base_version) || (inputs.base_version_linux || inputs.base_version) }}
       BUILD_PLATFORM: ${{ matrix.platform }}
 
     steps:
@@ -279,7 +287,11 @@ jobs:
       SOURCE_REF: ${{ inputs.source_ref }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       BUILD_OPERATION: ${{ inputs.operation }}
-      BASE_VERSION: ${{ inputs.base_version }}
+      # For platform=all, each matrix build already validated its own base and the finalizer
+      # rechecks the common draft/source contract through Windows. A one-platform retry must
+      # validate that selected platform instead of requiring the other platform's base input.
+      BUILD_PLATFORM: ${{ inputs.platform == 'linux' && 'linux' || 'win32' }}
+      BASE_VERSION: ${{ inputs.platform == 'linux' && (inputs.base_version_linux || inputs.base_version) || (inputs.base_version_win32 || inputs.base_version) }}
 
     steps:
       - name: Check out workflow tools
@@ -307,7 +319,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APP_SOURCE_DIR: app-source
-          BUILD_PLATFORM: win32
         run: node workflow-source/scripts/draft-app-release.mjs verify
 
       - name: Merge platform registers and publish canonical checksum

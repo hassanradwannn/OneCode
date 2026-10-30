@@ -1781,7 +1781,7 @@ var CLF_DOM = (() => {
     if (!models || !restored || !owns()) { failure?.(!restored ? 'restore_failed' : problem || 'model_unconfirmed'); return null; }
     return [{ id: 'gemini-current', label: 'Automatic (current Gemini model)', efforts: [] }, ...models];
   }
-  async function selectModelSettings(model, effort, current = () => true, failure = null) {
+  async function selectModelSettings(model, effort, current = () => true, failure = null, _modelSurface = undefined, modelLabel = undefined) {
     const initial = modelSurface(current);
     const refuse = (stage, surface = initial) => {
       failure?.(stage);
@@ -1830,8 +1830,11 @@ var CLF_DOM = (() => {
     let confirmEffort = async () => !requestedEffort;
     try {
       const rows = await waitFor(nativeModelMenu, surface.current, 5000);
-      const options = rows?.filter(row => !model || model === 'gemini-current' ? row.selected :
-        row.id === String(model).toLowerCase() || row.label === model) || [];
+      const normalizeIdentity = value => compact(value).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}.]/gu, '');
+      const exact = rows?.filter(row => row.id === String(model).toLowerCase()) || [];
+      const labelIdentity = normalizeIdentity(modelLabel || model);
+      const byLabel = !exact.length && labelIdentity ? rows?.filter(row => normalizeIdentity(row.label) === labelIdentity) || [] : [];
+      const options = !model || model === 'gemini-current' ? rows?.filter(row => row.selected) || [] : exact.length ? exact : byLabel;
       if (options.length !== 1 || !surface.current()) return refuse('choice-unconfirmed', surface);
       const target = options[0];
       confirmEffort = async () => {

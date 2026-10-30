@@ -18,8 +18,11 @@ Use the `stable-release` GitHub operation for ordinary future stable releases. I
 ```sh
 gh workflow run draft-app-build.yml --repo hassanradwannn/OneCode --ref release \
   -f source_ref=EXACT_40_CHARACTER_COMMIT_SHA -f release_tag=vX.Y.Z \
-  -f operation=stable-release -f base_version=VERIFIED_MINIMUM_BASE -f platform=all
+  -f operation=stable-release -f platform=all \
+  -f base_version_win32=VERIFIED_WINDOWS_BASE -f base_version_linux=VERIFIED_LINUX_BASE
 ```
+
+Use the platform-specific base inputs whenever Windows and Linux intentionally retain different complete bases. The legacy `base_version` input remains a shared fallback when both platforms use the same published base. Each matrix leg validates only its own selected base/runtime before it can upload a capsule. The checksum finalizer uses the matching platform/base for a one-platform retry and still requires both platform checksum sidecars before it can publish the canonical register, so a retry cannot finalize an incomplete cross-platform release.
 
 `stable-capsule` remains available for exceptional hotfix-only releases, but it is no longer the normal stable publication shape. `stable-full-backfill` is a guarded repair operation for adding missing full artifacts to an already-published stable tag without replacing existing assets; do not use it as the normal release workflow.
 

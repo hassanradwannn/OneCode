@@ -21,7 +21,7 @@ import { isChatBlocked } from './blocked-chats.js';
 import { wakeBrowserWork } from '../browser-wake.js';
 import { logInfo, logWarn } from '../logger.js';
 import { noteChatOrigin } from './recorder.js';
-import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel, isProModel } from '../../shared/chat-models.js';
+import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel, isProModel, resolveChatModel } from '../../shared/chat-models.js';
 import { inFlightToolCalls, runningToolProgress } from '../mcp/call-context.js';
 import { automaticFinishEnabled, goalDrivingMode, consumeGoalReplyForInputNow } from '../goal.js';
 import { finishInstruction } from '../../shared/finish.js';
@@ -34,7 +34,7 @@ import { invokedSkills } from '../../shared/skill-invocation.js';
 import { SKILL_ID_PATTERN } from '../../shared/skills.js';
 import { autoSelectManagedSkills } from '../skill-routing.js';
 import { asksForImage } from './image-request.js';
-import { observedModelSurface } from '../chat-models.js';
+import { getChatModels, observedModelSurface } from '../chat-models.js';
 import { optionalNativeSkillGuidance, nativeSkillBudget, nativeSkillDelivery } from './native-skill.js';
 
 export const inputArgs = z.object({
@@ -104,6 +104,10 @@ export function adoptWarmupRecovery(r: WarmupRecovery, owner: string, browser: s
     ...(conversationId ? { conversationId } : {}) };
 }
 const entrySchema = inputArgs.extend({
+  /** Display identity observed with the requested native id. It is never selection authority by itself;
+   * the companion may use it only to resolve one unique currently observed native choice if the
+   * provider rotated the opaque id between catalog observation and fresh-chat preparation. */
+  modelLabel: z.string().trim().min(1).max(80).optional(),
   /** Original request metadata; the delivery surface may be inferred and frozen below. */
   requestedModelSurface: z.enum(['chat', 'work']).optional(),
   /** Saved interval authority; only the scheduler's internal admission supplies this. */
@@ -113,7 +117,8 @@ const entrySchema = inputArgs.extend({
   warmupRecovery: warmupRecoverySchema.optional(),
   /** Ordered recovery remains on the original input; navigation never refunds Send. */
   nativeRecovery: z.object({ turnId: z.string().min(1).max(256), questionId: z.string().min(1).max(256),
-    phase: z.enum(['ready-to-refresh', 'refresh-dispatched', 'ready']), refreshOwner: z.string().optional() }).optional(),
+    phase: z.enum(['ready-to-refresh', 'refresh-dispatched', 'ready']), refreshOwner: z.string().optional(),
+    dispatchedAt: z.number().nonnegative().optional() }).optional(),
   /** This exact outbox row owns the first native send of its reserved local session. */
   opening: z.literal(true).optional(),
   /** An explicit retry can keep its unbound local chat instead of reserving another. */
@@ -212,6 +217,8 @@ const TOOL_INPUT_TEXT_BYTES = 128000;
 const UNCERTAIN_SEND_MS = 15 * 60_000;
 /** A fresh native Gemini chat must finish its tool-free warmup before task Send. */
 const FRESH_OPENING_PREPARATION_MS = 6 * 60_000;
+/** A browser navigation has no Send authority. Bound a lost dispatch receipt rather than deadlocking the outbox forever. */
+const NATIVE_REFRESH_CONFIRM_MS = 6 * 60_000;
 const UNCLAIMED_PICKUP_RETRY_MIN_MS = 2 * 60_000;
 const UNCLAIMED_PICKUP_RETRY_MAX_AGE_MS = 30 * 60_000;
 /**
@@ -635,6 +642,13 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
       const reason = await recoveryInvalidReason(row);
       if (reason) return { ...row, state: 'cancelled', error: `Automatic Continue cancelled: ${reason}.` };
     }
+    if (row.nativeRecovery?.phase === 'refresh-dispatched') {
+      const dispatchedAt = row.nativeRecovery.dispatchedAt ?? row.offeredAt ?? row.createdAt;
+      if (Date.now() - dispatchedAt >= NATIVE_REFRESH_CONFIRM_MS) return {
+        ...row, state: 'cancelled', owner: null,
+        error: 'Automatic Continue cancelled: the browser refresh did not confirm a replacement page.'
+      };
+    }
     if (row.finishOwner && !terminal(row) && !(await finishInputCurrent(row)))
       return { ...row, state: 'cancelled', error: 'Automatic follow-up cancelled because its active turn or setting changed.' };
     if (row.purpose === 'decision') return row;
@@ -1043,7 +1057,9 @@ export function enqueueInput(raw: InputArgs, finishOwner?: InputEntry['finishOwn
     const transportIntent = scheduleId || input.steerTurnId ? 'browser' as const : toolDelivery ? 'tool' as const : input.attachments?.length ? 'browser' as const : input.mode === 'auto' && !finishOwner
       ? policy?.canInject ? 'tool' as const : !policy || policy.browserAllowed || policy.directTurn ? 'browser' as const : undefined : undefined;
     const directTurn = steerSource ?? (!input.steerTurnId && !toolDelivery && input.mode === 'auto' && !finishOwner && input.dueAt <= Date.now() ? policy?.directTurn : null);
-    const entry: InputEntry = { ...input, ...(scheduleId ? { scheduleId } : {}), chatProvider: inputProvider, ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
+    const observedModel = input.model ? resolveChatModel(getChatModels(inputProvider).models, input.model) : undefined;
+    const entry: InputEntry = { ...input, ...(scheduleId ? { scheduleId } : {}), chatProvider: inputProvider,
+      ...(observedModel?.label ? { modelLabel: observedModel.label } : {}), ...(queuedTurn ? { queuedTurn } : {}), ...(toolImages ? { toolImages } : {}), ...(directTurn ? { directTurn } : {}),
       ...(steerSource ? { steerReady: true as const } : {}),
       ...(injectionOwner ? { toolTurnId: injectionOwner.turnId } : {}), ...(transportIntent ? { transportIntent } : {}),
       ...(requestedMode !== input.mode ? { requestedMode } : {}), ...(finishOwner ? { finishOwner } : {}), state: 'queued', owner: null, createdAt: Date.now(), conversationId: null };
@@ -1869,7 +1885,7 @@ async function inputRefreshCurrent(row: InputEntry): Promise<boolean> {
 
 /** Navigation is a separately spent stage before the original continuation's Send. */
 export function advanceInputRefresh(id: string, owner: string, conversationId: string,
-  action: 'dispatch' | 'ready'): Promise<boolean> {
+  action: 'dispatch' | 'ready' | 'retry'): Promise<boolean> {
   return serial(async () => {
     const current = await load();
     const row = current.find(entry => entry.id === id && entry.state === 'browser' && entry.owner === owner &&
@@ -1877,8 +1893,12 @@ export function advanceInputRefresh(id: string, owner: string, conversationId: s
     if (!row?.nativeRecovery || !await inputRefreshCurrent(row)) return false;
     if (action === 'dispatch' && row.nativeRecovery.phase !== 'ready-to-refresh') return false;
     if (action === 'ready' && (row.nativeRecovery.phase !== 'refresh-dispatched' || row.nativeRecovery.refreshOwner !== owner)) return false;
+    if (action === 'retry' && (row.nativeRecovery.phase !== 'refresh-dispatched' || row.nativeRecovery.refreshOwner !== owner)) return false;
     const next: InputEntry = action === 'dispatch'
-      ? { ...row, nativeRecovery: { ...row.nativeRecovery, phase: 'refresh-dispatched', refreshOwner: owner } }
+      ? { ...row, nativeRecovery: { ...row.nativeRecovery, phase: 'refresh-dispatched', refreshOwner: owner, dispatchedAt: Date.now() } }
+      : action === 'retry'
+      ? { ...row, state: 'queued', owner: null, offeredAt: undefined, completedTurnId: undefined,
+          nativeRecovery: { turnId: row.nativeRecovery.turnId, questionId: row.nativeRecovery.questionId, phase: 'ready-to-refresh' } }
       : { ...row, state: 'queued', owner: null, offeredAt: undefined, completedTurnId: undefined,
           nativeRecovery: { ...row.nativeRecovery, phase: 'ready' },
           ...(row.recovery ? { recovery: { ...row.recovery, phase: 'resumed', reloadOwner: owner } } : {}) };

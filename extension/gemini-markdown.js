@@ -10,14 +10,35 @@ var CLF_GEMINI_MARKDOWN = (() => {
     const blocks = [];
     const keepBlock = value => { const token = `${prefix}${blocks.length}\uE001`; blocks.push([token, value]); return `\n\n${token}\n\n`; };
     const children = node => [...node.childNodes].map(read).join('');
-    const code = node => {
-      const body = node.matches('pre') ? node.querySelector('code') || node :
-        node.querySelector('[data-test-id="code-content"],pre code,pre');
+    const codeLanguage = (body, owner = body) => {
+      const hinted = body.className?.match(/(?:^|\s)language-([\w#+.-]+)/)?.[1] ||
+        owner.querySelector?.('.code-block-decoration > span')?.textContent?.trim() || '';
+      return /^[\w#+.-]{1,32}$/.test(hinted) ? hinted.toLowerCase() : '';
+    };
+    const standaloneBlockCode = node => node.matches?.('code') && !node.closest('pre,code-block') &&
+      (/[\r\n]/.test(node.textContent || '') || codeLanguage(node) && !node.closest('p,a,em,strong'));
+    const codeShellBody = node => {
+      if (!node.matches?.('div,section,article')) return null;
+      const allCodes = [...node.querySelectorAll('code')];
+      const candidates = allCodes.filter(standaloneBlockCode);
+      if (candidates.length !== 1) return null;
+      const body = candidates[0], language = codeLanguage(body, node);
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll('code')[allCodes.indexOf(body)]?.remove();
+      for (const drop of copy.querySelectorAll(omit)) drop.remove();
+      const chrome = (copy.textContent || '').replace(/\s+/g, ' ').trim();
+      // Some provider renderers no longer wrap a fenced block in <pre>. Treat a
+      // containing element as code chrome only when everything outside its one
+      // block is empty or exactly the redundant language label. Prose beside a
+      // code example therefore remains prose rather than being swallowed.
+      return !chrome || language && chrome.toLowerCase() === language ? body : null;
+    };
+    const code = (node, suppliedBody = null) => {
+      const body = suppliedBody || (node.matches('code') ? node : node.matches('pre') ? node.querySelector('code') || node :
+        node.querySelector('[data-test-id="code-content"],pre code,pre'));
       if (!body) return children(node);
       const value = (body.textContent || '').replace(/\r\n?/g, '\n');
-      const hinted = body.className?.match(/(?:^|\s)language-([\w#+.-]+)/)?.[1] ||
-        node.querySelector('.code-block-decoration > span')?.textContent?.trim() || '';
-      const language = /^[\w#+.-]{1,32}$/.test(hinted) ? hinted.toLowerCase() : '';
+      const language = codeLanguage(body, node);
       const longest = Math.max(2, ...[...value.matchAll(/`+/g)].map(match => match[0].length));
       const fence = '`'.repeat(longest + 1);
       return keepBlock(`${fence}${language}\n${value}${value.endsWith('\n') ? '' : '\n'}${fence}`);
@@ -38,7 +59,9 @@ var CLF_GEMINI_MARKDOWN = (() => {
           return display ? keepBlock(`\\[\n${tex}\n\\]`) : `\\(${tex}\\)`;
         }
       }
-      if (tag === 'code-block' || tag === 'pre') return code(node);
+      const shellBody = codeShellBody(node);
+      if (shellBody) return code(node, shellBody);
+      if (tag === 'code-block' || tag === 'pre' || standaloneBlockCode(node)) return code(node);
       if (tag === 'code') {
         const value = node.textContent || '', runs = [...value.matchAll(/`+/g)].map(match => match[0].length);
         const fence = '`'.repeat(Math.max(0, ...runs) + 1), pad = /^\s|\s$|^`|`$/.test(value) ? ' ' : '';

@@ -170,7 +170,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 21;
+const BRIDGE_PROTOCOL = 22;
 /** Browser-owned presentation preferences also exposed by the popup. */
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
@@ -4105,6 +4105,25 @@ function historyLedger(message, source) {
   historyLedgerQueue = run.then(() => undefined, () => undefined);
   return run;
 }
+async function refundUnconfirmedInputRefresh(token, receipt, definiteFailure = false) {
+  if (!receipt.input || pendingRepairReadiness.get(token) !== receipt) return false;
+  if (!definiteFailure) {
+    const tab = await chrome.tabs.get(receipt.tabId).catch(() => null);
+    const currentConversation = tab ? conversationForTab(tab) : null;
+    const oldDocumentStillCurrent = !!tab && !tab.pendingUrl && tab.status !== 'loading' &&
+      currentConversation === receipt.conversationId && tabDocuments[String(receipt.tabId)] === receipt.documentId;
+    const departed = !tab || currentConversation !== receipt.conversationId;
+    if (!oldDocumentStillCurrent && !departed) return false;
+  }
+  const ack = await call('/input/claim', { method: 'POST', body: JSON.stringify({
+    id: receipt.input.id, owner: receipt.input.owner, conversationId: receipt.conversationId, refreshAction: 'retry' }) });
+  if (!ack.ok) return false;
+  if (pendingRepairReadiness.get(token) === receipt) {
+    pendingRepairReadiness.delete(token);
+    await persistLive();
+  }
+  return ack.data?.ok === true;
+}
 function watchReloadedRepair(token, receipt) {
   if (receipt.checking) return;
   receipt.checking = true;
@@ -4119,10 +4138,13 @@ function watchReloadedRepair(token, receipt) {
       // An unavailable bridge cannot consume the browser's only spent-action
       // receipt. Retry confirmation, never navigation, after reconnect.
       if (ack.ok && (!receipt.input || ack.data?.ok === true)) { pendingRepairReadiness.delete(token); await persistLive(); }
+      else if (receipt.input && ack.ok) { pendingRepairReadiness.delete(token); await persistLive(); }
       else receipt.checking = false;
     } else {
       receipt.checking = false;
-      if (!receipt.reported && !receipt.input) {
+      if (receipt.input) {
+        await refundUnconfirmedInputRefresh(token, receipt);
+      } else if (!receipt.reported) {
         const ack = await call(`/status?repairFailed=${encodeURIComponent(token)}&repairAction=reloaded&why=unready`);
         if (ack.ok) { receipt.reported = true; await persistLive(); }
       }
@@ -4326,12 +4348,18 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
         }
       }
       if (target) {
-        const before = reason === 'assistant-error'
+        // A reload receipt is not a replacement-document receipt. Assistant-error and
+        // compaction both have follow-up work that may type as soon as main hears "repaired",
+        // so they must wait for the replacement content script to register and answer the
+        // readiness probe. Otherwise Compact & Resume can advance while Chrome is still between
+        // documents, leaving the handoff parked until the user happens to type or reload by hand.
+        const waitForReplacement = reason === 'assistant-error' || reason === 'compaction';
+        const before = waitForReplacement
           ? await tabReply(target.id, { type: 'clf-page-status' }, documentId ? { documentId } : undefined) : null;
         if (!current()) return advanced;
         // Persist custody before requesting navigation. If the worker stops at
         // that boundary, its successor reconciles the replacement, never reloads.
-        if (reason === 'assistant-error') {
+        if (waitForReplacement) {
           const receipt = { tabId: target.id, conversationId, documentId, runId: before?.runId, dispatchedAt: Date.now() };
           pendingRepairReadiness.set(token, receipt);
           await persistLive();
@@ -4340,8 +4368,16 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
             await persistLive();
             return advanced;
           }
-          reloadDispatched = true;
-          await chrome.tabs.reload(target.id);
+          try {
+            await chrome.tabs.reload(target.id);
+            reloadDispatched = true;
+          } catch (error) {
+            // A rejected tabs.reload call did not buy a navigation. Do not leave a durable
+            // readiness receipt waiting for a replacement document that can never arrive.
+            if (pendingRepairReadiness.get(token) === receipt) pendingRepairReadiness.delete(token);
+            await persistLive();
+            throw error;
+          }
           watchReloadedRepair(token, receipt);
           // A later exact replacement acknowledgement, not tabs.reload, owns confirmation.
           continue;
@@ -5139,11 +5175,21 @@ const HANDLERS = {
       if (!permit.ok || permit.data?.ok !== true) {
         pendingRepairReadiness.delete(receiptToken); await persistLive(); return { ok: false };
       }
-      const latest = await chrome.tabs.get(source.tab);
-      if (ownsDocument(source) && !latest.pendingUrl && conversationForTab(latest) === conversationId) {
-        await chrome.tabs.reload(source.tab);
-        watchReloadedRepair(receiptToken, receipt);
+      try {
+        const latest = await chrome.tabs.get(source.tab);
+        if (ownsDocument(source) && !latest.pendingUrl && conversationForTab(latest) === conversationId) {
+          await chrome.tabs.reload(source.tab);
+        }
+      } catch {
+        // Main spent only navigation authority, never Send. A definite reload
+        // failure may refund that exact stage; bridge loss keeps the receipt.
+        await refundUnconfirmedInputRefresh(receiptToken, receipt, true);
+        return { ok: false, error: 'refresh_not_dispatched' };
       }
+      // The source can begin navigating between the permit and reload. Watch that
+      // replacement too; an unchanged source is explicitly refunded after the
+      // readiness window instead of leaving main refresh-dispatched forever.
+      watchReloadedRepair(receiptToken, receipt);
       return permit;
     }
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
@@ -6299,7 +6345,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 116;
+const PAGE_RECORDER_VERSION = 118;
 
 let deferredRecoveryWork = null;
 
