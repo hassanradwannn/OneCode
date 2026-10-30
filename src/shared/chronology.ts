@@ -291,6 +291,7 @@ export function projectTimeline<T extends Chronological>(
   // page. This neither coalesces sibling messages nor grants a lifecycle turnId.
   const responses = new Map<string, TimelineTurns[string] | null>();
   const responseParents = new Map<string, Set<string>>();
+  const steeredResponses = new Map<string, Set<string>>();
   const nativeQuestions = new Set<string>();
   const exchanges = new Map<string, GeminiExchange>();
   const recordedTurns = new Set(Object.keys(turns));
@@ -318,13 +319,26 @@ export function projectTimeline<T extends Chronological>(
     const questions = [...parents].filter(parent => nativeQuestions.has(parent));
     const boundary = responses.get(key);
     if (questions.length > 1 || questions.length === 1 && boundary?.questionId &&
-        !questions[0]!.endsWith(`\u0000${boundary.questionId.toLowerCase()}`)) responses.set(key, null);
+        !questions[0]!.endsWith(`\u0000${boundary.questionId.toLowerCase()}`)) {
+      responses.set(key, null);
+      steeredResponses.set(key, new Set([...questions.map(question => question.slice(question.indexOf('\u0000') + 1)),
+        ...(boundary?.questionId ? [boundary.questionId.toLowerCase()] : [])]));
+    }
   }
   return entries.map(entry => {
     let boundary = entry.turnId ? turns[responseTurnId(turns, entry.turnId)] : undefined;
     if (!entry.turnId) {
       const response = assistantResponseKey(entry);
-      if (response) boundary = responses.get(response) ?? undefined;
+      if (response) {
+        boundary = responses.get(response) ?? undefined;
+        // A shared response pair across proved native corrections cannot select
+        // one whole group. Its provider-authored prose time can place a paragraph
+        // inside an already recorded question's boundaries, including the current
+        // turn before its final. This is display metadata, never task identity.
+        const questions = steeredResponses.get(response), written = authoredTimeOf(entry);
+        const owner = questions && written !== undefined ? turnOpenAt(turns, written) : undefined;
+        if (owner && turns[owner]?.questionId && questions!.has(turns[owner]!.questionId!.toLowerCase())) boundary = turns[owner];
+      }
     }
     // Older recorders dropped the local turn after its end. Its earlier exact request
     // proof still places the call, including when that proof lies outside this page.
