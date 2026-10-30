@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.9': {
+    lead: () => t('Testing the first Steer outline correction.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Keep earlier replies in place'), text: () => t('Removes a retained earlier outline from the correction while preserving its new reply.') }
+    ]
+  },
   '0.8.4': {
     lead: () => t('More reliable chats and clearer plugin setup.'),
     highlights: [
