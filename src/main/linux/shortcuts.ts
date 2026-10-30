@@ -15,14 +15,19 @@ function executable(text: string): string | null {
   const value = match && (match[1] ?? match[2])?.replace(/\\(["\\$`])/g, '$1').replaceAll('%%', '%');
   return value && path.isAbsolute(value) ? value : null;
 }
-function grouped(text: string, hiddenAlias = false): string {
+function grouped(text: string, retiredAlias = false, revive = false): string {
   const lines = text.split(/\r?\n/), start = lines.indexOf('[Desktop Entry]');
   if (start < 0) return text;
-  for (const [key, value] of [['StartupWMClass', wmClass], ...(hiddenAlias ? [['NoDisplay', 'true']] : [])]) {
+  const fields: [string, string | null][] = retiredAlias
+    ? [['StartupWMClass', null], ['NoDisplay', 'true'], ['Hidden', 'true']]
+    : [['StartupWMClass', wmClass], ...(revive ? [['NoDisplay', null], ['Hidden', null]] as [string, null][] : [])];
+  for (const [key, value] of fields) {
     let end = lines.findIndex((line, index) => index > start && line.startsWith('['));
     if (end < 0) end = lines.length;
-    const field = lines.findIndex((line, index) => index > start && index < end && line.startsWith(`${key}=`));
-    if (field >= 0) lines[field] = `${key}=${value}`; else lines.splice(start + 1, 0, `${key}=${value}`);
+    for (let index = end - 1; index > start; index--) {
+      if (lines[index]!.startsWith(`${key}=`)) lines.splice(index, 1);
+    }
+    if (value !== null) lines.splice(start + 1, 0, `${key}=${value}`);
   }
   return lines.join('\n');
 }
@@ -47,22 +52,28 @@ export async function repairLinuxShortcuts(target: string, options: { home?: str
   if (!owned.has(canonical)) {
     // A canonical launcher that already exists but is foreign must not be replaced.
     try { await fs.lstat(path.join(directory, canonical)); return; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await fs.writeFile(path.join(directory, canonical), grouped(owned.get(legacy)!), { flag: 'wx', mode: 0o644 });
-    owned.set(canonical, grouped(owned.get(legacy)!));
+    const next = grouped(owned.get(legacy)!, false, true);
+    await fs.writeFile(path.join(directory, canonical), next, { flag: 'wx', mode: 0o644 });
+    owned.set(canonical, next);
+  }
+  // Migrate an owned favourite before retiring its old ID. GNOME 42 indexes
+  // NoDisplay entries and picks the first matching StartupWMClass; hiding the
+  // alias alone can bind the running window to an unpinnable hidden application.
+  if (legacy !== canonical && owned.has(legacy)) {
+    const run = options.run ?? (async args => (await promisify(execFile)('/usr/bin/gsettings', args, { timeout: 2000, maxBuffer: 64 * 1024 })).stdout);
+    const raw = (await run(['get', 'org.gnome.shell', 'favorite-apps'])).trim().replace(/^@as\s+/, '');
+    if (!/^\[(?:\s*'[A-Za-z0-9_.+-]+'\s*,?)*\s*\]$/.test(raw)) return;
+    const names = [...raw.matchAll(/'([^']+)'/g)].map(match => match[1]!);
+    if (names.includes(legacy)) {
+      const next = names.includes(canonical) ? names.filter(name => name !== legacy) : names.map(name => name === legacy ? canonical : name);
+      await run(['set', 'org.gnome.shell', 'favorite-apps', JSON.stringify(next)]);
+    }
   }
   for (const [name, text] of owned) {
     const next = grouped(text, name === legacy && legacy !== canonical); if (text === next) continue;
     const file = path.join(directory, name);
-    try { await fs.copyFile(file, `${file}.before-0.8.2`, constants.COPYFILE_EXCL); }
+    try { await fs.copyFile(file, `${file}.before-launcher-identity`, constants.COPYFILE_EXCL); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     await fs.writeFile(`${file}.tmp`, next, { mode: 0o644 }); await fs.rename(`${file}.tmp`, file);
   }
-  if (legacy === canonical || !owned.has(legacy)) return;
-  const run = options.run ?? (async args => (await promisify(execFile)('/usr/bin/gsettings', args, { timeout: 2000, maxBuffer: 64 * 1024 })).stdout);
-  const raw = (await run(['get', 'org.gnome.shell', 'favorite-apps'])).trim();
-  if (!/^\[(?:\s*'[A-Za-z0-9_.+-]+'\s*,?)*\s*\]$/.test(raw)) return;
-  const names = [...raw.matchAll(/'([^']+)'/g)].map(match => match[1]!);
-  if (!names.includes(legacy)) return;
-  const next = names.includes(canonical) ? names.filter(name => name !== legacy) : names.map(name => name === legacy ? canonical : name);
-  await run(['set', 'org.gnome.shell', 'favorite-apps', JSON.stringify(next)]);
 }
