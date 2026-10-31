@@ -2242,16 +2242,24 @@ export function prepareGeminiInputClaim(id: string, owner: string, conversationI
 }
 
 export type GeminiInputBindingStatus = { state: 'pending' | 'invalid'; accepted?: true } | { state: 'ready'; turn: GeminiInputTurn };
+/** A receipt timeout is not a user revocation. Preserve its original capability
+ * as pending until the same paired owner supplies an exact late native ACK.
+ * This permits neither execution nor another Send while delivery is unknown. */
+function unconfirmedAuthorizedInput(row: InputEntry): boolean {
+  return row.state === 'cancelled' && !row.cancelledByUser && row.error === UNCONFIRMED_SEND &&
+    row.sendAuthorizedAt !== undefined && row.deliveredAt === undefined && !row.messageId;
+}
 /** Resolve only the exact claimed input's committed native Send/history receipt. */
 export function chatgptInputBindingStatus(proof: GeminiBindingInput): Promise<LocalBindingStatus> { return localInputBindingStatus(proof, 'chatgpt'); }
 export async function localInputBindingStatus(proof: GeminiBindingInput, provider: import('./local-binding.js').LocalCapabilityProvider): Promise<LocalBindingStatus> {
   const row = (await load()).find(entry => entry.id === proof.id);
   if (!row || row.owner !== proof.owner || row.claimedBrowser !== proof.browser || row.offeredAt !== proof.offeredAt ||
-      !row.requiresAuthorization || !['browser', 'sent'].includes(row.state)) return { state: 'invalid' };
+      !row.requiresAuthorization || (!['browser', 'sent'].includes(row.state) && !unconfirmedAuthorizedInput(row))) return { state: 'invalid' };
   if (row.chatProvider && row.chatProvider !== provider) return { state: 'invalid' };
-  if (!row.conversationId) return row.state === 'browser' ? { state: 'pending' } : { state: 'invalid' };
+  if (!row.conversationId) return row.state === 'browser' || unconfirmedAuthorizedInput(row) ? { state: 'pending' } : { state: 'invalid' };
   if (!isChatProviderConversationId(row.conversationId, provider) || !row.sessionId) return { state: 'invalid' };
   if (isChatBlocked(row.conversationId)) return { state: 'blocked' };
+  if (unconfirmedAuthorizedInput(row)) return { state: 'pending' };
   const result = await geminiInputBindingStatus(proof, row.conversationId, row.sessionId);
   if (result.state === 'invalid' && isChatBlocked(row.conversationId)) return { state: 'blocked' };
   return result.state === 'ready' ? { ...result, conversationId: row.conversationId, sessionId: row.sessionId } : result;
@@ -2272,6 +2280,7 @@ export async function geminiInputBindingStatus(proof: GeminiBindingInput, conver
   // cancellation. Keep the receipt available as predecessor/supersession evidence while refusing
   // to turn the cancelled task credential into an executable binding.
   if (row.cancelledByUser) return { state: 'invalid', ...accepted };
+  if (unconfirmedAuthorizedInput(row) && !isChatBlocked(conversationId)) return { state: 'pending' };
   if (!['browser', 'sent'].includes(row.state) || isChatBlocked(conversationId)) return { state: 'invalid', ...accepted };
   const session = await getSession(sessionId);
   if (!owns() || !session) return { state: 'pending' };

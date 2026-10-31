@@ -29,6 +29,8 @@ var CLF_DOM = (() => {
   const composer = () => unique(all(BOX));
   const composerWritable = () => enabled(composer()) && composer().getAttribute('contenteditable') === 'true';
   const sendButton = () => unique(all('button[data-testid="chat-input-send"][aria-label="Send message"]'));
+  const queuedSendButtons = () => all('button,[role="button"]').filter(node => shown(node) &&
+    compact(node.getAttribute('aria-label') || text(node)).toLowerCase() === 'send now');
   const attachButton = () => unique(all('button[data-testid="chat-input-attach"][aria-label="Add files, connectors, and more"]'));
   const composerBox = () => composer()?.closest('form') || composer()?.parentElement?.parentElement || null;
   function blockText(node) {
@@ -600,10 +602,20 @@ var CLF_DOM = (() => {
     if (!box || !submitted || !composerWritable() || !stillCurrent() || initialDraft && !initialDraft.current()) return refuse('editor-not-ready');
     if (generating() && !whileGenerating) return refuse('page-busy');
     if (whileGenerating && (!start || typeof acceptUserReceipt !== 'function')) return refuse('page-busy');
-    let edited = false, clicked = false, stopped = false, rawRead = null;
+    let edited = false, clicked = false, stopped = false, rawRead = null, queueCommitAttempted = false;
+    const priorQueue = new Set(queuedSendButtons());
+    // A pre-existing native queue belongs to its author, not this draft lease.
+    if (whileGenerating && priorQueue.size) return refuse('queued-message-present');
     const prior = new Set(messages().filter(row => row.role === 'user').map(row => row.id));
-    const noteEdit = event => { if (event.isTrusted && (event.target?.closest?.(BOX) ||
-      event.type === 'click' && (event.target?.closest?.('[role="menu"]') || event.target?.closest?.('button') === attachButton()))) edited = true; };
+    const noteEdit = event => {
+      if (!event.isTrusted) return;
+      const button = event.type === 'click' ? event.target?.closest?.('button,[role="button"]') : null;
+      const queued = clicked && whileGenerating ? queuedSendButtons().filter(node => !priorQueue.has(node)) : [];
+      // A person's Send now commits the same queued input. Do not click it again.
+      if (button && queued.length === 1 && queued[0] === button) { queueCommitAttempted = true; return; }
+      if (event.target?.closest?.(BOX) || event.type === 'click' &&
+          (event.target?.closest?.('[role="menu"]') || button === attachButton())) edited = true;
+    };
     const current = () => !edited && stillCurrent() && location.href === route && composer() === box &&
       composerAuthoredText() === submitted && (!initialDraft || initialDraft.current());
     for (const type of ['beforeinput', 'input', 'click']) document.addEventListener(type, noteEdit, true);
@@ -622,6 +634,7 @@ var CLF_DOM = (() => {
       if (beforeSend && await beforeSend(current) !== true) return refuse('not-authorized');
       const button = sendButton();
       if (!current() || !enabled(button) || button !== ready) return refuse('draft-changed');
+      if (whileGenerating && queuedSendButtons().length) return refuse('queued-message-present');
       if (skillSelection(box)) outgoingSkill = { expected: submitted, prior, conversation: start, current: stillCurrent };
       rawRead = { prior, current: () => !edited && stillCurrent(), until: Date.now() + (receiptTimeoutMs || 180000) };
       nativeUserReceiptRead = rawRead;
@@ -632,6 +645,20 @@ var CLF_DOM = (() => {
         if (!elected) elected = conversation;
         if (conversation !== elected) return null;
         const users = messages().filter(row => row.role === 'user'), candidate = users.at(-1);
+        if (whileGenerating) {
+          const queued = queuedSendButtons().filter(node => !priorQueue.has(node));
+          // The first Send only queues a busy Claude message. Advance the one
+          // new queue created by this exclusive, authorized Send, once. Native
+          // receipt/ACK below still owns delivery and task authorization.
+          if (queued.length) {
+            if (!queueCommitAttempted && queued.length === 1 && enabled(queued[0]) && !composerAuthoredText() &&
+                !edited && stillCurrent() && location.href === route &&
+                users.every(row => prior.has(row.id) || (matchesUser ? matchesUser(row, submitted) : clean(row.text) === submitted))) {
+              queueCommitAttempted = true; queued[0].click();
+            }
+            return null;
+          }
+        }
         if (!candidate || !nativeUserIdValid(candidate.id, conversation) || prior.has(candidate.id) ||
             (matchesUser ? !matchesUser(candidate, submitted) : clean(candidate.text) !== submitted) ||
             acceptUserReceipt && !acceptUserReceipt(candidate, conversation)) return null;
