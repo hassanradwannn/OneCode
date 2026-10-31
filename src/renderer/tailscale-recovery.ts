@@ -2,22 +2,35 @@ import { recoverySteps } from '../shared/tailscale-recovery.js';
 import { el, run, toast } from './dom.js';
 import { t } from './i18n.js';
 
+let repairing = false;
+function disableRepairButtons(disabled: boolean): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-tailscale-repair]')) button.disabled = disabled;
+}
+const repairHint = 'Fix network restarts the system Tailscale service and briefly interrupts Tailscale connections. Windows may ask for administrator approval. Saved URLs and settings are retained.';
+
+/** Settings and the connection popover share one explicit repair flight. */
+export function paintTailscaleRepairButton(repair: HTMLButtonElement): void {
+  repair.type = 'button'; repair.dataset.tailscaleRepair = ''; repair.disabled = repairing;
+  repair.textContent = t('Fix network'); repair.title = t(repairHint);
+  repair.onclick = async () => {
+    if (repairing) return;
+    repairing = true; disableRepairButtons(true);
+    try {
+      if (await run(window.api.repairTailscale())) toast(t('Tailscale restarted. Check the connection status.'));
+    } catch { toast(t('The repair result is unknown. Check Tailscale before trying again.')); }
+    finally { repairing = false; disableRepairButtons(false); }
+  };
+}
+
 /** Shared recovery UI: wraps commands to fit narrow settings panes. */
 export function paintTailscaleRecovery(host: HTMLElement, step: string | undefined, mode: 'remote' | 'tunnel', canRepair = false): void {
   const signature = `${mode}:${step ?? 'failure'}:${canRepair}`;
   if (host.dataset.recovery === signature) return;
   host.dataset.recovery = signature; host.replaceChildren();
   if (canRepair && mode === 'tunnel') {
-    host.append(el('p', 'hint', () => t('Tailscale is connected locally, but its public TLS path failed. Repair restarts the system Tailscale service and briefly interrupts Tailscale connections. Windows may ask for administrator approval. Saved URLs and settings are retained.')));
-    const repair = el('button', 'btn', () => t('Repair public connection')) as HTMLButtonElement;
-    repair.type = 'button';
-    repair.onclick = async () => {
-      repair.disabled = true;
-      try {
-        if (await run(window.api.repairTailscale())) toast(t('Tailscale restarted. OneCode is checking the public connection.'));
-      } catch { toast(t('The repair result is unknown. Check Tailscale before trying again.')); }
-      finally { repair.disabled = false; }
-    };
+    host.append(el('p', 'hint', () => t(repairHint)));
+    const repair = el('button', 'btn') as HTMLButtonElement;
+    paintTailscaleRepairButton(repair);
     host.append(repair);
   }
   const details = document.createElement('details'); details.className = 'tailscale-recovery';

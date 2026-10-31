@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.5': {
+    lead: () => t('Network repair stays within reach.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Fix network'), text: () => t('On Windows, restart Tailscale from the connection menu or Setup, including when disconnected or still checking. Saved URLs and settings are retained.') }
+    ]
+  },
   '0.8.4': {
     lead: () => t('More reliable chats and clearer plugin setup.'),
     highlights: [

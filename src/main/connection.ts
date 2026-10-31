@@ -26,6 +26,7 @@ import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { inFlightToolCalls } from './mcp/call-context.js';
+import { restartWindowsTailscale } from './tunnel/tailscale-repair.js';
 
 let endpoint: ProviderEndpoints | null = null;
 /** Retain custody while draining so final shutdown can bound that same stop. */
@@ -741,15 +742,20 @@ export function connect(current?: () => boolean): Promise<void> {
   return enqueueLifecycle(() => connectImpl(current));
 }
 
-/** Explicit desktop request; the live adapter rechecks its own native route custody. */
-export async function repairTailscaleConnection(): Promise<void> {
-  if (shutdownRequested || pendingDisconnect || getConfig().tunnel.kind !== 'tailscale' ||
-      activeCoreTransport?.kind !== 'tailscale' || !sameCoreTransport(activeCoreTransport, coreTransport(getConfig().tunnel)) ||
-      !status.tailscale?.canRepair || !tunnel?.repairTailscale) {
-    throw new Error('Repair is available only for the current Tailscale public TLS failure.');
-  }
-  if (inFlightToolCalls() > 0) throw new Error('Wait for running tools to finish before restarting Tailscale.');
-  await tunnel.repairTailscale();
+let pendingTailscaleRepair: Promise<void> | null = null;
+/** Explicit desktop service recovery, including disconnected and pre-route failures. */
+export function repairTailscaleConnection(): Promise<void> {
+  if (pendingTailscaleRepair) return pendingTailscaleRepair;
+  pendingTailscaleRepair = (async () => {
+    if (process.platform !== 'win32' || shutdownRequested || pendingDisconnect || getConfig().tunnel.kind !== 'tailscale' ||
+        (activeCoreTransport && (activeCoreTransport.kind !== 'tailscale' || !sameCoreTransport(activeCoreTransport, coreTransport(getConfig().tunnel))))) {
+      throw new Error('Repair is available only for the current Tailscale connection on Windows.');
+    }
+    if (inFlightToolCalls() > 0) throw new Error('Wait for running tools to finish before restarting Tailscale.');
+    if (tunnel?.repairTailscale) await tunnel.repairTailscale();
+    else await restartWindowsTailscale();
+  })().finally(() => { pendingTailscaleRepair = null; });
+  return pendingTailscaleRepair;
 }
 
 export function disconnect(): Promise<void> {

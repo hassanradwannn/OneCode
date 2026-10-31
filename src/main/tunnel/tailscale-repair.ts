@@ -29,7 +29,7 @@ export function restartWindowsTailscale(): Promise<void> {
   if (process.platform !== 'win32' || !process.env.SystemRoot) return Promise.reject(new Error('Restart Tailscale through its system service, then return to OneCode.'));
   const { file, args } = tailscaleRepairCommand(process.env.SystemRoot);
   pending = run(file, args, { windowsHide: true, timeout: 180_000, maxBuffer: 64 * 1024, env: childEnv() })
-    .then(() => undefined, () => { throw new Error('Tailscale restart was cancelled or could not be confirmed. Check Tailscale before trying Repair public connection again.'); })
+    .then(() => undefined, () => { throw new Error('Tailscale restart was cancelled or could not be confirmed. Check Tailscale before trying Fix network again.'); })
     .finally(() => { pending = null; });
   return pending;
 }

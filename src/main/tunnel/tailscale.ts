@@ -202,8 +202,11 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
   return {
     stop: async () => { stopped = true; clearTimeout(timer); await active?.stop(); },
     repairTailscale: async () => {
-      if (stopped || !active?.repairTailscale) throw new Error('The Tailscale connection is no longer active.');
-      await active.repairTailscale();
+      if (stopped) throw new Error('The Tailscale connection is no longer active.');
+      // Startup may be waiting for the very daemon this explicit action repairs.
+      // Its existing prerequisite watcher owns recovery; do not replay Connect.
+      if (active?.repairTailscale) await active.repairTailscale();
+      else await (overrides.repair ?? restartWindowsTailscale)();
     }
   };
 }
@@ -216,7 +219,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
   let repairing: Promise<void> | null = null, transportEpoch = 0;
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
   const report = (state: 'connecting-tunnel' | 'connected' | 'offline' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
-    check.canRepair = process.platform === 'win32' && !repairing && check.funnel === 'ready' && check.publicIngress?.state === 'tls-error';
+    check.canRepair = deps.platform === 'win32' && !repairing;
     check.checkedAt = Date.now(); check.detail = detail;
     opts.report({ state, detail, publicUrl, tailscale: { ...check } });
   };
@@ -453,19 +456,21 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
       repairTailscale: () => {
         if (repairing) return repairing;
         let started = false;
-        repairing = (async () => {
-          if (stopped || check.publicIngress?.state !== 'tls-error') throw new Error('A current public TLS failure is required before repairing Tailscale.');
-          await withTailscaleMutation(async () => { await verifyNative(); if (stopped) throw new Error('The Tailscale connection was closed.'); });
-          if (stopped || check.publicIngress?.state !== 'tls-error') throw new Error('The connection changed while repair was being prepared. Check its current status.');
+        const previousIngress = check.publicIngress;
+        repairing = Promise.resolve().then(async () => {
+          if (stopped) throw new Error('The Tailscale connection was closed.');
+          // Restart is an explicit OS-consented service action, not a route write.
+          // An unreachable daemon must not veto the action intended to recover it.
+          // The ordinary cycle rechecks exact native custody after the restart.
           started = true; transportEpoch++; clearTimeout(timer);
           check.publicIngress = { state: 'checking', checkedAt: null };
           report('connecting-tunnel', 'Waiting for Windows administrator consent to restart Tailscale. Saved routes and connector URLs are retained.', publicUrl);
           await deps.repair();
           if (!stopped) report('connecting-tunnel', 'Tailscale restarted. Verifying the existing connector through public DNS, HTTPS and MCP…', publicUrl);
-        })().catch(error => {
+        }).catch(error => {
           if (!stopped && started) {
-            check.publicIngress = { state: 'tls-error', checkedAt: Date.now() };
-            report('tunnel-unavailable', 'The public connection repair was not confirmed. Check Tailscale before trying Repair public connection again.', publicUrl);
+            check.publicIngress = previousIngress;
+            report('tunnel-unavailable', 'The public connection repair was not confirmed. Check Tailscale before trying Fix network again.', publicUrl);
           }
           throw error;
         }).finally(() => {

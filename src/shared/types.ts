@@ -543,7 +543,7 @@ export type TailscalePublicFailure = 'dns-pending' | 'dns-error' | 'tls-error' |
 export interface TailscaleStatus {
   /** A read-only daemon/node prerequisite is waiting for connectivity, not policy approval. */
   waitingForNetwork?: boolean;
-  /** Current native custody with failed public TLS permits OS-consented desktop recovery. */
+  /** Windows exposes explicit OS-consented service recovery independently of probe verdicts. */
   canRepair?: boolean;
   /** Desktop setup action; static first-party URL, never CLI output. */
   setup?: import('./tailscale-setup.js').TailscaleSetupAction;

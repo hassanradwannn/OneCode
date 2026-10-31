@@ -78,7 +78,7 @@ import { publishMainTexts } from './main-texts.js';
 import { paintSharedTunnel } from './tunnel-warning.js';
 import { tailscalePublicReady, tailscaleSetupView } from './tailscale-setup.js';
 import { TAILSCALE_SETUP_ACTIONS } from '../shared/tailscale-setup.js';
-import { paintTailscaleRecovery } from './tailscale-recovery.js';
+import { paintTailscaleRecovery, paintTailscaleRepairButton } from './tailscale-recovery.js';
 
 declare global {
   interface Window {
@@ -1678,6 +1678,8 @@ function apply(next: AppState): void {
   ui(connectBtn, 'textContent', () => disconnecting ? t('Disconnecting…') : running ? t("Disconnect") : t("Connect"));
   connectBtn.disabled = disconnecting || (!running && missing !== null);
   connectBtn.title = !running && missing ? missing.text : '';
+  $('connectionPopoverRecovery').hidden = config.tunnel.kind !== 'tailscale' || next.platform?.family !== 'windows';
+  paintTailscaleRepairButton($<HTMLButtonElement>('connectionPopoverRepair'));
   // One place per action: while the capsule itself says Connect or Disconnecting…, the details only
   // describe. The panel is anchored at its bottom, so it shrinks or grows from the top; a returning
   // action fades in.
@@ -1947,7 +1949,7 @@ function apply(next: AppState): void {
     const setupStep = next.status.tailscale?.setup?.step;
     const action = setupStep && TAILSCALE_SETUP_ACTIONS[setupStep];
     const setupButton = $<HTMLButtonElement>('tailscaleSetupAction'); setupButton.hidden = !action;
-    const canRepair = next.status.tailscale?.canRepair === true;
+    const canRepair = next.platform?.family === 'windows';
     const recovery = $('tailscaleRecovery'); recovery.hidden = !action && !canRepair && !['tunnel-unavailable', 'offline'].includes(next.status.state);
     if (!recovery.hidden) paintTailscaleRecovery(recovery, next.status.tailscale?.setup?.step, 'tunnel', canRepair);
     if (action && setupStep) { setupButton.textContent = t(action.label); setupButton.onclick = () => { void run(api.runTailscaleSetup(setupStep)); }; }
