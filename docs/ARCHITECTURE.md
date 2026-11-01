@@ -110,6 +110,10 @@ Browser adapters retain the existing draft lease through their own native prepar
 
 Recovery owns each adapter and recorder as a pair. It probes the exact requested document before injection and preserves a healthy pair, refreshing ChatGPT's independent MAIN-world helper when needed. Concurrent repair attempts share one per-tab flight; a different document rechecks its own custody afterward. Replacing an adapter alone can erase callbacks still owned by a retained recorder. The recorder protocol revision fences replacement of older pairs; both provider repair paths and overlapping/replaced documents have regression coverage.
 
+A paired native observation can settle a lost input ACK only when the latest canonical extension-authored question contains the complete frozen task and its still-retained exact claim credential. The input owner rechecks provider, session, original browser, authorization and cancellation before using the same receipt commit as live delivery. Markdown escaping is decoded once; partial text, inferred identity and a different task cannot match. This recovers delivery only. The existing native question and active-generation checks still decide tool admission.
+
+Silence recovery with an owed Continue retains its one-shot reload receipt until the replacement document confirms readiness. A transport-error card cannot stand in for a recovered page. Provider history backoff may delay readiness, but cannot authorize another reload or replay a Send.
+
 Each recorder captures its adapter instance at creation. A late static adapter/content injection may replace the global while retaining the healthy recorder; it cannot redirect that recorder away from its original binding resolver, claims and draft leases. Worker and Resume bootstrap regressions cover this injection order.
 
 A reconciled recovery offer may replace an older pre-redeem recovery waiter or same-chat URL marker. It cannot replace a fresh bootstrap or a command that has started redemption. This retires stale browser waiting state without replaying a Send or touching a human draft.

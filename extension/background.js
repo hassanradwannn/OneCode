@@ -4137,8 +4137,7 @@ function watchReloadedRepair(token, receipt) {
         : await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=reloaded`);
       // An unavailable bridge cannot consume the browser's only spent-action
       // receipt. Retry confirmation, never navigation, after reconnect.
-      if (ack.ok && (!receipt.input || ack.data?.ok === true)) { pendingRepairReadiness.delete(token); await persistLive(); }
-      else if (receipt.input && ack.ok) { pendingRepairReadiness.delete(token); await persistLive(); }
+      if (ack.ok) { pendingRepairReadiness.delete(token); await persistLive(); }
       else receipt.checking = false;
     } else {
       receipt.checking = false;
@@ -4317,22 +4316,6 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
           continue;
         }
       }
-      if (target && reason === 'silence' && continueFollows) {
-        // A silent chat whose page still shows ChatGPT's own transport error ("Connection
-        // interrupted. Waiting for the complete answer", a delivery timeout) is not helped by a
-        // reload: on 2026-10-12 each such reload left the prime on the same card or ran into
-        // ChatGPT's history limit ("this conversation could not be loaded"), while Stop and a
-        // Continue got it working at once. The app files that Continue when this repair is
-        // confirmed, and its delivery presses Stop first when ChatGPT still shows it, so the
-        // page is left as it is. Only when the app says that Continue will follow: with automatic
-        // recovery off and no Goal nothing is filed, and the reload stays the chat's one chance.
-        const status = await tabReply(target.id, { type: 'clf-page-status' },
-          documentId ? { documentId } : undefined);
-        if (status?.ok === true && status.assistantError === true) {
-          await acknowledge(`/status?repaired=${encodeURIComponent(token)}&repairAction=preserved`, token);
-          continue;
-        }
-      }
       if (target && reason === 'no-tab') {
         // A no-tab repair exists to give the chat a tab. When it has one again by now, it is
         // usually the tab a worker wake or another command just opened for it, and reloading that
@@ -4353,7 +4336,10 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
         // so they must wait for the replacement content script to register and answer the
         // readiness probe. Otherwise Compact & Resume can advance while Chrome is still between
         // documents, leaving the handoff parked until the user happens to type or reload by hand.
-        const waitForReplacement = reason === 'assistant-error' || reason === 'compaction';
+        // A queued Continue cannot use a broken document. Keep the spent reload
+        // receipt until its replacement is ready, including history rate limits.
+        const waitForReplacement = reason === 'assistant-error' || reason === 'compaction' ||
+          (reason === 'silence' && continueFollows);
         const before = waitForReplacement
           ? await tabReply(target.id, { type: 'clf-page-status' }, documentId ? { documentId } : undefined) : null;
         if (!current()) return advanced;

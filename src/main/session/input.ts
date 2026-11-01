@@ -11,6 +11,7 @@ import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
 import { localBindingInstructions, hasCurrentLocalBinding, usesLocalTaskCapability, validateLocalBinding, validateLocalBindingReceipt, type LocalBindingEvidence, type LocalBindingStatus } from './local-binding.js';
 import { positionOf } from '../../shared/chronology.js';
+import { matchesAppPrompt, userPromptText } from '../../shared/user-prompt.js';
 import { randomUUID } from 'node:crypto';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
@@ -2327,51 +2328,81 @@ export function bindBrowserInputProject(id: string, owner: string, conversationI
   });
 }
 export function acknowledgeBrowserInput(id: string, owner: string, conversationId?: string | null, messageId?: string, beforeChanged?: () => void): Promise<boolean> {
+  return serial(() => commitBrowserInputReceipt(id, owner, conversationId, messageId, beforeChanged));
+}
+
+/** Called only while the input queue is held. Both live and recovered receipts settle here. */
+async function commitBrowserInputReceipt(id: string, owner: string, conversationId?: string | null, messageId?: string, beforeChanged?: () => void): Promise<boolean> {
+  const current = await load();
+  const entry = current.find((row) => row.id === id && row.owner === owner);
+  if (entry && companionOf(current, entry)) return false;
+  if (!owner || !entry || !['browser', 'sent', 'decision', 'cancelled'].includes(entry.state) ||
+    (entry.state === 'cancelled' && entry.purpose === 'decision')) return false;
+  if (conversationId !== undefined && !(entry.lifetime === 'temporary-planner' && conversationId === null) && !isChatProviderConversationId(conversationId)) return false;
+  if (conversationId && entry.conversationId && entry.conversationId !== conversationId) return false;
+  // A fresh user send is not complete until Gemini assigns its exact conversation.
+  // Keep the authored sessionId unchanged so retrying the original enqueue is idempotent.
+  if ((entry.opening || !entry.sessionId) && entry.purpose !== 'decision' && !conversationId && !entry.conversationId) return false;
+  if (messageId !== undefined && (!messageId || messageId.length > 256)) return false;
+  if ((entry.state !== 'browser' && entry.state !== 'cancelled') || (entry.state === 'cancelled' && entry.deliveredAt !== undefined)) { await publishHistory(); return true; }
+  const deliveredConversation = conversationId ?? entry.conversationId;
+  if (entry.purpose !== 'decision' && deliveredConversation && chatProviderForConversation(deliveredConversation) === 'claude' &&
+      !isProviderNativeQuestionId('claude', deliveredConversation, messageId)) return false;
+  if (entry.opening && deliveredConversation) {
+    if (entry.state === 'cancelled' && entry.requiresAuthorization && entry.sendAuthorizedAt === undefined) return false;
+    if (!await bindOpening(entry, deliveredConversation)) return false;
+  }
+  if (!entry.sessionId && entry.purpose !== 'decision' && deliveredConversation) {
+    await noteChatOrigin(deliveredConversation, { kind: 'desktop', fromSessionId: null, agentId: null, task: '' });
+  }
+  const delivered = entry.sessionId ? await getSession(entry.sessionId) : deliveredConversation
+    ? await findSessionByConversation(deliveredConversation, { requireUnique: true }) : null;
+  if (entry.purpose === 'decision' && entry.lifetime !== 'temporary-planner' && deliveredConversation) await deliveryHooks?.bindHelper?.(deliveredConversation, entry.decisionSourceSessionId ?? null);
+  const acknowledged: InputEntry = { ...entry, conversationId: deliveredConversation,
+    deliveredSessionId: delivered?.id ?? null, state: entry.purpose === 'decision' ? 'decision' : 'sent',
+    // A provider receipt is stronger than an earlier local timeout/cancel tombstone. Preserve
+    // cancelledByUser as historical intent, but never keep presenting an exact delivered message
+    // as unsent/unconfirmed after its native receipt has arrived.
+    error: undefined,
+    // A user cancellation that lost the race with native Send must not resurrect automation or
+    // later plan checkpoints merely because the provider eventually proved the first delivery.
+    ...(entry.state === 'cancelled' && entry.cancelledByUser && entry.stages?.length ? { stagesApplied: true } : {}),
+    ...(messageId ? { messageId } : {}), deliveredAt: Date.now() };
+  await transition(current, current.map((row) => row === entry ? acknowledged : row.id === entry.companionInputId ? { ...row,
+    state: acknowledged.state, error: acknowledged.error, deliveredSessionId: acknowledged.deliveredSessionId,
+    messageId: acknowledged.messageId, deliveredAt: acknowledged.deliveredAt } : row),
+    entry.state !== 'cancelled' && (entry.opening || !entry.sessionId) && entry.automation && deliveredConversation && entry.purpose !== 'decision' ? [acknowledged] : [], 'after-send', beforeChanged);
+  if (entry.completedTurnId && entry.sessionId && deliveredConversation)
+    await consumeGoalReplyForInputNow(deliveredConversation, entry.sessionId, entry.completedTurnId);
+  logInfo(`input ${id}: browser acknowledged after ${Math.max(0, Date.now() - entry.createdAt)} ms`);
+  await publishHistory();
+  return true;
+}
+/** A replacement document may capture the question after the sending document lost its ACK.
+ * The complete native message, including this claim's opaque credential, proves delivery.
+ * This settles the original row only; it grants no Send, new task or successor generation. */
+export function reconcileRecordedBrowserInput(sessionId: string, conversationId: string, browser: string | null): Promise<boolean> {
   return serial(async () => {
+    const provider = chatProviderForConversation(conversationId);
+    if (!browser || !usesLocalTaskCapability(provider) || isChatBlocked(conversationId)) return false;
     const current = await load();
-    const entry = current.find((row) => row.id === id && row.owner === owner);
-    if (entry && companionOf(current, entry)) return false;
-    if (!owner || !entry || !['browser', 'sent', 'decision', 'cancelled'].includes(entry.state) ||
-      (entry.state === 'cancelled' && entry.purpose === 'decision')) return false;
-    if (conversationId !== undefined && !(entry.lifetime === 'temporary-planner' && conversationId === null) && !isChatProviderConversationId(conversationId)) return false;
-    if (conversationId && entry.conversationId && entry.conversationId !== conversationId) return false;
-    // A fresh user send is not complete until Gemini assigns its exact conversation.
-    // Keep the authored sessionId unchanged so retrying the original enqueue is idempotent.
-    if ((entry.opening || !entry.sessionId) && entry.purpose !== 'decision' && !conversationId && !entry.conversationId) return false;
-    if (messageId !== undefined && (!messageId || messageId.length > 256)) return false;
-    if ((entry.state !== 'browser' && entry.state !== 'cancelled') || (entry.state === 'cancelled' && entry.deliveredAt !== undefined)) { await publishHistory(); return true; }
-    const deliveredConversation = conversationId ?? entry.conversationId;
-    if (entry.purpose !== 'decision' && deliveredConversation && chatProviderForConversation(deliveredConversation) === 'claude' &&
-        !isProviderNativeQuestionId('claude', deliveredConversation, messageId)) return false;
-    if (entry.opening && deliveredConversation) {
-      if (entry.state === 'cancelled' && entry.requiresAuthorization && entry.sendAuthorizedAt === undefined) return false;
-      if (!await bindOpening(entry, deliveredConversation)) return false;
-    }
-    if (!entry.sessionId && entry.purpose !== 'decision' && deliveredConversation) {
-      await noteChatOrigin(deliveredConversation, { kind: 'desktop', fromSessionId: null, agentId: null, task: '' });
-    }
-    const delivered = entry.sessionId ? await getSession(entry.sessionId) : deliveredConversation
-      ? await findSessionByConversation(deliveredConversation, { requireUnique: true }) : null;
-    if (entry.purpose === 'decision' && entry.lifetime !== 'temporary-planner' && deliveredConversation) await deliveryHooks?.bindHelper?.(deliveredConversation, entry.decisionSourceSessionId ?? null);
-    const acknowledged: InputEntry = { ...entry, conversationId: deliveredConversation,
-      deliveredSessionId: delivered?.id ?? null, state: entry.purpose === 'decision' ? 'decision' : 'sent',
-      // A provider receipt is stronger than an earlier local timeout/cancel tombstone. Preserve
-      // cancelledByUser as historical intent, but never keep presenting an exact delivered message
-      // as unsent/unconfirmed after its native receipt has arrived.
-      error: undefined,
-      // A user cancellation that lost the race with native Send must not resurrect automation or
-      // later plan checkpoints merely because the provider eventually proved the first delivery.
-      ...(entry.state === 'cancelled' && entry.cancelledByUser && entry.stages?.length ? { stagesApplied: true } : {}),
-      ...(messageId ? { messageId } : {}), deliveredAt: Date.now() };
-    await transition(current, current.map((row) => row === entry ? acknowledged : row.id === entry.companionInputId ? { ...row,
-      state: acknowledged.state, error: acknowledged.error, deliveredSessionId: acknowledged.deliveredSessionId,
-      messageId: acknowledged.messageId, deliveredAt: acknowledged.deliveredAt } : row),
-      entry.state !== 'cancelled' && (entry.opening || !entry.sessionId) && entry.automation && deliveredConversation && entry.purpose !== 'decision' ? [acknowledged] : [], 'after-send', beforeChanged);
-    if (entry.completedTurnId && entry.sessionId && deliveredConversation)
-      await consumeGoalReplyForInputNow(deliveredConversation, entry.sessionId, entry.completedTurnId);
-    logInfo(`input ${id}: browser acknowledged after ${Math.max(0, Date.now() - entry.createdAt)} ms`);
-    await publishHistory();
-    return true;
+    const candidates = current.filter(row => row.sessionId === sessionId && row.conversationId === conversationId &&
+      row.owner && row.claimedBrowser === browser && row.offeredAt !== undefined && row.requiresAuthorization &&
+      row.sendAuthorizedAt !== undefined && row.deliveredAt === undefined && !row.messageId &&
+      !row.cancelledByUser && (row.state === 'browser' || unconfirmedAuthorizedInput(row)) &&
+      row.deliveryText && !companionOf(current, row));
+    if (!candidates.length || (await getSession(sessionId))?.conversationId !== conversationId) return false;
+    const question = await readLatestUserMessage(sessionId);
+    if (!question || question.source !== 'extension' || question.message.truncated || question.historyBeforeQuestionId ||
+        !isProviderNativeQuestionId(provider, conversationId, question.messageId) ||
+        userPromptText(question.message.text) === null) return false;
+    const matches = candidates.filter(row => matchesAppPrompt(question.message.text, row.deliveryText!) &&
+      hasCurrentLocalBinding(provider, row.deliveryText!, { kind: 'input', input: {
+        id: row.id, owner: row.owner!, browser: row.claimedBrowser!, offeredAt: row.offeredAt!
+      } }));
+    if (matches.length !== 1) return false;
+    const row = matches[0]!;
+    return commitBrowserInputReceipt(row.id, row.owner!, conversationId, question.messageId);
   });
 }
 /** A later exact call proves receipt of an earlier tool response, never of a queued task. */

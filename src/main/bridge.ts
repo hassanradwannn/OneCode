@@ -44,7 +44,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, reconcileRecordedBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -3784,6 +3784,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
       const result = await recordChatObservations(id, observations, agent);
       const superseded = await conversationWasSuperseded(id);
+      if (!superseded && result.sessionId) await reconcileRecordedBrowserInput(result.sessionId, id, browserOf(req));
       if (!superseded && !isChatBlocked(id) && result.activity.working && result.activity.at) {
         const woke = result.activity.startedAt !== undefined
           ? noteAgentAlive(id, 'turn', result.activity.startedAt)

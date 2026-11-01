@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.6': {
+    lead: () => t('Keep recovery and task authorization together.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Recover interrupted chats'), text: () => t('Refresh a stuck provider page once and wait for its replacement before continuing, including when history loading is temporarily limited.') },
+      { icon: 'i-chat', title: () => t('Keep continuation authorization'), text: () => t('Recover a missing delivery acknowledgement from the exact recorded native question, so an accepted continuation can keep using its own task authorization.') }
+    ]
+  },
   '0.8.5': {
     lead: () => t('Network repair stays within reach.'),
     highlights: [

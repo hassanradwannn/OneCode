@@ -30,6 +30,13 @@ function asTyped(text: string): string {
   return text.replace(/\\\n/g, '\n').replace(/\\([!-/:-@[-`{-~])/g, '$1').replace(/(^|\n)&#x20;/g, '$1 ');
 }
 
+/** Compare a complete app-authored message with the provider's optional Markdown escaping. */
+export function matchesAppPrompt(actual: string, expected: string): boolean {
+  actual = actual.replace(/\r\n?/g, '\n');
+  expected = expected.replace(/\r\n?/g, '\n');
+  return actual === expected || asTyped(actual) === expected;
+}
+
 function readFrame(text: string): string | null {
   const identity = continuation(text);
   const header = /^\[\[COS_CONTEXT:(\d{1,6})\]\]\n/.exec(text.slice(identity.length));
