@@ -5106,6 +5106,17 @@ const HANDLERS = {
     const tab = await chrome.tabs.get(source.tab);
     const conversationId = conversationFromUrl(tab.url);
     const prefix = `${source.tab}:${sender.documentId}:`;
+    if (message.rejectedRetry === 'retry' || message.rejectedRetry === 'send') {
+      const opening = inputOpenings[id], owner = String(message.owner || '');
+      const url = new URL(tab.url);
+      const retryPage = url.pathname === '/' || /^\/c\/local-chatgpt(?:%3A|:)[0-9a-f-]{36}$/i.test(url.pathname);
+      if (!retryPage || providerForUrl(tab.url) !== 'chatgpt' || conversationId || tab.pendingUrl ||
+          opening?.tab !== source.tab || opening.inputOwner !== owner || opening.inputDocumentId !== source.documentId ||
+          !owner.startsWith(prefix) || !ownsDocument(source)) return { ok: false };
+      const result = await call('/input/claim', { method: 'POST', body: JSON.stringify({
+        id, owner, conversationId: null, rejectedRetry: message.rejectedRetry }) });
+      return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
+    }
     const completed = message.ack === true || message.fail === true || typeof message.response === 'string' || typeof message.partial === 'string';
     const owner = completed || message.authorize === true ? String(message.owner || '') : `${prefix}${source.navigationEpoch}`;
     if (message.authorize === true && !owner.startsWith(prefix)) return { ok: false, error: 'stale_input_owner' };
@@ -6331,7 +6342,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 124;
+const PAGE_RECORDER_VERSION = 125;
 
 let deferredRecoveryWork = null;
 

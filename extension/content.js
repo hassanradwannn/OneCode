@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 124;
+  const RECORDER_VERSION = 125;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -1038,7 +1038,7 @@
   async function sendSubmittedText(stillCurrent, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null,
                              matchesUser = matchesSubmittedUser, receiptTimeoutMs = null, explain = null, mention = currentCoreMention(), sentRequest = null,
                              whileGenerating = false, initialDraft = null, prepareAttachments = null, nativeMedia = false, onSendAttempt = null,
-                             requireCore = mention !== null || CLF_DOM.requiresConnectorWithoutMention === true, priorUserIdsForNode = null, nativeUserReceipts = null, requestedModel = null, requestedEffort = null) {
+                             requireCore = mention !== null || CLF_DOM.requiresConnectorWithoutMention === true, priorUserIdsForNode = null, nativeUserReceipts = null, requestedModel = null, requestedEffort = null, beforeRejectedRetry = null) {
     // Missing discovery is not permission to send a tools-enabled task without
     // Core. Wait only before authorization, under the existing draft lease.
     if (CLF_DOM.provider === 'chatgpt' && requireCore && !mention) {
@@ -1054,7 +1054,7 @@
       }
     }
     return CLF_DOM.send({ stillCurrent, clearAcceptedDraft, beforeSend, acceptUserReceipt, matchesUser, receiptTimeoutMs, mention, explain, sentRequest, whileGenerating, initialDraft,
-      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode, nativeUserReceipts, requestedModel, requestedEffort, requireCore,
+      prepareAttachments, nativeMedia, onSendAttempt, priorUserIdsForNode, nativeUserReceipts, requestedModel, requestedEffort, requireCore, beforeRejectedRetry,
       observeEvidence: check => { pageViewChecks.add(check); return () => pageViewChecks.delete(check); } });
   }
   const GOAL_MARKER_INSTRUCTION = '\n\nFor this Goal session only: at the end of each final reply, write exactly one separate last line: [[COS_GOAL:COMPLETE]] if the entire requested task is finished, or [[COS_GOAL:CONTINUE]] if requested work remains. Do not claim completion for partial work. If user input is required, explain it and omit both markers.';
@@ -15514,7 +15514,22 @@
       input.coreMention === false && !input.recovery && !agent,
       () => { sendAttempted = true; },
       input.purpose !== 'decision' && !(input.coreMention === false && !input.recovery && !agent) &&
-        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode, nativeUserReceipts, input.model, input.reasoningEffort);
+        Boolean(input.recovery || agent || mentionCore), priorUserIdsForNode, nativeUserReceipts, input.model, input.reasoningEffort,
+      CLF_DOM.provider === 'chatgpt' && input.opening && !target && !temporary && !input.images?.length && !input.attachments?.length
+        ? async (action, current) => {
+          if (!sendAttempted || !sendingTarget() || !current()) return false;
+          if (action === 'send' && (input.model || input.reasoningEffort) &&
+              !await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, current, () => {}, input.modelSurface, input.modelLabel)) return false;
+          if (!sendingTarget() || !current()) return false;
+          const permit = await ask({ type: 'desktop_input', id: input.id, owner: input.owner,
+            conversationId: null, rejectedRetry: action });
+          if (permit?.data?.ok !== true || !sendingTarget() || !current()) return false;
+          if (action === 'send') {
+            rememberUserSend();
+            if (userSendReceipt) userSendReceipt.deferTurnUntilAck = true;
+          }
+          return true;
+        } : null);
       // #744: one retry when the editor was replaced before anything asked to send it.
       intakeStage('sending');
       if (!(await nativeSend()) &&

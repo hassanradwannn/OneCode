@@ -347,12 +347,29 @@ var CLF_DOM = (() => {
   // "Stream cache expired" (2026-10-05).
   function transportFailure(value) {
     const line = String(value || '').replace(/\s+/g, ' ').trim();
+    if (accountChangedFailure(line.replace(/\s*Retry$/i, '').trim())) return true;
     // The same failures on a pt-BR account, as measured 2026-10-12 (a send that never reached the
     // model, and its dropped answer). Only observed wording; other languages stay unrecognised.
     if (/^(?:a entrega da mensagem atingiu o tempo limite(?:\. tente novamente\.?)?|conexão interrompida\.? aguardando a resposta completa\.?)(?: tentar novamente)?$/i.test(line)) return true;
     // The same two on a German account, as measured 2026-10-14 after a long answer's stream broke.
     if (/^(?:zeitüberschreitung bei der übermittlung der nachricht(?:\. bitte versuche es erneut\.?)?|verbindung unterbrochen\.? warten auf die vollständige antwort\.?)(?: erneut versuchen)?$/i.test(line)) return true;
     return /^(?:message delivery timed out(?:\. please try again\.?)?|connection interrupted\.? waiting for the complete answer\.?|chatgpt stream recovery polling timed out\.?|stream cache expired\.?|unknown error occurred\.?|there was an error generating (?:a|the) response\.?|error in message stream\.?|network error\.?|a network error occurred\.?(?: please check your connection and try again\.?)?|resume stream unavailable\.?|something went wrong\.?|something went wrong while generating the response(?:\. if this issue persists please contact us through our help center at help\.openai\.com\.?)?\.?)(?: retry)?$/i.test(line);
+  }
+
+  function accountChangedFailure(text) {
+    return /^Your account changed\. Send your message again\.?$/i.test(text);
+  }
+
+  /** The native rejected-Send card, never authored Markdown or a general Retry control. */
+  function accountChangedRetry() {
+    const matches = [...document.querySelectorAll('button')].flatMap(button => {
+      if (button.disabled || button.getAttribute('aria-disabled') === 'true' ||
+          button.closest(`${OWN_SURFACES}, .markdown, form, nav, aside, header`)) return [];
+      const failure = retryFailure(button);
+      const notice = failure?.text.replace(/\s*Retry$/i, '').trim();
+      return notice && accountChangedFailure(notice) ? [button] : [];
+    });
+    return matches.length === 1 ? matches[0] : null;
   }
 
   /**
@@ -2543,12 +2560,12 @@ var CLF_DOM = (() => {
     channel.port2.postMessage(null);
   }
 
-  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null, nativeUserReceipts = null, initialDraft = null } = {}) {
+  async function send({ acceptanceTimeoutMs = 30000, stillCurrent = () => true, matchesUser = null, observeEvidence = null, clearAcceptedDraft = true, beforeSend = null, acceptUserReceipt = null, receiptTimeoutMs = null, mention = null, explain = null, sentRequest = null, whileGenerating = false, onSendAttempt = null, priorUserIdsForNode = null, nativeUserReceipts = null, initialDraft = null, beforeRejectedRetry = null } = {}) {
     // Why a Send ended without acceptance, as one short code for the caller's diagnostics (#820).
     // It names the first refusal only and never changes what Send does.
     const refused = (why) => { try { explain?.(why); } catch { /* Diagnostics never change Send. */ } return false; };
     try {
-      const box = composer();
+      let box = composer();
       if (!box || !box.isConnected) return refused('editor-missing');
       if (!stillCurrent()) return refused('chat-changed');
       // A message for the running turn goes out while ChatGPT works: its composer offers Send once it
@@ -2559,9 +2576,9 @@ var CLF_DOM = (() => {
       if (box.getAttribute('aria-disabled') === 'true' || box.getAttribute('contenteditable') === 'false') return refused('editor-disabled');
       // Rich editors use adjacent paragraphs for newlines; textContent concatenates
       // their words. Preserve those boundaries when matching the rendered user message.
-      const draftText = () => {
-        const source = box.querySelector(APP_MENTION_CHIP) ? box.cloneNode(true) : box;
-        if (source !== box) for (const chip of source.querySelectorAll(APP_MENTION_CHIP)) chip.remove();
+      const draftText = (editor = box) => {
+        const source = editor.querySelector(APP_MENTION_CHIP) ? editor.cloneNode(true) : editor;
+        if (source !== editor) for (const chip of source.querySelectorAll(APP_MENTION_CHIP)) chip.remove();
         return (typeof source.innerText === 'string' ? source.innerText : [...source.childNodes]
           .map((node) => (node.textContent || '') + (/^(P|DIV|BR)$/.test(node.nodeName) ? '\n' : '')).join('')).trim();
       };
@@ -2572,6 +2589,8 @@ var CLF_DOM = (() => {
       const beforeConversation = conversationId();
       const beforeGenerating = generating();
       const beforeStop = stopButton();
+      const canRetryRejectedOpening = typeof beforeRejectedRetry === 'function' && !beforeConversation && !whileGenerating;
+      const oldAccountRetry = canRetryRejectedOpening ? accountChangedRetry() : null;
       let steerStopAttempted = false;
       const priorUsers = messages().filter((message) => message.role === 'user');
       // A native section can contain several questions or be recycled by React.
@@ -2684,6 +2703,14 @@ var CLF_DOM = (() => {
         let mentionedDraft = null;
         let mentionPlain = '';
         let priorMentions = new Set();
+        let rejectedRetrySpent = false, rejectedRetryClicked = false, rejectedDraftSendSpent = false, retrying = false;
+        let retryTouched = false;
+        const retryEditEvents = ['beforeinput', 'input', 'keydown', 'pointerdown', 'paste', 'drop'];
+        const noteRetryEdit = event => {
+          const editor = composer();
+          if (attempted && event.isTrusted && editor?.closest('form')?.contains(event.target)) retryTouched = true;
+        };
+        for (const name of retryEditEvents) document.addEventListener(name, noteRetryEdit, true);
         const ownMentions = () => mentionAdded ? [...box.querySelectorAll(`[app-mention-path="${mention.path}"]`)].filter(node => !priorMentions.has(node)) : [];
         const finish = (value, why = attempted ? 'not-accepted' : 'send-not-ready') => {
           if (done) return;
@@ -2696,6 +2723,7 @@ var CLF_DOM = (() => {
             safe(() => { for (const node of own) node.remove(); box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null })); }, undefined);
           }
           if (observer) observer.disconnect();
+          for (const name of retryEditEvents) document.removeEventListener(name, noteRetryEdit, true);
           if (unsubscribeEvidence) unsubscribeEvidence();
           if (timer !== null) clearTimeout(timer);
           for (const pending of mentionTimers) clearTimeout(pending);
@@ -2729,7 +2757,44 @@ var CLF_DOM = (() => {
           if (done) return;
           if (!stillCurrent() || (beforeConversation && conversationId() !== beforeConversation)) return finish(false, 'chat-changed');
           if (attempted) {
-            if (accepted()) finish(true);
+            const retry = canRetryRejectedOpening ? accountChangedRetry() : null;
+            if ((!retry || retry === oldAccountRetry) && accepted()) return finish(true);
+            if (!canRetryRejectedOpening || conversationId() || retrying) return;
+            const current = () => !done && !retryTouched && stillCurrent() && !conversationId() && !approvalWaiting() && !hasComposerAttachments();
+            if (retry && !rejectedRetrySpent && retry !== oldAccountRetry) {
+              const latest = messages().filter(row => row.role === 'user').at(-1);
+              if (!current() || !latest || priorUserIds.has(latest.id) || !matchesUser?.(latest, submitted)) return;
+              const editor = composer();
+              if (!editor || (draftText(editor) && draftText(editor) !== submitted)) return;
+              const rejectionCurrent = () => {
+                const user = messages().filter(row => row.role === 'user').at(-1);
+                return current() && accountChangedRetry() === retry && composer() === editor &&
+                  user?.id === latest.id && matchesUser(user, submitted) && (!draftText(editor) || draftText(editor) === submitted);
+              };
+              rejectedRetrySpent = true; retrying = true;
+              void Promise.resolve(beforeRejectedRetry('retry', rejectionCurrent)).then(allowed => {
+                if (allowed !== true || !rejectionCurrent()) return;
+                rejectedRetryClicked = true; clickedAt = Date.now();
+                retry.click();
+              }).catch(() => undefined).finally(() => { retrying = false; check(); });
+              return;
+            }
+            // Retry can submit the rejected question itself, or return it as a Home draft.
+            // Only the latter earns a separate, durably reserved Send of those exact bytes.
+            if (!rejectedRetryClicked || rejectedDraftSendSpent || retry || location.pathname !== '/' || !current() ||
+                generating() || stopButton() || sentRequest?.(clickedAt) || messages().some(row => row.role === 'user')) return;
+            const restored = composer(), control = sendButton();
+            if (!restored || draftText(restored) !== submitted || !sendButtonEnabled(control) ||
+                !(initialDraft?.current() || initialDraft?.rebind())) return;
+            box = restored; rejectedDraftSendSpent = true; retrying = true;
+            const restoredCurrent = () => current() && composer() === restored && initialDraft.current() &&
+              location.pathname === '/' && !accountChangedRetry() && !generating() && !stopButton() && !sentRequest?.(clickedAt) &&
+              !messages().some(row => row.role === 'user') && draftText(restored) === submitted &&
+              sendButton() === control && sendButtonEnabled(control);
+            void Promise.resolve(beforeRejectedRetry('send', restoredCurrent)).then(allowed => {
+              if (allowed !== true || !restoredCurrent()) return;
+              clickedAt = Date.now(); control.click();
+            }).catch(() => undefined).finally(() => { retrying = false; check(); });
             return;
           }
           if (mentioning) return settleMention();

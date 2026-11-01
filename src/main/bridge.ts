@@ -30,7 +30,7 @@ import { messageReferences } from '../shared/session.js';
 import type { ArtifactKind } from '../shared/artifact.js';
 import { admitNativeArtifactSnapshot, admitNativeOutputIdentity } from '../shared/native-output.js';
 import { turnTrace } from '../shared/turn-trace.js';
-import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy, collectRecordedBrowserDecision, fileRotationInput, type InputActivity } from './session/input.js';
+import { publishBrowserDecision, authorizeBrowserInput, authorizeRejectedInputRetry, sessionInputPolicy, collectRecordedBrowserDecision, fileRotationInput, type InputActivity } from './session/input.js';
 import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
@@ -3595,6 +3595,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (ok) changed();
       return json(res, 200, { ok }, origin);
     }
+    if (body.rejectedRetry === 'retry' || body.rejectedRetry === 'send')
+      return json(res, 200, { ok: target === null && await authorizeRejectedInputRetry(body.id, body.owner, browserOf(req), body.rejectedRetry) }, origin);
     if (body.recoveryAction === 'stop' || body.recoveryAction === 'stopped' || body.recoveryAction === 'settled' || body.recoveryAction === 'close' || body.recoveryAction === 'reloaded') {
       const ok = !!target && recoveryInputAllowed((await findSessionByConversation(target))?.id ?? '', target) &&
         await advanceRecoveryInput(body.id, body.owner, target, body.recoveryAction);

@@ -5,7 +5,7 @@ import { REASONING_EFFORTS, workSequence } from '../../shared/session.js';
  * Tool delivery repeats under a stable message id until a later request proves receipt.
  */
 import { z } from 'zod';
-import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, type InputImage, type QueuedInputNowIntent } from '../../shared/input.js';
+import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, INPUT_RECEIPT_WAIT_MS, type InputImage, type QueuedInputNowIntent } from '../../shared/input.js';
 import type { SessionSummary } from '../../shared/session.js';
 import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
@@ -168,6 +168,8 @@ const entrySchema = inputArgs.extend({
   /** Explicit live Steer may not borrow a retained MCP window after native turn end. */
   toolSteer: z.literal(true).optional(),
   sendAuthorizedAt: z.number().optional(),
+  /** One native account-rejection Retry and, only if it restores a draft, one Send. */
+  rejectedRetry: z.object({ phase: z.enum(['retry-dispatched', 'send-dispatched']), expiresAt: z.number() }).optional(),
   requiresAuthorization: z.boolean().optional(),
   /** A browser pickup timeout is safely replayable only before Send authorization. */
   pickupFailedAt: z.number().optional(),
@@ -1519,6 +1521,27 @@ export function authorizeBrowserInput(id: string, owner: string, conversationId:
     if (!row.recovery && row.completedTurnId && row.sessionId && conversationId)
       await consumeGoalReplyForInputNow(conversationId, row.sessionId, row.completedTurnId);
     return !row.recovery || await recoveryCurrent(row);
+  });
+}
+
+/** A native account-change rejection may return the same fresh task to Home.
+ * Spend each action before the browser clicks it; retain the original claim and credential. */
+export function authorizeRejectedInputRetry(id: string, owner: string, browser: string | null, action: 'retry' | 'send'): Promise<boolean> {
+  return serial(async () => {
+    const current = await load(), row = current.find(entry => entry.id === id && entry.owner === owner);
+    if (!browser || !row?.opening || row.chatProvider !== 'chatgpt' || row.claimedBrowser !== browser ||
+        row.state !== 'browser' || row.conversationId !== null || !row.requiresAuthorization ||
+        row.sendAuthorizedAt === undefined || row.deliveredAt !== undefined || row.messageId || row.cancelledByUser ||
+        companionOf(current, row) || !await browserInputAllowed(row)) return false;
+    if (Date.now() >= row.sendAuthorizedAt + INPUT_RECEIPT_WAIT_MS) return false;
+    const session = row.sessionId ? await getSession(row.sessionId) : null;
+    if (!session || session.conversationId || session.browserRecoveryDismissedAt !== undefined) return false;
+    if (action === 'retry' && row.rejectedRetry) return false;
+    if (action === 'send' && (row.rejectedRetry?.phase !== 'retry-dispatched' || Date.now() >= row.rejectedRetry.expiresAt)) return false;
+    const rejectedRetry = { phase: action === 'retry' ? 'retry-dispatched' as const : 'send-dispatched' as const,
+      expiresAt: row.rejectedRetry?.expiresAt ?? Math.min(Date.now() + 30_000, row.sendAuthorizedAt + INPUT_RECEIPT_WAIT_MS) };
+    await commit(current.map(entry => entry === row ? { ...entry, rejectedRetry } : entry));
+    return (await getSession(session.id))?.conversationId === null;
   });
 }
 /** The same outbox serialization owns mode changes and browser ACK. A late ACK

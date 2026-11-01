@@ -19,6 +19,7 @@ const RELEASES: Readonly<Record<string, Release>> = {
   '0.8.6': {
     lead: () => t('Keep recovery and task authorization together.'),
     highlights: [
+      { icon: 'i-retry', title: () => t('Handle native Retry'), text: () => t('Recognize ChatGPT account-change rejections during a new chat. Continue when Retry resumes it, or send the exact restored task once if Retry returns to Home.') },
       { icon: 'i-retry', title: () => t('Recover interrupted chats'), text: () => t('Refresh a stuck provider page once and wait for its replacement before continuing, including when history loading is temporarily limited.') },
       { icon: 'i-chat', title: () => t('Keep continuation authorization'), text: () => t('Recover a missing delivery acknowledgement from the exact recorded native question, so an accepted continuation can keep using its own task authorization.') }
     ]
