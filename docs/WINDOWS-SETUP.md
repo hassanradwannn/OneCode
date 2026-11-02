@@ -1,8 +1,8 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.8.7
+## Version 0.8.8
 
-Install the [complete 0.8.7 Windows release](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.7/OneCode-Setup-x64.exe), or use **Settings → General → Check for updates → Install when done** from an existing installation. This release includes a complete installer and a cumulative capsule for compatible existing installations. Provider selection, current/legacy model menus, native thinking controls and optional provider skills are available through Setup. Existing chats keep their original provider. Installer downloads use the selected version's feed; compatible application capsules retain their verified native base.
+Install the [complete 0.8.8 Windows release](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Setup-x64.exe), or use **Settings → General → Check for updates → Install when done** from an existing installation. This release includes a complete installer and a cumulative capsule for compatible existing installations. Provider selection, current/legacy model menus, native thinking controls and optional provider skills are available through Setup. Existing chats keep their original provider. Installer downloads use the selected version's feed; compatible application capsules retain their verified native base.
 
 For future hotfixes, a compatible installation downloads the small bundle. If its native base is missing or incompatible, OneCode verifies and downloads the declared full base plus the hotfix, waits for active work, installs both in order and opens the final version once. Do not manually extract a hotfix into the installation. A failed or interrupted update leaves a diagnostic rather than replaying an uncertain installer.
 

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.8] — 2026-11-02
+
+Use the unique native uploader owned by Claude's current form/dock on fresh and existing pages. Retain the prompt when attachment confirmation fails instead of clearing it while leaving the file/error behind. Preserve exact upload-state proof and one-shot dispatch; no uncertain task is resent. Companion protocol 22 is unchanged and recorder 127 refreshes the adapter/content pair. Full Windows/Linux packages and compatible capsules ship together. See [notes](docs/release-notes/v0.8.8.md) and [acceptance](docs/release-acceptance/v0.8.8.md).
+
 ## [0.8.7] — 2026-11-02
 
 Wait up to thirty seconds for Gemini's initial model picker and exact native connector entry to load, retaining draft, route, cancellation, native model selection and connector token checks. Publish complete Windows/Linux installations and compatible cumulative capsules from the same frozen source. Companion protocol 22 is unchanged; recorder 126 replaces the loaded adapter/recorder pair. See [release notes](docs/release-notes/v0.8.7.md) and [acceptance](docs/release-acceptance/v0.8.7.md).

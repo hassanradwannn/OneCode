@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.8': {
+    lead: () => t('Keep Claude attachments and their prompts together.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Upload in fresh Claude chats'), text: () => t('Use the native uploader belonging to the current composer on both new and existing Claude pages, including PDF attachments.') },
+      { icon: 'i-chat', title: () => t('Keep an unconfirmed upload draft'), text: () => t('If an attachment cannot be confirmed, keep the unsent prompt and any native file or error available for inspection. The message is not sent automatically.') }
+    ]
+  },
   '0.8.7': {
     lead: () => t('Keep provider loading, delivery and recovery in sync.'),
     highlights: [

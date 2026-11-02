@@ -2,13 +2,21 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.8.7](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.7)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.7/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.7/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.7/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.8.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.8)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.8.8
+
+- Upload Claude PDFs/files through the exact native uploader belonging to the current composer, including fresh chats.
+- Keep the unsent prompt and any staged file/error when an upload cannot be confirmed. Uncertain uploads and messages are never automatically repeated.
+- Install directly from complete Windows/Linux packages, or use a compatible cumulative capsule through the internal updater.
+
+See [0.8.8 release notes](docs/release-notes/v0.8.8.md) and [verification scope](docs/release-acceptance/v0.8.8.md).
 
 ## What's new in 0.8.7
 

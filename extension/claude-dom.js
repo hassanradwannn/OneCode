@@ -390,13 +390,20 @@ var CLF_DOM = (() => {
     const box = composer(), route = location.href;
     if (files.length > 20 || files.some(file => !file.name || file.name.length > 512) || !box || !composerWritable() ||
         !current() || !draft?.current() || hasComposerAttachments()) return false;
-    const inputs = all('input#chat-input-file-upload-bottom[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]')
-      .filter(node => node.isConnected && !node.disabled && !node.closest(OWN));
-    if (inputs.length !== 1) return false;
-    const input = inputs[0];
-    let dock = input.parentElement;
-    while (dock && (!dock.hasAttribute('data-cds-dock-group') || !dock.contains(box))) dock = dock.parentElement;
-    if (!dock || !dock.contains(input) || !dock.contains(box)) return false;
+    // Fresh /new and existing chats use different native input IDs and mounts.
+    // Elect only the unique labelled native input in this editor's nearest
+    // form/dock owner. An unrelated uploader elsewhere on the page cannot win.
+    let dock = null, input = null;
+    const form = box.closest('form');
+    for (let owner = box.parentElement; owner && owner !== document.body; owner = owner.parentElement) {
+      if (!owner.matches('form,[data-cds-dock-group]')) continue;
+      const inputs = all('input[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]', owner)
+        .filter(node => node.isConnected && !node.disabled && !node.closest(OWN) &&
+          (!node.closest('form') || node.closest('form') === form));
+      if (inputs.length > 1) return false;
+      if (inputs.length === 1) { dock = owner; input = inputs[0]; break; }
+    }
+    if (!dock || !input) return false;
     let interrupted = false;
     const note = event => { if (event.isTrusted && (dock.contains(event.target) || event.target?.matches?.('input[type="file"]'))) interrupted = true; };
     const owns = () => !interrupted && current() && draft.current() && location.href === route && composer() === box && box.isConnected;
