@@ -16,6 +16,16 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.7': {
+    lead: () => t('Keep provider loading, delivery and recovery in sync.'),
+    highlights: [
+      { icon: 'i-gear', title: () => t('Wait for Gemini model controls'), text: () => t('Wait up to thirty seconds for Gemini to expose its native model picker before reporting a model confirmation failure. Your requested model and draft stay protected.') },
+      { icon: 'i-plug', title: () => t('Allow slow connector menus'), text: () => t('Give Gemini up to thirty seconds to load the exact OneCode connector entry in its native menu while preserving your draft and request.') },
+      { icon: 'i-retry', title: () => t('Keep completed work intact'), text: () => t('Avoid repeating recorded Gemini approvals after reload, show native Gemini limit notices, and check for a finished answer before recovering a silent page.') },
+      { icon: 'i-chat', title: () => t('Confirm long Claude messages'), text: () => t('Recognize the exact sent task when Claude hides its native skill chip in a collapsed question. An explicit Low effort click is also retained for Send.') },
+      { icon: 'i-file', title: () => t('Complete installers included'), text: () => t('New users can install this release directly on Windows or Linux. Compatible existing installations can keep using smaller application updates.') }
+    ]
+  },
   '0.8.6': {
     lead: () => t('Keep recovery and task authorization together.'),
     highlights: [

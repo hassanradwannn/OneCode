@@ -180,6 +180,17 @@ var CLF_DOM = (() => {
   function userAuthoredText(root, id) {
     const source = nativeUserBody(root, id);
     const raw = source ?? blockText(root);
+    const accepted = acceptedSkillQuestions.get(id);
+    const outgoing = outgoingSkill && outgoingSkill.current() && !outgoingSkill.prior.has(id) &&
+      (!outgoingSkill.conversation || id.startsWith(`${outgoingSkill.conversation}:user:`)) ? outgoingSkill : null;
+    // A long native question can collapse its selected skill chip out of the
+    // rendered body. The exact plain source plus our positively selected
+    // outgoing skill still proves its prefix; a DOM chip is not required again.
+    const authoredSource = source?.startsWith('/onecode ') ? source.slice('/onecode '.length) : null;
+    if (authoredSource !== null && (accepted && authoredSource === accepted || outgoing && authoredSource === outgoing.expected)) {
+      if (outgoing) { acceptedSkillQuestions.set(id, authoredSource); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
+      return authoredSource;
+    }
     const chips = all(sentSkillGroup, root).filter(wrapper => {
       const buttons = all(':scope > span[role="button"][type="button"][data-base-ui-click-trigger][aria-haspopup="dialog"]', wrapper)
         .filter(node => ['0', '-1'].includes(node.getAttribute('tabindex')));
@@ -192,17 +203,7 @@ var CLF_DOM = (() => {
     if (chips.length !== 1) return raw;
     const copy = root.cloneNode(true), allGroups = all(sentSkillGroup, root);
     all(sentSkillGroup, copy)[allGroups.indexOf(chips[0])]?.remove();
-    const candidate = blockText(copy), accepted = acceptedSkillQuestions.get(id);
-    const outgoing = outgoingSkill && outgoingSkill.current() && !outgoingSkill.prior.has(id) &&
-      (!outgoingSkill.conversation || id.startsWith(`${outgoingSkill.conversation}:user:`)) ? outgoingSkill : null;
-    // The native plain item serializes the positively selected chip as this
-    // exact witnessed prefix. Its remaining original bytes, not flattened DOM
-    // whitespace, must match this Send's frozen task before removing it.
-    const authoredSource = source?.startsWith('/onecode ') ? source.slice('/onecode '.length) : null;
-    if (authoredSource !== null && (accepted && authoredSource === accepted || outgoing && authoredSource === outgoing.expected)) {
-      if (outgoing) { acceptedSkillQuestions.set(id, authoredSource); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
-      return authoredSource;
-    }
+    const candidate = blockText(copy);
     if (accepted && candidate === accepted || outgoing && candidate === outgoing.expected) {
       if (outgoing) { acceptedSkillQuestions.set(id, candidate); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
       return candidate;

@@ -729,7 +729,7 @@ var CLF_DOM = (() => {
     if (provenMention(box)?.name === name) return true;
     return all(MENTION, box).some(node => text(node).trim().replace(/^@/, '') === name || node.getAttribute('data-mention-name') === name);
   }
-  async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null, menuTimeoutMs = 8000) {
+  async function selectNativeMention(name, current, explain = null, replacement = null, onReady = null, menuTimeoutMs = 30_000) {
     const requestedName = name;
     const sameName = candidate => candidate === requestedName;
     const refused = reason => { explain?.(reason); return false; };
@@ -808,6 +808,9 @@ var CLF_DOM = (() => {
     if (!ownEdit(() => insertPrompt('@', true, null, result => { selectorEdit = result; }))) return refused('connector-selector-insert-refused');
     snapshot(true);
     if (compact(blockText(box)) !== '@') return refused('connector-selector-text-unconfirmed');
+    // The native @ popup can mount its shell before its account connectors
+    // hydrate. Keep this one selector/draft lease while the exact entry loads;
+    // a generic menu action or a different connector cannot stand in for it.
     const choices = await waitFor(() => {
       const native = all('button.at-mentions-v2-item[role="menuitem"][aria-label]')
         .filter(node => shown(node) && sameName(node.getAttribute('aria-label')));
@@ -1426,6 +1429,11 @@ var CLF_DOM = (() => {
   }
   const approvalCard = () => { const cards = approvalCards(); return cards.length === 1 ? cards[0] : null; };
   const approvalClicks = new WeakSet();
+  const approvalDecisionRecorded = card => {
+    if (approvalReceiptRoute !== approvalScope()) return false;
+    const source = card.node.closest('.conversation-container[id]');
+    return Boolean(source && [...durableApprovalReplies.values()].some(row => row.sourceId === source.id.toLowerCase()));
+  };
   // Native decisions clicked by the user need the same exact exchange receipt
   // as Companion clicks. Otherwise Gemini's generated Allow row is mistaken
   // for a new authored task and cancels the handoff it was approving.
@@ -1433,7 +1441,7 @@ var CLF_DOM = (() => {
     if (!event.isTrusted) return;
     const button = event.target?.closest?.('button');
     const card = approvalCards().find(card => card.allowButton === button || card.denyButton === button);
-    if (!card || !enabled(button) || approvalClicks.has(card.node)) return;
+    if (!card || !enabled(button) || approvalClicks.has(card.node) || approvalDecisionRecorded(card)) return;
     approvalClicks.add(card.node);
     expectApprovalReply(card, card.allowButton === button ? 'allow' : 'deny');
   }, true);
@@ -1442,7 +1450,10 @@ var CLF_DOM = (() => {
     if (!card || card.tool !== expected.tool || card.machineTool !== expected.machineTool || card.connector !== expected.connector) return 'card_changed';
     const node = card.node;
     const button = choice === 'allow' ? card.allowButton : choice === 'deny' ? card.denyButton : null;
-    if (!enabled(button) || approvalClicks.has(node)) return 'unavailable';
+    // A refresh can briefly re-enable a historical card before its retained
+    // Allow/Deny exchange hydrates. A scoped receipt is a veto on another click,
+    // including while that reply is absent; it never authorizes a new decision.
+    if (!enabled(button) || approvalClicks.has(node) || approvalDecisionRecorded(card)) return 'unavailable';
     approvalClicks.add(node); expectApprovalReply(card, choice); button.click(); return 'clicked';
   }
   function answerApprovalCard(node, choice) {
@@ -1464,11 +1475,11 @@ var CLF_DOM = (() => {
     if (!approvalReceiptsReady()) return false;
     if (approvalFlight) return approvalFlight;
     const cards = approvalCards(), id = conversationId();
-    if (!id || !cards.some(card => card.allow && !approvalClicks.has(card.node))) return false;
+    if (!id || !cards.some(card => card.allow && !approvalClicks.has(card.node) && !approvalDecisionRecorded(card))) return false;
     approvalFlight = (async () => {
       let clicked = false;
       for (const card of cards) {
-      if (!card.allow || approvalClicks.has(card.node) || !card.node.isConnected || conversationId() !== id) continue;
+      if (!card.allow || approvalClicks.has(card.node) || approvalDecisionRecorded(card) || !card.node.isConnected || conversationId() !== id) continue;
       const binding = await bindingFor(id, () => conversationId() === id && card.node.isConnected);
       const ownedNames = Array.isArray(binding?.connector_names) ? binding.connector_names : [binding?.connector_name];
       const matches = ownedNames.filter(name => name === card.connector);
@@ -1498,12 +1509,23 @@ var CLF_DOM = (() => {
   const pendingApprovalIn = root => all('remy-confirmation-card button', root).some(button =>
     enabled(button) && /^(?:Allow|Allow once|Deny)$/i.test(text(button)));
   const approvalWaiting = () => pendingApprovalIn(document);
+  const approvalOnlyResponse = node => {
+    if (!node?.querySelector('remy-confirmation-card')) return false;
+    const body = messageNode({ node, role: 'assistant' });
+    if (!body) return true;
+    const copy = body.cloneNode(true);
+    for (const control of copy.querySelectorAll('remy-confirmation-card,action-card,button,script,style')) control.remove();
+    return !compact(text(copy));
+  };
   const messageComplete = message => Boolean(message?.node?.querySelector('.response-footer.complete')) &&
-    !pendingApprovalIn(message.node) && !generating();
+    !approvalOnlyResponse(message.node) && !pendingApprovalIn(message.node) && !generating();
   function completedResponseReceipt(allowStaleStop = false) {
     if (!approvalReceiptsReady()) return null;
     const rows = messages(), question = rows.findLast(row => row.role === 'user'), answer = rows.at(-1);
+    const latest = turns().at(-1);
     if (!question || answer?.role !== 'assistant' || !answer.node.isConnected ||
+        latest?.node !== answer.node || latest?.id !== answer.id ||
+        approvalOnlyResponse(answer.node) ||
         !new RegExp(`^gemini:${conversationId()}:assistant:[0-9a-f]{16}$`).test(answer.id) ||
         !answer.node.querySelector('.response-footer.complete') || approvalWaiting() ||
         all('model-response [aria-busy="true"]').some(shown) || (!allowStaleStop && generating()) ||
@@ -1799,12 +1821,13 @@ var CLF_DOM = (() => {
     const requestedEffort = effort ?? null;
     if (!model && !requestedEffort) return true;
     // The fresh native editor can become writable before its model control is
-    // mounted/readable. Wait under the original claim and exact draft lease;
+    // mounted/readable, especially on a cold or slow account load. Allow up to
+    // thirty seconds under the original claim and exact draft lease;
     // observing that later control grants no authority to replace either one.
     let picker = await waitFor(() => {
       const candidate = pickerButton();
       return enabled(candidate) && visibleModelSelection()?.model ? candidate : null;
-    }, () => initial.ownsDraft() && !generating(), 5000);
+    }, () => initial.ownsDraft() && !generating(), 30_000);
     if (!picker) return refuse('picker-not-ready');
     let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null, confirmedLabel = null, provedPicker = null;
     const surface = { current: () => {
@@ -1918,13 +1941,34 @@ var CLF_DOM = (() => {
     const url = new URL(node.href, location.href);
     return url.origin === 'https://gemini.google.com' && isAppHomePath(url.pathname);
   })) : null;
-  const errors = () => all('[role="alert"]').filter(node => shown(node) && !node.closest(TURN)).map(node => {
+  function composerUsageLimits() {
+    const host = composerBox();
+    if (!host) return [];
+    const rows = [];
+    for (const control of all('button,a,[role="button"]', host).filter(node => shown(node) && compact(text(node)) === 'See usage')) {
+      // The observed native quota strip sits beside the editor, outside the
+      // transcript. Its exact reset sentence and usage control identify it;
+      // an authored draft or assistant quotation is never account evidence.
+      for (let node = control.parentElement; node && host.contains(node); node = node.parentElement) {
+        if (node.matches(BOX) || node.closest(`${TURN},${BOX},${OWN}`)) break;
+        const match = /^(Your limit resets at [^\n]{1,120}?)\s*See usage$/.exec(compact(text(node)));
+        if (match) {
+          if (!rows.some(row => row.node === node)) rows.push({ node, text: match[1], recoverable: false, blocking: true,
+            usageLimit: { kind: 'unknown', resetText: match[1] } });
+          break;
+        }
+        if (node === host) break;
+      }
+    }
+    return rows;
+  }
+  const errors = () => [...all('[role="alert"]').filter(node => shown(node) && !node.closest(`${TURN},${OWN}`)).map(node => {
     const notice = text(node).slice(0, 2000).replace(/\s+/g, ' ').trim();
     // A transport failure can be refreshed; quota/account notices cannot. Unknown
     // alerts stay blocking. Ordinary assistant/user prose never enters this path.
     const transport = /^(?:something went wrong(?:\. please try again(?: later)?)?|a network error occurred(?:\. please check your connection and try again)?|network error|connection (?:lost|interrupted)|unable to connect|there was a problem generating (?:a|the) response)(?:[.!])?(?: (?:try again|retry))?$/i.test(notice);
     return { node, text: notice, recoverable: transport, blocking: !transport };
-  });
+  }), ...composerUsageLimits()];
   const conversationTitle = () => document.title.replace(/\s*[-–]\s*(?:Google )?Gemini\s*$/, '').trim();
   const composerActions = () => {
     const button = sendButton() || stopButton() || unique(all('button[aria-label^="Dictate"]'));

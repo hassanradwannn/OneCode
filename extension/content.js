@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 125;
+  const RECORDER_VERSION = 126;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -14766,8 +14766,11 @@
     // repair can say why instead of only "the page changed" (#1086).
     const changed = !expected ? null : expected.turnId !== turnId ? 'turn' : expected.questionId !== questionId ? 'question'
       : expected.revision !== turnProgressRevision ? 'progress' : null;
+    const completed = current() ? CLF_DOM.completedResponseReceipt?.() : null;
+    const pageFinal = completed && completed.questionId === questionId;
     return verdict([[!current(), 'page-changed'], [stopRequestedAt, 'stop-requested'], [running === null, 'tool-state-unavailable'], [running !== 0, 'tool-running'],
       [desktopInputBusy, 'sending'], [nativeBusy, 'page-busy'], [job?.busy, 'compaction'], [draft(), 'draft'],
+      [pageFinal, 'page-final'],
       [changed, 'changed']],
     { revision: turnProgressRevision, turnId, questionId,
       ...(changed ? { changed, ...(changed === 'progress' && turnProgressSource ? { progressBy: turnProgressSource } : {}) } : {}) });

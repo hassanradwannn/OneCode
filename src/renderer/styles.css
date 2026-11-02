@@ -3769,6 +3769,8 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 #composerPowerChoices input[type='range'] { position: absolute; inset: 0; appearance: none; width: 100%; height: 28px; border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; }
 #composerPowerChoices input[type='range']:disabled { cursor: default; }
 #composerPowerChoices input[type='range']::-webkit-slider-thumb { appearance: none; width: var(--power-thumb); height: var(--power-thumb); background: var(--ink); border-radius: 50%; border: 0; box-shadow: none; }
+#composerPowerChoices .power-track:has(input[data-unselected='true']) { background: var(--control-selected); }
+#composerPowerChoices input[type='range'][data-unselected='true']::-webkit-slider-thumb { opacity: 0; }
 #composerPowerChoices input[type='range']:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
 
 /* Contextual controls: normal chat contains prose and work, diagnostics stay optional. */

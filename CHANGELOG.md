@@ -1,5 +1,19 @@
 # OneCode changelog
 
+## [0.8.7] — 2026-11-02
+
+Wait up to thirty seconds for Gemini's initial model picker and exact native connector entry to load, retaining draft, route, cancellation, native model selection and connector token checks. Publish complete Windows/Linux installations and compatible cumulative capsules from the same frozen source. Companion protocol 22 is unchanged; recorder 126 replaces the loaded adapter/recorder pair. See [release notes](docs/release-notes/v0.8.7.md) and [acceptance](docs/release-acceptance/v0.8.7.md).
+
+Retain completed Gemini approval receipts across refresh to veto another click, reject approval-only final footers, and project the native composer usage-limit strip. Recognize an exact Claude selected-skill task when its visible chip collapses, recheck a native final before silence navigation, and distinguish unchanged effort from an explicit Low endpoint choice.
+
+## [0.8.6] — 2026-11-01
+
+Recover exact accepted continuation receipts after a lost browser acknowledgement, retain one-shot page recovery through replacement readiness, and handle ChatGPT's native account-change Retry during an owned fresh opening. See [release notes](docs/release-notes/v0.8.6.md) and [acceptance](docs/release-acceptance/v0.8.6.md).
+
+## [0.8.5] — 2026-10-31
+
+Keep the trusted Windows Tailscale repair available across connection states while preserving saved routes and settings. See [release notes](docs/release-notes/v0.8.5.md) and [acceptance](docs/release-acceptance/v0.8.5.md).
+
 ## [0.8.4] — 2026-10-30
 
 Carry the 0.8.3 reliability repairs into a new acceptance candidate. Activate the current ChatGPT picker through its native click, default empty discovery helpers to Chat mode, avoid unnecessary picker mutations for an exact account-available selection, and keep response identifiers reused across Steers from moving commentary above its correction. Restore the in-app connection dot and identify OneCode in the Windows tray. Show plugin installation progress, explicit completion/error state and visible setup instructions; export Blender MCP's verified matching bundled add-on through a Save dialog. Companion protocol 22 and recorder 119. See [release notes](docs/release-notes/v0.8.4.md) and [acceptance](docs/release-acceptance/v0.8.4.md).

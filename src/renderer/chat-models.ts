@@ -561,10 +561,12 @@ function paintComposerChoices(): void {
   }
   let shown = Math.max(0, current);
   slider.value = String(shown);
+  slider.dataset.unselected = String(current < 0);
   paintPosition(shown);
   if (current >= 0) announce(shown);
   else ui(slider, 'aria-valuetext', () => t('Choose an available model and effort'));
   const pick = (index: number): void => {
+    slider.dataset.unselected = 'false';
     announce(index);
     if (index !== shown || effort.value !== supported[index]) { shown = index; choose(supported[index]!); }
   };
@@ -585,6 +587,10 @@ function paintComposerChoices(): void {
     settling = frame(step);
   };
   slider.addEventListener('input', () => { cancelFrame(settling); paintPosition(Number(slider.value)); pick(nearest()); });
+  // Keeping the native effort is blank intent, even though a range must have a
+  // numeric value. Clicking its unchanged Low endpoint may emit no input/change
+  // event. That deliberate interaction still selects Low for the next Send.
+  slider.addEventListener('pointerdown', () => { if (!effort.value) pick(nearest()); });
   slider.addEventListener('change', settle);
   slider.addEventListener('pointerup', settle);
   slider.addEventListener('keydown', event => {
