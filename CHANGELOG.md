@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.8.9] — 2026-11-03
+
+Approve existing native paths explicitly supplied in trusted Desktop/Remote user messages through the existing root owner. Preserve exact-file scope, folder contents, canonical path validation, existing aliases, revocation and capability settings. Remote resolves recorded ChatGPT sandbox links to their native chat on the phone, handles blocked popups visibly and hides inline provider reference markers. Full Windows/Linux packages and compatible capsules ship together. See [notes](docs/release-notes/v0.8.9.md) and [acceptance](docs/release-acceptance/v0.8.9.md).
+
 ## [0.8.8] — 2026-11-02
 
 Use the unique native uploader owned by Claude's current form/dock on fresh and existing pages. Retain the prompt when attachment confirmation fails instead of clearing it while leaving the file/error behind. Preserve exact upload-state proof and one-shot dispatch; no uncertain task is resent. Companion protocol 22 is unchanged and recorder 127 refreshes the adapter/content pair. Full Windows/Linux packages and compatible capsules ship together. See [notes](docs/release-notes/v0.8.8.md) and [acceptance](docs/release-acceptance/v0.8.8.md).

@@ -101,5 +101,5 @@ export async function resolveLinkedSkillAlias(
 
 /** The library is reachable explicitly; it can never choose where a task starts. */
 export function firstTaskRoot(roots: readonly Root[]): Root | undefined {
-  return roots.find(root => root.name.toLowerCase() !== 'skills' && !isSkillPath(root.path));
+  return roots.find(root => root.kind !== 'file' && root.name.toLowerCase() !== 'skills' && !isSkillPath(root.path));
 }

@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.8.9': {
+    lead: () => t('Use the paths you explicitly share.'),
+    highlights: [
+      { icon: 'i-folder', title: () => t('Grant paths in your message'), text: () => t('Put an existing file or folder path on its own line with your task, or quote it in a Read or Scan request. OneCode approves that path before preparing your message.') },
+      { icon: 'i-file', title: () => t('Keep file access precise'), text: () => t('A file grant covers that exact file. Folder grants cover their contents, and existing capability settings remain in effect.') },
+      { icon: 'i-link', title: () => t('Open provider files from Remote'), text: () => t('Recorded ChatGPT file links open their ChatGPT chat on your phone for download. Normal web links open separately, and inline provider reference markers stay hidden.') }
+    ]
+  },
   '0.8.8': {
     lead: () => t('Keep Claude attachments and their prompts together.'),
     highlights: [

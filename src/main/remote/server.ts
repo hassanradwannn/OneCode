@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { recordedProviderFileLink } from '../provider-file-links.js';
 import { RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
 import { remoteAction, remoteActionSchema } from './actions.js';
@@ -119,6 +120,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const device = auth.authenticate(token); if (!device) throw new RequestError(401, 'connection_required');
+    if (req.method === 'POST' && route.pathname === '/api/file-links/resolve') {
+      const request = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/), messageId: z.string().min(1).max(200),
+        href: z.string().max(2100) }).strict().parse(await body(req));
+      const recorded = await recordedProviderFileLink(request.sessionId, request.messageId, request.href);
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      json(res, 200, { url: recorded.url }); return;
+    }
     if (req.method === 'POST' && route.pathname === '/api/video/prepare') {
       const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);
       const request = z.union([

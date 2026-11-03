@@ -34,8 +34,7 @@ import { GEMINI_SKILLS_URL } from '../shared/gemini-web-skill.js';
 import { noteChatOrigin } from './session/recorder.js';
 import { refreshAppProxy } from './app-proxy.js';
 import { committedResumeAncestorsFromSummary, DEFAULT_RECORDING_STORAGE_GIB, REASONING_EFFORTS, RECORDING_STORAGE_LIMITS_GIB, type RecordingStorageLimitGiB, type SessionChange } from '../shared/session.js';
-import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
-import { chatProviderForStoredConversation } from '../shared/chat-provider.js';
+import { safeExternalLink } from '../shared/external-link.js';
 import { browserControl } from './browser-control.js';
 import { wakeBrowserWork } from './browser-wake.js';
 import { refreshKeepAwake } from './keep-awake.js';
@@ -45,6 +44,7 @@ import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
 import { validateInputImages } from './session/input-images.js';
 import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { approveFolder, applyWrittenFolderApproval } from './root-approval.js';
+import { recordedProviderFileLink } from './provider-file-links.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -99,7 +99,7 @@ import { onBackgroundExecChange, runningExecProcesses, stopExecProcess } from '.
 import { keychainNoticeReady } from './keychain-notice.js';
 import { runDiagnostics } from './diagnostics.js';
 import { readRecentLog, renderDiagnosticsReport, saveDiagnosticsReport, systemFacts, memoryFacts } from './diagnostics-report.js';
-import { listSessions, readTurnTraces, readEvents } from './session/store.js';
+import { listSessions, readTurnTraces } from './session/store.js';
 import { formatLogAsJson, formatLogForClipboard, getLog, logInfo, logWarn, onLog } from './logger.js';
 import { managedWorktreeCleanupOffers, acknowledgeManagedWorktreeCleanupOffer } from './agents.js';
 import { listOfferedWorkerWorktrees, disposeOfferedWorkerWorktree, WorkerWorktreeError } from './worktrees/index.js';
@@ -1853,8 +1853,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const input = inputArgs.parse(payload);
     try { logInfo('main window send received'); } catch { /* Diagnostics cannot reject or replay a Send. */ }
     await validateInputImages(input.images ?? []);
-    if ((input.authoredSource ?? 'text') === 'text' && !input.stages?.length &&
-        !input.images?.length && !input.attachments?.length && await applyWrittenFolderApproval(input.text)) {
+    const authored = input.authoredSource ?? 'text';
+    const approvalText = authored === 'objective' ? input.objective ?? '' : authored === 'text' && !input.stages?.length ? input.text : '';
+    // Only the original trusted user submission grants paths. A repeated input
+    // ID, generated stage, recovery or model/tool payload cannot renew access.
+    if (approvalText &&
+        !(await listInputs()).some(row => row.id === input.id) && await applyWrittenFolderApproval(approvalText)) {
       push('state:changed', await buildState());
     }
     const accepted = await sendDesktopInput(input);
@@ -1931,14 +1935,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
   handle('sessions:openFileLink', async payload => {
     const { id, messageId, href } = z.object({ id: z.string().uuid(), messageId: z.string().min(1).max(200), href: z.string().max(2100) }).strict().parse(payload);
-    if (!safeProviderFileLink(href)) throw new Error('That provider file link is not allowed');
-    const session = await getSession(id);
-    if (chatProviderForStoredConversation(session?.conversationId) !== 'chatgpt') throw new Error('File links are not supported by this provider');
-    const allowed = async () => (await getSession(id))?.conversationId === session?.conversationId &&
-      (await readEvents(id)).some(event => event.kind === 'assistant_message' && event.messageId === messageId &&
-        (event.message.text.includes(href) || event.renderedHtml?.text.includes(href)));
-    if (!session?.conversationId || !await allowed()) throw new Error('This file link is not recorded in this chat');
-    const result = await browserControl.execute('native_file_link', { messageId, href }, `session:${id}`, session.conversationId, allowed);
+    const recorded = await recordedProviderFileLink(id, messageId, href);
+    const allowed = async () => { try { return (await recordedProviderFileLink(id, messageId, href)).conversationId === recorded.conversationId; } catch { return false; } };
+    const result = await browserControl.execute('native_file_link', { messageId, href }, `session:${id}`, recorded.conversationId, allowed);
     if (result.error) throw new Error(result.error);
     return true;
   });

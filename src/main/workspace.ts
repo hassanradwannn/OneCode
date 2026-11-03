@@ -368,6 +368,7 @@ export async function projectFolderOf(
  * already proven it can reach.
  */
 export async function learnWorkspace(resolved: { real: string; virtual: string; root: Root }): Promise<void> {
+  if (resolved.root.kind === 'file') return;
   if (isSkillPath(resolved.real) || isSkillVirtualPath(resolved.virtual) || resolved.root.name.toLowerCase() === 'skills') return;
   if (!workspaceKey()) return;
   let rootReal: string;

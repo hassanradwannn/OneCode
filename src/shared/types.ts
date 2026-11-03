@@ -96,6 +96,8 @@ export interface Root {
   name: string;
   /** Absolute host path. Never sent to the model. */
   path: string;
+  /** A directly approved file grants only that exact path, never its directory. */
+  kind?: 'file';
 }
 
 export type TunnelKind = 'openai' | 'cloudflared' | 'tailscale' | 'manual';

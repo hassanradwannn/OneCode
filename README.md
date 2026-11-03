@@ -2,13 +2,22 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.8.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.8)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.8/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.8.9](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.9)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.8.9
+
+- Put an existing native file/folder path on its own line with your task, or quote it in a direct Read/Scan request. OneCode approves that exact path before preparing the message. Files stay scoped to that file; folders include their contents.
+- Keep current capability settings and earlier virtual aliases. Attached contents, generated plan stages and repeated delivery of an old message cannot grant new access.
+- Open recorded ChatGPT file links from Remote in their ChatGPT chat on the phone for native download, with a Safari popup fallback. This opens the native source; it does not transfer provider-private files through OneCode.
+- Open normal web links separately and hide leaked inline provider reference markers.
+
+See [0.8.9 notes](docs/release-notes/v0.8.9.md) and [verification scope](docs/release-acceptance/v0.8.9.md).
 
 ## What's new in 0.8.8
 

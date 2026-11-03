@@ -218,7 +218,8 @@ const rootSchema = z.object({
     .min(1)
     .max(32)
     .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Root names are lowercase letters, digits, dot, dash, underscore'),
-  path: z.string().min(2).max(4096)
+  path: z.string().min(2).max(4096),
+  kind: z.literal('file').optional()
 });
 
 /**

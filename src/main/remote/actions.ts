@@ -78,7 +78,10 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
         (!body.modelSurface || model?.nativeSurface === body.modelSurface)) throw new Error('Refresh models and choose an available model and thinking effort.');
   } else if (body.reasoningEffort) throw new Error('Select a model before choosing thinking effort.');
   if (body.automation === 'goal' && body.text.length > 16_000) throw new Error('Keep a new Goal objective below 16,000 characters.');
-  if (!body.plan && !body.attachments?.length) await applyWrittenFolderApproval(text);
+  // The authenticated user-authored body owns path grants, never generated
+  // plan stages or attachment contents. Duplicate IDs returned above do not
+  // reapply a grant that the user may since have revoked.
+  await applyWrittenFolderApproval(body.text);
   const input = await sendDesktopInput({ id: body.id, sessionId: body.sessionId, provider: body.provider, text,
     ...(body.modelSurface ? { modelSurface: body.modelSurface } : {}),
     ...(body.projectId ? { projectId: body.projectId } : {}),

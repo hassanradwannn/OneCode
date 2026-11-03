@@ -171,6 +171,11 @@ export function isContained(parent: string, child: string): boolean {
   return nb.startsWith(prefix);
 }
 
+/** File grants retain the same resolver with an exact, non-recursive boundary. */
+export function rootContains(root: Root, child: string, rootReal = root.path): boolean {
+  return root.kind === 'file' ? nativePathIdentity(rootReal) === nativePathIdentity(child) : isContained(rootReal, child);
+}
+
 /**
  * Canonicalises the deepest part of `absPath` that exists, returning it along with
  * the segments that do not exist yet. Used so a create/write can be checked for
@@ -215,6 +220,7 @@ async function realRoot(root: Root): Promise<string> {
     if (!isContained(root.path, current) || !isContained(current, root.path)) {
       throw new SandboxError(`Root "/${root.name}" changed on disk. Remove it and approve the folder again.`);
     }
+    if (root.kind === 'file' && !(await fs.stat(current)).isFile()) throw new SandboxError('Approved file changed kind');
     return current;
   } catch {
     throw new SandboxError(`Root "/${root.name}" is not available or changed on disk. Remove it and approve the folder again.`);
@@ -297,7 +303,7 @@ async function normaliseNativePath(roots: readonly Root[], input: string): Promi
   const native = path.resolve(trimmed);
   // A WSL folder (or a mapped drive's canonical UNC root) may be approved. Reject every
   // other UNC spelling lexically, before a remote host can trigger DNS/SMB or credentials.
-  if (nativeWindows && native.startsWith('\\\\') && !roots.some(root => isContained(root.path, native))) {
+  if (nativeWindows && native.startsWith('\\\\') && !roots.some(root => rootContains(root, native))) {
     const names = roots.map((r) => `/${r.name}`).join(', ') || '(none approved)';
     throw new SandboxError(
       `Native path "${trimmed}" is not inside an approved folder. ` +
@@ -318,7 +324,7 @@ async function normaliseNativePath(roots: readonly Root[], input: string): Promi
     } catch {
       continue;
     }
-    if (isContained(rootReal, canonicalNative)) {
+    if (rootContains(root, canonicalNative, rootReal)) {
       return toVirtualPath(root, rootReal, canonicalNative);
     }
     // Preserve the useful distinction between a genuinely outside native path and a spelling
@@ -385,7 +391,7 @@ export async function resolvePath(
   const candidate = rest.length === 0 ? rootReal : path.join(rootReal, ...rest);
 
   // Cheap structural check before touching the disk.
-  if (!isContained(rootReal, candidate)) {
+  if (!rootContains(root, candidate, rootReal)) {
     throw new SandboxError('Path escapes its approved folder');
   }
 
@@ -393,7 +399,7 @@ export async function resolvePath(
 
   // The canonical existing part must still be inside the root. This is the check
   // that catches a symlink or junction inside the tree pointing somewhere else.
-  if (!isContained(rootReal, real)) {
+  if (!rootContains(root, real, rootReal)) {
     throw new SandboxError('Path escapes its approved folder via a link');
   }
 
@@ -402,7 +408,7 @@ export async function resolvePath(
   }
 
   const finalReal = missing.length === 0 ? real : path.join(real, ...missing);
-  if (!isContained(rootReal, finalReal)) {
+  if (!rootContains(root, finalReal, rootReal)) {
     throw new SandboxError('Path escapes its approved folder');
   }
 
@@ -428,7 +434,7 @@ export function toVirtualPath(root: Root, rootReal: string, realPath: string): s
  * Validates a folder the user picked in the UI before it becomes a root.
  * Allows local WSL folders, rejects other network paths and overlapping roots.
  */
-export async function validateNewRoot(folderPath: string, existing: readonly Root[]): Promise<string> {
+export async function validateNewRoot(folderPath: string, existing: readonly Root[], options: { allowFile?: boolean; allowContainingRoots?: boolean } = {}): Promise<string> {
   if (!path.isAbsolute(folderPath)) {
     throw new SandboxError('Folder path must be absolute');
   }
@@ -443,8 +449,8 @@ export async function validateNewRoot(folderPath: string, existing: readonly Roo
   }
   const real = await canonicalRealpath(folderPath);
   const stat = await fs.stat(real);
-  if (!stat.isDirectory()) {
-    throw new SandboxError('That is not a folder');
+  if (!stat.isDirectory() && !(options.allowFile && stat.isFile())) {
+    throw new SandboxError(options.allowFile ? 'That is not a file or folder' : 'That is not a folder');
   }
   const parsed = path.parse(real);
   const sameRoot = nativePathIdentity(parsed.root) === nativePathIdentity(real);
@@ -462,7 +468,10 @@ export async function validateNewRoot(folderPath: string, existing: readonly Roo
     } catch {
       continue;
     }
-    if (isContained(otherReal, real) || isContained(real, otherReal)) {
+    // A newly explicit folder can contain an earlier grant. Keep the original
+    // virtual alias rather than deleting it from a chat already using it.
+    if (options.allowContainingRoots && stat.isDirectory() && isContained(real, otherReal)) continue;
+    if (rootContains(other, real, otherReal) || isContained(real, otherReal)) {
       throw new SandboxError(`That folder overlaps the existing root "/${other.name}"`);
     }
   }
