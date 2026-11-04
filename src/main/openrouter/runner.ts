@@ -7,7 +7,7 @@ import { appendEvent, getSession, upsertMessageEvent } from "../session/store.js
 import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, type InputEntry } from "../session/input.js";
 import { notifyChanged } from "../session/recorder.js";
 import { estimateTokens } from "../../shared/session.js";
-import { OpenRouterClient, OpenRouterApiError, type OpenRouterMessage, type OpenRouterModel, type OpenRouterToolCall } from "./client.js";
+import { FREE_ROUTER_MODEL, OpenRouterClient, OpenRouterApiError, type OpenRouterMessage, type OpenRouterModel, type OpenRouterToolCall } from "./client.js";
 import { currentOpenRouterTurn, openRouterTools, type OwnedTurn } from "./tools.js";
 
 const API_OWNER = "onecode:openrouter-api";
@@ -113,7 +113,8 @@ async function perform(entry: InputEntry): Promise<void> {
     if (!getConfig().sessions.record) throw new OpenRouterApiError("SESSION_RECORDING_REQUIRED");
     const client = new OpenRouterClient();
     const models = await client.models(apiKey, controller.signal);
-    const model = models.find(item => item.id === entry.model);
+    const model = models.find(item => item.id === entry.model) ??
+      (entry.model === FREE_ROUTER_MODEL.id ? FREE_ROUTER_MODEL : undefined);
     if (!model) throw new OpenRouterApiError("MODEL_UNAVAILABLE");
     const session = await getSession(entry.sessionId);
     if (!session) throw new OpenRouterApiError("SESSION_UNAVAILABLE");
@@ -128,6 +129,12 @@ async function perform(entry: InputEntry): Promise<void> {
       messageId, turnId, signal: controller.signal };
     const tools = openRouterTools(turn);
     const declarations = model.supportsTools ? tools.declarations : [];
+    const reasoningEffort = entry.reasoningEffort;
+    const reasoning = reasoningEffort === 'minimal' || reasoningEffort === 'low' ||
+      reasoningEffort === 'medium' || reasoningEffort === 'high' || reasoningEffort === 'xhigh'
+      ? reasoningEffort : undefined;
+    if (reasoning && !model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort'))
+      throw new OpenRouterApiError('MODEL_REASONING_UNAVAILABLE');
     const output = Math.min(model.maxCompletionTokens ?? 4096, 4096);
     const messages: OpenRouterMessage[] = [...thread.messages, { role: "user", content: entry.text }];
     const contextMessages: OpenRouterMessage[] = [{ role: "system", content: SYSTEM }, ...messages];
@@ -162,7 +169,7 @@ async function perform(entry: InputEntry): Promise<void> {
       budget(requestMessages, model, declarations, output);
       const response = await client.complete({ apiKey, model: model.id, sessionId: conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
-        onAccepted: firstAccepted, onText: paint });
+        reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint });
       if (!accepted || !await currentOpenRouterTurn(turn)) throw new OpenRouterApiError("API_TURN_NOT_CURRENT");
       const resultContent = response.content;
       if (resultContent && !displayed.endsWith(resultContent)) {
@@ -171,6 +178,7 @@ async function perform(entry: InputEntry): Promise<void> {
       }
       const calls = response.toolCalls;
       thread.messages.push({ role: "assistant", content: resultContent || null,
+        ...(response.reasoningDetails.length ? { reasoning_details: response.reasoningDetails } : {}),
         ...(calls.length ? { tool_calls: calls } : {}) });
       await saveThread(thread);
       if (!calls.length) {

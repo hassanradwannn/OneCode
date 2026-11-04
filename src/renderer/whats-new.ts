@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.1': {
+    lead: () => t('Connect OpenRouter with an API key, no browser extension required.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('API-only OpenRouter setup'), text: () => t('Select OpenRouter to securely save your API key in Setup. Browser installation and native sign-in are not needed.') },
+      { icon: 'i-chat', title: () => t('Free model routing'), text: () => t('Use openrouter/free or choose a listed model. Preserve supported reasoning metadata and OneCode-owned tool sessions.') }
+    ]
+  },
   '0.9.0': {
     lead: () => t('Try OpenRouter through OneCode Beta.'),
     highlights: [

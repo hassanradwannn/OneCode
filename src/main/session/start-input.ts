@@ -148,8 +148,11 @@ export async function sendDesktopInput(input: InputArgs, scheduleId?: string): P
       throw new Error('This OpenRouter Beta supports text chat and local tool calls. Attachments, scheduled sends and Goal stages are not available yet.');
     // The API cannot inject into a streaming response. Keep the instruction for
     // this exact chat after its running turn; never replay an existing tool call.
+    const sendModel = input.model || (existing?.conversationId?.startsWith('openrouter:')
+      ? existing.selectedModel?.model : null) || 'openrouter/free';
     const safeInput: InputArgs = input.steerTurnId
-      ? { ...input, mode: 'after-turn', steerTurnId: undefined } : input;
+      ? { ...input, model: sendModel, mode: 'after-turn', steerTurnId: undefined }
+      : { ...input, model: sendModel };
     const entry = await enqueueInput(safeInput);
     if (entry.state === 'queued') scheduleOpenRouterInput(entry);
     return entry;

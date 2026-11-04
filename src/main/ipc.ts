@@ -1415,6 +1415,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (key === 'openaiApiKey' && owner !== (config.tunnel.profileId ?? 'default') &&
         !config.setupProfiles?.some(profile => profile.id === owner)) throw new Error('Setup profile not found');
     await setSecret(key === 'openaiApiKey' ? setupApiKeySlot(owner) : key, value);
+    if (key === 'openRouterApiKey') {
+      const { invalidateOpenRouterModels, startOpenRouterModelDiscovery } = await import('./openrouter/catalog.js');
+      invalidateOpenRouterModels();
+      if (value.trim() && config.ui.chatProvider === 'openrouter')
+        void startOpenRouterModelDiscovery(true);
+    }
     const activeGoalKey = getConfig().goal.provider.kind === 'custom' ? 'customProviderApiKey' : 'openRouterApiKey';
     if (key === activeGoalKey) retireGoalDrafts();
     const what = key === 'openRouterApiKey' ? 'openrouter key' : key === 'customProviderApiKey' ? 'custom provider key' : 'api key';

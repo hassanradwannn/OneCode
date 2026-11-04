@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.1 Beta] — 2026-11-04
+
+Correct OpenRouter Setup to prompt directly for an API key instead of browser/extension installation. Save and remove keys through protected credential storage, invalidate model discovery after key changes, and offer the openrouter/free routing model when no exact model is selected. Preserve OpenRouter reasoning metadata in subsequent API messages without displaying it as an answer; retain OneCode local tool/session permissions. The free route uses an explicitly estimated local context budget because its upstream model varies. This remains an experimental Beta with live-provider acceptance pending. See [Beta notes](docs/release-notes/beta-v0.9.1.md).
+
 ## [0.9.0 Beta] — 2026-11-04
 
 Experimental OpenRouter API provider with OneCode-owned sessions, model discovery, local tool calls, and bounded request handling. Repair late native acknowledgment during automatic ChatGPT turn rotation without relaxing task capabilities; preserve distinct prior/new credentials across live and restarted sessions. This is a Beta prerelease for Windows and Linux testing, not a Stable release. OpenRouter automatic context compaction and signed-in native acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.0.md).

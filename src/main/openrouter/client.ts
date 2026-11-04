@@ -13,17 +13,28 @@ export type OpenRouterModel = {
   supportedParameters: string[];
   pricing: { prompt: string; completion: string };
 };
+/** OpenRouter's documented free router, even when /models omits this virtual model. */
+export const FREE_ROUTER_MODEL: OpenRouterModel = {
+  // The router may select models with different context windows. Until the
+  // endpoint reports a concrete limit, use an estimated local budget that
+  // leaves room for OneCode's complete tool schema. It is not a route guarantee.
+  id: "openrouter/free", name: "Free Models Router", contextLength: 32768,
+  maxCompletionTokens: null, supportsTools: true, supportedParameters: ["tools"],
+  pricing: { prompt: "0", completion: "0" }
+};
 export type OpenRouterTool = { type: "function"; function: { name: string; description: string; parameters: object } };
 export type OpenRouterToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 export type OpenRouterMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: OpenRouterToolCall[] }
+  | { role: "assistant"; content: string | null; tool_calls?: OpenRouterToolCall[]; reasoning_details?: unknown[] }
   | { role: "tool"; tool_call_id: string; content: string };
 export type OpenRouterCompletion = {
   id: string;
   model: string;
   content: string;
   toolCalls: OpenRouterToolCall[];
+  /** Opaque API reasoning metadata; round-trip unchanged without displaying it. */
+  reasoningDetails: unknown[];
   finishReason: string | null;
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
 };
@@ -34,6 +45,7 @@ export type CompleteOptions = {
   messages: OpenRouterMessage[];
   tools?: OpenRouterTool[];
   maxCompletionTokens?: number;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
   signal?: AbortSignal;
   onText?: (increment: string) => void;
   /** Remote HTTP accepted. Caller must commit its exact local Send receipt first. */
@@ -101,6 +113,7 @@ function parseCompletion(value: unknown): OpenRouterCompletion {
   const finishReason = str(choice.finish_reason) || null;
   if (finishReason === "length") throw new OpenRouterApiError("TRUNCATED_COMPLETION");
   return { id: str(value.id), model: str(value.model), content: str(message.content), toolCalls: calls,
+    reasoningDetails: Array.isArray(message.reasoning_details) ? message.reasoning_details : [],
     finishReason, usage: parseUsage(value.usage) };
 }
 
@@ -110,6 +123,7 @@ async function streamCompletion(response: Response, onText?: (increment: string)
   const reader = response.body.getReader(), decoder = new TextDecoder();
   const parts = new Map<number, { id: string; name: string; arguments: string }>();
   let bytes = 0, pending = "", complete = false, content = "", id = "", model = "", finishReason: string | null = null;
+  const reasoningDetails: unknown[] = [];
   let usage: OpenRouterCompletion["usage"] = null;
   const take = (data: string) => {
     if (data === "[DONE]") { complete = true; return; }
@@ -123,6 +137,7 @@ async function streamCompletion(response: Response, onText?: (increment: string)
       if (!isObject(choice)) continue;
       if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
       if (!isObject(choice.delta)) continue;
+      if (Array.isArray(choice.delta.reasoning_details)) reasoningDetails.push(...choice.delta.reasoning_details);
       if (typeof choice.delta.content === "string") { content += choice.delta.content; onText?.(choice.delta.content); }
       if (!Array.isArray(choice.delta.tool_calls)) continue;
       for (const delta of choice.delta.tool_calls) {
@@ -161,7 +176,7 @@ async function streamCompletion(response: Response, onText?: (increment: string)
   const toolCalls = [...parts].sort(([a], [b]) => a - b).map(([, call]) =>
     validatedCall({ id: call.id, function: { name: call.name, arguments: call.arguments } }));
   if (new Set(toolCalls.map(call => call.id)).size !== toolCalls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
-  return { id, model, content, toolCalls, finishReason, usage };
+  return { id, model, content, toolCalls, reasoningDetails, finishReason, usage };
 }
 
 export class OpenRouterClient {
@@ -196,6 +211,7 @@ export class OpenRouterClient {
     if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
     const streaming = input.stream !== false;
     const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
+      ...(input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
       stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });

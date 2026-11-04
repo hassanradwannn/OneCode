@@ -145,7 +145,13 @@ const browserSetup = initBrowserSetup({
   },
   repaint: () => { setupOpenStep = 'browser'; if (state) apply(state); },
   open: (browser, page) => run(api.openSetupBrowser(browser, page)),
-  locate: async browser => { await settingsSaveQueue; const next = await run(api.pickBrowserExecutable(browser)); if (next) apply(next); }
+  locate: async browser => { await settingsSaveQueue; const next = await run(api.pickBrowserExecutable(browser)); if (next) apply(next); },
+  saveOpenRouterKey: async key => {
+    const reply = await api.setGoalKey(key);
+    if (!reply.ok) throw new Error('Could not save the OpenRouter API key.');
+    apply(reply.data);
+    return reply.data;
+  }
 });
 // Escape the translucent sidebar's backdrop-filter containing block.
 document.body.append($('connectionPopover'));
@@ -1890,6 +1896,9 @@ function apply(next: AppState): void {
   step('tunnel').hidden = !openai;
   step('key').hidden = !openai;
   step('browser').hidden = !browserRequired;
+  step('chatgpt').hidden = provider === 'openrouter';
+  const browserRail = document.querySelector<HTMLElement>('[data-rail-step="browser"] .setup-rail-label');
+  if (browserRail) browserRail.textContent = provider === 'openrouter' ? 'API key' : 'Browser';
   const cosBrowser = (config.ui.chatBrowser ?? 'chrome') === 'cos';
   const browserProgress = browserSetup.render(next);
   for (const other of externalSetupLinks) other.hidden = !cosBrowser;
