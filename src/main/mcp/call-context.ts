@@ -98,6 +98,8 @@ export interface CallContext {
   allowUnattributed?: boolean;
   /** Who this call was proven to be, for the broker tools to route by. */
   caller: CallCaller;
+  /** Exact turn owned by OneCode's local API runner, not an external request hint. */
+  localApiTurnId?: string;
   /**
    * Set by the tool guard, which is the only code that can tell a refusal apart from
    * a genuine failure — both come back to the model as an error result.

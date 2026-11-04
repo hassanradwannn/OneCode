@@ -1204,6 +1204,8 @@ export interface ToolCallInput {
   conversationId?: string | null;
   /** Durable local session principal carried by the exact request correlation, when available. */
   sessionId?: string | null;
+  /** OneCode API-owned turn, supplied only by a validated local API dispatch. */
+  localApiTurnId?: string;
   /** Validated by MCP ingress/dispatcher; local authorization, never Google request proof. */
   attributionMethod?: 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability';
   /** Captured before dispatch from this exact input's canonical ACK and actual native turn. */
@@ -1258,8 +1260,10 @@ export function recordToolCall(input: ToolCallInput): Promise<ToolCallRecord | n
       sessionId:
         input.sessionId ??
         (correlation?.conversationId === input.conversationId ? correlation.sessionId : null),
-      attribution: input.attributionMethod ?? 'request_id',
-      turnId: input.attributionMethod ? input.geminiInputTurn?.turnId ?? null : live?.turnId ?? null
+      attribution: input.localApiTurnId && input.conversationId.startsWith('openrouter:') && input.sessionId
+        ? 'local_api_turn' : input.attributionMethod ?? 'request_id',
+      turnId: input.localApiTurnId && input.conversationId?.startsWith('openrouter:') && input.sessionId
+        ? input.localApiTurnId : input.attributionMethod ? input.geminiInputTurn?.turnId ?? null : live?.turnId ?? null
     };
     if (input.bind) bindAgentConversation(input.bind, input.conversationId);
     attributing = Promise.resolve(target);
@@ -1456,7 +1460,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
 
     const call: ToolCallRecord = {
       ...(input.nested === true ? { nested: true } : {}),
-      ...((target.attribution === 'request_id' || target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability' || target.attribution === 'claude_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
+      ...((target.attribution === 'request_id' || target.attribution === 'local_api_turn' || target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability' || target.attribution === 'claude_session_capability') && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
         ? { process: { sessionId: evidence.processSessionId } } : {}),
       ...callModel,
       callId: randomUUID(),
@@ -1467,6 +1471,8 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       attributionMethod:
         target.attribution === 'superseded'
           ? 'superseded'
+          : target.attribution === 'local_api_turn'
+            ? 'local_api_turn'
           : target.attribution === 'gemini_session_capability' || target.attribution === 'chatgpt_session_capability' || target.attribution === 'claude_session_capability'
             ? target.attribution
           : target.conversationId && input.requestId

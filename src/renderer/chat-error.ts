@@ -43,6 +43,17 @@ const noticeKey = (error: ChatError): string => `${error.seq}:${error.time}:${er
 /** Presentation only: never infer send/reload authority from error prose. */
 export function chatErrorPresentation(error: ChatError, history: readonly SessionEvent[] = []) {
   const text = error.message.text.trim();
+  if (error.source === 'app' && error.turnId?.startsWith('or-')) {
+    const truncated = text === 'TRUNCATED_COMPLETION';
+    return {
+      title: truncated ? t('OpenRouter response reached its output limit') : t('OpenRouter API request did not complete'),
+      message: truncated
+        ? t('The upstream model stopped at its completion-token limit before finishing. High reasoning may consume part of this budget.')
+        : text,
+      resolved: false, reloaded: false,
+      next: t('This is an API chat, not a browser chat. Check any recorded tool results before choosing to continue manually; OneCode will not replay an uncertain action.')
+    };
+  }
   if (error.usageLimit) {
     const reset = usageLimitResetText(error.usageLimit, currentLanguage());
     return { title: t(usageLimitTitle(error.usageLimit)), message: text, resolved: false, reloaded: false,

@@ -61,7 +61,7 @@ import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
 import type { AppState, Capability, ChatBrowser, Config, LogEntry, SurfaceStatus } from '../shared/types.js';
 import { opensInCosBrowser } from '../shared/cos-browser-sites.js';
 import {
-  browserExtensionRequired,
+  selectedProviderNeedsBrowser,
   isNewer,
   CAPABILITY_DETAILS,
   CAPABILITY_LABELS,
@@ -1248,14 +1248,15 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   // that has not caught up yet - normal while an update downloads - and telling that user to
   // load the bundled folder again would talk them into downgrading a working extension. The
   // app sentence already owns being behind.
-  const stale =
+  const browserRequired = selectedProviderNeedsBrowser(config);
+  const stale = browserRequired &&
     bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion)
       ? bridge.extensionVersion
       : null;
-  const repairExtension = bridge.extensionUpdateRequired === true;
+  const repairExtension = browserRequired && bridge.extensionUpdateRequired === true;
   // A mismatched companion can fail the protocol gate before it becomes present.
   // Retain its last observed version until a matching companion actually reports in.
-  const missing = !stale && !repairExtension && bridge.running && !selectedBrowserConnected(bridge, config.ui.chatBrowser) && isRunning(status.state) && browserExtensionRequired(config);
+  const missing = browserRequired && !stale && !repairExtension && bridge.running && !selectedBrowserConnected(bridge, config.ui.chatBrowser) && isRunning(status.state);
   if (!stale && !repairExtension && !missing && !update.latest && !update.latestRevision && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
 
   const lines: string[] = [];
@@ -1892,7 +1893,7 @@ function apply(next: AppState): void {
   }
 
   const openai = config.tunnel.kind === 'openai';
-  const browserRequired = browserExtensionRequired(config);
+  const browserRequired = selectedProviderNeedsBrowser(config);
   step('tunnel').hidden = !openai;
   step('key').hidden = !openai;
   step('browser').hidden = !browserRequired;

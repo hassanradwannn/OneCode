@@ -685,6 +685,9 @@ export async function dispatch(
       ? { ...parent.caller }
       : { transportKey, requestId, conversationId: geminiBinding?.conversationId ?? null,
           sessionId: geminiBinding?.sessionId ?? null, setupProfileId, ...(geminiBinding ? { geminiBinding } : {}) },
+    // Only the in-process, current-checked API dispatch may pass an exact turn.
+    ...(parent?.localApiTurnId && mcpProvider() === 'openrouter'
+      ? { localApiTurnId: parent.localApiTurnId } : {}),
     outcome: null,
     evidence: emptyEvidence()
   };
@@ -1238,6 +1241,7 @@ async function dispatchTracked(
     requestId: context.caller.requestId,
     conversationId: context.caller.conversationId,
     sessionId: context.caller.sessionId ?? null,
+    ...(context.localApiTurnId ? { localApiTurnId: context.localApiTurnId } : {}),
     ...(context.caller.geminiBinding ? { attributionMethod: context.caller.geminiBinding.attribution } : {}),
     ...(context.caller.geminiBinding?.inputTurn ? { geminiInputTurn: context.caller.geminiBinding.inputTurn } : {}),
     endsActivity: isFinish && !result.isError

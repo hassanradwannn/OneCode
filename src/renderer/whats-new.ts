@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.2': {
+    lead: () => t('Use OpenRouter tools without browser warnings and keep task authorization recoverable.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('API-first tool access'), text: () => t('OpenRouter local tools are recorded under their exact turn. First-message guidance checks actual exposed tools across providers.') },
+      { icon: 'i-chat', title: () => t('Clearer API model and context'), text: () => t('Show selected model context estimates and API completion limits without pretending that browser-only compaction is active.') },
+      { icon: 'i-retry', title: () => t('Safer task recovery'), text: () => t('Briefly recheck an uncertain browser attachment before refusing the exact original task. Stale or revoked credentials stay blocked.') }
+    ]
+  },
   '0.9.1': {
     lead: () => t('Connect OpenRouter with an API key, no browser extension required.'),
     highlights: [

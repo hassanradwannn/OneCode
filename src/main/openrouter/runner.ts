@@ -16,7 +16,13 @@ const MAX_CALLS = 60;
 const MAX_HISTORY_MESSAGES = 2000;
 const MAX_HISTORY_BYTES = 6 * 1024 * 1024;
 const MAX_TOOL_RESULT_CHARS = 12000;
-const SYSTEM = "You are an assistant in OneCode. Tool calls are requests to OneCode, never executed by the model provider. Use available tools for local actions; respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. Answer clearly once work is verified.";
+const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. Answer clearly once work is verified.";
+function modelInstruction(requested: string): string {
+  return requested === FREE_ROUTER_MODEL.id
+    ? "Model identity: this request uses OpenRouter's openrouter/free routing alias. The actual upstream model can vary per request. Explain the distinction if asked; never guess which upstream model served this response."
+    : "Model identity: OneCode requested the exact OpenRouter model ID " + requested +
+      ". If asked, report that requested ID, and do not claim independent proof of underlying provider routing.";
+}
 
 interface Thread { version: 1; sessionId: string; conversationId: string; messages: OpenRouterMessage[] }
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
@@ -129,15 +135,22 @@ async function perform(entry: InputEntry): Promise<void> {
       messageId, turnId, signal: controller.signal };
     const tools = openRouterTools(turn);
     const declarations = model.supportsTools ? tools.declarations : [];
+    if (model.supportsTools && declarations.length === 0)
+      throw new OpenRouterApiError("CORE_TOOLS_UNAVAILABLE");
     const reasoningEffort = entry.reasoningEffort;
     const reasoning = reasoningEffort === 'minimal' || reasoningEffort === 'low' ||
       reasoningEffort === 'medium' || reasoningEffort === 'high' || reasoningEffort === 'xhigh'
       ? reasoningEffort : undefined;
     if (reasoning && !model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort'))
       throw new OpenRouterApiError('MODEL_REASONING_UNAVAILABLE');
-    const output = Math.min(model.maxCompletionTokens ?? 4096, 4096);
+    // High-effort reasoning consumes completion tokens before visible prose or
+    // tool calls. A hard 4096-token cap truncated legitimate long agent turns.
+    // Retain a finite budget and respect the selected model's published ceiling.
+    const output = Math.min(model.maxCompletionTokens ?? 16384, 16384,
+      Math.max(512, Math.floor(model.contextLength * 0.55)));
+    const system = SYSTEM + "\n" + modelInstruction(model.id);
     const messages: OpenRouterMessage[] = [...thread.messages, { role: "user", content: entry.text }];
-    const contextMessages: OpenRouterMessage[] = [{ role: "system", content: SYSTEM }, ...messages];
+    const contextMessages: OpenRouterMessage[] = [{ role: "system", content: system }, ...messages];
     budget(contextMessages, model, declarations, output);
     let displayed = "", invocations = 0;
     let paintedAt = 0;
@@ -164,7 +177,7 @@ async function perform(entry: InputEntry): Promise<void> {
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
       controller.signal.throwIfAborted();
       if (round > 0 && !await currentOpenRouterTurn(turn)) throw new OpenRouterApiError("API_TURN_NOT_CURRENT");
-      const requestMessages: OpenRouterMessage[] = [{ role: "system", content: SYSTEM },
+      const requestMessages: OpenRouterMessage[] = [{ role: "system", content: system },
         ...(round === 0 ? messages : thread.messages)];
       budget(requestMessages, model, declarations, output);
       const response = await client.complete({ apiKey, model: model.id, sessionId: conversationId,

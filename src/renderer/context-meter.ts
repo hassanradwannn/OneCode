@@ -3,6 +3,8 @@ import type { Config } from '../shared/types.js';
 import type { SessionSummary } from '../shared/session.js';
 import type { ReasoningEffort } from '../shared/session.js';
 import { isProModel } from '../shared/chat-models.js';
+import { modelContextWindow } from './chat-models.js';
+import type { ChatProvider } from '../shared/chat-provider.js';
 
 /**
  * A short token count in the interface language. Some locales
@@ -16,7 +18,9 @@ export function compactTokens(value: number, language: string): string {
 }
 
 /** Recorder estimates, never a claim about the provider's exact context window. */
-export function paintContextMeter(session: SessionSummary | null, config: Config, composer: { model: string; reasoningEffort: ReasoningEffort | null } | null = null): void {
+export function paintContextMeter(session: SessionSummary | null, config: Config,
+  composer: { model: string; reasoningEffort: ReasoningEffort | null } | null = null,
+  provider: ChatProvider = config.ui?.chatProvider ?? 'gemini'): void {
   const button = document.getElementById('contextMeterButton');
   const panel = document.getElementById('contextMeterInfo');
   const arc = document.getElementById('contextMeterArc');
@@ -26,41 +30,51 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
   // preceding turn (or not exist yet in a new chat).
   const observed = session?.selectedModel;
   const selection = composer ?? (observed?.conversationId === session?.conversationId ? observed : null);
-  const pro = isProModel(selection?.model, selection?.reasoningEffort ?? undefined);
-  const limit = config.sessions.limitTokens;
+  const api = provider === 'openrouter';
+  const pro = !api && isProModel(selection?.model, selection?.reasoningEffort ?? undefined);
+  const observedLimit = api ? modelContextWindow(provider, selection?.model) : null;
+  const limit = api ? observedLimit ?? 0 : config.sessions.limitTokens;
   const percent = limit > 0 ? Math.round(used / limit * 100) : 0;
   const boundedPercent = Math.min(100, percent);
-  arc.setAttribute('stroke-dasharray', `${pro ? 0 : boundedPercent * 0.377} 37.7`);
+  arc.setAttribute('stroke-dasharray', `${pro || api && !observedLimit ? 0 : boundedPercent * 0.377} 37.7`);
   const tokens = () => new Intl.NumberFormat(currentLanguage()).format(used);
   const root = document.getElementById('contextMeter')!;
   const values = root.dataset.display === 'values';
   const compact = document.getElementById('contextMeterCompact');
   const short = (value: number) => compactTokens(value, currentLanguage());
-  const counts = () => pro ? short(used) : `${short(used)} / ${short(limit)}`;
+  const counts = () => pro || api && !observedLimit ? short(used) : `${short(used)} / ${short(limit)}`;
   if (compact) {
-    ui(compact, 'textContent', () => values || pro ? counts() : `${percent}%`);
+    ui(compact, 'textContent', () => values || pro || api && !observedLimit ? counts() : `${percent}%`);
   }
   const description = () => [t('Session context · estimated'), pro
     ? t('{0} tokens used', [tokens()])
+    : api ? observedLimit
+      ? t('{0} / {1} estimated tokens · {2}% of model context', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent])
+      : t('Model context unknown until the OpenRouter catalog loads')
     : t('{0} / {1} estimated tokens · {2}% of OneCode reference', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent]),
-    pro ? t('Auto-compaction off for Pro') : config.compaction.auto
+    api ? t('API auto-compaction is not available yet') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto
       ? t('Auto-compaction at {0} tokens', [new Intl.NumberFormat(currentLanguage()).format(config.compaction.autoTokens)])
-      : t('Auto-compaction off'), t('This local estimate does not block messages or tools and is not the provider’s context limit.')].join('\n');
+    : t('Auto-compaction off'), api ? t('The upstream model chosen by OpenRouter may have a different effective limit.')
+      : t('This local estimate does not block messages or tools and is not the provider’s context limit.')].join('\n');
   // One fact per row: the estimate, the limit from Settings, the share, and when compaction starts.
   ui(document.getElementById('contextTokens')!, 'textContent', () => short(used));
   const limitRow = document.getElementById('contextLimit');
-  if (limitRow) ui(limitRow, 'textContent', () => pro ? '—' : short(limit));
-  ui(document.getElementById('contextPercent')!, 'textContent', () => pro ? '—' : `${percent}%`);
-  ui(document.getElementById('contextThreshold')!, 'textContent', () => pro ? t('Auto-compaction off for Pro') : config.compaction.auto ? short(config.compaction.autoTokens) : t('Off'));
+  if (limitRow) {
+    ui(limitRow, 'textContent', () => pro || api && !observedLimit ? '—' : short(limit));
+    const label = limitRow.previousElementSibling;
+    if (label) ui(label, 'textContent', () => api ? t('Selected model context (estimate)') : t('OneCode reference'));
+  }
+  ui(document.getElementById('contextPercent')!, 'textContent', () => pro || api && !observedLimit ? '—' : `${percent}%`);
+  ui(document.getElementById('contextThreshold')!, 'textContent', () => api ? t('API auto-compaction unavailable') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto ? short(config.compaction.autoTokens) : t('Off'));
   const progress = panel.querySelector<HTMLElement>('.context-progress')!;
-  progress.hidden = pro;
+  progress.hidden = pro || api && !observedLimit;
   progress.style.setProperty('--context-used', `${boundedPercent}%`);
   progress.setAttribute('aria-valuenow', String(boundedPercent));
   const display = document.getElementById('contextDisplay') as HTMLButtonElement;
   ui(display.querySelector('span')!, 'textContent', () => values ? t('Show percentage') : t('Show token values'));
   display.onclick = () => {
     root.dataset.display = values ? 'percent' : 'values';
-    paintContextMeter(session, config, composer);
+    paintContextMeter(session, config, composer, provider);
   };
   ui(button, 'aria-label', () => description().replaceAll('\n', '. '));
 }

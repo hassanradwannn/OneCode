@@ -184,6 +184,7 @@ export type ToolOutcome = 'ok' | 'process_exit_nonzero' | 'tool_rejected' | 'too
  */
 export type CallAttribution =
   | 'request_id'
+  | 'local_api_turn'
   | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability'
   | 'unattributed'
   | 'superseded'
@@ -213,6 +214,7 @@ export type CallAttribution =
  */
 export const ATTRIBUTION_LABELS: Record<CallAttribution, string> = {
   request_id: 'exact request id',
+  local_api_turn: 'exact OneCode API turn',
   gemini_session_capability: 'local Gemini session capability',
   chatgpt_session_capability: 'local ChatGPT session capability',
   claude_session_capability: 'local provider session capability',
@@ -257,7 +259,7 @@ export interface ToolCallRecord {
   /** Conversation proven by that request id, or null when ownership was unresolved. */
   conversationId: string | null;
   /** Deterministic placement outcome for current, unresolved, or deliberately retired callers. */
-  attributionMethod: 'request_id' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability' | 'unattributed' | 'superseded';
+  attributionMethod: 'request_id' | 'local_api_turn' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability' | 'unattributed' | 'superseded';
   /** Exact arguments as JSON. Cut inline past the cap, with the whole text in an asset. */
   args: StoredText;
   result: StoredText;

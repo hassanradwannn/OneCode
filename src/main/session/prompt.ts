@@ -26,6 +26,8 @@ export type PromptLimits = { maxChars: number; maxBytes: number };
 type ProjectInstructions = { directory: string; text: string; truncated: boolean };
 const limits: PromptLimits = { maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: Infinity };
 const cutNotice = '\n\n[Cut off because of the message limit. Read AGENTS.md yourself for the remaining instructions.]';
+/** Applied only to an app-authored opening, never a follow-up or recovery Send. */
+const FIRST_TURN_TOOLS = 'First-turn tool access: check tools actually exposed now. Use available OneCode tools for approved work; if missing, say so. Do not invent execution or replay uncertain calls.';
 
 const promptFolder = (scope: PromptScope) => scope.sessionId ? getSessionProject(scope.sessionId)
   : scope.projectId ? projectWorkspace(scope.projectId) : Promise.resolve(null);
@@ -67,6 +69,16 @@ function claudeOpeningInstructions(): string {
     ...(effectiveCapabilities(config).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(effectiveCapabilities(config).read ? ['Live local references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.'] : []),
     'Recurring checks: Core automations; set interval_minutes and message, verify the returned schedule id.',
+    ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
+  ].join('\n\n');
+}
+/** API-only provider; no browser mention, native skill or extension prerequisite. */
+function openRouterOpeningInstructions(): string {
+  const config = getConfig();
+  return [
+    'OpenRouter uses OneCode API sessions with locally executed tool calls. Use only the function schemas exposed in the API request.',
+    'If tools are missing or the model cannot call them, report that without claiming work ran. Never replay an uncertain action.',
+    ...(effectiveCapabilities(config).read ? ['Read the selected project instructions through available OneCode tools.'] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
   ].join('\n\n');
 }
@@ -181,11 +193,12 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const chatgptSkill = provider === 'chatgpt' && config.mcp.useChatgptWebSkill === true;
-  const compact = provider === 'claude' || chatgptSkill || provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
+  const compact = provider === 'claude' || provider === 'openrouter' || chatgptSkill || provider === 'gemini' && (geminiBindingsEnabled() || config.mcp.useGeminiWebSkill === true);
   // Gemini does not need an unselected local catalog in every opening. Explicit
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
-  const core = [compact ? (provider === 'claude' ? claudeOpeningInstructions() : chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
+  const core = [compact ? (provider === 'claude' ? claudeOpeningInstructions() : provider === 'openrouter' ? openRouterOpeningInstructions() : chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
+    ...(compact ? [FIRST_TURN_TOOLS] : []),
     scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
@@ -201,7 +214,7 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   if ((await promptFolder(scope))?.real !== folder?.real) throw new Error('The selected project changed during Skill preparation');
   const session = scope.sessionId ? await getSession(scope.sessionId) : null;
   const provider = chatProviderForConversation(session?.conversationId, scope.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
-  const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true || provider === 'claude';
+  const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true || provider === 'claude' || provider === 'openrouter';
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
     ...((provider === 'gemini' || provider === 'claude') && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),

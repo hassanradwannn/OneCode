@@ -98,7 +98,7 @@ import {
   MAX_GOAL_SYSTEM_PROMPT_CHARS
 } from '../shared/goal.js';
 import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, HANDOFF_LENGTHS, MAX_HANDOFF_PROMPT_CHARS, type HandoffLength } from '../shared/handoff.js';
-import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
+import { selectedProviderNeedsBrowser, type AppState, type Config } from '../shared/types.js';
 import { $, ago, clockTime, compactNumber, disclosureChevron, el, icon, run, setIcon, toast } from './dom.js';
 import { APPROVAL_ANSWERED_TEXT, APPROVAL_PROGRESS_PREFIX, APPROVAL_WAITING_TEXT, type ApprovalCardView } from '../shared/approval-wait.js';
 import { openRowMenu, rowMenuOpenFor, toggleRowMenu, type RowMenuItem } from './row-menu.js';
@@ -4726,7 +4726,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   applyComposerSessionModel(selectedId ? `${selectedId}:${selectionGeneration}` : null, composerSessionSelection(summary) ?? null,
     acceptedAutomaticModel(summary, pendingComposerInputs));
   const config = deps.state()?.config;
-  if (config) paintContextMeter(summary, config, confirmedComposerModel());
+  if (config) paintContextMeter(summary, config, confirmedComposerModel(), selectedChatProvider());
   const project = selectedLocalProject();
   $('chatProjectContext').hidden = !project;
   $('chatProjectName').textContent = project?.name ?? '';
@@ -6284,7 +6284,7 @@ let bridgePresent = true;
  */
 function queuedWaitReason(entry: InputEntry): 'extension' | 'tool-call' | 'chatgpt-project' | 'chatgpt-project-failed' | null {
   if (entry.state !== 'queued' || entry.error || entry.dueAt > Date.now() || entry.delivery === 'tool') return null;
-  if (!bridgePresent) return 'extension';
+  if (entry.chatProvider !== 'openrouter' && !bridgePresent) return 'extension';
   const project = chatgptProjectWait(entry);
   if (project) return project;
   if (entry.mode === 'auto' && entry.sessionId && entry.sessionId === runningToolsFor && runningTools.length > 0 && !entry.directTurn && !entry.steerTurnId) return 'tool-call';
@@ -6296,7 +6296,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyRouteSettling(state.status.routeSettlingUntil ?? 0);
   if (bridgePresent !== bridge.present) { bridgePresent = bridge.present; paintPendingInputs(); }
   if (visible && selectedId) void refreshSessionControls();
-  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel());
+  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider());
   applyChatModels(config, previous, selectedChatProvider());
 
   applyChatChecked($<HTMLInputElement>('autoCompact'), config.compaction.auto, previous?.compaction.auto);
@@ -6379,7 +6379,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyGoal(state, previous);
 
   // Extension bridge. Connecting is automatic, so this reports rather than asks.
-  const browserRequired = browserExtensionRequired(config);
+  const browserRequired = selectedProviderNeedsBrowser(config);
   $<HTMLButtonElement>('bridgeUnpair').disabled = !bridge.paired;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
   ui($('bridgeState'), 'textContent', () => !browserRequired
@@ -7206,7 +7206,7 @@ export function initChat(next: Deps): void {
   initChatModels(() => {
     paintLoopDelivery();
     const config = deps.state()?.config;
-    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel());
+    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider());
   });
   $('queueAtFinish').addEventListener('click', () => {
     if ($('queueAtFinish').hidden) return;

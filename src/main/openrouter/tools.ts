@@ -49,7 +49,8 @@ export function openRouterTools(turn: OwnedTurn) {
       const context: CallContext = {
         startedAt: Date.now(), transportKey: null, agent: null, allowUnattributed: false,
         caller: { transportKey: null, requestId: null, conversationId: turn.conversationId,
-          sessionId: turn.sessionId }, outcome: null, evidence: emptyEvidence(),
+          sessionId: turn.sessionId }, localApiTurnId: turn.turnId,
+        outcome: null, evidence: emptyEvidence(),
         publication: { completedAt: null, failed: false }
       };
       return withMcpProvider("openrouter", () => registry.invokeOwned(name, args, context, current));

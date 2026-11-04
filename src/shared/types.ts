@@ -893,12 +893,17 @@ export interface MacOSDesktopAccessStatus {
 /**
  * Whether the enabled product surface currently needs the companion browser extension.
  *
- * Recording is always on and consumes browser observations, so the extension bridge is an
- * unconditional product dependency. Keep the parameter for source compatibility with callers
- * that already pass their config snapshot.
+ * Recording existing browser-provider chats still requires Companion even if
+ * the new-chat default is OpenRouter. This is a lifecycle requirement, not
+ * evidence that an API-only chat needs a browser.
  */
-export function browserExtensionRequired(_config: Pick<Config, 'sessions' | 'multiAgent'> & Partial<Pick<Config, 'capabilities'>>): boolean {
+export function browserExtensionRequired(_config: Pick<Config, 'sessions' | 'multiAgent'> & Partial<Pick<Config, 'capabilities' | 'ui'>>): boolean {
   return true;
+}
+
+/** Only UI readiness and provider-specific notices depend on the selected default. */
+export function selectedProviderNeedsBrowser(config: Pick<Config, 'ui'>): boolean {
+  return config.ui?.chatProvider !== 'openrouter';
 }
 
 export interface AppState {
