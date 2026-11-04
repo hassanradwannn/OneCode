@@ -8,7 +8,7 @@ import { REASONING_EFFORTS } from '../../shared/session.js';
 import { resolveChatModel } from '../../shared/chat-models.js';
 
 export const remotePreferencesSchema = z.object({
-  chatProvider: z.enum(CHAT_PROVIDERS).optional(), defaultChatModel: z.string().max(80).optional(),
+  chatProvider: z.enum(CHAT_PROVIDERS).optional(), defaultChatModel: z.string().max(200).optional(),
   defaultChatModelAffinity: z.union([z.object({ provider: z.enum(CHAT_PROVIDERS), model: z.string().min(1).max(80), surface: z.enum(['chat', 'work']) }).strict(), z.literal('')])
     .optional().transform(value => value === '' ? undefined : value),
   defaultChatReasoning: z.union([z.enum(REASONING_EFFORTS), z.literal('')]).optional(), followUp: z.enum(['steer', 'queue']).optional(),

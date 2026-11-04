@@ -658,7 +658,8 @@ export async function dispatch(
   surface: SurfaceId,
   run: () => Promise<ToolResult>,
   parent?: CallContext,
-  setupProfileId: string | null = null
+  setupProfileId: string | null = null,
+  trustedLocalDirect = false
 ): Promise<ToolResult> {
   const geminiBinding = parent?.caller.geminiBinding ?? inboundGeminiBinding();
   if (mcpProvider() === 'claude' && (!geminiBinding || geminiBinding.attribution !== 'claude_session_capability'))
@@ -693,7 +694,7 @@ export async function dispatch(
   const confirmUse = !parent && inboundProviderRequest() ? beginPluginToolCall(surface) : null;
   try {
     const result = await trackMcpRequest(() =>
-      trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent))
+      trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent && !trustedLocalDirect))
     );
     // In-process callers have no socket; resolving their outer invocation publishes it.
     if (!parent && !inboundPublication()) context.publication!.completedAt = Date.now();
@@ -763,7 +764,8 @@ async function dispatchTracked(
   // request id, identity-sensitive handlers (workspace/session/agents) see it before they
   // touch state. If the page is one tick late this stays null; only handlers that actually
   // require identity wait for their own exact mate. Ordinary absolute reads/execs never wait.
-  if (!nested && !context.caller.geminiBinding) setCallerConversation(context, callerConversation(name, startedAt, requestId));
+  if (!nested && !context.caller.geminiBinding && !context.caller.conversationId)
+    setCallerConversation(context, callerConversation(name, startedAt, requestId));
   await reconcileAgentRequestOwners().catch(error => {
     logWarn(`Worker ownership recovery deferred: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -1509,6 +1511,8 @@ export interface SurfaceRegistrar {
   registered(): string[];
   /** Same registered handler/schema, with a fresh child recording context and inherited proof. */
   invokeNested(name: string, args: unknown, parent: CallContext): Promise<ToolResult>;
+  /** Same direct guards, but only for an app-owned API turn revalidated by its dispatch owner. */
+  invokeOwned(name: string, args: unknown, parent: CallContext, current: () => Promise<boolean>): Promise<ToolResult>;
   descriptions(): Array<{ name: string; description: string; inputSchema: object }>;
 }
 
@@ -1550,6 +1554,17 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
         const entry = handlers.get(name);
         return entry ? entry.run(input) : fail('UNKNOWN_TOOL: this tool is not available on this connector.');
       }, parent);
+    },
+    async invokeOwned(name, args, parent, current) {
+      if (mcpProvider() !== 'openrouter' || !parent.caller.sessionId || !parent.caller.conversationId ||
+          !parent.caller.conversationId.startsWith('openrouter:') || !await current())
+        return fail('API_TURN_NOT_CURRENT: no local tool ran.');
+      return dispatch(name, args, null, null, surface, async () => {
+        // Revalidate after all asynchronous policy checks, immediately before handler entry.
+        if (!await current()) return fail('API_TURN_NOT_CURRENT: no local tool ran.');
+        const entry = handlers.get(name);
+        return entry ? entry.run(args) : fail('UNKNOWN_TOOL: not available on this connector.');
+      }, parent, null, true);
     },
     register(name, config, handler) {
       names.push(name);

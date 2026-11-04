@@ -2299,6 +2299,14 @@ async function recordChatObservationsNow(
       if (item.outcome !== 'completed' && item.outcome !== 'stopped') batchUncertainEndId = item.turnId;
     }
   }
+  // A brand-new native conversation has no trustworthy question boundary yet when its
+  // first batch is only a turn start or assistant activity. Creating a separate session
+  // here races the reserved app opening's exact Send receipt and can display the answer
+  // above the pending authored message. Wait for a native user row or an already bound
+  // session; no assistant observation alone can attach a provider conversation.
+  if (!firstUser && !conversations.has(conversationId) && !pendingOrigins.has(conversationId) &&
+      !await findSessionByConversation(conversationId, { requireUnique: true }))
+    return { sessionId: null, stored: 0, activity, goalCandidates: [] };
   const sessionId = await sessionForConversation(
     conversationId,
     pageTitle?.text?.trim() || observedUserTitle(firstUser?.text)

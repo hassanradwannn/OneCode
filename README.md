@@ -4,6 +4,8 @@ A desktop workspace for AI providers and local tools on Windows and Linux. Work 
 
 **Stable release: [OneCode 0.8.9](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.9)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
+**Experimental [OneCode Beta 0.9.0](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.0)** tests the browserless OpenRouter API provider and ChatGPT automatic-continuation authorization repair. Install Beta separately from Stable; its model/tool support and automatic context management are still under validation. See [Beta notes](docs/release-notes/beta-v0.9.0.md).
+
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension.

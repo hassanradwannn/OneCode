@@ -7,6 +7,7 @@ import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConv
 import { enqueueInput, cancelInput, listInputs, noteInputStartupError, releaseSteeringInput, sendQueuedInputNow, type InputArgs, type InputEntry } from './input.js';
 import { getSession } from './store.js';
 import type { QueuedInputNowIntent } from '../../shared/input.js';
+import { cancelOpenRouterInput, scheduleOpenRouterInput } from '../openrouter/runner.js';
 
 function wakeBrowser(entry: InputEntry, retry = false, signal?: AbortSignal): Promise<void> {
   const marker = `cos-input=${encodeURIComponent(entry.id)}`;
@@ -86,7 +87,8 @@ let stopped = false;
 export async function cancelDesktopInput(id: string): Promise<boolean> {
   const start = starting.get(id);
   start?.abort(new Error('Input cancelled'));
-  return await cancelInput(id) || !!start;
+  const apiCancelled = cancelOpenRouterInput(id);
+  return await cancelInput(id) || !!start || apiCancelled;
 }
 async function startAcceptedInput(entry: InputEntry, controller: AbortController): Promise<void> {
   try {
@@ -130,12 +132,28 @@ export async function sendQueuedDesktopInputNow(id: string, intent?: QueuedInput
   if (stopped || starting.has(id) || !await sendQueuedInputNow(id, intent)) return false;
   const entry = (await listInputs()).find(row => row.id === id);
   if (!entry) return false;
+  if (entry.chatProvider === 'openrouter') { scheduleOpenRouterInput(entry); return true; }
   const controller = new AbortController(); starting.set(id, controller);
   void startAcceptedInput(entry, controller).catch(() => undefined);
   return true;
 }
 export async function sendDesktopInput(input: InputArgs, scheduleId?: string): Promise<InputEntry> {
   if (stopped) throw new Error('The app is shutting down');
+  const existing = input.sessionId ? await getSession(input.sessionId) : null;
+  const selected = input.provider ?? chatProviderForConversation(existing?.conversationId,
+    getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+  if (selected === 'openrouter') {
+    if (input.mode === 'finish' || input.images?.length || input.attachments?.length || input.delivery ||
+        input.attachmentDelivery || input.stages?.length || scheduleId)
+      throw new Error('This OpenRouter Beta supports text chat and local tool calls. Attachments, scheduled sends and Goal stages are not available yet.');
+    // The API cannot inject into a streaming response. Keep the instruction for
+    // this exact chat after its running turn; never replay an existing tool call.
+    const safeInput: InputArgs = input.steerTurnId
+      ? { ...input, mode: 'after-turn', steerTurnId: undefined } : input;
+    const entry = await enqueueInput(safeInput);
+    if (entry.state === 'queued') scheduleOpenRouterInput(entry);
+    return entry;
+  }
   if (input.mode === 'finish' || starting.has(input.id)) return scheduleId ? enqueueInput(input, undefined, scheduleId) : enqueueInput(input);
   const controller = new AbortController(); starting.set(input.id, controller);
   try {
@@ -159,6 +177,12 @@ export function stopInputStartup(): void {
 }
 export async function retryQueuedInputBrowser(id: string): Promise<InputEntry | null> {
   if (stopped || starting.has(id)) return null;
+  const apiEntry = (await listInputs()).find(entry => entry.id === id && entry.chatProvider === 'openrouter');
+  if (apiEntry) {
+    if (apiEntry.state !== 'queued' || apiEntry.sendAuthorizedAt !== undefined) return null;
+    scheduleOpenRouterInput(apiEntry);
+    return apiEntry;
+  }
   const eligible = (entry: InputEntry | undefined): entry is InputEntry => !!entry && entry.state === 'queued' && entry.purpose !== 'decision' && !!(entry.error?.startsWith(BROWSER_PREFIX) || entry.error?.startsWith(SETUP_PREFIX) || entry.error?.startsWith('Local chat setup failed:'));
   if (!eligible((await listInputs()).find(entry => entry.id === id)) || stopped || starting.has(id)) return null;
   const controller = new AbortController(); starting.set(id, controller);

@@ -998,7 +998,9 @@ function sessionRow(summary: SessionSummary): HTMLElement {
       }
     }
     items.push(
-      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its provider title stays the same."), run: () => startRename(summary) },
+      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its provider title stays the same."), run: () => startRename(summary) }
+    );
+    if (provider !== 'openrouter') items.push(
       { action: 'open', icon: 'i-out', label: () => t('Open in browser'), title: () => t("Open this chat in your browser"), run: () => void run(api.openSessionChat(summary.id)) },
       { action: 'copy-link', icon: 'i-copy', label: () => t('Copy link'), title: () => t("Copy this chat's provider link"),
         run: async () => {

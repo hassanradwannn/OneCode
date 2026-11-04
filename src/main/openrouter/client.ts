@@ -1,0 +1,213 @@
+/** OpenRouter transport only. All local tool execution remains owned by OneCode. */
+export const OPENROUTER_API = "https://openrouter.ai/api/v1";
+const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_TOOL_ARGUMENTS = 64 * 1024;
+
+export type OpenRouterModel = {
+  id: string;
+  name: string;
+  contextLength: number;
+  maxCompletionTokens: number | null;
+  supportsTools: boolean;
+  supportedParameters: string[];
+  pricing: { prompt: string; completion: string };
+};
+export type OpenRouterTool = { type: "function"; function: { name: string; description: string; parameters: object } };
+export type OpenRouterToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+export type OpenRouterMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: OpenRouterToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+export type OpenRouterCompletion = {
+  id: string;
+  model: string;
+  content: string;
+  toolCalls: OpenRouterToolCall[];
+  finishReason: string | null;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
+};
+export type CompleteOptions = {
+  apiKey: string;
+  model: string;
+  sessionId: string;
+  messages: OpenRouterMessage[];
+  tools?: OpenRouterTool[];
+  maxCompletionTokens?: number;
+  signal?: AbortSignal;
+  onText?: (increment: string) => void;
+  /** Remote HTTP accepted. Caller must commit its exact local Send receipt first. */
+  onAccepted?: () => Promise<void>;
+  stream?: boolean;
+};
+
+export class OpenRouterApiError extends Error {
+  constructor(readonly code: string, readonly status: number | null = null) {
+    super(code);
+    this.name = "OpenRouterApiError";
+  }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+const positive = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+const str = (value: unknown): string => typeof value === "string" ? value : "";
+
+function authHeaders(apiKey: string): HeadersInit {
+  if (!apiKey || apiKey.length > 512 || /[\r\n]/.test(apiKey)) throw new OpenRouterApiError("INVALID_KEY");
+  return { Authorization: "Bearer " + apiKey, "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+}
+
+function apiFailure(status: number): OpenRouterApiError {
+  const known: Record<number, string> = { 400: "BAD_REQUEST", 401: "UNAUTHORIZED", 402: "INSUFFICIENT_CREDITS",
+    403: "FORBIDDEN", 404: "MODEL_UNAVAILABLE", 408: "REQUEST_TIMEOUT", 429: "RATE_LIMITED" };
+  return new OpenRouterApiError(known[status] ?? (status >= 500 ? "PROVIDER_UNAVAILABLE" : "API_ERROR"), status);
+}
+
+async function boundedText(response: Response): Promise<string> {
+  const data = await response.text();
+  if (Buffer.byteLength(data) > MAX_RESPONSE_BYTES) throw new OpenRouterApiError("RESPONSE_TOO_LARGE");
+  return data;
+}
+
+function parseUsage(value: unknown): OpenRouterCompletion["usage"] {
+  if (!isObject(value)) return null;
+  const promptTokens = positive(value.prompt_tokens) ?? 0;
+  const completionTokens = positive(value.completion_tokens) ?? 0;
+  const totalTokens = positive(value.total_tokens) ?? promptTokens + completionTokens;
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+function validatedCall(value: unknown): OpenRouterToolCall {
+  if (!isObject(value) || !isObject(value.function)) throw new OpenRouterApiError("INVALID_TOOL_CALL");
+  const id = str(value.id), name = str(value.function.name), args = str(value.function.arguments);
+  if (!id || id.length > 200 || !/^[A-Za-z0-9_-]+$/.test(id) ||
+      !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name) || args.length > MAX_TOOL_ARGUMENTS)
+    throw new OpenRouterApiError("INVALID_TOOL_CALL");
+  try { const parsed = JSON.parse(args); if (!isObject(parsed)) throw new Error("arguments are not an object"); }
+  catch { throw new OpenRouterApiError("INVALID_TOOL_ARGUMENTS"); }
+  return { id, type: "function", function: { name, arguments: args } };
+}
+
+function parseCompletion(value: unknown): OpenRouterCompletion {
+  if (!isObject(value) || !Array.isArray(value.choices) || !isObject(value.choices[0]))
+    throw new OpenRouterApiError("INVALID_RESPONSE");
+  const choice = value.choices[0] as Record<string, unknown>;
+  const message = isObject(choice.message) ? choice.message : null;
+  if (!message) throw new OpenRouterApiError("INVALID_RESPONSE");
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls.map(validatedCall) : [];
+  if (new Set(calls.map(call => call.id)).size !== calls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
+  const finishReason = str(choice.finish_reason) || null;
+  if (finishReason === "length") throw new OpenRouterApiError("TRUNCATED_COMPLETION");
+  return { id: str(value.id), model: str(value.model), content: str(message.content), toolCalls: calls,
+    finishReason, usage: parseUsage(value.usage) };
+}
+
+/** Assemble fragmented SSE deltas; no tool call is returned until [DONE] is observed. */
+async function streamCompletion(response: Response, onText?: (increment: string) => void): Promise<OpenRouterCompletion> {
+  if (!response.body) throw new OpenRouterApiError("EMPTY_STREAM");
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  const parts = new Map<number, { id: string; name: string; arguments: string }>();
+  let bytes = 0, pending = "", complete = false, content = "", id = "", model = "", finishReason: string | null = null;
+  let usage: OpenRouterCompletion["usage"] = null;
+  const take = (data: string) => {
+    if (data === "[DONE]") { complete = true; return; }
+    let payload: unknown;
+    try { payload = JSON.parse(data); } catch { throw new OpenRouterApiError("INVALID_STREAM_EVENT"); }
+    if (!isObject(payload)) return;
+    id ||= str(payload.id); model ||= str(payload.model);
+    if (payload.usage !== undefined) usage = parseUsage(payload.usage);
+    if (!Array.isArray(payload.choices)) return;
+    for (const choice of payload.choices) {
+      if (!isObject(choice)) continue;
+      if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+      if (!isObject(choice.delta)) continue;
+      if (typeof choice.delta.content === "string") { content += choice.delta.content; onText?.(choice.delta.content); }
+      if (!Array.isArray(choice.delta.tool_calls)) continue;
+      for (const delta of choice.delta.tool_calls) {
+        if (!isObject(delta) || !Number.isSafeInteger(delta.index) || (delta.index as number) < 0 || (delta.index as number) > 63)
+          throw new OpenRouterApiError("INVALID_TOOL_DELTA");
+        const index = delta.index as number, prior = parts.get(index) ?? { id: "", name: "", arguments: "" };
+        if (typeof delta.id === "string") prior.id += delta.id;
+        if (isObject(delta.function)) {
+          if (typeof delta.function.name === "string") prior.name += delta.function.name;
+          if (typeof delta.function.arguments === "string") prior.arguments += delta.function.arguments;
+        }
+        if (prior.arguments.length > MAX_TOOL_ARGUMENTS) throw new OpenRouterApiError("TOOL_ARGUMENTS_TOO_LARGE");
+        parts.set(index, prior);
+      }
+    }
+  };
+  try {
+    while (!complete) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new OpenRouterApiError("RESPONSE_TOO_LARGE");
+      // Normalize CRLF after joining chunks, including a CR split from its LF.
+      pending = (pending + decoder.decode(next.value, { stream: true })).replace(/\r\n/g, "\n");
+      let boundary: number;
+      while ((boundary = pending.indexOf("\n\n")) >= 0) {
+        const event = pending.slice(0, boundary).replace(/\r/g, ""); pending = pending.slice(boundary + 2);
+        const data = event.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+        if (data) take(data);
+        if (complete) break;
+      }
+    }
+  } finally { await reader.cancel().catch(() => undefined); }
+  if (!complete) throw new OpenRouterApiError("STREAM_INCOMPLETE");
+  if (finishReason === "length") throw new OpenRouterApiError("TRUNCATED_COMPLETION");
+  const toolCalls = [...parts].sort(([a], [b]) => a - b).map(([, call]) =>
+    validatedCall({ id: call.id, function: { name: call.name, arguments: call.arguments } }));
+  if (new Set(toolCalls.map(call => call.id)).size !== toolCalls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
+  return { id, model, content, toolCalls, finishReason, usage };
+}
+
+export class OpenRouterClient {
+  constructor(private readonly transport: typeof fetch = fetch, private readonly baseUrl = OPENROUTER_API) {}
+
+  async models(apiKey: string, signal?: AbortSignal): Promise<OpenRouterModel[]> {
+    const response = await this.transport(this.baseUrl + "/models", { headers: authHeaders(apiKey), signal });
+    if (!response.ok) throw apiFailure(response.status);
+    let value: unknown;
+    try { value = JSON.parse(await boundedText(response)); } catch { throw new OpenRouterApiError("INVALID_CATALOG"); }
+    if (!isObject(value) || !Array.isArray(value.data)) throw new OpenRouterApiError("INVALID_CATALOG");
+    return value.data.flatMap((entry: unknown): OpenRouterModel[] => {
+      if (!isObject(entry)) return [];
+      const id = str(entry.id), name = str(entry.name) || id;
+      const top = isObject(entry.top_provider) ? entry.top_provider : {};
+      const contextLength = positive(top.context_length) ?? positive(entry.context_length);
+      if (!id || id.length > 200 || !/^[A-Za-z0-9._:\/-]+$/.test(id) || !contextLength) return [];
+      const supportedParameters = Array.isArray(entry.supported_parameters) ?
+        entry.supported_parameters.filter((item: unknown): item is string => typeof item === "string") : [];
+      const pricing = isObject(entry.pricing) ? entry.pricing : {};
+      return [{ id, name: name.slice(0, 200), contextLength, maxCompletionTokens: positive(top.max_completion_tokens),
+        supportsTools: supportedParameters.includes("tools"), supportedParameters,
+        pricing: { prompt: str(pricing.prompt), completion: str(pricing.completion) } }];
+    });
+  }
+
+  async complete(input: CompleteOptions): Promise<OpenRouterCompletion> {
+    if (!input.model || input.model.length > 200 || !/^[A-Za-z0-9._:\/-]+$/.test(input.model))
+      throw new OpenRouterApiError("INVALID_MODEL");
+    if (!input.sessionId || input.sessionId.length > 256) throw new OpenRouterApiError("INVALID_SESSION");
+    if (!input.messages.length || input.messages.length > 500) throw new OpenRouterApiError("INVALID_MESSAGES");
+    if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
+    const streaming = input.stream !== false;
+    const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
+      ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
+      ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
+      stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });
+    if (Buffer.byteLength(body) > MAX_REQUEST_BYTES) throw new OpenRouterApiError("REQUEST_TOO_LARGE");
+    // POST is never retried here. Its response may have charged tokens or requested side effects.
+    const response = await this.transport(this.baseUrl + "/chat/completions", { method: "POST",
+      headers: authHeaders(input.apiKey), body, signal: input.signal });
+    if (!response.ok) throw apiFailure(response.status);
+    await input.onAccepted?.();
+    if (streaming) return streamCompletion(response, input.onText);
+    let value: unknown;
+    try { value = JSON.parse(await boundedText(response)); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
+    return parseCompletion(value);
+  }
+}

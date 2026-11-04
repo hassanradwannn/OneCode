@@ -1,26 +1,71 @@
-/** Provider identity and URL routing shared by the app, renderer and browser companion. */
+/** Browser-provider identity and URL routing shared by the app, renderer and companion. */
 export const CHAT_PROVIDER_DEFINITIONS = {
   gemini: {
-    label: 'Gemini', homeUrl: 'https://gemini.google.com/app', conversationPrefix: 'https://gemini.google.com/app/',
+    label: 'Gemini',
+    homeUrl: 'https://gemini.google.com/app',
+    conversationPrefix: 'https://gemini.google.com/app/',
     conversationId: /^[0-9a-f]{16}$/i,
-    capabilities: { maxMessageChars: 96_000, nativeProjects: false, nativePluginRefresh: false, generatedImageExport: true,
-      handoff: 'markdown-tool' as const, receipt: 'native-question' as const }
+    capabilities: {
+      maxMessageChars: 96_000,
+      nativeProjects: false,
+      nativePluginRefresh: false,
+      generatedImageExport: true,
+      handoff: 'markdown-tool' as const,
+      receipt: 'native-question' as const
+    }
   },
   chatgpt: {
-    label: 'ChatGPT', homeUrl: 'https://chatgpt.com/', conversationPrefix: 'https://chatgpt.com/c/',
+    label: 'ChatGPT',
+    homeUrl: 'https://chatgpt.com/',
+    conversationPrefix: 'https://chatgpt.com/c/',
     conversationId: /^(?![0-9a-f]{16}$)[0-9a-z-]{8,64}$/i,
-    capabilities: { maxMessageChars: 96_000, nativeProjects: true, nativePluginRefresh: true, generatedImageExport: true,
-      handoff: 'native-answer' as const, receipt: 'fiber-question' as const }
+    capabilities: {
+      maxMessageChars: 96_000,
+      nativeProjects: true,
+      nativePluginRefresh: true,
+      generatedImageExport: true,
+      handoff: 'native-answer' as const,
+      receipt: 'fiber-question' as const
+    }
   },
   claude: {
-    label: 'Claude', homeUrl: 'https://claude.ai/new', conversationPrefix: 'https://claude.ai/chat/',
+    label: 'Claude',
+    homeUrl: 'https://claude.ai/new',
+    conversationPrefix: 'https://claude.ai/chat/',
     conversationId: /^claude:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i,
-    capabilities: { maxMessageChars: 96_000, nativeProjects: false, nativePluginRefresh: false, generatedImageExport: false,
-      handoff: 'markdown-tool' as const, receipt: 'native-question' as const }
+    capabilities: {
+      maxMessageChars: 96_000,
+      nativeProjects: false,
+      nativePluginRefresh: false,
+      generatedImageExport: false,
+      handoff: 'markdown-tool' as const,
+      receipt: 'native-question' as const
+    }
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    // An API chat has no provider browser. URL accessors reject this transport.
+    homeUrl: '',
+    conversationPrefix: '',
+    conversationId: /^openrouter:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i,
+    capabilities: {
+      maxMessageChars: 96_000,
+      nativeProjects: false,
+      nativePluginRefresh: false,
+      generatedImageExport: false,
+      handoff: 'markdown-tool' as const,
+      receipt: 'native-question' as const
+    }
   }
 } as const;
 export type ChatProvider = keyof typeof CHAT_PROVIDER_DEFINITIONS;
 export const CHAT_PROVIDERS: readonly ChatProvider[] = Object.freeze(Object.keys(CHAT_PROVIDER_DEFINITIONS) as ChatProvider[]);
+/** These transports use the native web site and paired Companion; API-backed chats do not. */
+export const BROWSER_CHAT_PROVIDERS = ['gemini', 'chatgpt', 'claude'] as const;
+export type BrowserChatProvider = typeof BROWSER_CHAT_PROVIDERS[number];
+export function isBrowserChatProvider(provider: ChatProvider): provider is BrowserChatProvider {
+  return provider !== 'openrouter';
+}
 export const DEFAULT_CHAT_PROVIDER: ChatProvider = 'gemini';
 
 /** Reject unknown persisted or external provider keys before any adapter lookup. */
@@ -58,19 +103,28 @@ export function chatProviderForConversation(value: unknown, fallback: ChatProvid
 }
 
 export function chatProviderHomeUrl(provider: ChatProvider): string {
+  if (!isBrowserChatProvider(provider)) throw new Error('API-backed chats have no provider browser');
   return providerDefinition(provider).homeUrl;
 }
 
 /** Native connection settings for the explicitly selected provider. */
 export function chatProviderConnectionsUrl(provider: ChatProvider): string {
   providerDefinition(provider);
-  return { gemini: 'https://gemini.google.com/customize/connectors', chatgpt: 'https://chatgpt.com/plugins',
-    claude: 'https://claude.ai/customize/connectors' }[provider];
+  return {
+    gemini: 'https://gemini.google.com/customize/connectors',
+    chatgpt: 'https://chatgpt.com/plugins',
+    claude: 'https://claude.ai/customize/connectors',
+    openrouter: 'https://openrouter.ai/settings/keys'
+  }[provider];
 }
 
 export function chatProviderConversationUrl(provider: ChatProvider, conversationId: string): string {
+  if (!isBrowserChatProvider(provider)) throw new Error('API-backed chats have no provider browser');
   if (provider === 'claude' && !isChatProviderConversationId(conversationId, provider)) throw new Error('Unsupported provider conversation');
-  return providerDefinition(provider).conversationPrefix + encodeURIComponent(provider === 'claude' ? conversationId.trim().slice('claude:'.length).toLowerCase() : conversationId);
+  const nativeId = provider === 'claude'
+    ? conversationId.trim().slice('claude:'.length).toLowerCase()
+    : conversationId;
+  return providerDefinition(provider).conversationPrefix + encodeURIComponent(nativeId);
 }
 
 /** A native service UUID is namespaced before it enters shared session storage. */

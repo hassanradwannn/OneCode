@@ -849,7 +849,7 @@ async function rebuildSummaryFromHistory(
     identities.push({ seq: event.seq, origin: positionOf(event), time: event.time, kind: event.kind,
       source: event.source, turnId: event.turnId,
       ...(event.kind === 'user_message' ? { messageId: event.messageId, inputId: event.inputId,
-        historyBeforeQuestionId: event.historyBeforeQuestionId } : {}),
+        inputDelivery: event.inputDelivery, historyBeforeQuestionId: event.historyBeforeQuestionId } : {}),
       ...(event.kind === 'turn_end' && event.continued === true ? { continued: true } : {}),
       ...(event.kind === 'tool_call' ? { call: { requestId: event.call.requestId,
         conversationId: event.call.conversationId, attribution: event.call.attribution } } : {}) });

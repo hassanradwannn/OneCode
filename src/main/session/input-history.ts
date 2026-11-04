@@ -1,7 +1,7 @@
 import type { InputEntry } from './input.js';
 import { estimateTokens } from '../../shared/session.js';
 import { browserInputModel } from '../../shared/input.js';
-import { getSession, observeSessionModel, readAsset, readEvents, upsertMessageEvent, writeAsset } from './store.js';
+import { getSession, observeSessionModel, readAsset, readEvents, readLatestUserMessage, upsertMessageEvent, writeAsset } from './store.js';
 import { validateInputImages } from './input-images.js';
 import { loadNativePackage } from '../native-package.js';
 const sharp = loadNativePackage('sharp');
@@ -18,7 +18,28 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
   const messageId = offered ? `input:${entry.id}` : entry.messageId!;
   const time = offered || (messageId.startsWith('input:') && Number.isFinite(entry.offeredAt))
     ? entry.offeredAt! : entry.deliveredAt!;
-  if (!await getSession(sessionId)) return false;
+  const session = await getSession(sessionId);
+  if (!session) return false;
+  // Automatic Continue can create the next native turn before its exact Send ACK
+  // reaches the recorder. Only the frozen rotation source, an accepted native
+  // question, and one uniquely open successor may repair that late ordering.
+  // Never attach ordinary input/Steer, or infer an owner from browser focus/time.
+  let rotationTurnId: string | null = null;
+  if (confirmed && entry.state === 'sent' && entry.purpose === 'rotation' && entry.queuedTurn &&
+      entry.conversationId && session.conversationId === entry.conversationId &&
+      entry.queuedTurn.conversationId === entry.conversationId && session.activeTurnId) {
+    const turns = session.timelineTurns ?? {};
+    const source = turns[entry.queuedTurn.turnId];
+    const successor = turns[session.activeTurnId];
+    if (source?.questionId && source.endOrigin !== undefined && successor &&
+        successor.origin > source.endOrigin && successor.endOrigin === undefined &&
+        successor.questionId === source.questionId &&
+        Object.entries(turns).filter(([, turn]) => turn.origin > source.endOrigin!).length === 1) {
+      const latest = await readLatestUserMessage(sessionId);
+      if (latest?.messageId === source.questionId || latest?.messageId === messageId)
+        rotationTurnId = session.activeTurnId;
+    }
+  }
   const images = [...entry.images ?? [], ...entry.toolImages ?? []];
   const text = entry.deliveryText ?? entry.text;
   // Only an explicit native picker request proves model selection. Finish tasks
@@ -33,7 +54,8 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
     // Tool delivery has no native user row and keeps the stable input id as its key.
     messageId, inputId: entry.id, inputDelivery: offered ? 'offered' as const : 'confirmed' as const, authoredText: entry.text,
     wireTokenEstimate: estimateTokens(text),
-    ...(messageId.startsWith('input:') && entry.toolTurnId ? { turnId: entry.toolTurnId } : {}),
+    ...(messageId.startsWith('input:') && entry.toolTurnId ? { turnId: entry.toolTurnId }
+      : rotationTurnId ? { turnId: rotationTurnId } : {}),
     ...(entry.attachments?.length && entry.transportIntent !== 'tool' ? { attachments: entry.attachments } : {}),
     // Injection does not change the running model. Only the native send path verifies
     // picker selection before delivery; a later sparse browser echo keeps this evidence.

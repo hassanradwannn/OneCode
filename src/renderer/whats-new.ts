@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.0': {
+    lead: () => t('Try OpenRouter through OneCode Beta.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('OpenRouter API models'), text: () => t('Choose an API model without a provider browser. Local tools still respect OneCode permissions.') },
+      { icon: 'i-chat', title: () => t('Safer automatic continuation'), text: () => t('Late native acknowledgments reconnect the correct new task credential, never an old or ambiguous one.') }
+    ]
+  },
   '0.8.9': {
     lead: () => t('Use the paths you explicitly share.'),
     highlights: [

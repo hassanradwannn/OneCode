@@ -116,7 +116,8 @@ export function initBrowserSetup(actions: {
     const browser = state.config.ui.chatBrowser ?? 'chrome';
     const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
     const providerName = chatProviderLabel(provider);
-    const providerHost = new URL(chatProviderHomeUrl(provider)).hostname;
+    // API providers do not have a Companion-controlled browser page.
+    const providerHost = provider === 'openrouter' ? 'openrouter.ai' : new URL(chatProviderHomeUrl(provider)).hostname;
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;
       initialized = true;

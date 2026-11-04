@@ -8,6 +8,8 @@ import type { ChatModelCatalog, ChatModelDiscoveryRequest } from '../shared/chat
 import { resolveChatModel, isNativeModelId, type NativeModelSurface, type ChatModelAffinity } from '../shared/chat-models.js';
 import { readDurable, writeDurableSoon } from './durable.js';
 import { CHAT_PROVIDERS, chatProviderLabel, type ChatProvider } from '../shared/chat-provider.js';
+import { getOpenRouterModels, onOpenRouterModelsChanged, restoreOpenRouterModels,
+  requestOpenRouterModels, startOpenRouterModelDiscovery, resetOpenRouterModelsForTests } from './openrouter/catalog.js';
 const modelId = z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/);
 const observation = z.object({
   nonce: z.string().uuid(),
@@ -58,203 +60,220 @@ const waitingReasons: Record<z.infer<typeof progress>['waiting'], string> = {
   picker_unreadable: 'The open chats show no readable model picker. Refresh opens a separate discovery page.'
 };
 function createCatalogOwner(activeProvider: ChatProvider) {
-const catalogKey = () => activeProvider === 'gemini' ? 'chat-models' : `chat-models-${activeProvider}`;
-const providerText = (text: string) => text.replaceAll('Gemini', chatProviderLabel(activeProvider));
-let lastProblem: string | null = null;
-let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
-let request: Omit<ChatModelDiscoveryRequest, 'provider'> | null = null;
-let deadline: ReturnType<typeof setTimeout> | null = null;
-let launch: { nonce: string; allowOpen: boolean; work: Promise<void> } | null = null;
-let changed = (): void => {};
-let wake: ((nonce: string, allowOpen: boolean) => Promise<void>) | null = null;
-async function restoreChatModels(): Promise<void> {
-  const provider = activeProvider;
-  const saved = z.object({ observedAt: z.number().finite().positive(), models: observation.shape.models.unwrap() }).strict().safeParse(await readDurable(catalogKey()));
-  if (provider !== activeProvider || !saved.success || request || catalog.state !== 'unknown') return;
-  const models = saved.data.models;
-  if (new Set(models.map(model => model.id)).size !== models.length || models.some(model => !isNativeModelId(model.id, provider) || model.aliases?.some(alias => !isNativeModelId(alias, provider)) || new Set(model.efforts).size !== model.efforts.length)) return;
-  catalog = { state: 'ready', requestedAt: null, observedAt: saved.data.observedAt, models };
-}
-function failed(error: string): void {
-  catalog = { ...catalog, state: catalog.models.length ? 'ready' : 'unavailable', waiting: undefined, error };
-}
-function configureChatModelDiscovery(options: { changed: () => void; wake: (nonce: string, allowOpen: boolean) => Promise<void> }): void { changed = options.changed; wake = options.wake; }
-function scheduleDeadline(at: number): void {
-  if (deadline) clearTimeout(deadline);
-  deadline = setTimeout(() => { deadline = null; expire(); changed(); wakeBrowserWork(); }, Math.max(0, at - Date.now()));
-  deadline.unref?.();
-}
-function expire(): void {
-  if (request && Date.now() >= request.expiresAt) {
-    logInfo(`model discovery expired id=${request.nonce}`); request = null;
-    failed(`Model discovery timed out. ${lastProblem ?? catalog.waiting ?? 'Check the browser extension and the signed-in Gemini page, then retry.'}`);
+  const catalogKey = () => activeProvider === 'gemini' ? 'chat-models' : `chat-models-${activeProvider}`;
+  const providerText = (text: string) => text.replaceAll('Gemini', chatProviderLabel(activeProvider));
+  let lastProblem: string | null = null;
+  let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
+  let request: Omit<ChatModelDiscoveryRequest, 'provider'> | null = null;
+  let deadline: ReturnType<typeof setTimeout> | null = null;
+  let launch: { nonce: string; allowOpen: boolean; work: Promise<void> } | null = null;
+  let changed = (): void => {};
+  let wake: ((nonce: string, allowOpen: boolean) => Promise<void>) | null = null;
+  async function restoreChatModels(): Promise<void> {
+    const provider = activeProvider;
+    const saved = z.object({ observedAt: z.number().finite().positive(), models: observation.shape.models.unwrap() }).strict().safeParse(await readDurable(catalogKey()));
+    if (provider !== activeProvider || !saved.success || request || catalog.state !== 'unknown') return;
+    const models = saved.data.models;
+    if (new Set(models.map(model => model.id)).size !== models.length || models.some(model => !isNativeModelId(model.id, provider) || model.aliases?.some(alias => !isNativeModelId(alias, provider)) || new Set(model.efforts).size !== model.efforts.length)) return;
+    catalog = { state: 'ready', requestedAt: null, observedAt: saved.data.observedAt, models };
   }
-}
-function getChatModels(): ChatModelCatalog {
-  expire(); return structuredClone({ ...catalog, provider: activeProvider,
-    ...(catalog.error ? { error: providerText(catalog.error) } : {}),
-    ...(catalog.waiting ? { waiting: providerText(catalog.waiting) } : {}) });
-}
-function validateModelRequest(allowOpen: boolean, model: string | undefined): void {
-  if (model !== undefined && (activeProvider !== 'claude' || !allowOpen || !isNativeModelId(model, activeProvider)))
-    throw new Error('Thinking-level discovery requires an explicit model choice for this provider.');
-}
-function requestChatModels(allowOpen = true, model?: string): ChatModelCatalog {
-  validateModelRequest(allowOpen, model);
-  expire();
-  // A different deliberate model choice owns a new observation. It cannot
-  // adopt the prior model's effort result or extend its native inspection lease.
-  if (model !== undefined && request && request.model !== model) {
-    request = null; launch = null;
-    if (deadline) clearTimeout(deadline); deadline = null;
+  function failed(error: string): void {
+    catalog = { ...catalog, state: catalog.models.length ? 'ready' : 'unavailable', waiting: undefined, error };
   }
-  if (!request) {
-    const now = Date.now(); request = { nonce: randomUUID(), expiresAt: now + 120000, allowOpen, ...(model !== undefined ? { model } : {}) };
-    logInfo(`model discovery requested id=${request.nonce}`);
-    lastProblem = null;
-    catalog = { ...catalog, state: 'pending', requestedAt: now, waiting: undefined, error: undefined };
-    scheduleDeadline(request.expiresAt);
-    changed();
-    wakeBrowserWork();
-  } else if (allowOpen && !request.allowOpen) {
-    // Explicit refresh promotes the existing nonce once. Time spent waiting for the
-    // companion during passive startup must not consume the user's inspection budget.
-    request.allowOpen = true;
-    request.expiresAt = Date.now() + 120000;
-    scheduleDeadline(request.expiresAt);
-    changed();
-    wakeBrowserWork();
+  function configureChatModelDiscovery(options: { changed: () => void; wake: (nonce: string, allowOpen: boolean) => Promise<void> }): void { changed = options.changed; wake = options.wake; }
+  function scheduleDeadline(at: number): void {
+    if (deadline) clearTimeout(deadline);
+    deadline = setTimeout(() => { deadline = null; expire(); changed(); wakeBrowserWork(); }, Math.max(0, at - Date.now()));
+    deadline.unref?.();
   }
-  return getChatModels();
-}
-/** An explicit UI request starts only the local browser bridge, never MCP/tunnel exposure. */
-async function startChatModelDiscovery(allowOpen = true, model?: string): Promise<ChatModelCatalog> {
-  validateModelRequest(allowOpen, model);
-  // Showing an existing app window is neither a refresh nor permission to open Chrome.
-  if (!allowOpen && catalog.state !== 'unknown') return getChatModels();
-  requestChatModels(allowOpen, model);
-  const nonce = request!.nonce;
-  if (!launch || launch.nonce !== nonce || (request!.allowOpen && !launch.allowOpen)) {
-    const previous = launch?.nonce === nonce ? launch.work : null;
-    const attempt = { nonce, allowOpen: request!.allowOpen, work: Promise.resolve() };
-    const work = (async () => {
-      try {
-        if (previous) await previous;
-        if (request?.nonce !== nonce) return;
-        if (!wake) throw new Error('Model discovery is not ready');
-        await wake(nonce, attempt.allowOpen);
-        // Wake dispatch is separate from the exact model_catalog completion receipt.
-        logInfo(`model discovery browser wake dispatched id=${nonce}`);
-      }
-      catch (error) {
-        if (request?.nonce !== nonce) return;
-        request = null;
-        if (deadline) clearTimeout(deadline); deadline = null;
-        failed(`${(error as Error).message}. Retry model discovery.`.slice(0, 240));
-        changed(); wakeBrowserWork();
-      }
-    })();
-    attempt.work = work;
-    launch = attempt;
-    void work.finally(() => { if (launch === attempt) launch = null; });
+  function expire(): void {
+    if (request && Date.now() >= request.expiresAt) {
+      logInfo(`model discovery expired id=${request.nonce}`); request = null;
+      failed(`Model discovery timed out. ${lastProblem ?? catalog.waiting ?? 'Check the browser extension and the signed-in Gemini page, then retry.'}`);
+    }
   }
-  // The request deadline and observation own completion. OS wake is only dispatch;
-  // an unresolved handoff must never hold the renderer's Refresh/Send promise.
-  await Promise.resolve();
-  return getChatModels();
-}
-const unofferedAsked = new Set<string>();
-/**
- * A choice saved in Settings that the stored catalog does not offer may be newer than the catalog:
- * a restored catalog is never observed again on its own, so one saved before a rollout hid the new
- * model for good. Asks an already open Gemini page, never a new browser, once per saved choice; a
- * fresh catalog that still lacks it is the account's answer, not a reason to ask again.
- */
-function refreshForUnoffered(saved: string): void {
-  if (catalog.observedAt === null || unofferedAsked.has(saved)) return;
-  unofferedAsked.add(saved);
-  requestChatModels(false);
-}
-function pendingChatModelRequest(): ChatModelDiscoveryRequest | null {
-  expire(); return request ? { ...request, provider: activeProvider } : null;
-}
-function observeChatModels(raw: unknown): boolean {
-  expire();
-  const pending = progress.safeParse(raw);
-  if (pending.success) {
-    if (!request || pending.data.nonce !== request.nonce) return false;
-    const waiting = activeProvider === 'claude' && pending.data.waiting === 'inspecting'
-      ? request.model ? 'Reading thinking levels for the selected model.' : 'Reading native models and the current model’s thinking levels.'
-      : waitingReasons[pending.data.waiting];
-    // A positive lost-page receipt retires this inspection. Keeping its nonce
-    // pending made explicit Refresh reuse the same dead election for two minutes.
-    // Late observations remain fenced by the spent nonce; no task is retried.
-    if (pending.data.waiting === 'page_changed') {
-      logInfo(`model discovery page retired id=${request.nonce}`);
+  function getChatModels(): ChatModelCatalog {
+    expire(); return structuredClone({ ...catalog, provider: activeProvider,
+      ...(catalog.error ? { error: providerText(catalog.error) } : {}),
+      ...(catalog.waiting ? { waiting: providerText(catalog.waiting) } : {}) });
+  }
+  function validateModelRequest(allowOpen: boolean, model: string | undefined): void {
+    if (model !== undefined && (activeProvider !== 'claude' || !allowOpen || !isNativeModelId(model, activeProvider)))
+      throw new Error('Thinking-level discovery requires an explicit model choice for this provider.');
+  }
+  function requestChatModels(allowOpen = true, model?: string): ChatModelCatalog {
+    validateModelRequest(allowOpen, model);
+    expire();
+    // A different deliberate model choice owns a new observation. It cannot
+    // adopt the prior model's effort result or extend its native inspection lease.
+    if (model !== undefined && request && request.model !== model) {
       request = null; launch = null;
       if (deadline) clearTimeout(deadline); deadline = null;
-      failed(waiting); changed(); wakeBrowserWork(); return true;
     }
-    if (!['opening', 'inspecting'].includes(pending.data.waiting)) lastProblem = waiting;
-    if (catalog.waiting !== waiting) {
-      catalog = { ...catalog, waiting };
-      logInfo(`model discovery waiting id=${request.nonce} reason=${pending.data.waiting}`);
+    if (!request) {
+      const now = Date.now(); request = { nonce: randomUUID(), expiresAt: now + 120000, allowOpen, ...(model !== undefined ? { model } : {}) };
+      logInfo(`model discovery requested id=${request.nonce}`);
+      lastProblem = null;
+      catalog = { ...catalog, state: 'pending', requestedAt: now, waiting: undefined, error: undefined };
+      scheduleDeadline(request.expiresAt);
       changed();
+      wakeBrowserWork();
+    } else if (allowOpen && !request.allowOpen) {
+      // Explicit refresh promotes the existing nonce once. Time spent waiting for the
+      // companion during passive startup must not consume the user's inspection budget.
+      request.allowOpen = true;
+      request.expiresAt = Date.now() + 120000;
+      scheduleDeadline(request.expiresAt);
+      changed();
+      wakeBrowserWork();
     }
-    return true;
+    return getChatModels();
   }
-  const parsed = observation.safeParse(raw);
-  if (!parsed.success || !request || parsed.data.nonce !== request.nonce) return false;
-  const models = parsed.data.models;
-  if (models && (models.some(model => !isNativeModelId(model.id, activeProvider) || model.aliases?.some(alias => !isNativeModelId(alias, activeProvider))) || new Set(models.map(model => model.id)).size !== models.length ||
-    models.some(model => new Set(model.efforts).size !== model.efforts.length))) return false;
-  logInfo(`model discovery observed id=${request.nonce} models=${models?.length ?? 0} elapsed_ms=${Date.now() - (catalog.requestedAt ?? Date.now())} error=${parsed.data.error ?? 'none'}`);
-  const error = parsed.data.error === 'picker_unavailable'
-    ? 'Gemini\'s native model picker could not be read. Check the loaded Gemini page in the selected browser, close native dialogs, then retry.'
-    : parsed.data.error === 'restore_failed' ? 'The original Gemini model selection could not be restored. Check the native picker before retrying.'
-    : parsed.data.error === 'picker_close_failed' ? 'The native Gemini model picker did not close. Close it before retrying.'
-    : 'Gemini model choices could not be confirmed. Check the native picker in the selected browser, then retry.';
-  if (models) {
-    catalog = { ...catalog, state: 'ready', models, observedAt: Date.now(), waiting: undefined, error: undefined };
-    writeDurableSoon(catalogKey(), { observedAt: catalog.observedAt, models });
-  } else failed(error);
-  request = null;
-  if (deadline) clearTimeout(deadline); deadline = null;
-  changed(); wakeBrowserWork(); return true;
-}
-function clearCatalog(): void {
-  if (deadline) clearTimeout(deadline); deadline = null; launch = null;
-  request = null; lastProblem = null; unofferedAsked.clear(); catalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
-}
-function resetChatModelsForTests(): void { clearCatalog(); }
+  /** An explicit UI request starts only the local browser bridge, never MCP/tunnel exposure. */
+  async function startChatModelDiscovery(allowOpen = true, model?: string): Promise<ChatModelCatalog> {
+    validateModelRequest(allowOpen, model);
+    // Showing an existing app window is neither a refresh nor permission to open Chrome.
+    if (!allowOpen && catalog.state !== 'unknown') return getChatModels();
+    requestChatModels(allowOpen, model);
+    const nonce = request!.nonce;
+    if (!launch || launch.nonce !== nonce || (request!.allowOpen && !launch.allowOpen)) {
+      const previous = launch?.nonce === nonce ? launch.work : null;
+      const attempt = { nonce, allowOpen: request!.allowOpen, work: Promise.resolve() };
+      const work = (async () => {
+        try {
+          if (previous) await previous;
+          if (request?.nonce !== nonce) return;
+          if (!wake) throw new Error('Model discovery is not ready');
+          await wake(nonce, attempt.allowOpen);
+          // Wake dispatch is separate from the exact model_catalog completion receipt.
+          logInfo(`model discovery browser wake dispatched id=${nonce}`);
+        }
+        catch (error) {
+          if (request?.nonce !== nonce) return;
+          request = null;
+          if (deadline) clearTimeout(deadline); deadline = null;
+          failed(`${(error as Error).message}. Retry model discovery.`.slice(0, 240));
+          changed(); wakeBrowserWork();
+        }
+      })();
+      attempt.work = work;
+      launch = attempt;
+      void work.finally(() => { if (launch === attempt) launch = null; });
+    }
+    // The request deadline and observation own completion. OS wake is only dispatch;
+    // an unresolved handoff must never hold the renderer's Refresh/Send promise.
+    await Promise.resolve();
+    return getChatModels();
+  }
+  const unofferedAsked = new Set<string>();
+  /**
+   * A choice saved in Settings that the stored catalog does not offer may be newer than the catalog:
+   * a restored catalog is never observed again on its own, so one saved before a rollout hid the new
+   * model for good. Asks an already open Gemini page, never a new browser, once per saved choice; a
+   * fresh catalog that still lacks it is the account's answer, not a reason to ask again.
+   */
+  function refreshForUnoffered(saved: string): void {
+    if (catalog.observedAt === null || unofferedAsked.has(saved)) return;
+    unofferedAsked.add(saved);
+    requestChatModels(false);
+  }
+  function pendingChatModelRequest(): ChatModelDiscoveryRequest | null {
+    expire(); return request ? { ...request, provider: activeProvider } : null;
+  }
+  function observeChatModels(raw: unknown): boolean {
+    expire();
+    const pending = progress.safeParse(raw);
+    if (pending.success) {
+      if (!request || pending.data.nonce !== request.nonce) return false;
+      const waiting = activeProvider === 'claude' && pending.data.waiting === 'inspecting'
+        ? request.model ? 'Reading thinking levels for the selected model.' : 'Reading native models and the current model’s thinking levels.'
+        : waitingReasons[pending.data.waiting];
+      // A positive lost-page receipt retires this inspection. Keeping its nonce
+      // pending made explicit Refresh reuse the same dead election for two minutes.
+      // Late observations remain fenced by the spent nonce; no task is retried.
+      if (pending.data.waiting === 'page_changed') {
+        logInfo(`model discovery page retired id=${request.nonce}`);
+        request = null; launch = null;
+        if (deadline) clearTimeout(deadline); deadline = null;
+        failed(waiting); changed(); wakeBrowserWork(); return true;
+      }
+      if (!['opening', 'inspecting'].includes(pending.data.waiting)) lastProblem = waiting;
+      if (catalog.waiting !== waiting) {
+        catalog = { ...catalog, waiting };
+        logInfo(`model discovery waiting id=${request.nonce} reason=${pending.data.waiting}`);
+        changed();
+      }
+      return true;
+    }
+    const parsed = observation.safeParse(raw);
+    if (!parsed.success || !request || parsed.data.nonce !== request.nonce) return false;
+    const models = parsed.data.models;
+    if (models && (models.some(model => !isNativeModelId(model.id, activeProvider) || model.aliases?.some(alias => !isNativeModelId(alias, activeProvider))) || new Set(models.map(model => model.id)).size !== models.length ||
+      models.some(model => new Set(model.efforts).size !== model.efforts.length))) return false;
+    logInfo(`model discovery observed id=${request.nonce} models=${models?.length ?? 0} elapsed_ms=${Date.now() - (catalog.requestedAt ?? Date.now())} error=${parsed.data.error ?? 'none'}`);
+    const error = parsed.data.error === 'picker_unavailable'
+      ? 'Gemini\'s native model picker could not be read. Check the loaded Gemini page in the selected browser, close native dialogs, then retry.'
+      : parsed.data.error === 'restore_failed' ? 'The original Gemini model selection could not be restored. Check the native picker before retrying.'
+      : parsed.data.error === 'picker_close_failed' ? 'The native Gemini model picker did not close. Close it before retrying.'
+      : 'Gemini model choices could not be confirmed. Check the native picker in the selected browser, then retry.';
+    if (models) {
+      catalog = { ...catalog, state: 'ready', models, observedAt: Date.now(), waiting: undefined, error: undefined };
+      writeDurableSoon(catalogKey(), { observedAt: catalog.observedAt, models });
+    } else failed(error);
+    request = null;
+    if (deadline) clearTimeout(deadline); deadline = null;
+    changed(); wakeBrowserWork(); return true;
+  }
+  function clearCatalog(): void {
+    if (deadline) clearTimeout(deadline); deadline = null; launch = null;
+    request = null; lastProblem = null; unofferedAsked.clear(); catalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
+  }
+  function resetChatModelsForTests(): void { clearCatalog(); }
 
-return { restoreChatModels, getChatModels, requestChatModels, configureChatModelDiscovery, startChatModelDiscovery, refreshForUnoffered, pendingChatModelRequest, observeChatModels, resetChatModelsForTests };
+  return { restoreChatModels, getChatModels, requestChatModels, configureChatModelDiscovery, startChatModelDiscovery, refreshForUnoffered, pendingChatModelRequest, observeChatModels, resetChatModelsForTests };
 }
 
 const owners = Object.fromEntries(CHAT_PROVIDERS.map(provider => [provider, createCatalogOwner(provider)])) as Record<ChatProvider, ReturnType<typeof createCatalogOwner>>;
 let activeProvider: ChatProvider = 'gemini';
 let notify: ((catalog: ChatModelCatalog) => void) | null = null;
-export async function restoreChatModels(): Promise<void> { await Promise.all(Object.values(owners).map(owner => owner.restoreChatModels())); }
+export async function restoreChatModels(): Promise<void> {
+  await Promise.all([...Object.entries(owners).filter(([provider]) => provider !== 'openrouter').map(([, owner]) => owner.restoreChatModels()), restoreOpenRouterModels()]);
+}
 export async function setChatModelProvider(provider: ChatProvider): Promise<void> {
   if (activeProvider === provider) return;
-  activeProvider = provider; await owners[provider].restoreChatModels(); notify?.(owners[provider].getChatModels()); wakeBrowserWork();
+  activeProvider = provider;
+  if (provider === 'openrouter') {
+    await restoreOpenRouterModels();
+    notify?.(getOpenRouterModels());
+    void startOpenRouterModelDiscovery();
+  } else {
+    await owners[provider].restoreChatModels(); notify?.(owners[provider].getChatModels()); wakeBrowserWork();
+  }
 }
-export const getChatModels = (provider: ChatProvider = activeProvider): ChatModelCatalog => owners[provider].getChatModels();
+export const getChatModels = (provider: ChatProvider = activeProvider): ChatModelCatalog => provider === 'openrouter'
+  ? getOpenRouterModels() : owners[provider].getChatModels();
 /** Freeze only an explicitly observed native mode; never derive it from a model slug. */
 export function observedModelSurface(model: string | null | undefined, provider: ChatProvider, affinity?: ChatModelAffinity): NativeModelSurface | undefined {
   if (provider !== 'chatgpt' || !model) return undefined;
   if (affinity?.provider === provider && affinity.model === model && (affinity.surface === 'chat' || affinity.surface === 'work')) return affinity.surface;
   return resolveChatModel(owners.chatgpt.getChatModels().models, model)?.nativeSurface;
 }
-export const requestChatModels = (allowOpen = true, provider: ChatProvider = activeProvider, model?: string): ChatModelCatalog => owners[provider].requestChatModels(allowOpen, model);
-export const startChatModelDiscovery = (allowOpen = true, provider: ChatProvider = activeProvider, model?: string): Promise<ChatModelCatalog> => owners[provider].startChatModelDiscovery(allowOpen, model);
-export const refreshForUnoffered = (saved: string, provider: ChatProvider = activeProvider): void => owners[provider].refreshForUnoffered(saved);
+export const requestChatModels = (allowOpen = true, provider: ChatProvider = activeProvider, model?: string): ChatModelCatalog => provider === 'openrouter'
+  ? requestOpenRouterModels() : owners[provider].requestChatModels(allowOpen, model);
+export const startChatModelDiscovery = (allowOpen = true, provider: ChatProvider = activeProvider, model?: string): Promise<ChatModelCatalog> => provider === 'openrouter'
+  ? startOpenRouterModelDiscovery(allowOpen) : owners[provider].startChatModelDiscovery(allowOpen, model);
+export const refreshForUnoffered = (saved: string, provider: ChatProvider = activeProvider): void => {
+  if (provider === 'openrouter') { void startOpenRouterModelDiscovery(); return; }
+  owners[provider].refreshForUnoffered(saved);
+};
 export function configureChatModelDiscovery(options: { changed: (catalog: ChatModelCatalog) => void; wake: (nonce: string, allowOpen: boolean, provider: ChatProvider) => Promise<void> }): void {
   notify = options.changed;
-  for (const provider of CHAT_PROVIDERS) owners[provider].configureChatModelDiscovery({ changed: () => options.changed(owners[provider].getChatModels()), wake: (nonce, allowOpen) => options.wake(nonce, allowOpen, provider) });
+  onOpenRouterModelsChanged(options.changed);
+  for (const provider of CHAT_PROVIDERS.filter(provider => provider !== 'openrouter'))
+    owners[provider].configureChatModelDiscovery({ changed: () => options.changed(owners[provider].getChatModels()), wake: (nonce, allowOpen) => options.wake(nonce, allowOpen, provider) });
 }
 export function pendingChatModelRequest() {
-  const pending = [activeProvider, ...CHAT_PROVIDERS.filter(provider => provider !== activeProvider)]
+  const pending = [activeProvider, ...CHAT_PROVIDERS.filter(provider => provider !== activeProvider)].filter(provider => provider !== 'openrouter')
     .map(provider => owners[provider].pendingChatModelRequest()).filter(value => value !== null);
   return pending.find(value => value.allowOpen) ?? pending[0] ?? null;
 }
@@ -263,4 +282,4 @@ export function observeChatModels(raw: unknown): boolean {
   const owner = Object.values(owners).find(value => value.pendingChatModelRequest()?.nonce === nonce);
   return owner?.observeChatModels(raw) ?? false;
 }
-export function resetChatModelsForTests(): void { for (const owner of Object.values(owners)) owner.resetChatModelsForTests(); activeProvider = 'gemini'; notify = null; }
+export function resetChatModelsForTests(): void { for (const owner of Object.values(owners)) owner.resetChatModelsForTests(); resetOpenRouterModelsForTests(); activeProvider = 'gemini'; notify = null; }

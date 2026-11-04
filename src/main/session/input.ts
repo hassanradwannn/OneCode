@@ -60,7 +60,7 @@ export const inputArgs = z.object({
   mode: z.enum(['auto', 'after-turn', 'finish']),
   afterTurn: z.boolean().optional(),
   dueAt: z.number().int().nonnegative(),
-  model: z.string().max(80).nullable(),
+  model: z.string().max(200).nullable(),
   /** Explicit native mode from the selected observed model choice. */
   modelSurface: z.enum(['chat', 'work']).optional(),
   reasoningEffort: z.enum(REASONING_EFFORTS).nullable()
@@ -2317,7 +2317,22 @@ export async function geminiInputBindingStatus(proof: GeminiBindingInput, conver
   if (question.messageId !== row.messageId || question.inputId !== row.id || positionOf(question) !== row.historySeq) return { state: 'invalid', ...accepted };
   const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === row.messageId);
   // The original question cannot lend its grant to Regenerate/a successor generation.
-  if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return { state: 'invalid', ...accepted };
+  if (turns.length > 1) return { state: 'invalid', ...accepted };
+  if (turns.some(([, turn]) => turn.endOrigin !== undefined)) {
+    // A refresh may produce an uncertain end before the same native generation is
+    // re-adopted. No tools may run while the turn is ended, but an uncertain end is
+    // not permanent revocation: chronology can reopen this exact turn on later proof.
+    // Keep its existing credential pending rather than retiring it irreversibly.
+    // Completed/stopped/failed ends, or another authored question, remain terminal.
+    const [lastEnd] = await readRecentEvents(sessionId, 1, { kinds: ['turn_end'] });
+    if (!owns()) return { state: 'pending', ...accepted };
+    if (lastEnd?.kind === 'turn_end' &&
+        turns.some(([id, turn]) => id === lastEnd.turnId && turn.endOrigin !== undefined) &&
+        (lastEnd.outcome === 'unknown' || lastEnd.outcome === 'interrupted')) {
+      return { state: 'pending', ...accepted };
+    }
+    return { state: 'invalid', ...accepted };
+  }
   if (!session.activeTurnId || !turns.length) return { state: 'pending', accepted: true };
   const active = session.timelineTurns?.[session.activeTurnId];
   if (!active || active.questionId !== row.messageId)
@@ -2352,6 +2367,95 @@ export function bindBrowserInputProject(id: string, owner: string, conversationI
 }
 export function acknowledgeBrowserInput(id: string, owner: string, conversationId?: string | null, messageId?: string, beforeChanged?: () => void): Promise<boolean> {
   return serial(() => commitBrowserInputReceipt(id, owner, conversationId, messageId, beforeChanged));
+}
+
+const API_INPUT_OWNER = 'onecode:openrouter-api';
+
+/**
+ * Admit an API-backed message to the existing durable outbox. No browser, companion,
+ * invented native receipt or local model credential participates in this path.
+ * A claimed request is never automatically retried after a crash or uncertain HTTP outcome.
+ */
+export function claimOpenRouterInput(id: string, conversationId: string): Promise<InputEntry | null> {
+  return serial(async () => {
+    if (!isChatProviderConversationId(conversationId, 'openrouter') || isChatBlocked(conversationId) ||
+        await conversationWasSuperseded(conversationId)) return null;
+    const current = await load();
+    const entry = current.find(row => row.id === id);
+    if (!entry || entry.chatProvider !== 'openrouter' || entry.state !== 'queued' || entry.owner ||
+        !entry.sessionId || !entry.model || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined ||
+        entry.purpose === 'decision' || entry.mode === 'finish' || entry.steerTurnId || entry.delivery ||
+        entry.attachmentDelivery || entry.images?.length || entry.attachments?.length || entry.stages?.length ||
+        (entry.conversationId && entry.conversationId !== conversationId)) return null;
+    const session = await getSession(entry.sessionId);
+    if (!session || (session.conversationId && session.conversationId !== conversationId) ||
+        session.activeTurnId || session.origin?.kind === 'worker') return null;
+    const now = Date.now();
+    const claimed: InputEntry = {
+      ...entry, state: 'browser', owner: API_INPUT_OWNER, conversationId,
+      offeredAt: now, sendAuthorizedAt: now, deliveryText: entry.text,
+      // API calls use the same outbox receipt, but never require a browser-issued capability.
+      requiresAuthorization: false
+    };
+    if (entry.opening && !await bindOpening(claimed, conversationId)) return null;
+    await commit(current.map(row => row === entry ? claimed : row));
+    return { ...claimed };
+  });
+}
+
+/** Only the same app-owned API claim can commit its exact recorded input. */
+export function acknowledgeOpenRouterInput(id: string, conversationId: string, messageId: string): Promise<boolean> {
+  return serial(async () => {
+    const row = (await load()).find(entry => entry.id === id);
+    if (!row || row.chatProvider !== 'openrouter' || row.owner !== API_INPUT_OWNER ||
+        row.conversationId !== conversationId || !isChatProviderConversationId(conversationId, 'openrouter') ||
+        !/^[0-9a-f-]{36}$/i.test(messageId)) return false;
+    return commitBrowserInputReceipt(id, API_INPUT_OWNER, conversationId, messageId);
+  });
+}
+
+/**
+ * A first browser observation can arrive before the original opening's /input/ack response.
+ * Attach the already reserved local session only when a paired browser captured the exact
+ * authorized user question, including this input's still-current task capability.
+ *
+ * This does not acknowledge Send or authorize a tool: the recorder must first commit the
+ * native question, after which reconcileRecordedBrowserInput settles the original receipt.
+ */
+export function attachRecordedOpeningInput(
+  conversationId: string,
+  browser: string | null,
+  questions: ReadonlyArray<{ kind: string; messageId?: string; text?: string; historyBeforeQuestionId?: string }>
+): Promise<boolean> {
+  return serial(async () => {
+    if (!browser || !isChatProviderConversationId(conversationId) || isChatBlocked(conversationId) ||
+        await conversationWasSuperseded(conversationId)) return false;
+    const provider = chatProviderForConversation(conversationId);
+    if (!usesLocalTaskCapability(provider)) return false;
+    const current = await load();
+    const candidates = current.filter(row => row.opening && row.chatProvider === provider &&
+      row.conversationId === null && row.sessionId && row.owner && row.claimedBrowser === browser &&
+      row.state === 'browser' && row.requiresAuthorization && row.offeredAt !== undefined &&
+      row.sendAuthorizedAt !== undefined && row.deliveredAt === undefined && !row.cancelledByUser &&
+      row.deliveryText && !companionOf(current, row));
+    if (!candidates.length) return false;
+    const matching = candidates.filter(row => questions.some(question =>
+      question.kind === 'user_message' && question.messageId &&
+      isProviderNativeQuestionId(provider, conversationId, question.messageId) &&
+      !question.historyBeforeQuestionId && typeof question.text === 'string' &&
+      matchesAppPrompt(question.text, row.deliveryText!) &&
+      hasCurrentLocalBinding(provider, row.deliveryText!, { kind: 'input', input: {
+        id: row.id, owner: row.owner!, browser, offeredAt: row.offeredAt!
+      } })));
+    if (matching.length !== 1) return false;
+    const entry = matching[0]!;
+    const existing = await findSessionByConversation(conversationId, { requireUnique: true });
+    if (existing && existing.id !== entry.sessionId) return false;
+    const bound = { ...entry, conversationId };
+    if (!await bindOpening(bound, conversationId)) return false;
+    await commit(current.map(row => row === entry ? bound : row));
+    return true;
+  });
 }
 
 /** Called only while the input queue is held. Both live and recovered receipts settle here. */

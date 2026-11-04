@@ -44,7 +44,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, reconcileRecordedBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, reconcileRecordedBrowserInput, attachRecordedOpeningInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -2491,10 +2491,12 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
   // Reuse the recorder's process-local observation (or an exact attributed running
   // tool) so opening old recordings after restart cannot resurrect Stop/Working.
   const live = liveConversations().find(entry => entry.conversationId === id && entry.sessionId === sessionId);
+  const apiTurn = chatProviderForConversation(id) === 'openrouter'
+    ? (await import('./openrouter/runner.js')).openRouterTurnStatus(sessionId, session.activeTurnId ?? null) : null;
   const activityExpiry = sessionActivityExpiresAt(session);
   const stopping = commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId);
   const activeTurnId = session.browserRecoveryDismissedAt === undefined && session.activeTurnId &&
-    (stopping || runningToolProgress(id) !== null || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
+    (apiTurn !== null || stopping || runningToolProgress(id) !== null || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
       live?.activeTurnId === session.activeTurnId)) ? session.activeTurnId : null;
   const finishHeld = !blocked && await sessionFinishHeld(sessionId, activeTurnId, id);
   const draft = goalViewFor(id) ?? goalOutcomeFor(id);
@@ -2512,7 +2514,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
     goalDraft: draft ? { stage: draft.stage, model: draft.model, text: draft.text.slice(-8000), error: draft.error } : null,
     goalWait: !blocked && !draft && goalActiveFor(id)
       ? await goalWaitFor(id, sessionId, Date.now(), session.browserRecoveryDismissedAt !== undefined) : null,
-    stopPending: commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId),
+    stopPending: apiTurn === 'stopping' || commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId),
     objective: goalObjectiveFor(id),
     loopAfterTurn: control.afterTurn,
     proLoopDelivery: control.enabled && getConfig().ui.finishTool === true && session.selectedModel?.conversationId === id &&
@@ -2537,6 +2539,16 @@ async function stopUserAnchor(sessionId: string, turnId: string): Promise<string
 /** Stop is a request against one exact live turn, never a predicted final boundary. */
 export async function stopSessionTurn(sessionId: string, expectedTurnId: string, continuationInputId?: string): Promise<SessionControlsView> {
   const id = await controlledConversation(sessionId);
+  if (chatProviderForConversation(id) === 'openrouter') {
+    if (continuationInputId || !expectedTurnId || (await getSession(sessionId))?.activeTurnId !== expectedTurnId)
+      throw new Error('active_turn_changed');
+    const { stopOpenRouterTurn } = await import('./openrouter/runner.js');
+    if (!stopOpenRouterTurn(sessionId, expectedTurnId)) throw new Error('active_turn_changed');
+    await setSessionAutomation(sessionId, 'off');
+    await revokeSilenceInputs(sessionId, 'the user stopped the API turn');
+    // A successful abort request is not proof that an executing local tool stopped.
+    return sessionControlsFor(sessionId);
+  }
   const assertCurrent = async () => {
     const latest = await getSession(sessionId);
     if (latest?.conversationId !== id || latest.activeTurnId !== expectedTurnId || !expectedTurnId ||
@@ -3784,6 +3796,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           });
         }
       }
+      // An opening's ACK may lag behind the paired page's native observations. Preserve its
+      // reserved session before the recorder can create a second chat for the same question.
+      // This bridge operation uses the exact task text and current local capability; seeing
+      // a tab or an assistant reply alone is not evidence of a delivered user message.
+      if (observations.some(item => item.kind === 'user_message'))
+        await attachRecordedOpeningInput(id, browserOf(req), observations);
       const result = await recordChatObservations(id, observations, agent);
       const superseded = await conversationWasSuperseded(id);
       if (!superseded && result.sessionId) await reconcileRecordedBrowserInput(result.sessionId, id, browserOf(req));

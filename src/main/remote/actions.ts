@@ -18,7 +18,7 @@ import { getProject } from '../projects.js';
 
 const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);
 const send = z.object({ action: z.literal('send'), id: z.string().uuid(), sessionId: sessionId.nullable(), provider: z.enum(CHAT_PROVIDERS),
-  text: z.string().trim().min(1).max(64_000), model: z.string().max(80).nullable(), reasoningEffort: z.enum(REASONING_EFFORTS).nullable(),
+  text: z.string().trim().min(1).max(64_000), model: z.string().max(200).nullable(), reasoningEffort: z.enum(REASONING_EFFORTS).nullable(),
   modelSurface: z.enum(['chat', 'work']).optional(),
   expectedTurnId: z.string().min(1).max(256).nullable(), afterTurn: z.boolean().optional(), automation: z.enum(['off', 'goal', 'loop']).optional(),
   attachments: z.array(attachmentSchema).max(20).optional(),
@@ -33,7 +33,7 @@ export const remoteActionSchema = z.discriminatedUnion('action', [send,
   z.object({ action: z.literal('rename'), id: z.string().uuid(), sessionId, title: z.string().trim().min(1).max(120), expectedTitle: z.string().max(120) }).strict(),
   z.object({ action: z.literal('cancel'), id: z.string().uuid(), inputId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('refreshModels'), id: z.string().uuid(), provider: z.enum(CHAT_PROVIDERS),
-    model: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/).optional() }).strict(),
+    model: z.string().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/).optional() }).strict(),
   z.object({ action: z.literal('preferences'), id: z.string().uuid(), expectedRevision: z.string().regex(/^[0-9a-f]{64}$/), changes: z.unknown() }).strict()
 ]);
 export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Promise<unknown> {
@@ -49,7 +49,9 @@ export async function remoteAction(body: z.infer<typeof remoteActionSchema>): Pr
   if (body.action === 'cancel') return { cancelled: await cancelDesktopInput(body.inputId) };
   const session = body.sessionId ? await getSession(body.sessionId) : null;
   if (body.sessionId && !session?.conversationId) throw new Error('This task has no attached provider chat.');
-  if (body.action === 'selectChat') return ensureSelectedChatReady(body.sessionId);
+  if (body.action === 'selectChat') return session?.conversationId && chatProviderForConversation(session.conversationId) === 'openrouter'
+    ? { ready: true, sessionId: body.sessionId, conversationId: session.conversationId }
+    : ensureSelectedChatReady(body.sessionId);
   if (body.action === 'rename') { await renameSession(body.sessionId, body.title, 'manual', undefined, body.expectedTitle); return { title: body.title }; }
   if (body.action === 'stop') return stopSessionTurn(body.sessionId, body.expectedTurnId);
   if (body.modelSurface && (body.provider !== 'chatgpt' || !body.model)) throw new Error('A native Chat/Work model surface requires an explicit ChatGPT model.');

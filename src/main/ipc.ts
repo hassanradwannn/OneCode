@@ -241,7 +241,7 @@ const settingsPatch = z.object({
   ui: z.object({
     appearance: appearanceSchema.optional(),
     autoContinue: z.boolean().optional(),
-    defaultChatModel: z.string().trim().min(1).max(80).optional(),
+    defaultChatModel: z.string().trim().min(1).max(200).optional(),
     defaultChatModelAffinity: chatModelAffinity,
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional(),
     chatProvider: z.enum(CHAT_PROVIDERS).optional(),
@@ -732,6 +732,8 @@ export async function openSessionChat(id: string): Promise<void> {
   if (!isChatProviderConversationId(conversationId)) {
     throw new Error('This session has no valid provider conversation');
   }
+  if (chatProviderForConversation(conversationId) === 'openrouter')
+    throw new Error('OpenRouter API chats live in OneCode; there is no provider browser page.');
   // The selected browser owns this explicit action. In particular, a connected companion in
   // Chrome/Edge must not override the user's choice to open the chat in the CoS browser.
   if (getConfig().ui.chatBrowser === 'cos') {
@@ -1820,7 +1822,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('browser:preferences', async (payload) => requestBrowserPreferences(payload));
   handle('chatModels:request', async payload => {
     const parsed = z.union([z.enum(CHAT_PROVIDERS), z.object({ provider: z.enum(CHAT_PROVIDERS).optional(),
-      model: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/) }).strict()]).optional().parse(payload);
+      model: z.string().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/) }).strict()]).optional().parse(payload);
     return parsed && typeof parsed === 'object' ? startChatModelDiscovery(true, parsed.provider, parsed.model)
       : startChatModelDiscovery(true, parsed);
   });

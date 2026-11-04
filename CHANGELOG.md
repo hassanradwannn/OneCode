@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.0 Beta] — 2026-11-04
+
+Experimental OpenRouter API provider with OneCode-owned sessions, model discovery, local tool calls, and bounded request handling. Repair late native acknowledgment during automatic ChatGPT turn rotation without relaxing task capabilities; preserve distinct prior/new credentials across live and restarted sessions. This is a Beta prerelease for Windows and Linux testing, not a Stable release. OpenRouter automatic context compaction and signed-in native acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.0.md).
+
 ## [0.8.9] — 2026-11-03
 
 Approve existing native paths explicitly supplied in trusted Desktop/Remote user messages through the existing root owner. Preserve exact-file scope, folder contents, canonical path validation, existing aliases, revocation and capability settings. Remote resolves recorded ChatGPT sandbox links to their native chat on the phone, handles blocked popups visibly and hides inline provider reference markers. Full Windows/Linux packages and compatible capsules ship together. See [notes](docs/release-notes/v0.8.9.md) and [acceptance](docs/release-acceptance/v0.8.9.md).
