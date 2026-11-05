@@ -41,6 +41,8 @@ export type ApiCompleteOptions = {
   reasoningEnabled?: boolean;
   /** Remote HTTP accepted. Caller must commit its exact local Send receipt first. */
   onAccepted?: () => Promise<void>;
+  /** Local serialization passed; a network attempt is starting, not a delivery receipt. */
+  onDispatch?: (requestBytes: number) => void;
   stream?: boolean;
 };
 

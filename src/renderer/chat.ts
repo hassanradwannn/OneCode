@@ -2147,6 +2147,7 @@ async function refreshSessionControls(): Promise<void> {
   controlledRecovery = controls?.recovery ?? [];
   apiLiveActivity = controls?.apiActivity ?? null;
   paintDeliveryControls();
+  paintPendingInputs();
   paintStateLine();
   menu.hidden = !controls;
   $('compactSession').hidden = !controls || !isBrowserChatProvider(selectedChatProvider());
@@ -5258,6 +5259,13 @@ const NATIVE_STEP_NOW = /^\S+ing\b/i;
  */
 let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
+  if (controlledSessionId === selectedId && apiLiveActivity) {
+    const labels: Partial<Record<import('../main/api/activity.js').ApiActivity['phase'], string>> = {
+      catalog: t('Loading model information'), preparing: t('Preparing API request'), requesting: t('Waiting for provider response')
+    };
+    const label = labels[apiLiveActivity.phase];
+    if (label) return { text: label, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
+  }
   if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'recovering')
     return { text: t('Reconnecting to the model (retry {0}) — running tasks are retained', [String(apiLiveActivity.attempt ?? 1)]), icon: 'i-retry', working: true };
   const call = runningToolsFor === selectedId ? runningTools.at(-1) : undefined;
@@ -6452,6 +6460,16 @@ function historicalAutomaticInput(entry: InputEntry): boolean {
   return automaticInput(entry) && ['failed', 'cancelled'].includes(entry.state) && !!entry.error;
 }
 
+function apiPendingInputStatus(entry: InputEntry): string | null {
+  if (!entry.chatProvider || isBrowserChatProvider(entry.chatProvider) || entry.error || !['queued', 'browser'].includes(entry.state)) return null;
+  const activity = controlledSessionId === selectedId && apiLiveActivity?.inputId === entry.id ? apiLiveActivity : null;
+  if (!activity && entry.steerTurnId && controlledUnfinishedTurnId === entry.steerTurnId) return t('Waiting for the current step to finish');
+  if (activity?.phase === 'catalog') return t('Loading model information…');
+  if (activity?.phase === 'requesting') return t('Waiting for provider acceptance…');
+  if (activity?.phase === 'recovering') return t('Retrying provider connection…');
+  return t('Preparing API request…');
+}
+
 function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   const row = el('div', 'pending-message');
   row.classList.toggle('is-delivered', !entry.error && ['sent', 'tool'].includes(entry.state));
@@ -6459,13 +6477,15 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   const held = routeHeld(entry);
   row.classList.toggle('is-route-held', held);
   const waiting = queuedWaitReason(entry);
+  const apiStatus = apiPendingInputStatus(entry);
+  row.classList.toggle('has-api-status', !!apiStatus);
   row.classList.toggle('is-waiting', !!waiting && !held);
   row.dataset.inputId = entry.id;
   row.dataset.timelineKey = `input:${entry.id}`;
   if (!visibleInputIds.has(entry.id)) row.classList.add('is-entering');
   visibleInputIds.add(entry.id);
   if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
-  const status = () => entry.error ? t(entry.error) : held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued"));
+  const status = () => entry.error ? t(entry.error) : apiStatus ?? (held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued")));
   const files = el('div', 'message-attachments');
   if (entry.attachments?.length) files.append(...entry.attachments.map(file => attachmentCard(file)));
   for (const image of entry.images ?? []) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; files.append(preview); }
@@ -6477,7 +6497,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   }
   const receipt = el('span', 'pending-message-status');
   ui(receipt, 'title', status); ui(receipt, 'aria-label', status);
-  if (entry.error || entry.state === 'failed' || held || waiting) {
+  if (apiStatus || entry.error || entry.state === 'failed' || held || waiting) {
     ui(receipt, 'textContent', status);
   }
   else receipt.append(icon(['sent', 'tool'].includes(entry.state) ? 'i-check' : 'i-clock'));
@@ -6585,7 +6605,7 @@ function paintPendingInputs(): void {
   const host = $('inputQueue');
   const previous = new Map([...host.querySelectorAll<HTMLElement>(':scope > .pending-message')].map(row => [row.dataset.inputId, row]));
   const next = rows.filter(entry => !historicalAutomaticInput(entry)).map(entry => {
-    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), entry.stagesApplied,
+    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
       entry.stages, entry.attachments?.map(file => file.id), entry.images?.map(image => [image.name, image.dataUrl.length]),
       hasLaterModelActivity(entry.deliveredAt ?? entry.offeredAt ?? entry.createdAt)]);
     const old = previous.get(entry.id);

@@ -3,6 +3,7 @@ import type { ChatProvider } from '../../shared/chat-provider.js';
 import { getSecret } from '../secrets.js';
 import { FREE_ROUTER_MODEL, OpenRouterClient } from '../openrouter/client.js';
 import { ApiError, type ApiModel, type ApiCompleteOptions, type ApiCompletion } from './types.js';
+import { loadOpenRouterApiModels } from '../openrouter/catalog.js';
 
 export interface ApiProvider {
   id: ChatProvider;
@@ -23,7 +24,7 @@ export function apiProvider(provider: ChatProvider): ApiProvider | null {
   };
   return {
     id: provider, defaultModel: FREE_ROUTER_MODEL,
-    models: async signal => client.models(await key(), AbortSignal.any([signal, AbortSignal.timeout(30_000)])),
+    models: signal => loadOpenRouterApiModels(signal),
     complete: async input => client.complete({ ...input, apiKey: await key(),
       signal: AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(10 * 60_000)]) }),
     modelInstruction: requested => requested === FREE_ROUTER_MODEL.id

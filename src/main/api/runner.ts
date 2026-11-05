@@ -18,12 +18,13 @@ import { apiRetryDelay, apiFailureDescription, API_RETRY_LIMIT } from './recover
 import { apiOutputBudget } from './budget.js';
 import { ApiRefusalWatch } from './refusals.js';
 import type { OutputPublication } from '../codex/unified-exec.js';
+import { logInfo } from '../logger.js';
 export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 1000;
 const MAX_CALLS = 3000;
 const MAX_HISTORY_MESSAGES = 2000;
-const MAX_HISTORY_BYTES = 6 * 1024 * 1024;
+const MAX_HISTORY_BYTES = 32 * 1024 * 1024;
 // A normal terminal result already has a 10K-token native presentation budget. Carry
 // that complete rendering plus recovery pages instead of silently cutting it to 12K chars.
 const MAX_TOOL_RESULT_CHARS = 64_000;
@@ -136,12 +137,16 @@ export async function steerApiInput(entry: InputEntry): Promise<void> {
 async function perform(entry: InputEntry): Promise<void> {
   if (!entry.sessionId || !entry.model) return;
   const controller = new AbortController();
-  const active: ActiveApiTurn = { sessionId: entry.sessionId, turnId: null, controller, activity: { phase: 'requesting' } };
+  const startedAt = Date.now();
+  const active: ActiveApiTurn = { sessionId: entry.sessionId, turnId: null, controller, deliveryPending: true,
+    activity: { phase: 'catalog', inputId: entry.id, since: startedAt } };
   controllers.set(entry.id, active);
+  notifyChanged(entry.sessionId);
   const dropWorkerStop = entry.apiWorker ? onSwarmEnd((_reason, _retired, runId) => {
     if (runId === entry.apiWorker!.runId) controller.abort(new Error('Worker family ended'));
   }) : null;
   let admitted = false, accepted = false;
+  let networkAttempted = false;
   let conversationId: string | null = null;
   let turnId: string | null = null;
   let painting = Promise.resolve();
@@ -166,13 +171,18 @@ async function perform(entry: InputEntry): Promise<void> {
         const delay = apiRetryDelay(error, attempt);
         if (delay === null) throw error;
         retryCount = attempt + 1;
-        await noteInputStartupError(entry.id, 'Message queued. ' + apiFailureDescription(error) +
-          ` Retrying model discovery ${retryCount}/${API_RETRY_LIMIT} in ${Math.ceil(delay / 1000)}s.`);
+        active.activity = { phase: 'recovering', inputId: entry.id, since: Date.now(), attempt: retryCount,
+          retryAt: Date.now() + delay, reason: apiFailureDescription(error) };
+        notifyChanged(entry.sessionId);
         await wait(delay, undefined, { signal: controller.signal });
       }
     }
     retryCount = 0;
     await noteInputStartupError(entry.id, null);
+    const preparedAt = Date.now();
+    active.activity = { phase: 'preparing', inputId: entry.id, since: preparedAt };
+    notifyChanged(entry.sessionId);
+    logInfo(`api timing input=${entry.id} queue_wait_ms=${Math.max(0, startedAt - entry.createdAt)} catalog_ms=${preparedAt - startedAt}`);
     const model = models.find(item => item.id === entry.model) ??
       (entry.model === provider.defaultModel.id ? provider.defaultModel : undefined);
     if (!model) throw new ApiError("MODEL_UNAVAILABLE");
@@ -230,6 +240,7 @@ async function perform(entry: InputEntry): Promise<void> {
         throw new ApiError("INPUT_RECEIPT_REJECTED");
       await appendEvent(turn.sessionId, { kind: "turn_start", source: "app", time: Date.now(), turnId: turn.turnId });
       accepted = true;
+      active.deliveryPending = false;
       await acknowledgeApiWorker(entry);
       thread.messages = messages;
       await saveThread(thread);
@@ -264,18 +275,30 @@ async function perform(entry: InputEntry): Promise<void> {
     let roundId = 0;
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
       controller.signal.throwIfAborted();
+      let preparationBeganAt = round === 0 ? preparedAt : Date.now();
       roundId = round;
       if (accepted && await yieldToDirection()) return;
       if (round > 0) { displayed = ''; answerId = randomUUID(); paintedAt = 0; responseSaved = false; }
-      active.activity = { phase: 'requesting' }; notifyChanged(turn.sessionId);
+      active.activity = { phase: 'preparing', inputId: entry.id, since: preparationBeganAt }; notifyChanged(turn.sessionId);
       if (round > 0 && !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
       declarations = model.supportsTools ? tools.declarations : [];
       const requestMessages: ApiMessage[] = [{ role: "system", content: system },
         ...(round === 0 ? messages : thread.messages)];
       const { output, maximum } = apiOutputBudget(model, requestMessages, declarations, desiredOutput);
+      let dispatchedAt = 0;
       const complete = () => provider.complete({ model: model.id, sessionId: turn.conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
-        reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint,
+        reasoningEffort: reasoning, onAccepted: async () => {
+          if (dispatchedAt) logInfo(`api timing input=${entry.id} round=${round} header_wait_ms=${Date.now() - dispatchedAt}`);
+          await firstAccepted(); active.activity = { phase: 'responding', since: Date.now() }; notifyChanged(turn.sessionId);
+        }, onText: paint,
+        onDispatch: requestBytes => {
+          networkAttempted = true;
+          dispatchedAt = Date.now();
+          active.activity = { phase: 'requesting', inputId: entry.id, since: dispatchedAt, requestBytes };
+          logInfo(`api timing input=${entry.id} round=${round} preparation_ms=${dispatchedAt - preparationBeganAt} request_bytes=${requestBytes}`);
+          notifyChanged(turn.sessionId);
+        },
         onToolCall: name => {
           if (!declarations.some(tool => tool.function.name === name) || controller.signal.aborted) return;
           active.activity = { phase: 'preparing-tool' }; notifyChanged(turn.sessionId);
@@ -299,7 +322,7 @@ async function perform(entry: InputEntry): Promise<void> {
             assistantRow(displayed, answerId, messageId, turn.turnId, model.id, false));
           displayed = ''; answerId = randomUUID(); paintedAt = 0;
           const reason = apiFailureDescription(error), retryAt = Date.now() + delay;
-          active.activity = { phase: 'recovering', attempt: attempt + 1, retryAt, reason };
+          active.activity = { phase: 'recovering', inputId: entry.id, since: Date.now(), attempt: attempt + 1, retryAt, reason };
           // A pre-header failure has no Send ACK yet. Keep its durable input queued/claimed
           // with a truthful startup notice rather than fabricating a turn receipt.
           const notice = `${reason} Retrying model step ${attempt + 1}/${API_RETRY_LIMIT} in ${Math.ceil(delay / 1000)}s. Saved tool results and running tasks are retained.`;
@@ -308,7 +331,8 @@ async function perform(entry: InputEntry): Promise<void> {
           await wait(delay, undefined, { signal: controller.signal });
           controller.signal.throwIfAborted();
           if (accepted && await yieldToDirection()) return;
-          active.activity = { phase: 'requesting' }; notifyChanged(turn.sessionId);
+          preparationBeganAt = Date.now();
+          active.activity = { phase: 'preparing', inputId: entry.id, since: preparationBeganAt }; notifyChanged(turn.sessionId);
         }
       }
       if (retried && accepted) await recoveryNotice('API connection recovered. Continuing the same task from saved results.');
@@ -426,7 +450,8 @@ async function perform(entry: InputEntry): Promise<void> {
     // Only the inference operation above is retryable. Never replay a local tool or storage write.
     if (!admitted && !controller.signal.aborted)
       await noteInputStartupError(entry.id, "Message queued. " + description).catch(() => undefined);
-    if (admitted && !accepted) await failBrowserInput(entry.id, apiInputOwner(entry.chatProvider ?? "openrouter"), "API dispatch was not confirmed. " + description).catch(() => undefined);
+    if (admitted && !accepted) await failBrowserInput(entry.id, apiInputOwner(entry.chatProvider ?? "openrouter"),
+      (networkAttempted ? 'API dispatch was not confirmed. ' : 'Message was not sent. ') + description).catch(() => undefined);
     if (entry.apiWorker && !accepted) {
       failAgent(entry.apiWorker.agentId, 'API worker could not start (' + code + '). Inspect its saved input before assigning more work.',
         undefined, {}, entry.apiWorker.runId);

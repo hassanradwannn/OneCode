@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.7 Beta] — 2026-11-05
+
+Raise the local API JSON transport limit from 2 to 16 MiB and the durable thread allowance from 6 to 32 MiB, independently of model context limits. Preserve existing chat history, tool outcomes and ownership. Share validated model definitions between the UI and runtime using the existing catalog owner, with expiry, explicit refresh, credential invalidation and independent cancellation. Show pending preparation/provider-wait stages and record safe per-phase timing/byte metadata without fabricating delivery receipts. See [Beta notes](docs/release-notes/beta-v0.9.7.md).
+
 ## [0.9.6 Beta] — 2026-11-05
 
 Use model/context-aware API response budgets and automatically continue length-truncated responses without executing incomplete tool proposals. Repair API terminal result publication and acknowledgement, carry normal terminal renderings without the former 12K-character clip, and re-offer unacknowledged restored prefixes. Preserve session/incarnation ownership and incomplete/failed delivery. Detect unchanged exec-refusal loops across model decisions and guide owned hung-process interruption without launching another command. See [Beta notes](docs/release-notes/beta-v0.9.6.md).

@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.7': {
+    lead: () => t('Continue larger API chats and see what Send is waiting for.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Larger API conversations'), text: () => t('Remove the former two-MiB request blocker while preserving your saved conversation, completed results and running work.') },
+      { icon: 'i-retry', title: () => t('Clear send stages'), text: () => t('See request preparation and provider acceptance separately. A message is marked sent only after the provider accepts it.') },
+      { icon: 'i-plug', title: () => t('Reuse model information'), text: () => t('Share a validated model catalog between Send and the model picker instead of fetching it again on every message.') }
+    ]
+  },
   '0.9.6': {
     lead: () => t('Recover API output limits and keep terminal work moving.'),
     highlights: [

@@ -9,7 +9,8 @@ export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
 import { apiTransportError } from '../api/recovery.js';
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
-const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+// A transport memory bound, separate from the selected model's token/context limits.
+export const MAX_API_REQUEST_BYTES = 16 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_TOOL_ARGUMENTS = 64 * 1024;
 
@@ -35,7 +36,7 @@ function authHeaders(apiKey: string): HeadersInit {
 
 function apiFailure(status: number, retryAfterMs: number | null = null): OpenRouterApiError {
   const known: Record<number, string> = { 400: "BAD_REQUEST", 401: "UNAUTHORIZED", 402: "INSUFFICIENT_CREDITS",
-    403: "FORBIDDEN", 404: "MODEL_UNAVAILABLE", 408: "REQUEST_TIMEOUT", 429: "RATE_LIMITED" };
+    403: "FORBIDDEN", 404: "MODEL_UNAVAILABLE", 408: "REQUEST_TIMEOUT", 413: 'PROVIDER_REQUEST_TOO_LARGE', 429: "RATE_LIMITED" };
   return new OpenRouterApiError(known[status] ?? (status >= 500 ? "PROVIDER_UNAVAILABLE" : "API_ERROR"), status, retryAfterMs);
 }
 
@@ -211,11 +212,14 @@ export class OpenRouterClient {
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
       stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });
-    if (Buffer.byteLength(body) > MAX_REQUEST_BYTES) throw new OpenRouterApiError("REQUEST_TOO_LARGE");
+    const requestBytes = Buffer.byteLength(body);
+    if (requestBytes > MAX_API_REQUEST_BYTES) throw new OpenRouterApiError("REQUEST_TOO_LARGE");
+    const headers = authHeaders(input.apiKey);
+    input.onDispatch?.(requestBytes);
     // One transport attempt only. The harness can retry inference from a saved checkpoint;
     // no local tool is executed until a complete validated response has been returned.
     const response = await this.transport(this.baseUrl + "/chat/completions", { method: "POST",
-      headers: authHeaders(input.apiKey), body, signal: input.signal }).catch(error => {
+      headers, body, signal: input.signal }).catch(error => {
         if (input.signal?.aborted && input.signal.reason?.name !== 'TimeoutError') throw error;
         throw apiTransportError(error);
       });
