@@ -531,7 +531,7 @@
         <section class="panel setup-panel scroll" data-panel="setup">
           <div class="sheet settings-page-content">
             <div class="setup-heading settings-page-head">
-              <div><h1 id="setupTitle">Setup</h1><p>Connect your workspace to Gemini.</p></div>
+              <div><button class="btn btn-quiet" id="setupBackToChat" type="button"><i class="ico ph ph-arrow-left" aria-hidden="true"></i><span>Back to chats</span></button><h1 id="setupTitle">Setup</h1><p>Connect your workspace to Gemini.</p></div>
               <div class="language-tabs" role="group" aria-label="Language">
                 <button type="button" data-language="de" lang="de" translate="no" title="Deutsch" aria-label="Deutsch" aria-pressed="false"><svg class="language-flag" viewBox="0 0 900 600" aria-hidden="true"><image href="./flags/de.svg" width="900" height="600"/></svg></button>
                 <button type="button" data-language="en" lang="en" translate="no" title="English" aria-label="English" aria-pressed="true"><svg class="language-flag" viewBox="0 0 60 40" aria-hidden="true"><path fill="#012169" d="M0 0h60v40H0z"/><path stroke="#fff" stroke-width="8" d="m0 0 60 40M60 0 0 40"/><path stroke="#c8102e" stroke-width="3" d="m0 0 60 40M60 0 0 40"/><path stroke="#fff" stroke-width="13" d="M30 0v40M0 20h60"/><path stroke="#c8102e" stroke-width="7" d="M30 0v40M0 20h60"/></svg></button>
@@ -617,11 +617,11 @@
                 <div class="step-body browser-setup">
                   <div class="browser-setup-header">
                     <label class="setting"><span class="setting-text"><b>AI provider</b><em>New chats use this provider immediately. Existing Gemini and ChatGPT chats keep working with their original provider.</em></span><select id="setupChatProvider"></select></label>
-                    <ol class="browser-phases" aria-label="Connect your Gemini">
+                    <ol class="browser-phases" id="browserPhases" aria-label="Connect your Gemini">
                     <li id="browserPhaseExtension" aria-current="step"><span class="phase-number" aria-hidden="true" translate="no">A</span><span>Install the extension</span></li>
                     <li id="browserPhaseLocation"><span class="phase-number" aria-hidden="true" translate="no">B</span><span>Where Gemini runs</span></li>
                   </ol>
-                    <div class="browser-picker">
+                    <div class="browser-picker" id="browserPicker">
                       <p class="step-lead">Choose your browser.</p>
                       <div class="browser-segments" role="radiogroup" aria-label="Browser">
                         <button type="button" role="radio" data-external-browser="chrome" aria-checked="true"><img src="./browser-icons/chrome.svg" alt="" /><span translate="no">Chrome</span></button>
@@ -632,6 +632,20 @@
                       </div>
                     <h3 id="browserExtensionTitle" tabindex="-1">Connect your browser</h3>
                   </div>
+                  <section id="openRouterSetup" class="openrouter-setup" aria-labelledby="openRouterSetupTitle" hidden>
+                    <h3 id="openRouterSetupTitle">Connect OpenRouter with an API key</h3>
+                    <p class="step-lead">OpenRouter runs directly through its API. You don't need a browser extension or a provider sign-in.</p>
+                    <form id="openRouterKeyForm" autocomplete="off">
+                      <label for="openRouterSetupKey">OpenRouter API key</label>
+                      <input id="openRouterSetupKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-…" />
+                      <p id="openRouterSetupStatus" class="hint" role="status" aria-live="polite"></p>
+                      <div class="step-actions">
+                        <button id="openRouterSaveKey" class="btn btn-solid" type="submit">Save API key</button>
+                        <button id="openRouterRemoveKey" class="btn" type="button">Remove stored key</button>
+                        <button class="btn btn-quiet" type="button" data-link="https://openrouter.ai/settings/keys">Get an OpenRouter API key</button>
+                      </div>
+                    </form>
+                  </section>
                   <div id="browserExecutablePicker" hidden><button class="btn btn-quiet" id="pickBrowserExecutable" type="button">Locate browser executable…</button><p class="hint" id="browserExecutableHint">For portable browsers or an installation in another folder or drive.</p></div>
                   <section id="browserExtensionStage" class="browser-stage" aria-labelledby="browserExtensionTitle">
                     <div class="browser-stage-copy">

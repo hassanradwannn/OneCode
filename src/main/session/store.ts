@@ -596,7 +596,10 @@ export async function createSession(options: {
   if (options.reservedId) {
     const existing = await getSession(id);
     if (existing) {
-      if (existing.origin?.kind !== 'desktop') throw new Error('Reserved opening session belongs to different work');
+      if (existing.origin?.kind !== 'desktop' && !(options.origin?.kind === 'worker' &&
+          existing.conversationId === options.conversationId &&
+          JSON.stringify(existing.origin) === JSON.stringify(options.origin)))
+        throw new Error('Reserved opening session belongs to different work');
       return existing;
     }
   }
@@ -849,7 +852,7 @@ async function rebuildSummaryFromHistory(
     identities.push({ seq: event.seq, origin: positionOf(event), time: event.time, kind: event.kind,
       source: event.source, turnId: event.turnId,
       ...(event.kind === 'user_message' ? { messageId: event.messageId, inputId: event.inputId,
-        historyBeforeQuestionId: event.historyBeforeQuestionId } : {}),
+        inputDelivery: event.inputDelivery, historyBeforeQuestionId: event.historyBeforeQuestionId } : {}),
       ...(event.kind === 'turn_end' && event.continued === true ? { continued: true } : {}),
       ...(event.kind === 'tool_call' ? { call: { requestId: event.call.requestId,
         conversationId: event.call.conversationId, attribution: event.call.attribution } } : {}) });

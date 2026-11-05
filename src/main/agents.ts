@@ -21,7 +21,7 @@ import { liveConnectorName } from './mcp/surfaces.js';
 import { workerBrief, workerOwnTask } from '../shared/worker-brief.js';
 import { getChatModels, refreshForUnoffered } from './chat-models.js';
 import { resolveChatModel, isNativeModelId, type ChatModelOption } from '../shared/chat-models.js';
-import { chatProviderForConversation, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
+import { chatProviderForConversation, isBrowserChatProvider, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { logInfo, logWarn } from './logger.js';
 import { inheritWorkspace, releasePrimeWorkspace, bindAgentWorkspace } from './workspace.js';
 import { requestCorrelation } from './session/correlation.js';
@@ -660,7 +660,7 @@ export function pendingWorkerSpawns(): WorkerSpawn[] {
  */
 export function onSpawnRequest(handler: (workers: WorkerSpawn[]) => void): () => void {
   spawnRequest = handler;
-  const owed = pendingWorkerSpawns();
+  const owed = pendingWorkerSpawns().filter(worker => isBrowserChatProvider(chatProviderForConversation(worker.primeConversationId)));
   if (owed.length > 0) {
     handler(owed);
     logInfo(`multi-agent: ${owed.length} worker chat(s) still owed a tab`);
@@ -2046,8 +2046,12 @@ export function requestWorkerBootstraps(ids: readonly string[], runId?: string):
     )
     .map((agent) => ({ runId: run.runId, primeConversationId: run.primeConversationId, id: agent.info.id, task: agent.info.task, model: agent.info.model, reasoningEffort: agent.info.reasoningEffort, ...(agent.info.modelSurface ? { modelSurface: agent.info.modelSurface } : {}) }));
   if (owed.length === 0) return 0;
-  if (spawnRequest) spawnRequest(owed);
-  else logWarn('multi-agent: no browser extension is paired, so worker chats cannot be opened automatically');
+  const browser = owed.filter(worker => isBrowserChatProvider(chatProviderForConversation(worker.primeConversationId)));
+  const api = owed.filter(worker => !isBrowserChatProvider(chatProviderForConversation(worker.primeConversationId)));
+  if (api.length) void import('./api/workers.js').then(adapter => adapter.deliverApiWorkerSpawns(api))
+    .catch(() => logWarn('API worker transport could not start'));
+  if (browser.length && spawnRequest) spawnRequest(browser);
+  else if (browser.length) logWarn('multi-agent: no browser extension is paired, so worker chats cannot be opened automatically');
   return owed.length;
 }
 
@@ -3476,7 +3480,7 @@ let reviveRequest: ((revivals: WorkerRevival[]) => void) | null = null;
  */
 export function onReviveRequest(handler: (revivals: WorkerRevival[]) => void): () => void {
   reviveRequest = handler;
-  const owed = pendingWorkerRevivals();
+  const owed = pendingWorkerRevivals().filter(worker => isBrowserChatProvider(chatProviderForConversation(worker.conversationId)));
   if (owed.length > 0) {
     handler(owed);
     logInfo(`multi-agent: ${owed.length} worker chat(s) still owed a revival`);
@@ -3749,8 +3753,12 @@ export function requestWorkerRevivals(ids: readonly string[], runId?: string): n
   const wanted = new Set(ids);
   const owed = pendingWorkerRevivals().filter((revival) => revival.runId === run.runId && wanted.has(revival.id));
   if (owed.length === 0) return 0;
-  if (reviveRequest) reviveRequest(owed);
-  else logWarn('multi-agent: no browser extension is paired, so sleeping worker chats cannot be reopened');
+  const browser = owed.filter(worker => isBrowserChatProvider(chatProviderForConversation(worker.conversationId)));
+  const api = owed.filter(worker => !isBrowserChatProvider(chatProviderForConversation(worker.conversationId)));
+  if (api.length) void import('./api/workers.js').then(adapter => adapter.deliverApiWorkerRevivals(api))
+    .catch(() => logWarn('API worker revival transport could not start'));
+  if (browser.length && reviveRequest) reviveRequest(browser);
+  else if (browser.length) logWarn('multi-agent: no browser extension is paired, so sleeping worker chats cannot be reopened');
   return owed.length;
 }
 
@@ -5461,7 +5469,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
         repaired = true;
         continue;
       }
-      const restored = deserializeAgents(saved.agents, snapshot.savedAt);
+      const restored = deserializeAgents(saved.agents, snapshot.savedAt, chatProviderForConversation(saved.primeConversationId));
       repaired ||= restored.repaired;
       // A dormant history can never contain a slot-holder. If disk says otherwise, choosing to
       // run it beside another owner or silently sleeping live work would both be guesses.
@@ -5518,7 +5526,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
       const primeConversationId = saved.primeConversationId;
       const primeRequestId = snapshot.version === 7 && 'primeRequestId' in saved && validRequestOwner(saved.primeRequestId)
         ? saved.primeRequestId : undefined;
-      const restored = deserializeAgents(saved.agents, snapshot.savedAt);
+      const restored = deserializeAgents(saved.agents, snapshot.savedAt, chatProviderForConversation(saved.primeConversationId));
       repaired ||= restored.repaired;
       if (runs.has(saved.runId!) || dormantRuns.has(saved.runId!) || !acceptOwner(primeConversationId, restored.agents, primeRequestId, saved.localOwnerId)) {
         logWarn(`multi-agent: discarded active run for ${primeConversationId} because its conversation ownership conflicted`);
@@ -5574,7 +5582,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   // A worker that was invited but whose chat was never bound needs it opened again. If the
   // bridge is not registered yet — at startup it is not, because the run is restored first —
   // this is replayed by onSpawnRequest the moment it registers.
-  const stranded = pendingWorkerSpawns();
+  const stranded = pendingWorkerSpawns().filter(worker => isBrowserChatProvider(chatProviderForConversation(worker.primeConversationId)));
   if (stranded.length > 0 && spawnRequest) {
     spawnRequest(stranded);
     logInfo(`multi-agent: re-requested ${stranded.length} worker chat(s) that were unbound at the restart`);
@@ -5586,7 +5594,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   );
 }
 
-function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number): { agents: Map<string, Agent>; repaired: boolean } {
+function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number, provider: ChatProvider): { agents: Map<string, Agent>; repaired: boolean } {
   const agents = new Map<string, Agent>();
   let repaired = false;
   for (const entry of entries) {
@@ -5606,7 +5614,7 @@ function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number)
         managedWorktree: entry.info.managedWorktree === true,
         managedWorktreeCleaned: entry.info.managedWorktree === true && cleanupAcknowledged(entry.info),
         jobTitle: typeof entry.info.jobTitle === 'string' && entry.info.jobTitle ? entry.info.jobTitle.slice(0, 160) : undefined,
-        model: isModelSlug(entry.info.model) ? entry.info.model : null,
+        model: isModelSlug(entry.info.model, provider) ? entry.info.model : null,
         reasoningEffort: isReasoningEffort(entry.info.reasoningEffort) ? entry.info.reasoningEffort : null,
         modelSurface: entry.info.modelSurface === 'chat' || entry.info.modelSurface === 'work' ? entry.info.modelSurface : undefined,
         sleptAt: typeof entry.info.sleptAt === 'number' ? entry.info.sleptAt : null,

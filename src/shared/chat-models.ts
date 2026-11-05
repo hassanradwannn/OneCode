@@ -10,6 +10,9 @@ export type ChatModelAffinity = { provider: import('./chat-provider.js').ChatPro
 export type NativeReasoningControl = { kind: 'levels'; label: string } |
   { kind: 'toggle'; label: string; on: ReasoningEffort; off: ReasoningEffort; checked: boolean };
 export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[]; nativeSurface?: NativeModelSurface;
+  /** API catalog metadata; never inferred from browser observations. */
+  contextLength?: number; maxCompletionTokens?: number | null; supportsTools?: boolean;
+  pricing?: { prompt: string; completion: string };
   /** false means unobserved, distinct from an observed empty effort menu. Legacy adapters omit it. */
   effortsObserved?: boolean; reasoningControl?: NativeReasoningControl; description?: string; group?: string; effortLabels?: Partial<Record<ReasoningEffort, string>>; effortHints?: Partial<Record<ReasoningEffort, string>> };
 /** Only positively observed controls render; old adapters retain their existing level picker. */
@@ -29,6 +32,8 @@ export function currentEffortChoiceLabel(provider?: import('./chat-provider.js')
 }
 /** Native label identifiers are opaque; syntax alone never proves account availability. */
 export function isNativeModelId(value: unknown, provider?: import('./chat-provider.js').ChatProvider): value is string {
+  if (provider === 'openrouter') return typeof value === 'string' && value.length > 0 && value.length <= 200 &&
+    value.trim() === value && /^[A-Za-z0-9._:\/-]+$/.test(value);
   return typeof value === 'string' && value.length > 0 && value.length <= 80 && value.trim() === value &&
     (provider === 'claude' ? !/[\u0000-\u001f\u007f]/.test(value) : /^[A-Za-z0-9._-]+$/.test(value));
 }

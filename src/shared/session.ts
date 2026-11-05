@@ -184,6 +184,7 @@ export type ToolOutcome = 'ok' | 'process_exit_nonzero' | 'tool_rejected' | 'too
  */
 export type CallAttribution =
   | 'request_id'
+  | 'local_api_turn'
   | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability'
   | 'unattributed'
   | 'superseded'
@@ -213,6 +214,7 @@ export type CallAttribution =
  */
 export const ATTRIBUTION_LABELS: Record<CallAttribution, string> = {
   request_id: 'exact request id',
+  local_api_turn: 'exact OneCode API turn',
   gemini_session_capability: 'local Gemini session capability',
   chatgpt_session_capability: 'local ChatGPT session capability',
   claude_session_capability: 'local provider session capability',
@@ -257,7 +259,7 @@ export interface ToolCallRecord {
   /** Conversation proven by that request id, or null when ownership was unresolved. */
   conversationId: string | null;
   /** Deterministic placement outcome for current, unresolved, or deliberately retired callers. */
-  attributionMethod: 'request_id' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability' | 'unattributed' | 'superseded';
+  attributionMethod: 'request_id' | 'local_api_turn' | 'gemini_session_capability' | 'chatgpt_session_capability' | 'claude_session_capability' | 'unattributed' | 'superseded';
   /** Exact arguments as JSON. Cut inline past the cap, with the whole text in an asset. */
   args: StoredText;
   result: StoredText;
@@ -400,6 +402,16 @@ interface BaseEvent {
   turnId?: string;
 }
 
+/** API context lifecycle is local presentation evidence, never a browser Send/ticket. */
+export interface ApiCompactionProgress {
+  id: string;
+  state: 'archiving' | 'summarizing' | 'merging' | 'retrying' | 'saving' | 'saved' | 'resumed' | 'failed' | 'cancelled' | 'unchanged';
+  part?: number; total?: number; attempt?: number;
+  beforeTokens?: number; afterTokens?: number;
+  reasonCode?: string; manual?: boolean;
+  stage?: 'archive' | 'summary' | 'save' | 'resume';
+  summary?: StoredText;
+}
 export type SessionEvent =
   | (BaseEvent & { kind: 'session_start'; conversationId: string | null; title: string })
   | (BaseEvent & {
@@ -541,7 +553,7 @@ export type SessionEvent =
    * event written before this model existed, or by a page whose commentary had no readable
    * identity, is still a plain standalone caption.
    */
-  | (BaseEvent & { kind: 'progress'; message: StoredText; progressId?: string; origin?: number; presentation?: ArtifactPresentation; finishControl?: { state: 'released' | 'notified' | 'decision'; conversationId: string; revision?: string; inputRevision?: string; workSeq?: number } })
+  | (BaseEvent & { kind: 'progress'; message: StoredText; progressId?: string; origin?: number; presentation?: ArtifactPresentation; apiCompaction?: ApiCompactionProgress; finishControl?: { state: 'released' | 'notified' | 'decision'; conversationId: string; revision?: string; inputRevision?: string; workSeq?: number } })
   /**
    * Visible ChatGPT-native tool activity that never passed through this MCP server.
    *
@@ -556,7 +568,7 @@ export type SessionEvent =
    * call under the same server turn then proved it had not. Absent on the page's own starts.
    */
   | (BaseEvent & { kind: 'turn_start'; detail?: string })
-  | (BaseEvent & { kind: 'turn_end'; outcome: TurnOutcome; detail?: string; reason?: 'thinking_failed'; providerMessageId?: string;
+  | (BaseEvent & { kind: 'turn_end'; outcome: TurnOutcome; detail?: string; reason?: 'thinking_failed' | 'steer'; providerMessageId?: string;
       /** The user sent a message into this running answer and ChatGPT carried the response on into the next turn (#1301). */
       continued?: true })
   /**
@@ -1324,7 +1336,8 @@ export function foldProgress(events: readonly SessionEvent[]): SessionEvent[] {
           (held.presentation.revision !== event.presentation.revision || held.presentation.openId !== event.presentation.openId)) {
         out[at] = null; anchor.set(key, index); continue;
       }
-      out[at] = { ...held, message: event.message, ...(event.presentation ? { presentation: event.presentation } : {}) };
+      out[at] = { ...held, message: event.message, ...(event.presentation ? { presentation: event.presentation } : {}),
+        ...(event.source==='app' && event.apiCompaction ? {apiCompaction:event.apiCompaction} : {}) };
     } else if (held && held.kind === 'page_tool' && event.kind === 'page_tool') {
       out[at] = { ...held, label: event.label };
     } else if (held && held.kind === 'tool_call' && event.kind === 'tool_call') {

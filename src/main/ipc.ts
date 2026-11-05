@@ -241,7 +241,7 @@ const settingsPatch = z.object({
   ui: z.object({
     appearance: appearanceSchema.optional(),
     autoContinue: z.boolean().optional(),
-    defaultChatModel: z.string().trim().min(1).max(80).optional(),
+    defaultChatModel: z.string().trim().min(1).max(200).optional(),
     defaultChatModelAffinity: chatModelAffinity,
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional(),
     chatProvider: z.enum(CHAT_PROVIDERS).optional(),
@@ -732,6 +732,8 @@ export async function openSessionChat(id: string): Promise<void> {
   if (!isChatProviderConversationId(conversationId)) {
     throw new Error('This session has no valid provider conversation');
   }
+  if (chatProviderForConversation(conversationId) === 'openrouter')
+    throw new Error('OpenRouter API chats live in OneCode; there is no provider browser page.');
   // The selected browser owns this explicit action. In particular, a connected companion in
   // Chrome/Edge must not override the user's choice to open the chat in the CoS browser.
   if (getConfig().ui.chatBrowser === 'cos') {
@@ -755,10 +757,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
   const workbenchBrowser = new WorkbenchBrowserController(getWindow);
-  workbenchBrowser.onChange(sessionId => {
+  workbenchBrowser.onChange((sessionId, reveal) => {
     const target = getWindow();
     if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
-    target.webContents.send('workbenchBrowser:changed', { sessionId });
+    target.webContents.send('workbenchBrowser:changed', { sessionId, ...(reveal ? { reveal: true } : {}) });
   });
   // A session row remains visible until its delete IPC resolves. Fence Trust while deletion is
   // in flight so a second click cannot recreate permission after the row's durable revoke.
@@ -1413,6 +1415,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     if (key === 'openaiApiKey' && owner !== (config.tunnel.profileId ?? 'default') &&
         !config.setupProfiles?.some(profile => profile.id === owner)) throw new Error('Setup profile not found');
     await setSecret(key === 'openaiApiKey' ? setupApiKeySlot(owner) : key, value);
+    if (key === 'openRouterApiKey') {
+      const { invalidateOpenRouterModels, startOpenRouterModelDiscovery } = await import('./openrouter/catalog.js');
+      invalidateOpenRouterModels();
+      if (value.trim() && config.ui.chatProvider === 'openrouter')
+        void startOpenRouterModelDiscovery(true);
+    }
     const activeGoalKey = getConfig().goal.provider.kind === 'custom' ? 'customProviderApiKey' : 'openRouterApiKey';
     if (key === activeGoalKey) retireGoalDrafts();
     const what = key === 'openRouterApiKey' ? 'openrouter key' : key === 'customProviderApiKey' ? 'custom provider key' : 'api key';
@@ -1820,7 +1828,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('browser:preferences', async (payload) => requestBrowserPreferences(payload));
   handle('chatModels:request', async payload => {
     const parsed = z.union([z.enum(CHAT_PROVIDERS), z.object({ provider: z.enum(CHAT_PROVIDERS).optional(),
-      model: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/) }).strict()]).optional().parse(payload);
+      model: z.string().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/) }).strict()]).optional().parse(payload);
     return parsed && typeof parsed === 'object' ? startChatModelDiscovery(true, parsed.provider, parsed.model)
       : startChatModelDiscovery(true, parsed);
   });

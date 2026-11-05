@@ -10,6 +10,12 @@ import { type ChatProvider } from '../shared/chat-provider.js';
 let activeProvider: ChatProvider = 'gemini';
 let settingsProvider: ChatProvider = 'gemini';
 const catalogs: Partial<Record<ChatProvider, ChatModelCatalog>> = {};
+/** Model context belongs to the selected provider's own catalog, not global Settings. */
+export function modelContextWindow(provider: ChatProvider, model: string | null | undefined): number | null {
+  const source = catalogs[provider] ?? (provider === activeProvider ? catalog : undefined);
+  const value = source?.models.find(item => item.id === model)?.contextLength;
+  return value && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
 type SettingsModelSelector = 'defaultChatModel' | 'workerModel' | 'helperModel';
 const settingsModelEdits = new Map<SettingsModelSelector, { provider: ChatProvider; model: string; surface?: NativeModelSurface }>();
 

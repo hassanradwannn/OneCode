@@ -1,3 +1,4 @@
+import { apiTurnStatus, apiActivity, type ApiActivity } from './api/activity.js';
 import { normalizeProviderUsageLimit } from '../shared/session.js';
 import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
 import { z } from 'zod';
@@ -35,7 +36,7 @@ import { authorizedPluginRefreshPublications, hasRequestedPluginRefresh, pending
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
 import { noteBrowserInputRouting } from './session/input.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
@@ -44,7 +45,7 @@ export { setBrowserWorkArea } from './browser-window-layout.js';
 import { pendingBrowserPreferenceRequest, acknowledgeBrowserPreferences } from './browser-preferences.js';
 import { sessionFinishHeld, releaseSessionFinish, getSessionFinishDraft, sessionFinishWaiting } from './session/finish.js';
 import { observeUsage } from './session/usage.js';
-import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, reconcileRecordedBrowserInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
+import { pendingBrowserInputs, claimBrowserInput, acknowledgeBrowserInput, reconcileRecordedBrowserInput, attachRecordedOpeningInput, bindBrowserInputProject, bindGeminiOpeningInput, prepareGeminiInputClaim, geminiInputBindingStatus, failBrowserInput, completeBrowserDecision, listInputs, fileSilenceInput, fileRecoveryInput, advanceRecoveryInput, advanceInputRefresh, permitSteeringClose, permitGeminiWarmupRefresh, permitGeminiWarmupInitialization, reserveWarmupInitialization, warmupRecoverySchema, warmupRecoveryView, adoptWarmupRecovery, type WarmupRecovery, type WarmupDocument, hasQueuedAfterTurnInput, inputBeforeGoal, pendingQueuedPickups, recordQueuedPickupAttemptNow, syncQueuedPickupRecoveryNow, deferSilenceInput, revokeSilenceInputs, endRecoveryInput, retryUnclaimedInput, failInputsForDeletedConversation } from './session/input.js';
 /**
  * The local bridge between the Chrome extension and this app.
  *
@@ -1036,6 +1037,7 @@ function selectedReadinessState(request: NonNullable<ReturnType<typeof selectedC
   return request.state;
 }
 export function selectedChatReadinessFor(sessionId: string, currentConversationId?: string | null): SelectedChatReadiness | null {
+  if (currentConversationId && !isBrowserChatProvider(chatProviderForConversation(currentConversationId))) return { phase: 'ready' };
   const request = selectedChatReadiness.get(sessionId);
   if (request) request.reads = (request.reads ?? 0) + 1;
   if (request && currentConversationId !== undefined && request.conversationId !== currentConversationId)
@@ -1075,6 +1077,7 @@ export function ensureSelectedChatReady(sessionId: string): Promise<SelectedChat
     const conversation = session?.conversationId;
     if (!conversation || isChatBlocked(conversation) || await conversationWasSuperseded(conversation))
       return { phase: 'refused', reason: 'This chat has no current browser attachment.' };
+    if (!isBrowserChatProvider(chatProviderForConversation(conversation))) return { phase: 'ready' };
     followChatInBackground(conversation);
     // Every new explicit click owns a fresh opening. The prior token may have
     // already opened a tab the user closed while its state still said loading.
@@ -2462,6 +2465,8 @@ export type SessionControlsView = {
   queueAtFinish?: boolean;
   canInject?: boolean;
   canSendDirectly?: boolean;
+  apiActivity?: ApiActivity | null;
+  apiContext?: {tokens:number;limit:number} | null;
   canSendQueuedWhenIdle?: boolean;
   finishWaiting?: boolean;
   stopPending?: boolean;
@@ -2491,11 +2496,22 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
   // Reuse the recorder's process-local observation (or an exact attributed running
   // tool) so opening old recordings after restart cannot resurrect Stop/Working.
   const live = liveConversations().find(entry => entry.conversationId === id && entry.sessionId === sessionId);
+  const apiTurn = apiTurnStatus(sessionId, session.activeTurnId ?? null);
   const activityExpiry = sessionActivityExpiresAt(session);
   const stopping = commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId);
   const activeTurnId = session.browserRecoveryDismissedAt === undefined && session.activeTurnId &&
-    (stopping || runningToolProgress(id) !== null || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
+    (apiTurn !== null || stopping || runningToolProgress(id) !== null || (activityExpiry !== undefined ? activityExpiry !== null && activityExpiry > Date.now() :
       live?.activeTurnId === session.activeTurnId)) ? session.activeTurnId : null;
+  if (!isBrowserChatProvider(chatProviderForConversation(id))) {
+    const policy = await sessionInputPolicy(sessionId);
+    return { sessionId, conversationId: id, activeTurnId, unfinishedTurnId: session.activeTurnId ?? null,
+      plan: await readSessionPlan(sessionId), recovery: [], finishHeld: false, finishWaiting: false,
+      queueAtFinish: false, canInject: false, canSendDirectly: !blocked && !!policy.directTurn,
+      canSendQueuedWhenIdle: !blocked && policy.settled, stopPending: apiTurn === 'stopping',
+      apiActivity: apiActivity(sessionId, session.activeTurnId ?? null), objective: '', loopAfterTurn: false,
+      apiContext: await (await import('./api/runner.js')).apiContextForSession(sessionId,id),
+      proLoopDelivery: false, automation: 'off', blocked, job: null };
+  }
   const finishHeld = !blocked && await sessionFinishHeld(sessionId, activeTurnId, id);
   const draft = goalViewFor(id) ?? goalOutcomeFor(id);
   const inputPolicy = await sessionInputPolicy(sessionId, sessionInputActivity(session));
@@ -2512,7 +2528,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
     goalDraft: draft ? { stage: draft.stage, model: draft.model, text: draft.text.slice(-8000), error: draft.error } : null,
     goalWait: !blocked && !draft && goalActiveFor(id)
       ? await goalWaitFor(id, sessionId, Date.now(), session.browserRecoveryDismissedAt !== undefined) : null,
-    stopPending: commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId),
+    stopPending: apiTurn === 'stopping' || commands.some(c => c.spec.type === 'stop' && c.spec.sessionId === sessionId && c.spec.turnId === session.activeTurnId),
     objective: goalObjectiveFor(id),
     loopAfterTurn: control.afterTurn,
     proLoopDelivery: control.enabled && getConfig().ui.finishTool === true && session.selectedModel?.conversationId === id &&
@@ -2537,6 +2553,16 @@ async function stopUserAnchor(sessionId: string, turnId: string): Promise<string
 /** Stop is a request against one exact live turn, never a predicted final boundary. */
 export async function stopSessionTurn(sessionId: string, expectedTurnId: string, continuationInputId?: string): Promise<SessionControlsView> {
   const id = await controlledConversation(sessionId);
+  if (chatProviderForConversation(id) === 'openrouter') {
+    if (continuationInputId || !expectedTurnId || (await getSession(sessionId))?.activeTurnId !== expectedTurnId)
+      throw new Error('active_turn_changed');
+    const { stopOpenRouterTurn } = await import('./openrouter/runner.js');
+    if (!stopOpenRouterTurn(sessionId, expectedTurnId)) throw new Error('active_turn_changed');
+    await setSessionAutomation(sessionId, 'off');
+    await revokeSilenceInputs(sessionId, 'the user stopped the API turn');
+    // A successful abort request is not proof that an executing local tool stopped.
+    return sessionControlsFor(sessionId);
+  }
   const assertCurrent = async () => {
     const latest = await getSession(sessionId);
     if (latest?.conversationId !== id || latest.activeTurnId !== expectedTurnId || !expectedTurnId ||
@@ -2708,7 +2734,14 @@ async function fileCompactionTicket(sessionId: string, id: string, automatic = f
   return { opened: continuationByToken(opened.token) ?? opened, started: !existing };
 }
 export async function compactSession(sessionId: string): Promise<SessionControlsView> {
-  const { opened } = await fileCompactionTicket(sessionId, await controlledConversation(sessionId));
+  const conversation=await controlledConversation(sessionId);
+  if(!isBrowserChatProvider(chatProviderForConversation(conversation))){
+    if(goalWorkerChat(conversation))throw new Error('worker_compaction_disabled');
+    if(isChatBlocked(conversation))throw new Error('chat_blocked');
+    await (await import('./api/runner.js')).requestApiCompaction(sessionId,conversation);
+    return sessionControlsFor(sessionId);
+  }
+  const { opened } = await fileCompactionTicket(sessionId, conversation);
   if (opened.state === 'awaiting-summary') {
     // The companion owns exact-tab discovery/opening even when Chrome is already
     // running. A cold process start alone cannot deliver a manual desktop request.
@@ -2728,7 +2761,10 @@ export async function resumeFromSavedSummary(sessionId: string, handoffId: strin
   return sessionControlsFor(sessionId);
 }
 export async function cancelSessionCompaction(sessionId: string): Promise<SessionControlsView> {
-  await controlledConversation(sessionId);
+  const conversation=await controlledConversation(sessionId);
+  if(!isBrowserChatProvider(chatProviderForConversation(conversation))){
+    (await import('./api/runner.js')).cancelApiCompaction(sessionId);return sessionControlsFor(sessionId);
+  }
   await cancelResumeNow(sessionId);
   changed();
   return sessionControlsFor(sessionId);
@@ -3784,6 +3820,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           });
         }
       }
+      // An opening's ACK may lag behind the paired page's native observations. Preserve its
+      // reserved session before the recorder can create a second chat for the same question.
+      // This bridge operation uses the exact task text and current local capability; seeing
+      // a tab or an assistant reply alone is not evidence of a delivered user message.
+      if (observations.some(item => item.kind === 'user_message'))
+        await attachRecordedOpeningInput(id, browserOf(req), observations);
       const result = await recordChatObservations(id, observations, agent);
       const superseded = await conversationWasSuperseded(id);
       if (!superseded && result.sessionId) await reconcileRecordedBrowserInput(result.sessionId, id, browserOf(req));
@@ -8062,6 +8104,7 @@ export function sessionInputActivity(summary: SessionSummary): InputActivity {
   const id = summary.conversationId;
   if (!id || summary.browserRecoveryDismissedAt !== undefined) return { possible: false, exact: false };
   const grant = activeUntil.get(id);
+  if (apiTurnStatus(summary.id, summary.activeTurnId ?? null)) return { possible: true, exact: true, model: 'other', ...(summary.activeTurnId ? { turnId: summary.activeTurnId } : {}) };
   const expiry = sessionActivityExpiresAt(summary);
   const mcpWindow = grant?.sessionId === summary.id && grant.mcpBacked && !grant.thinkingFailed &&
     (summary.activeTurnId || summary.lastTurnOutcome !== 'stopped') &&
@@ -8076,6 +8119,7 @@ export function sessionInputActivity(summary: SessionSummary): InputActivity {
 export function sessionActivityExpiresAt(summary: SessionSummary): number | null | undefined {
   const id = summary.conversationId;
   if (id && isChatBlocked(id)) return null;
+  if (apiTurnStatus(summary.id, summary.activeTurnId ?? null)) return Date.now() + CHAT_ACTIVE_MS;
   const grant = id ? activeUntil.get(id) : undefined;
   // Admission is already live work, even before a long call has a recorded result.
   // Use exact running ownership, never the conservative anonymous safety counter.
@@ -10294,6 +10338,7 @@ async function inspectOwedPickups(now: number): Promise<boolean> {
   }
   let queued = false;
   for (const reply of owed.values()) {
+    if (!isBrowserChatProvider(chatProviderForConversation(reply.conversationId))) continue;
     const session = await getSession(reply.sessionId);
     if (session?.conversationId !== reply.conversationId || isChatBlocked(reply.conversationId) ||
         stopRequestedFor(reply.conversationId) || await conversationWasSuperseded(reply.conversationId) ||
@@ -10674,6 +10719,8 @@ function noteCallAttribution(
     // canonical summary, not a later browser poll, owns the worker's context meter.
     if (currentConversation && filedSession?.id === sessionId && filedSession.conversationId === conversationId)
       noteAgentContextTokens(conversationId, filedSession.contextTokens);
+    // API runtime owns API activity. A local tool receipt cannot arm native browser recovery.
+    if (!isBrowserChatProvider(chatProviderForConversation(conversationId))) return;
     if (currentConversation && !endsActivity) lastAttributedCallAt.set(conversationId, Date.now());
     // The recorder has just withdrawn a completed end the page reported: the same server turn
     // went on calling tools. Whatever Goal was drafting for that end — or had filed as owed —

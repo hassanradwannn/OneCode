@@ -529,7 +529,7 @@ async function withBackgroundExecRecovery(
   const principal = executionPrincipal(caller.requestId, caller.sessionId);
   if (!principal) return result;
   const used = result.content.reduce((bytes, part) => bytes + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf8') : 0), 0);
-  const budget = Math.min(12_000, DEFAULT_MAX_OUTPUT_TOKENS * 4 - used) - 64;
+  const budget = Math.min(12_000, (publication.maxTextBytes ?? DEFAULT_MAX_OUTPUT_TOKENS * 4) - used) - 64;
   if (budget < 1_024) return result;
   const output = await offerBackgroundExecOutput(principal, publication, budget);
   // The page is the priority. Running-terminal reminders can wait for a later response.
@@ -658,7 +658,8 @@ export async function dispatch(
   surface: SurfaceId,
   run: () => Promise<ToolResult>,
   parent?: CallContext,
-  setupProfileId: string | null = null
+  setupProfileId: string | null = null,
+  trustedLocalDirect = false
 ): Promise<ToolResult> {
   const geminiBinding = parent?.caller.geminiBinding ?? inboundGeminiBinding();
   if (mcpProvider() === 'claude' && (!geminiBinding || geminiBinding.attribution !== 'claude_session_capability'))
@@ -684,6 +685,9 @@ export async function dispatch(
       ? { ...parent.caller }
       : { transportKey, requestId, conversationId: geminiBinding?.conversationId ?? null,
           sessionId: geminiBinding?.sessionId ?? null, setupProfileId, ...(geminiBinding ? { geminiBinding } : {}) },
+    // Only the in-process, current-checked API dispatch may pass an exact turn.
+    ...(parent?.localApiTurnId && parent.localApiCurrent
+      ? { localApiTurnId: parent.localApiTurnId, localApiCurrent: parent.localApiCurrent } : {}),
     outcome: null,
     evidence: emptyEvidence()
   };
@@ -693,7 +697,7 @@ export async function dispatch(
   const confirmUse = !parent && inboundProviderRequest() ? beginPluginToolCall(surface) : null;
   try {
     const result = await trackMcpRequest(() =>
-      trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent))
+      trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent && !trustedLocalDirect))
     );
     // In-process callers have no socket; resolving their outer invocation publishes it.
     if (!parent && !inboundPublication()) context.publication!.completedAt = Date.now();
@@ -737,6 +741,8 @@ async function dispatchTracked(
   run: () => Promise<ToolResult>,
   nested: boolean
 ): Promise<ToolResult> {
+  if (context.localApiCurrent && !await context.localApiCurrent())
+    return fail('API_TURN_NOT_CURRENT: no local tool ran.');
   if (context.caller.geminiBinding) {
     try { await validateLocalBinding(context.caller.geminiBinding); }
     catch (error) { return fail(localBindingRefusal(error, context.caller.geminiBinding)); }
@@ -763,7 +769,8 @@ async function dispatchTracked(
   // request id, identity-sensitive handlers (workspace/session/agents) see it before they
   // touch state. If the page is one tick late this stays null; only handlers that actually
   // require identity wait for their own exact mate. Ordinary absolute reads/execs never wait.
-  if (!nested && !context.caller.geminiBinding) setCallerConversation(context, callerConversation(name, startedAt, requestId));
+  if (!nested && !context.caller.geminiBinding && !context.caller.conversationId)
+    setCallerConversation(context, callerConversation(name, startedAt, requestId));
   await reconcileAgentRequestOwners().catch(error => {
     logWarn(`Worker ownership recovery deferred: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -1018,7 +1025,8 @@ async function dispatchTracked(
   if (!preAckPolicyRefusal && strictChatAllowlistEnabled(context.caller.conversationId)) {
     preAckPolicyRefusal = await conversationAccessRefusal(context.caller.conversationId);
   }
-  if (!nested && (requestId || context.caller.geminiBinding) && !preAckPolicyRefusal && !supersededConversation && !compacting) {
+  const exactApiOwner = context.localApiTurnId && context.localApiCurrent && await context.localApiCurrent();
+  if (!nested && (requestId || context.caller.geminiBinding || exactApiOwner) && !preAckPolicyRefusal && !supersededConversation && !compacting) {
     const explicitPoll = name === 'write_stdin' && args && typeof args === 'object'
       ? (args as { session_id?: number }).session_id : undefined;
     const principal = executionPrincipal(requestId, context.caller.sessionId);
@@ -1043,7 +1051,9 @@ async function dispatchTracked(
   if (admissionRefusal === STRICT_CHAT_REFUSAL) await recordUntrustedRefusalNotice(context);
   let handlerRan = false;
   markTiming('identity');
-  const invokeHandler = (): Promise<ToolResult> => {
+  const invokeHandler = async (): Promise<ToolResult> => {
+    if (context.localApiCurrent && !await context.localApiCurrent())
+      return fail('API_TURN_NOT_CURRENT: no local tool ran.');
     if (context.caller.geminiBinding && !localBindingIsCurrent(context.caller.geminiBinding)) {
       return Promise.resolve(fail(localBindingRefusal(undefined, context.caller.geminiBinding)));
     }
@@ -1236,6 +1246,7 @@ async function dispatchTracked(
     requestId: context.caller.requestId,
     conversationId: context.caller.conversationId,
     sessionId: context.caller.sessionId ?? null,
+    ...(context.localApiTurnId ? { localApiTurnId: context.localApiTurnId } : {}),
     ...(context.caller.geminiBinding ? { attributionMethod: context.caller.geminiBinding.attribution } : {}),
     ...(context.caller.geminiBinding?.inputTurn ? { geminiInputTurn: context.caller.geminiBinding.inputTurn } : {}),
     endsActivity: isFinish && !result.isError
@@ -1509,6 +1520,8 @@ export interface SurfaceRegistrar {
   registered(): string[];
   /** Same registered handler/schema, with a fresh child recording context and inherited proof. */
   invokeNested(name: string, args: unknown, parent: CallContext): Promise<ToolResult>;
+  /** Same direct guards, but only for an app-owned API turn revalidated by its dispatch owner. */
+  invokeOwned(name: string, args: unknown, parent: CallContext, current: () => Promise<boolean>): Promise<ToolResult>;
   descriptions(): Array<{ name: string; description: string; inputSchema: object }>;
 }
 
@@ -1550,6 +1563,17 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
         const entry = handlers.get(name);
         return entry ? entry.run(input) : fail('UNKNOWN_TOOL: this tool is not available on this connector.');
       }, parent);
+    },
+    async invokeOwned(name, args, parent, current) {
+      if (!parent.localApiTurnId || parent.localApiCurrent !== current ||
+          !parent.caller.sessionId || !parent.caller.conversationId || !await current())
+        return fail('API_TURN_NOT_CURRENT: no local tool ran.');
+      return dispatch(name, args, null, null, surface, async () => {
+        // Revalidate after all asynchronous policy checks, immediately before handler entry.
+        if (!await current()) return fail('API_TURN_NOT_CURRENT: no local tool ran.');
+        const entry = handlers.get(name);
+        return entry ? entry.run(args) : fail('UNKNOWN_TOOL: not available on this connector.');
+      }, parent, null, true);
     },
     register(name, config, handler) {
       names.push(name);

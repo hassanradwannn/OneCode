@@ -545,8 +545,23 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
             const text = storage
               ? `${prefix}_SESSION_STORAGE_UNAVAILABLE: no local tool ran. ${error.message} The existing task grant is retained; this is a storage failure, not evidence of revoked authorization.`
               : `${prefix}_SESSION_NOT_AUTHORIZED: no local tool ran. OneCode could not validate this exact task and receipt. Let it reconcile the existing task; do not resend an uncertain action.`;
+            // Fixed reasons let the assistant distinguish a stale key from an
+            // unobserved native ACK. Never disclose credentials or task identity.
+            const reason = error instanceof LocalBindingError ? error.admissionReason : null;
+            const explanation = reason === 'credential-unknown' || reason === 'credential-shape'
+              ? 'The task credential is missing, stale or malformed. Use the exact fresh credential from the latest OneCode-authored message; Setup permission is not task identity.'
+              : reason === 'proof-invalid' || reason === 'activation-changed' || reason === 'provider-mismatch'
+              ? 'This task or native turn was superseded or changed. A new OneCode-authored task needs its own credential; an older credential cannot be reused.'
+              : reason === 'blocked' ? 'This chat is explicitly blocked and cannot execute tools.'
+              : reason === 'receipt-pending' || reason === 'proof-unavailable'
+              ? 'The exact native question and current turn are not yet proven. OneCode retains the grant pending exact evidence; do not resend an uncertain operation.'
+              : 'The exact task is unproven; no action was taken.';
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text }] } });
+              result: { isError: true,
+                structuredContent: { refusal: storage ? 'task-storage-unavailable' : 'task-authorization',
+                  reason: storage ? 'storage-unavailable' : reason ?? 'proof-unavailable', executed: false },
+                content: [{ type: 'text', text: storage ? text : text + ' ' + explanation +
+                  ' Task authorization and command permissions are checked separately. Use the exact current task credential; compaction is not required to change permissions.' }] } });
             return new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
           }
           }) }));

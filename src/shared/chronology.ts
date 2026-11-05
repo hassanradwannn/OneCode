@@ -45,6 +45,8 @@ export interface Chronological {
   exchangeOrigin?: number | null;
   messageId?: string;
   inputId?: string;
+  /** A recorded browser Send receipt, not a tool injection or an inferred page role. */
+  inputDelivery?: string;
   /** Native ordered history proved this question precedes another question in the same scan. */
   historyBeforeQuestionId?: string;
   kind: string;
@@ -85,7 +87,7 @@ export function injectedUserMessage(entry: Chronological, turns?: TimelineTurns)
   // generation establishes injection; inputId alone is not transport evidence.
   return entry.kind === 'user_message' && !!entry.inputId &&
     (entry.messageId?.startsWith('input:') === true ||
-      (!!entry.turnId && !!turns && Object.hasOwn(turns, entry.turnId)));
+      (entry.inputDelivery !== 'confirmed' && !!entry.turnId && !!turns && Object.hasOwn(turns, entry.turnId)));
 }
 
 /** The journal keeps document-local ids; this derived relation names their one response. */
@@ -149,6 +151,15 @@ export function applyTurnIdentity(identity: TurnIdentity, event: Chronological):
     identity.nativeQuestion = { messageId: event.messageId, origin };
   }
   let turns = identity.timelineTurns ?? {};
+  if (event.kind === 'user_message' && event.source === 'app' && event.inputDelivery === 'confirmed' &&
+      event.inputId && event.messageId && event.turnId && turns[event.turnId] &&
+      turns[event.turnId]!.origin < origin && turns[event.turnId]!.endOrigin === undefined &&
+      turns[event.turnId]!.questionId !== event.messageId) {
+    // The input receipt owner attached a late automatic rotation to its one
+    // proven successor. Replace only this turn's stale previous question pointer;
+    // the native Send, immutable event history and source-turn provenance remain.
+    identity.timelineTurns = turns = { ...turns, [event.turnId]: { ...turns[event.turnId]!, questionId: event.messageId } };
+  }
   if (event.turnId && event.kind === 'turn_start' && !Object.hasOwn(turns, event.turnId)) {
     identity.timelineTurns = turns = { ...turns, [event.turnId]: { origin, time: event.time,
       ...(identity.nativeQuestion ? { questionId: identity.nativeQuestion.messageId } : {}) } };

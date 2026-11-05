@@ -334,7 +334,7 @@ const configSchema = z.object({
   ui: z.object({
     appearance: appearanceSchema.optional().catch(undefined),
     autoContinue: z.boolean().optional().default(true),
-    defaultChatModel: z.string().trim().min(1).max(80).optional().catch(undefined),
+    defaultChatModel: z.string().trim().min(1).max(200).optional().catch(undefined),
     defaultChatModelAffinity: chatModelAffinitySchema,
     defaultChatReasoning: z.enum(REASONING_EFFORTS).optional().catch(undefined),
     chatProvider: z.enum(CHAT_PROVIDERS).optional().default('gemini'),

@@ -73,7 +73,8 @@ export function codeModeHandler(
     const localBinding = parent?.caller.geminiBinding;
     const localProof = localBinding && localBindingIsCurrent(localBinding) &&
       localBinding.conversationId === parent.caller.conversationId && localBinding.sessionId === parent.caller.sessionId;
-    if (!parent || ((!localProof && (!parent.caller.requestId || !parent.caller.conversationId || !parent.caller.sessionId)) &&
+    const apiProof = parent?.localApiTurnId && parent.localApiCurrent && await parent.localApiCurrent();
+    if (!parent || ((!localProof && !apiProof && (!parent.caller.requestId || !parent.caller.conversationId || !parent.caller.sessionId)) &&
       !allowUnattributed)) {
       return failIdentity('CALLER_IDENTITY_REQUIRED: code mode needs exact companion chat/session proof or Allow unattributed calls enabled in app settings. No JavaScript or nested tool ran.');
     }

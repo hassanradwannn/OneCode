@@ -44,7 +44,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
@@ -98,7 +98,7 @@ import {
   MAX_GOAL_SYSTEM_PROMPT_CHARS
 } from '../shared/goal.js';
 import { DEFAULT_HANDOFF_LENGTH, DEFAULT_HANDOFF_PROMPT, HANDOFF_LENGTHS, MAX_HANDOFF_PROMPT_CHARS, type HandoffLength } from '../shared/handoff.js';
-import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
+import { selectedProviderNeedsBrowser, type AppState, type Config } from '../shared/types.js';
 import { $, ago, clockTime, compactNumber, disclosureChevron, el, icon, run, setIcon, toast } from './dom.js';
 import { APPROVAL_ANSWERED_TEXT, APPROVAL_PROGRESS_PREFIX, APPROVAL_WAITING_TEXT, type ApprovalCardView } from '../shared/approval-wait.js';
 import { openRowMenu, rowMenuOpenFor, toggleRowMenu, type RowMenuItem } from './row-menu.js';
@@ -998,7 +998,9 @@ function sessionRow(summary: SessionSummary): HTMLElement {
       }
     }
     items.push(
-      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its provider title stays the same."), run: () => startRename(summary) },
+      { action: 'rename', icon: 'i-pencil', label: () => t('Rename'), title: () => t("Rename this chat in the app. Its provider title stays the same."), run: () => startRename(summary) }
+    );
+    if (provider !== 'openrouter') items.push(
       { action: 'open', icon: 'i-out', label: () => t('Open in browser'), title: () => t("Open this chat in your browser"), run: () => void run(api.openSessionChat(summary.id)) },
       { action: 'copy-link', icon: 'i-copy', label: () => t('Copy link'), title: () => t("Copy this chat's provider link"),
         run: async () => {
@@ -2098,6 +2100,7 @@ async function refreshSessionControls(): Promise<void> {
   if (planHost.dataset.sessionId !== (id ?? '')) renderAgentPlan(planHost, id, null);
   const menu = $('sessionControls');
   if (controlledSessionId !== id || controlledSelection !== selectionGeneration) {
+    apiContextView=null;
     // Retire the previous selection's projection before awaiting the new owner's IPC.
     // Replace the translation binding too, so a locale refresh cannot revive its status.
     ui($('sessionControlStatus'), 'textContent', () => '');
@@ -2143,10 +2146,17 @@ async function refreshSessionControls(): Promise<void> {
   controlledCanSendDirectly = controls?.canSendDirectly === true;
   controlledCanSendQueuedWhenIdle = controls?.canSendQueuedWhenIdle === true;
   controlledRecovery = controls?.recovery ?? [];
+  apiLiveActivity = controls?.apiActivity ?? null;
+  apiContextView=controls?.apiContext??null;
+  const config=deps.state()?.config;
+  if(config)paintContextMeter(sessions.find(row=>row.id===id)??null,config,confirmedComposerModel(),selectedChatProvider(),apiContextView);
   paintDeliveryControls();
+  paintPendingInputs();
   paintStateLine();
   menu.hidden = !controls;
   $('compactSession').hidden = !controls;
+  const compactLabel=$('compactSession').querySelector('span');
+  if(compactLabel) ui(compactLabel,'textContent',()=>isBrowserChatProvider(selectedChatProvider())?t('Compact & resume'):t('Compact context'));
   if (!controls) { $('cancelCompaction').hidden = true; return; }
   const objective = $<HTMLTextAreaElement>('sessionObjective');
   if (objective.dataset.sessionId !== id || !objective.dataset.edited) {
@@ -2164,8 +2174,8 @@ async function refreshSessionControls(): Promise<void> {
     $<HTMLSelectElement>('loopDelivery').value = controls.loopAfterTurn ? 'after-turn' : 'finish';
   paintLoopDeliveryTitle();
   paintAutomationSwitch();
-  $<HTMLButtonElement>('compactSession').disabled = !!controls.blocked || !!controls.job?.busy;
-  $('cancelCompaction').hidden = !controls.job?.busy;
+  $<HTMLButtonElement>('compactSession').disabled = !!controls.blocked || !!controls.job?.busy || controls.apiActivity?.phase==='compacting' || controls.apiActivity?.compactionPending===true;
+  $('cancelCompaction').hidden = !controls.job?.busy && !(controls.apiActivity?.phase==='compacting' && controls.apiActivity.manual);
   ui($('sessionControlStatus'), 'textContent', () => controls.blocked === 'worker' ? t("This sub-agent is managed by its prime.") : controls.blocked === 'blocked' ? t("This chat is blocked.") : controls.job?.busy ? providerText("Compaction is running in Gemini.") : '');
 }
 
@@ -3852,6 +3862,8 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     case 'turn_start':
       return el('p', 'meta', () => event.detail ? t("Turn reopened — {0}", [event.detail]) : t("Turn started"));
     case 'turn_end': {
+      if (event.source === 'app' && event.reason === 'steer')
+        return el('p', 'meta is-progress', () => t('Direction updated; task continues.'));
       if (stoppedTurnEnd(event, context?.history ?? events)) {
         const line = el('p', 'meta is-progress thinking-line turn-stopped');
         line.append(icon('i-check-circle', 'ico thinking-ico'), el('span', '', () => providerText("Stopped. Gemini no longer shows this turn running.")));
@@ -4126,6 +4138,8 @@ function retainTimelinePage(source: SessionEvent[], direction: 'older' | 'newer'
  * things going on; they are one thing with three steps, and this is that thing.
  */
 interface CompactionBlock {
+  api?: import('../shared/session.js').ApiCompactionProgress;
+  apiMessage?: string;
   token: string;
   /** The row this card takes the place of. */
   seq: number;
@@ -4193,6 +4207,12 @@ function timelineItems(source: SessionEvent[]): TimelineItem[] {
     return block;
   };
   for (const event of source) {
+    if(event.kind==='progress' && event.source==='app' && event.apiCompaction && /^api-[a-f0-9-]{36}$/i.test(event.apiCompaction.id)){
+      const block=blockFor(event.apiCompaction.id,event);
+      block.seq=Math.min(block.seq,event.origin??event.seq);
+      block.api={...block.api,...event.apiCompaction};block.apiMessage=event.message.text;
+      continue;
+    }
     const marker = continuationMarker(event);
     if (marker && event.kind === 'user_message') {
       const block = blockFor(marker.token, event);
@@ -4273,6 +4293,20 @@ const ABANDONED_NOTE = /^Compact & Resume abandoned\s*[\u2014-]\s*/i;
  * in this timeline. Refused source calls are compatible with a still-running handoff.
  */
 function compactionState(block: CompactionBlock): { text: string; tone: CompactionTone } {
+  const api=block.api;
+  if(api){
+    const part=api.part&&api.total?t(' ({0}/{1})',[String(api.part),String(api.total)]):'';
+    if(api.state==='resumed')return {text:t('Task resumed in this chat'),tone:'good'};
+    if(api.state==='saved')return {text:api.manual?t('Summary saved — ready to continue in this chat'):t('Summary saved — resuming this chat…'),tone:api.manual?'good':'wait'};
+    if(api.state==='unchanged')return {text:t('Context already fits — no replacement needed'),tone:'good'};
+    if(api.state==='cancelled')return {text:t('Cancelled — original context retained'),tone:'wait'};
+    if(api.state==='failed')return {text:t('Failed — {0}',[block.apiMessage??api.reasonCode??t('Summary could not be saved')]),tone:'bad'};
+    if(api.state==='retrying')return {text:t('Retrying the handoff{0}',[api.attempt?t(' (attempt {0})',[String(api.attempt)]):'']),tone:'wait'};
+    if(api.state==='saving')return {text:t('Saving reduced context…'),tone:'wait'};
+    if(api.state==='merging')return {text:t('Merging the handoff{0}…',[part]),tone:'wait'};
+    if(api.state==='summarizing')return {text:t('Writing the summary{0}…',[part]),tone:'wait'};
+    return {text:t('Saving original history…'),tone:'wait'};
+  }
   const chars = block.handoff ? t(" ({0} characters)", [compactNumber(block.handoff.chars)]) : '';
   if (block.resume) return { text: t("New chat opened at {0}{1}", [clockTime(block.resume.time), chars]), tone: 'good' };
   const abandoned = [...block.notes].reverse().find((note) => ABANDONED_NOTE.test(note.message.text));
@@ -4318,6 +4352,29 @@ function compactionRow(block: CompactionBlock, previous?: HTMLElement, latest = 
   ui(box.querySelector<HTMLElement>('summary .state')!, 'textContent', () => compactionState(block).text);
 
   const raw = el('div', 'raw');
+  if(block.api){
+    const api=block.api;
+    raw.append(el('p','raw-facts',()=>t('Original history is retained. This API task resumes in the same chat.')));
+    if(api.state!=='unchanged'){
+      const at=api.stage?['archive','summary','save','resume'].indexOf(api.stage):api.state==='archiving'?0:['summarizing','merging','retrying'].includes(api.state)?1:api.state==='saving'?2:['saved','resumed'].includes(api.state)?3:0;
+      const steps=['Save original history','Write and merge the handoff','Save reduced context','Resume this chat'];
+      const list=el('ol','compaction-stages');
+      for(const [index,label] of steps.entries()){
+        const done=api.state==='resumed'||index<at;
+        const row=el('li','raw-facts');row.append(icon(done?'i-check':'i-clock'),el('span','',()=>t(label)));
+        if(index===at && !['resumed','saved','failed','cancelled'].includes(api.state))row.setAttribute('aria-current','step');
+        list.append(row);
+      }
+      raw.append(list);
+    }
+    if(block.apiMessage)raw.append(el('p','raw-facts',block.apiMessage));
+    if(api.beforeTokens!==undefined && api.afterTokens!==undefined)raw.append(el('p','raw-facts',()=>t('Estimated input context: {0} → {1} tokens',[compactNumber(api.beforeTokens!),compactNumber(api.afterTokens!)])));
+    if(api.summary){raw.append(el('h4','',()=>t('Saved handoff')),renderedMarkdown(api.summary.text));}
+    if(latest && api.state==='failed' && selectedId){
+      const id=selectedId,retry=el('button','btn',()=>t('Retry compaction')) as HTMLButtonElement;retry.type='button';
+      retry.addEventListener('click',()=>{retry.disabled=true;void run(window.api.compactSession(id)).finally(()=>{if(retry.isConnected)retry.disabled=false;});});raw.append(retry);
+    }
+  }
   if (block.prompt) {
     raw.append(el('h4', '', () => t("Brief request")));
     // The routing marker is the app's, not the user's; the card already says what this is.
@@ -4389,6 +4446,7 @@ function itemSignature(item: TimelineItem): string {
     const { block } = item;
     return [
       block.token,
+      JSON.stringify([block.api??null,block.apiMessage??null]),
       block.prompt?.seq ?? '',
       block.brief ? `${block.brief.seq}:${block.brief.message.chars}:${block.brief.renderedHtml?.chars ?? 0}:${block.brief.state}` : '',
       block.end ? `${block.end.seq}:${block.end.outcome}:${block.end.detail ?? ''}` : '',
@@ -4724,7 +4782,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   applyComposerSessionModel(selectedId ? `${selectedId}:${selectionGeneration}` : null, composerSessionSelection(summary) ?? null,
     acceptedAutomaticModel(summary, pendingComposerInputs));
   const config = deps.state()?.config;
-  if (config) paintContextMeter(summary, config, confirmedComposerModel());
+  if (config) paintContextMeter(summary, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   const project = selectedLocalProject();
   $('chatProjectContext').hidden = !project;
   $('chatProjectName').textContent = project?.name ?? '';
@@ -5251,7 +5309,19 @@ const NATIVE_STEP_NOW = /^\S+ing\b/i;
  * words it names itself. A Gemini step wears the globe its rows use. Thinking is not a step and does
  * not look like one: it shows Gemini's own sign for it, a white dot that breathes.
  */
+let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null;
+let apiContextView:{tokens:number;limit:number}|null=null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
+  if (controlledSessionId === selectedId && apiLiveActivity) {
+    const labels: Partial<Record<import('../main/api/activity.js').ApiActivity['phase'], string>> = {
+      catalog: t('Loading model information'), preparing: t('Preparing API request'), requesting: t('Waiting for provider response'),
+      compacting: t('Compacting context — running tasks are retained')
+    };
+    const label = labels[apiLiveActivity.phase];
+    if (label) return { text: apiLiveActivity.phase==='compacting' ? apiLiveActivity.reason || label : label, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
+  }
+  if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'recovering')
+    return { text: t('Reconnecting to the model (retry {0}) — running tasks are retained', [String(apiLiveActivity.attempt ?? 1)]), icon: 'i-retry', working: true };
   const call = runningToolsFor === selectedId ? runningTools.at(-1) : undefined;
   const open = tracesFor === selectedId ? openTurnId(events) : null;
   const said = open ? traces[open]?.findLast(item => item.kind === 'now') : undefined;
@@ -5260,6 +5330,8 @@ function liveActivity(): { text: string; icon: string; working: boolean; since?:
       : { text: said.text, icon: '', working: false };
   }
   if (call) return { text: call.title, icon: KIND_ICON[call.kind] ?? KIND_ICON.other, working: true, since: call.since };
+  if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'preparing-tool')
+    return { text: t('Preparing {0}', [apiLiveActivity.tool ?? t('tool call')]), icon: KIND_ICON.other, working: true };
   const thinking = { text: t('Thinking'), icon: '', working: false };
   // A message not yet recorded opens a turn that has done nothing visible so far.
   if (messageOnItsWay()) return thinking;
@@ -5531,6 +5603,9 @@ function workingLabel(turnId: string, elapsedSeconds: number): string {
 }
 
 function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad'; working?: boolean; ticking?: boolean } {
+  if(controlledSessionId===selectedId && controlledSelection===selectionGeneration && detailFor===selectedId &&
+      apiLiveActivity?.phase==='compacting' && (apiLiveActivity.manual || !controlledTurnId))
+    return {text:t('Compacting saved context'),tone:'is-live',working:true,ticking:true};
   if (!deps.state()?.config.ui.developerMode) {
     const summary = sessions.find(entry => entry.id === selectedId);
     if (!summary || detailFor !== selectedId) return { text: '', tone: '' };
@@ -6282,7 +6357,7 @@ let bridgePresent = true;
  */
 function queuedWaitReason(entry: InputEntry): 'extension' | 'tool-call' | 'chatgpt-project' | 'chatgpt-project-failed' | null {
   if (entry.state !== 'queued' || entry.error || entry.dueAt > Date.now() || entry.delivery === 'tool') return null;
-  if (!bridgePresent) return 'extension';
+  if (entry.chatProvider !== 'openrouter' && !bridgePresent) return 'extension';
   const project = chatgptProjectWait(entry);
   if (project) return project;
   if (entry.mode === 'auto' && entry.sessionId && entry.sessionId === runningToolsFor && runningTools.length > 0 && !entry.directTurn && !entry.steerTurnId) return 'tool-call';
@@ -6294,7 +6369,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyRouteSettling(state.status.routeSettlingUntil ?? 0);
   if (bridgePresent !== bridge.present) { bridgePresent = bridge.present; paintPendingInputs(); }
   if (visible && selectedId) void refreshSessionControls();
-  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel());
+  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   applyChatModels(config, previous, selectedChatProvider());
 
   applyChatChecked($<HTMLInputElement>('autoCompact'), config.compaction.auto, previous?.compaction.auto);
@@ -6377,7 +6452,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyGoal(state, previous);
 
   // Extension bridge. Connecting is automatic, so this reports rather than asks.
-  const browserRequired = browserExtensionRequired(config);
+  const browserRequired = selectedProviderNeedsBrowser(config);
   $<HTMLButtonElement>('bridgeUnpair').disabled = !bridge.paired;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
   ui($('bridgeState'), 'textContent', () => !browserRequired
@@ -6442,6 +6517,18 @@ function historicalAutomaticInput(entry: InputEntry): boolean {
   return automaticInput(entry) && ['failed', 'cancelled'].includes(entry.state) && !!entry.error;
 }
 
+function apiPendingInputStatus(entry: InputEntry): string | null {
+  if (!entry.chatProvider || isBrowserChatProvider(entry.chatProvider) || entry.error || !['queued', 'browser'].includes(entry.state)) return null;
+  const activity = controlledSessionId === selectedId && apiLiveActivity?.inputId === entry.id ? apiLiveActivity : null;
+  if (!activity && entry.steerTurnId && controlledUnfinishedTurnId === entry.steerTurnId) return t('Waiting for the current step to finish');
+  if (activity?.phase === 'catalog') return t('Loading model information…');
+  if (activity?.phase === 'requesting') return t('Waiting for provider acceptance…');
+  if (activity?.phase === 'recovering') return t('Retrying provider connection…');
+  if (activity?.phase === 'compacting') return t('Compacting context before sending…');
+  if(entry.apiRecovery)return t(entry.apiRecovery);
+  return t('Preparing API request…');
+}
+
 function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   const row = el('div', 'pending-message');
   row.classList.toggle('is-delivered', !entry.error && ['sent', 'tool'].includes(entry.state));
@@ -6449,13 +6536,15 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   const held = routeHeld(entry);
   row.classList.toggle('is-route-held', held);
   const waiting = queuedWaitReason(entry);
+  const apiStatus = apiPendingInputStatus(entry);
+  row.classList.toggle('has-api-status', !!apiStatus);
   row.classList.toggle('is-waiting', !!waiting && !held);
   row.dataset.inputId = entry.id;
   row.dataset.timelineKey = `input:${entry.id}`;
   if (!visibleInputIds.has(entry.id)) row.classList.add('is-entering');
   visibleInputIds.add(entry.id);
   if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
-  const status = () => entry.error ? t(entry.error) : held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued"));
+  const status = () => entry.error ? t(entry.error) : apiStatus ?? (held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued")));
   const files = el('div', 'message-attachments');
   if (entry.attachments?.length) files.append(...entry.attachments.map(file => attachmentCard(file)));
   for (const image of entry.images ?? []) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; files.append(preview); }
@@ -6467,7 +6556,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   }
   const receipt = el('span', 'pending-message-status');
   ui(receipt, 'title', status); ui(receipt, 'aria-label', status);
-  if (entry.error || entry.state === 'failed' || held || waiting) {
+  if (apiStatus || entry.error || entry.state === 'failed' || held || waiting) {
     ui(receipt, 'textContent', status);
   }
   else receipt.append(icon(['sent', 'tool'].includes(entry.state) ? 'i-check' : 'i-clock'));
@@ -6575,7 +6664,7 @@ function paintPendingInputs(): void {
   const host = $('inputQueue');
   const previous = new Map([...host.querySelectorAll<HTMLElement>(':scope > .pending-message')].map(row => [row.dataset.inputId, row]));
   const next = rows.filter(entry => !historicalAutomaticInput(entry)).map(entry => {
-    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), entry.stagesApplied,
+    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.apiRecovery, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
       entry.stages, entry.attachments?.map(file => file.id), entry.images?.map(image => [image.name, image.dataUrl.length]),
       hasLaterModelActivity(entry.deliveredAt ?? entry.offeredAt ?? entry.createdAt)]);
     const old = previous.get(entry.id);
@@ -7042,6 +7131,7 @@ function clearSelectedProviderReadiness(): void {
   if (status) { status.hidden = true; status.textContent = ''; }
 }
 async function ensureSelectedProvider(id: string, selection: number, poll = false): Promise<void> {
+  if (!isBrowserChatProvider(selectedChatProvider())) { clearSelectedProviderReadiness(); return; }
   if (id !== selectedId || selection !== selectionGeneration || !api.followSessionTab) return;
   // Poll the exact selection's receipt independently of transcript controls and
   // window focus. `chatView` is a hidden Timeline/Handoff picker, not this screen.
@@ -7170,7 +7260,8 @@ export function initChat(next: Deps): void {
   const docks = createWorkspaceDocks(chatHost);
   workspaceDocks = docks;
   artifactPanel = createArtifactPanel({ docks, selectedSession: () => selectedId, selectSession });
-  workbenchBrowserPanel = createWorkbenchBrowserPanel({ onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); } });
+  workbenchBrowserPanel = createWorkbenchBrowserPanel({ onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); },
+    onOpen: () => docks.activateSurface('browser') });
   mediaPanel = createMediaPanel({ onAvailabilityChanged: () => docks.sync(), onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); } });
   const agentToolGroups = new Map<string, HTMLElement>();
   const agentSays = new Map<string, { text: string; row: HTMLElement }>();
@@ -7204,7 +7295,7 @@ export function initChat(next: Deps): void {
   initChatModels(() => {
     paintLoopDelivery();
     const config = deps.state()?.config;
-    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel());
+    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   });
   $('queueAtFinish').addEventListener('click', () => {
     if ($('queueAtFinish').hidden) return;

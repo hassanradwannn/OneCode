@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 8;
+  const VERSION = 9;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -137,9 +137,18 @@
         const turnId = own(turn, 'id');
         if ((turnId !== message && turnId !== `new-human-message-uuid-${message}`) || own(turn, 'role') !== 'user') return [];
         const items = own(turn, 'items');
-        if (!Array.isArray(items) || items.length !== 1) return [];
-        const item = own(items, '0'), text = own(item, 'text');
-        const eligible = own(item, 'kind') === 'text' && own(item, 'id') === `${message}:0` && own(item, 'format') === 'plain' &&
+        if (!Array.isArray(items) || !items.length || items.length > 21) return [];
+        // A question with files may have public media items beside its text.
+        // Read only the sole plain text item and its exact native item identity;
+        // never flatten media, concatenate arbitrary items or read their payloads.
+        const texts = [];
+        for (let index = 0; index < items.length; index++) {
+          const item = own(items, String(index));
+          if (own(item, 'kind') === 'text') texts.push({ item, index });
+        }
+        if (texts.length !== 1) return [];
+        const { item, index } = texts[0], text = own(item, 'text');
+        const eligible = own(item, 'id') === `${message}:${index}` && own(item, 'format') === 'plain' &&
           typeof text === 'string' && text.length > 0 && text.length <= 240000;
         if (eligible) counts.eligibleSources++;
         return eligible ? [{ text }] : [];

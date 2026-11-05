@@ -3382,6 +3382,7 @@ nav button:hover, nav button.is-sel { background: var(--hover); color: var(--ink
 .pending-message .dock-action .ico { --ico: 15px; }
 .pending-message .dock-action:hover { color: var(--ink); background: var(--hover); }
 .pending-message-status .ico { --ico: 13px; --glyph: 15px; }
+.pending-message.has-api-status .pending-message-status { width: max-content; max-width: min(70vw, 360px); white-space: nowrap; justify-content: flex-end; }
 .pending-message.is-delivered .pending-message-status { right: 2px; width: 22px; }
 .pending-message .dock-action.delivery-retry { right: 28px; }
 .said.is-user.has-input-receipt { position: relative; margin-bottom: 22px; }

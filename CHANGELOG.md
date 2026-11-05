@@ -1,5 +1,57 @@
 # OneCode changelog
 
+## [0.9.0] — 2026-11-06
+
+Promote the complete Beta 0.9.0–0.9.11 repair series to Stable: opt-in OpenRouter sessions and model discovery; provider-generic local tools, code mode, plugins, skills and workers; live effective/written permissions and exact task credentials; boundary steering and inference-only recovery; visible commands/background work; terminal publication acknowledgment; model-aware output and request budgets; earlier topic names; Claude attachment/draft/transcript handling; discoverable sidebar browsing; Setup navigation; and archived API context compaction with validation recovery and the normal Desktop Compact & Resume card. Preserve Stable/Beta profile and updater isolation. See [Stable notes](docs/release-notes/v0.9.0.md).
+
+## [0.9.11 Beta] — 2026-11-05
+
+Present API context compaction through the existing Compact & Resume card, with durable archive, summary, retry, save and actual request-accepted resume stages. Separate pre-Send recovery information from delivery errors. Retry invalid summary output up to three attempts per part, progressively requesting shorter handoffs and expanding truncated/empty output budgets within the model ceiling. Keep typed failure reasons and content-free diagnostics, exact archives, cached valid parts and existing task/process ownership. See [Beta notes](docs/release-notes/beta-v0.9.11.md).
+
+## [0.9.10 Beta] — 2026-11-05
+
+Add local checkpointed API context compaction at model/tool boundaries, bounded hierarchical handoff summaries and recovery of typed upstream context rejections. Verify and retain the original source archive before atomically replacing working context. Preserve the first/latest user messages, complete recent tool exchanges, unacknowledged output pages and existing turn/process/worker ownership. Support manual Compact context for idle/failed chats and queued compaction for live tasks; honour the automatic-compaction toggle. Show compaction progress and the effective saved-context estimate. Disable OpenRouter's middle-out truncation so the local receipt owner knows which tool results were actually delivered. See [Beta notes](docs/release-notes/beta-v0.9.10.md).
+
+## [0.9.9 Beta] — 2026-11-05
+
+Keep Setup's provider picker and API-key form reachable for OpenRouter. Exclude hidden transport steps from active-step and completion calculation, show the API Next action and use saved secure-key readiness independently of browser/tunnel state. Provider switches stay on their setup page; Back from Folder reaches the provider form. Add a visible Back to chats exit. See [Beta notes](docs/release-notes/beta-v0.9.9.md).
+
+## [0.9.8 Beta] — 2026-11-05
+
+Read a native Claude question's sole exact plain text item alongside media without importing media payloads. Suppress lossy app-frame readback until exact source or structured-chip proof is available, and recover historical chip presentation without creating Send authority. Preserve an upload's exact draft across one editor remount, accept positively settled tiles and re-read delayed upload observations without uploading again. Request API titles at the first validated response, reject directory-style metadata and upgrade older folder names once while preserving manual names. Make the Workbench browser discoverable before a manual tab exists and reveal an authorized new tab only in its selected chat. See [Beta notes](docs/release-notes/beta-v0.9.8.md).
+
+## [0.9.7 Beta] — 2026-11-05
+
+Raise the local API JSON transport limit from 2 to 16 MiB and the durable thread allowance from 6 to 32 MiB, independently of model context limits. Preserve existing chat history, tool outcomes and ownership. Share validated model definitions between the UI and runtime using the existing catalog owner, with expiry, explicit refresh, credential invalidation and independent cancellation. Show pending preparation/provider-wait stages and record safe per-phase timing/byte metadata without fabricating delivery receipts. See [Beta notes](docs/release-notes/beta-v0.9.7.md).
+
+## [0.9.6 Beta] — 2026-11-05
+
+Use model/context-aware API response budgets and automatically continue length-truncated responses without executing incomplete tool proposals. Repair API terminal result publication and acknowledgement, carry normal terminal renderings without the former 12K-character clip, and re-offer unacknowledged restored prefixes. Preserve session/incarnation ownership and incomplete/failed delivery. Detect unchanged exec-refusal loops across model decisions and guide owned hung-process interruption without launching another command. See [Beta notes](docs/release-notes/beta-v0.9.6.md).
+
+## [0.9.5 Beta] — 2026-11-05
+
+Keep API tasks alive through steering and recover transient inference failures from saved tool results. Respect provider retry delays, show reconnecting/recovered status and safe HTTP/transport failure explanations, and retain running processes. Apply direction changes at model/tool boundaries without aborting inference or dispatched tools; explicitly skip proposals not yet executed. Extend long-task bounds beyond the earlier twenty-step cap. Stable remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.5.md).
+
+## [0.9.4 Beta] — 2026-11-05
+
+Make API Steer interrupt the exact current generation instead of silently queuing. Preserve in-flight tool receipts and background-process custody. Publish separate public progress segments around tools, trailing streaming updates and exact live command activity. Use API runtime activity in Desktop/Remote projections and keep API chats out of browser readiness/recovery. Generate short topic titles with a bounded tool-free request; protect manual names and do not retry uncertain metadata requests. Include exact schema feedback after rejected arguments and stronger workspace/artifact guidance. Stable preparation remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.4.md).
+
+## [0.9.3 Beta] — 2026-11-05
+
+Add a shared local API harness and adapter interface. OpenRouter can spawn, report and reuse broker-owned workers, compose Core tools, call installed plugins and import/read managed skills without a browser. Recheck live grants and Read-only; retain exact turn identity through nested calls and cancellation. Restore API model IDs and never repeat uncertain API requests after restart. Direct written capability grants update the existing settings owner. Recheck transient task attachments at handler admission and recognize an exact credential after leading whitespace. Stable remains 0.8.9; real-provider and installed acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.3.md).
+
+## [0.9.2 Beta] — 2026-11-05
+
+Separate OpenRouter API readiness from browser-extension warnings without disconnecting existing browser-provider sessions. Attach OneCode API tool events to their exact turns, report the selected model route, use model-catalog context estimates instead of a global reference, and stop labeling unavailable API automatic compaction as active. Raise the previously restrictive completion budget for capable models and distinguish API truncation from browser errors. Improve first-turn tool-availability instructions across providers and briefly recheck a temporarily ambiguous task attachment after refresh, preserving strict credentials and revocations. Full signed-in native acceptance remains pending. See [Beta notes](docs/release-notes/beta-v0.9.2.md).
+
+## [0.9.1 Beta] — 2026-11-04
+
+Correct OpenRouter Setup to prompt directly for an API key instead of browser/extension installation. Save and remove keys through protected credential storage, invalidate model discovery after key changes, and offer the openrouter/free routing model when no exact model is selected. Preserve OpenRouter reasoning metadata in subsequent API messages without displaying it as an answer; retain OneCode local tool/session permissions. The free route uses an explicitly estimated local context budget because its upstream model varies. This remains an experimental Beta with live-provider acceptance pending. See [Beta notes](docs/release-notes/beta-v0.9.1.md).
+
+## [0.9.0 Beta] — 2026-11-04
+
+Experimental OpenRouter API provider with OneCode-owned sessions, model discovery, local tool calls, and bounded request handling. Repair late native acknowledgment during automatic ChatGPT turn rotation without relaxing task capabilities; preserve distinct prior/new credentials across live and restarted sessions. This is a Beta prerelease for Windows and Linux testing, not a Stable release. OpenRouter automatic context compaction and signed-in native acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.0.md).
+
 ## [0.8.9] — 2026-11-03
 
 Approve existing native paths explicitly supplied in trusted Desktop/Remote user messages through the existing root owner. Preserve exact-file scope, folder contents, canonical path validation, existing aliases, revocation and capability settings. Remote resolves recorded ChatGPT sandbox links to their native chat on the phone, handles blocked popups visibly and hides inline provider reference markers. Full Windows/Linux packages and compatible capsules ship together. See [notes](docs/release-notes/v0.8.9.md) and [acceptance](docs/release-acceptance/v0.8.9.md).

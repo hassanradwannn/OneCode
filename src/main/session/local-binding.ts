@@ -37,6 +37,9 @@ export type ChatgptBindingProof = LocalBindingProof;
 type Grant = { id: string; digest: string; proof: LocalBindingProof; issuedAt: number; activated?: BrowserBindingEvidence };
 type Ledger = { version: 2; installationId: string; grants: Grant[] };
 const INIT_RETRY_INTERVAL_MS = 1_000;
+// A browser refresh can temporarily hide the exact session attachment. Recheck
+// briefly without admitting a tool, retiring the grant or replaying the task.
+const ATTACHMENT_RECHECK_MS = 2_000;
 const digest = (key: string) => createHash('sha256').update(key).digest('hex');
 const PREFIX = /^\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})\r?\n/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -242,7 +245,14 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
     if (evidence.attribution !== attribution) fail('provider-mismatch');
     const grant = [...grants.values()].find(row => row.id === evidence.bindingId);
     if (!grant) fail();
-    const current = await status(grant!);
+    // Refresh can become ambiguous after ingress. Recheck the same exact grant
+    // at handler admission as well, without changing its task or turn.
+    const deadline = performance.now() + ATTACHMENT_RECHECK_MS;
+    let current = await status(grant!);
+    while ((current.state === 'unresolved' || current.state === 'pending') && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      current = await status(grant!);
+    }
     if (current.state !== 'ready' || current.conversationId !== evidence.conversationId ||
         current.sessionId !== evidence.sessionId || !sameTurn(current.turn, evidence.inputTurn)) fail();
   }
@@ -261,7 +271,9 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
       return { args };
     }
     const input = args as Record<string, unknown>;
-    const code = typeof input.code === 'string' ? input.code : '';
+    // Leading blanks/BOM cannot turn an exact key into an unattributed caller.
+    // Never scan later statements or other comments for a credential.
+    const code = typeof input.code === 'string' ? input.code.replace(/^[\uFEFF\s]*(?=\/\/ onecode-session:)/, '') : '';
     const hasKey = Object.prototype.hasOwnProperty.call(input, 'onecode_session_key');
     if (!hasKey && !code.startsWith('// onecode-session:')) {
       if (provider === 'claude') fail('credential-unknown');
@@ -276,13 +288,14 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
     const grant = grants.get(digest((hasKey ? input.onecode_session_key : match![1]) as string));
     if (!grant) fail('credential-unknown');
     const deadline = performance.now() + INPUT_RECEIPT_WAIT_MS;
+    const attachmentDeadline = performance.now() + ATTACHMENT_RECHECK_MS;
     for (;;) {
       const current = await status(grant!);
       if (current.state === 'invalid') { await retireInvalid(grant!); fail('proof-invalid'); }
       // Block is a reversible policy fence, not proof that the task receipt vanished.
       // Refuse immediately without deleting the grant or dispatching a tool.
       if (current.state === 'blocked') fail('blocked');
-      if (current.state === 'unresolved') fail('proof-unavailable');
+      if (current.state === 'unresolved' && performance.now() >= attachmentDeadline) fail('proof-unavailable');
       if (current.state === 'ready') {
         const stripped = { ...input };
         delete stripped.onecode_session_key;

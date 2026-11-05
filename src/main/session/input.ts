@@ -13,7 +13,7 @@ import { localBindingInstructions, hasCurrentLocalBinding, usesLocalTaskCapabili
 import { positionOf } from '../../shared/chronology.js';
 import { matchesAppPrompt, userPromptText } from '../../shared/user-prompt.js';
 import { randomUUID } from 'node:crypto';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -60,7 +60,7 @@ export const inputArgs = z.object({
   mode: z.enum(['auto', 'after-turn', 'finish']),
   afterTurn: z.boolean().optional(),
   dueAt: z.number().int().nonnegative(),
-  model: z.string().max(80).nullable(),
+  model: z.string().max(200).nullable(),
   /** Explicit native mode from the selected observed model choice. */
   modelSurface: z.enum(['chat', 'work']).optional(),
   reasoningEffort: z.enum(REASONING_EFFORTS).nullable()
@@ -113,6 +113,9 @@ const entrySchema = inputArgs.extend({
   requestedModelSurface: z.enum(['chat', 'work']).optional(),
   /** Saved interval authority; only the scheduler's internal admission supplies this. */
   scheduleId: z.string().uuid().optional(),
+  /** Local broker receipt, added only by the API worker transport, never model arguments. */
+  apiWorker: z.object({ runId: z.string().uuid(), agentId: z.string().regex(/^worker-\d+$/),
+    messageIds: z.array(z.string()).max(1000) }).strict().optional(),
   steerReady: z.literal(true).optional(),
   steerClosedOnce: z.literal(true).optional(),
   warmupRecovery: warmupRecoverySchema.optional(),
@@ -187,6 +190,8 @@ const entrySchema = inputArgs.extend({
     nextAt: z.number().int().positive().optional(), stoppedAt: z.number().int().positive().optional() }).optional(),
   cancelledByUser: z.literal(true).optional(),
   error: z.string().max(200).optional(),
+  /** Live API preparation/recovery information; never a delivery-failure receipt. */
+  apiRecovery: z.string().max(500).optional(),
   owner: z.string().nullable(),
   /** The paired browser that obtained this exact durable claim; not a model-supplied field. */
   claimedBrowser: z.string().regex(/^[a-z0-9]{16,64}$/).optional(),
@@ -271,6 +276,12 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   const [end] = await readRecentEvents(sessionId, 1, { kinds: ['turn_start', 'turn_end'] });
   const session = await getSession(sessionId);
   if (!session?.conversationId || isChatBlocked(session.conversationId)) return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn: null, browserAllowed: false, settled: false };
+  if (!isBrowserChatProvider(chatProviderForConversation(session.conversationId))) {
+    const directTurn = session.activeTurnId ? await steeringSource(sessionId, session.conversationId, session.activeTurnId) : null;
+    const executing = runningToolProgress(session.conversationId) !== null;
+    return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn,
+      browserAllowed: !session.activeTurnId && !executing, settled: !session.activeTurnId && !executing };
+  }
   const activity = observedActivity ?? deliveryHooks?.activity?.(session) ?? { possible: !!session.activeTurnId, exact: !!session.activeTurnId };
   const stopped = session.finishTurn?.released === true;
   const selection = session.selectedModel?.conversationId === session.conversationId ? session.selectedModel : null;
@@ -854,7 +865,10 @@ function append(current: InputEntry[], entry: InputEntry, stackDirect = false): 
     if (positioned.length) entry = { ...entry, queueOrder: Math.max(...positioned.map(row => row.queueOrder!)) + 1 };
   }
   // Admission is per durable session. Native composer custody stays with each claim.
-  if (!stackDirect && entry.purpose !== 'decision' && !queuedFollowup(entry) && current.some(row => row.sessionId === entry.sessionId && row.purpose !== 'decision' &&
+  const apiQueued = entry.chatProvider && !isBrowserChatProvider(entry.chatProvider);
+  // API sessions have a serialized runner rather than a single native composer slot.
+  // Accept additional explicit directions durably; claim still admits one fresh turn.
+  if (!apiQueued && !stackDirect && entry.purpose !== 'decision' && !queuedFollowup(entry) && current.some(row => row.sessionId === entry.sessionId && row.purpose !== 'decision' &&
       !(!entry.finishOwner && row.finishOwner && row.state === 'tool') &&
       (!queuedFollowup(row) || row.state === 'browser') && ['queued', 'browser', 'tool'].includes(row.state))) {
     throw new Error('One message is already awaiting delivery. Cancel it before sending another.');
@@ -2317,7 +2331,22 @@ export async function geminiInputBindingStatus(proof: GeminiBindingInput, conver
   if (question.messageId !== row.messageId || question.inputId !== row.id || positionOf(question) !== row.historySeq) return { state: 'invalid', ...accepted };
   const turns = Object.entries(session.timelineTurns ?? {}).filter(([, turn]) => turn.questionId === row.messageId);
   // The original question cannot lend its grant to Regenerate/a successor generation.
-  if (turns.length > 1 || turns.some(([, turn]) => turn.endOrigin !== undefined)) return { state: 'invalid', ...accepted };
+  if (turns.length > 1) return { state: 'invalid', ...accepted };
+  if (turns.some(([, turn]) => turn.endOrigin !== undefined)) {
+    // A refresh may produce an uncertain end before the same native generation is
+    // re-adopted. No tools may run while the turn is ended, but an uncertain end is
+    // not permanent revocation: chronology can reopen this exact turn on later proof.
+    // Keep its existing credential pending rather than retiring it irreversibly.
+    // Completed/stopped/failed ends, or another authored question, remain terminal.
+    const [lastEnd] = await readRecentEvents(sessionId, 1, { kinds: ['turn_end'] });
+    if (!owns()) return { state: 'pending', ...accepted };
+    if (lastEnd?.kind === 'turn_end' &&
+        turns.some(([id, turn]) => id === lastEnd.turnId && turn.endOrigin !== undefined) &&
+        (lastEnd.outcome === 'unknown' || lastEnd.outcome === 'interrupted')) {
+      return { state: 'pending', ...accepted };
+    }
+    return { state: 'invalid', ...accepted };
+  }
   if (!session.activeTurnId || !turns.length) return { state: 'pending', accepted: true };
   const active = session.timelineTurns?.[session.activeTurnId];
   if (!active || active.questionId !== row.messageId)
@@ -2354,6 +2383,141 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
   return serial(() => commitBrowserInputReceipt(id, owner, conversationId, messageId, beforeChanged));
 }
 
+/** Attach the already accepted broker assignment to its ordinary durable outbox row. */
+export async function enqueueApiWorkerInput(input: InputArgs, worker: NonNullable<InputEntry['apiWorker']>): Promise<InputEntry> {
+  const entry = await enqueueInput(input);
+  return serial(async () => {
+    const current = await load();
+    const row = current.find(item => item.id === entry.id);
+    if (!row?.sessionId || !row.conversationId || !row.chatProvider ||
+        !(await import('../api/providers.js')).apiProvider(row.chatProvider)) throw new Error('API worker input is unavailable');
+    const session = await getSession(row.sessionId);
+    const broker = await import('../agents.js');
+    if (session?.origin?.kind !== 'worker' || session.origin.agentId !== worker.agentId ||
+        broker.agentConversation(worker.agentId, worker.runId) !== row.conversationId)
+      throw new Error('API worker assignment changed');
+    if (row.apiWorker) {
+      if (JSON.stringify(row.apiWorker) !== JSON.stringify(worker)) throw new Error('API worker input belongs to another assignment');
+      return { ...row };
+    }
+    if (row.state !== 'queued' || row.sendAuthorizedAt !== undefined) throw new Error('API worker input already dispatched');
+    const next = { ...row, apiWorker: worker };
+    await commit(current.map(item => item === row ? next : item));
+    return next;
+  });
+}
+
+/**
+ * Admit an API-backed message to the existing durable outbox. No browser, companion,
+ * invented native receipt or local model credential participates in this path.
+ * A claimed request is never automatically retried after a crash or uncertain HTTP outcome.
+ */
+export function claimOpenRouterInput(id: string, conversationId: string): Promise<InputEntry | null> {
+  return serial(async () => {
+    const { apiProvider, apiInputOwner } = await import('../api/providers.js');
+    const provider = chatProviderForConversation(conversationId);
+    if (!apiProvider(provider) || !isChatProviderConversationId(conversationId, provider) || isChatBlocked(conversationId) ||
+        await conversationWasSuperseded(conversationId)) return null;
+    const current = await load();
+    const entry = current.find(row => row.id === id);
+    if (!entry || entry.chatProvider !== provider || entry.state !== 'queued' || entry.owner ||
+        !entry.sessionId || !entry.model || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined ||
+        entry.purpose === 'decision' || entry.mode === 'finish' || entry.delivery ||
+        entry.attachmentDelivery || entry.images?.length || entry.attachments?.length || entry.stages?.length ||
+        (entry.conversationId && entry.conversationId !== conversationId)) return null;
+    const session = await getSession(entry.sessionId);
+    if (!session || (session.conversationId && session.conversationId !== conversationId) ||
+        session.activeTurnId || session.origin?.kind === 'worker' && !entry.apiWorker) return null;
+    if (entry.steerTurnId) {
+      const source = entry.directTurn;
+      const ended = session.timelineTurns?.[entry.steerTurnId];
+      if (!entry.steerReady || source?.id !== entry.steerTurnId || !source.questionId ||
+          ended?.questionId !== source.questionId || ended.endOrigin === undefined) return null;
+      // Several explicit directions can arrive while an already-dispatched tool settles.
+      // Each starts its own fresh question once idle; none may interrupt a later generation
+      // using the earlier source turn or reuse that source's execution authority.
+    }
+    if (entry.apiWorker && !await (await import('../api/workers.js')).apiWorkerInputCurrent(entry)) return null;
+    const now = Date.now();
+    const claimed: InputEntry = {
+      ...entry, state: 'browser', owner: apiInputOwner(provider), conversationId,
+      offeredAt: now, sendAuthorizedAt: now, deliveryText: entry.text,
+      // API calls use the same outbox receipt, but never require a browser-issued capability.
+      requiresAuthorization: false
+    };
+    if (entry.opening && !await bindOpening(claimed, conversationId)) return null;
+    await commit(current.map(row => row === entry ? claimed : row));
+    return { ...claimed };
+  });
+}
+
+/** Only the same app-owned API claim can commit its exact recorded input. */
+export function acknowledgeOpenRouterInput(id: string, conversationId: string, messageId: string): Promise<boolean> {
+  return serial(async () => {
+    const { apiProvider, apiInputOwner } = await import('../api/providers.js');
+    const row = (await load()).find(entry => entry.id === id);
+    if (!row?.chatProvider || !apiProvider(row.chatProvider) || row.owner !== apiInputOwner(row.chatProvider) ||
+        row.conversationId !== conversationId || !isChatProviderConversationId(conversationId, row.chatProvider) ||
+        !/^[0-9a-f-]{36}$/i.test(messageId)) return false;
+    return commitBrowserInputReceipt(id, apiInputOwner(row.chatProvider), conversationId, messageId);
+  });
+}
+
+/** Explain a live API claim's pre-header recovery without inventing a Send receipt. */
+export function noteApiInputRecovery(id: string, owner: string, error: string): Promise<void> {
+  return serial(async () => {
+    const current = await load();
+    const row = current.find(entry => entry.id === id);
+    if (!row?.chatProvider || owner !== (await import('../api/providers.js')).apiInputOwner(row.chatProvider) ||
+        row.owner !== owner || row.state !== 'browser' || row.cancelledByUser) return;
+    await commit(current.map(entry => entry === row ? { ...entry, error: undefined, apiRecovery: error.slice(0, 500) } : entry));
+  });
+}
+
+/**
+ * A first browser observation can arrive before the original opening's /input/ack response.
+ * Attach the already reserved local session only when a paired browser captured the exact
+ * authorized user question, including this input's still-current task capability.
+ *
+ * This does not acknowledge Send or authorize a tool: the recorder must first commit the
+ * native question, after which reconcileRecordedBrowserInput settles the original receipt.
+ */
+export function attachRecordedOpeningInput(
+  conversationId: string,
+  browser: string | null,
+  questions: ReadonlyArray<{ kind: string; messageId?: string; text?: string; historyBeforeQuestionId?: string }>
+): Promise<boolean> {
+  return serial(async () => {
+    if (!browser || !isChatProviderConversationId(conversationId) || isChatBlocked(conversationId) ||
+        await conversationWasSuperseded(conversationId)) return false;
+    const provider = chatProviderForConversation(conversationId);
+    if (!usesLocalTaskCapability(provider)) return false;
+    const current = await load();
+    const candidates = current.filter(row => row.opening && row.chatProvider === provider &&
+      row.conversationId === null && row.sessionId && row.owner && row.claimedBrowser === browser &&
+      row.state === 'browser' && row.requiresAuthorization && row.offeredAt !== undefined &&
+      row.sendAuthorizedAt !== undefined && row.deliveredAt === undefined && !row.cancelledByUser &&
+      row.deliveryText && !companionOf(current, row));
+    if (!candidates.length) return false;
+    const matching = candidates.filter(row => questions.some(question =>
+      question.kind === 'user_message' && question.messageId &&
+      isProviderNativeQuestionId(provider, conversationId, question.messageId) &&
+      !question.historyBeforeQuestionId && typeof question.text === 'string' &&
+      matchesAppPrompt(question.text, row.deliveryText!) &&
+      hasCurrentLocalBinding(provider, row.deliveryText!, { kind: 'input', input: {
+        id: row.id, owner: row.owner!, browser, offeredAt: row.offeredAt!
+      } })));
+    if (matching.length !== 1) return false;
+    const entry = matching[0]!;
+    const existing = await findSessionByConversation(conversationId, { requireUnique: true });
+    if (existing && existing.id !== entry.sessionId) return false;
+    const bound = { ...entry, conversationId };
+    if (!await bindOpening(bound, conversationId)) return false;
+    await commit(current.map(row => row === entry ? bound : row));
+    return true;
+  });
+}
+
 /** Called only while the input queue is held. Both live and recovered receipts settle here. */
 async function commitBrowserInputReceipt(id: string, owner: string, conversationId?: string | null, messageId?: string, beforeChanged?: () => void): Promise<boolean> {
   const current = await load();
@@ -2387,6 +2551,7 @@ async function commitBrowserInputReceipt(id: string, owner: string, conversation
     // cancelledByUser as historical intent, but never keep presenting an exact delivered message
     // as unsent/unconfirmed after its native receipt has arrived.
     error: undefined,
+    apiRecovery: undefined,
     // A user cancellation that lost the race with native Send must not resurrect automation or
     // later plan checkpoints merely because the provider eventually proved the first delivery.
     ...(entry.state === 'cancelled' && entry.cancelledByUser && entry.stages?.length ? { stagesApplied: true } : {}),

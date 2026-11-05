@@ -16,6 +16,100 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.11': {
+    lead: () => t('Follow API compaction and resume without losing the task.'),
+    highlights: [
+      { icon: 'i-steps', title: () => t('Visible Compact & Resume'), text: () => t('See history saving, summary progress, retries and task resumption in one workflow card, with the saved handoff available to inspect.') },
+      { icon: 'i-retry', title: () => t('Recover unusable summaries'), text: () => t('Retry empty, truncated or oversized handoffs within bounds. Progress no longer appears as a red message-delivery failure.') }
+    ]
+  },
+  '0.9.10': {
+    lead: () => t('Keep API tasks moving when their context fills up.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Automatic context recovery'), text: () => t('Save a handoff before the model window fills, preserve the original history and continue the same task with running processes intact.') },
+      { icon: 'i-chat', title: () => t('Compact a failed chat'), text: () => t('Use Compact context in the context menu, then Continue. Manual compaction can be cancelled and does not send another task message.') },
+      { icon: 'i-pulse', title: () => t('Effective context estimate'), text: () => t('See the reduced API working context separately from the full retained transcript.') }
+    ]
+  },
+  '0.9.9': {
+    lead: () => t('Switch providers and leave Setup without getting stuck.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('Reach provider setup'), text: () => t('Keep provider selection and the OpenRouter key form reachable. Back and Next follow the steps for your selected provider.') },
+      { icon: 'i-chat', title: () => t('Return to chats'), text: () => t('Use Back to chats from Setup at any time. API readiness checks your saved key without requiring a browser or tunnel.') }
+    ]
+  },
+  '0.9.8': {
+    lead: () => t('Keep Claude attachment questions intact and present running websites in OneCode.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Claude attachment delivery'), text: () => t('Read the exact question beside native media, preserve upload drafts through an editor remount and avoid displaying damaged transport instructions as your message.') },
+      { icon: 'i-browser', title: () => t('Open the running website'), text: () => t('Agents can discover the sidebar browser before you open it manually and request presentation of the actual running website.') },
+      { icon: 'i-chat', title: () => t('Earlier topic names'), text: () => t('Name API chats during the task and replace older folder-style generated names while keeping your manual titles.') }
+    ]
+  },
+  '0.9.7': {
+    lead: () => t('Continue larger API chats and see what Send is waiting for.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Larger API conversations'), text: () => t('Remove the former two-MiB request blocker while preserving your saved conversation, completed results and running work.') },
+      { icon: 'i-retry', title: () => t('Clear send stages'), text: () => t('See request preparation and provider acceptance separately. A message is marked sent only after the provider accepts it.') },
+      { icon: 'i-plug', title: () => t('Reuse model information'), text: () => t('Share a validated model catalog between Send and the model picker instead of fetching it again on every message.') }
+    ]
+  },
+  '0.9.6': {
+    lead: () => t('Recover API output limits and keep terminal work moving.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Continue at output limits'), text: () => t('Use the selected model’s output capacity and automatically continue from saved work when a response reaches its limit.') },
+      { icon: 'i-terminal', title: () => t('Collect completed command results'), text: () => t('Restore command access after old results are delivered. Preserve output pages, session ownership and interrupted deliveries.') },
+      { icon: 'i-chat', title: () => t('Clearer stalled-task recovery'), text: () => t('Avoid repeated blocked probes and use existing process controls for an owned hung test. Empty model responses no longer count as completed work.') }
+    ]
+  },
+  '0.9.5': {
+    lead: () => t('Keep API tasks moving through connection failures and direction changes.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Automatic API recovery'), text: () => t('Retry transient model requests from saved tool results with visible reconnecting status. Running commands and workers remain available.') },
+      { icon: 'i-chat', title: () => t('Steer without stopping the task'), text: () => t('Apply new directions at the next model or tool boundary. Dispatched tools finish, and proposals that have not started are skipped.') },
+      { icon: 'i-terminal', title: () => t('Longer agentic tasks'), text: () => t('Continue beyond the earlier twenty-step limit and explain connection, provider, storage and context failures clearly.') }
+    ]
+  },
+  '0.9.4': {
+    lead: () => t('Follow API work as it happens and change direction immediately.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Live work progress'), text: () => t('See progress paragraphs, completed tools, running commands and background processes while an API task is still working.') },
+      { icon: 'i-chat', title: () => t('Steer an API task'), text: () => t('Immediate messages interrupt the current API response. Already dispatched tools settle safely, and background processes remain available.') },
+      { icon: 'i-chat', title: () => t('Topic-based chat names'), text: () => t('Generate a short subject title for an API conversation and preserve names you set yourself.') }
+    ]
+  },
+  '0.9.3': {
+    lead: () => t('Use local workers, tools, plugins and skills with API models.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('A local API harness'), text: () => t('OpenRouter can run and reuse OneCode workers, compose Core tools, call installed plugins and use local skills without a provider browser.') },
+      { icon: 'i-folder', title: () => t('Permissions take effect now'), text: () => t('Explicit permission grants in your messages update live settings. API calls recheck approved folders, Read-only and task ownership.') },
+      { icon: 'i-retry', title: () => t('Clearer task recovery'), text: () => t('Refresh recovery retains exact task credentials and distinguishes task identity from disabled command permissions.') }
+    ]
+  },
+  '0.9.2': {
+    lead: () => t('Use OpenRouter tools without browser warnings and keep task authorization recoverable.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('API-first tool access'), text: () => t('OpenRouter local tools are recorded under their exact turn. First-message guidance checks actual exposed tools across providers.') },
+      { icon: 'i-chat', title: () => t('Clearer API model and context'), text: () => t('Show selected model context estimates and API completion limits without pretending that browser-only compaction is active.') },
+      { icon: 'i-retry', title: () => t('Safer task recovery'), text: () => t('Briefly recheck an uncertain browser attachment before refusing the exact original task. Stale or revoked credentials stay blocked.') }
+    ]
+  },
+  '0.9.1': {
+    lead: () => t('Connect OpenRouter with an API key, no browser extension required.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('API-only OpenRouter setup'), text: () => t('Select OpenRouter to securely save your API key in Setup. Browser installation and native sign-in are not needed.') },
+      { icon: 'i-chat', title: () => t('Free model routing'), text: () => t('Use openrouter/free or choose a listed model. Preserve supported reasoning metadata and OneCode-owned tool sessions.') }
+    ]
+  },
+  '0.9.0': {
+    lead: () => t('Use API models with local tools and recover long tasks.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('Local API execution'), text: () => t('Connect OpenRouter and use local tools, plugins, skills and managed workers with the same effective permissions as browser chats.') },
+      { icon: 'i-pulse', title: () => t('Steer and follow live work'), text: () => t('Keep the task running while steering at safe boundaries. See commands, tool progress, background processes and clearer send status.') },
+      { icon: 'i-steps', title: () => t('Compact and recover'), text: () => t('Archive full context, retry unusable summaries and resume the same API task through a visible Compact & Resume workflow.') },
+      { icon: 'i-chat', title: () => t('Delivery and navigation fixes'), text: () => t('Keep Claude attachment questions intact, generate topic names earlier, discover the sidebar browser and switch Setup providers without getting stuck.') }
+    ]
+  },
   '0.8.9': {
     lead: () => t('Use the paths you explicitly share.'),
     highlights: [

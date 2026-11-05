@@ -48,6 +48,7 @@ export function initBrowserSetup(actions: {
   repaint(): void;
   open(browser: ExternalBrowser, page: 'extensions' | 'chatgpt'): Promise<unknown>;
   locate?(browser: ExternalBrowser): Promise<void>;
+  saveOpenRouterKey?(key: string): Promise<AppState>;
 }): { render(state: AppState): { ready: boolean; choosingLocation: boolean }; reviewExtension(): void } {
   let current: AppState | null = null;
   let phase: 'extension' | 'location' = 'extension';
@@ -63,10 +64,12 @@ export function initBrowserSetup(actions: {
   let savedBrowser: ChatBrowser | null = null;
   let ready = false;
   let choosing = false;
+  let savingKey = false;
   const lockChoice = (busy: boolean): void => {
     choosing = busy;
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-external-browser], #useExtensionBrowser, #openSelectedChatGpt, #openChatGptBrowser, #openExtensionSettings, #openFirefoxAddon, #pickBrowserExecutable')) button.disabled = busy;
-    $('browserExecutablePicker').hidden = current?.platform?.family !== 'windows' && current?.platform?.family !== 'linux';
+    $('browserExecutablePicker').hidden = current?.config.ui.chatProvider === 'openrouter' ||
+      current?.platform?.family !== 'windows' && current?.platform?.family !== 'linux';
   };
 
   let copiedAt = 0;
@@ -116,6 +119,26 @@ export function initBrowserSetup(actions: {
     const browser = state.config.ui.chatBrowser ?? 'chrome';
     const provider = state.config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER;
     const providerName = chatProviderLabel(provider);
+    const apiOnly = provider === 'openrouter';
+    $('openRouterSetup').hidden = !apiOnly;
+    for (const id of ['browserPhases', 'browserPicker', 'browserExtensionTitle', 'browserExecutablePicker'])
+      $(id).hidden = apiOnly;
+    if (apiOnly) {
+      $('browserExtensionStage').hidden = true;
+      $('browserLocationStage').hidden = true;
+      const secure = state.secureStorage?.available ?? true;
+      const key = $<HTMLInputElement>('openRouterSetupKey');
+      key.disabled = !secure || savingKey;
+      key.placeholder = state.hasGoalKey ? '•••••••• stored' : 'sk-or-v1-…';
+      $<HTMLButtonElement>('openRouterSaveKey').disabled = !secure || savingKey;
+      $<HTMLButtonElement>('openRouterRemoveKey').disabled = !secure || savingKey || !state.hasGoalKey;
+      ui($('openRouterSetupStatus'), 'textContent', () => !secure
+        ? state.secureStorage?.detail ?? t('Secure OS credential storage is unavailable.')
+        : state.hasGoalKey
+          ? t('API key saved securely. You can start an OpenRouter chat or replace the key.')
+          : t('Enter an OpenRouter API key to use API models in OneCode. The key is stored securely and never displayed again.'));
+      return { ready: secure && state.hasGoalKey, choosingLocation: false };
+    }
     const providerHost = new URL(chatProviderHomeUrl(provider)).hostname;
     if (!initialized || browser !== savedBrowser) {
       if (browser !== 'cos') external = browser;
@@ -205,6 +228,29 @@ export function initBrowserSetup(actions: {
     $(next === 'extension' ? 'browserExtensionTitle' : 'browserLocationTitle').focus();
   };
   $('browserContinue').addEventListener('click', () => changePhase('location'));
+  $('openRouterKeyForm').addEventListener('submit', event => {
+    event.preventDefault();
+    if (savingKey || current?.config.ui.chatProvider !== 'openrouter' || !actions.saveOpenRouterKey) return;
+    const input = $<HTMLInputElement>('openRouterSetupKey');
+    const original = input.value, key = original.trim();
+    if (!key) { toast(t('Enter an OpenRouter API key first.')); return; }
+    savingKey = true;
+    if (current) render(current);
+    void actions.saveOpenRouterKey(key).then(next => {
+      if (input.value === original) input.value = '';
+      render(next);
+      actions.repaint();
+    }).catch(error => toast(error instanceof Error ? error.message : t('Could not save the API key.')))
+      .finally(() => { savingKey = false; if (current) render(current); });
+  });
+  $('openRouterRemoveKey').addEventListener('click', () => {
+    if (savingKey || current?.config.ui.chatProvider !== 'openrouter' || !actions.saveOpenRouterKey) return;
+    savingKey = true;
+    if (current) render(current);
+    void actions.saveOpenRouterKey('').then(next => { render(next); actions.repaint(); })
+      .catch(error => toast(error instanceof Error ? error.message : t('Could not remove the API key.')))
+      .finally(() => { savingKey = false; if (current) render(current); });
+  });
   $('browserBack').addEventListener('click', () => changePhase('extension'));
   $('browserReviewExtension').addEventListener('click', () => changePhase('extension'));
   const choiceFailed = (error: unknown): void => { toast(error instanceof Error ? error.message : t('The browser choice was not saved. Try again.')); };

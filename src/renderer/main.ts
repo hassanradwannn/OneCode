@@ -61,7 +61,7 @@ import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
 import type { AppState, Capability, ChatBrowser, Config, LogEntry, SurfaceStatus } from '../shared/types.js';
 import { opensInCosBrowser } from '../shared/cos-browser-sites.js';
 import {
-  browserExtensionRequired,
+  selectedProviderNeedsBrowser,
   isNewer,
   CAPABILITY_DETAILS,
   CAPABILITY_LABELS,
@@ -145,7 +145,13 @@ const browserSetup = initBrowserSetup({
   },
   repaint: () => { setupOpenStep = 'browser'; if (state) apply(state); },
   open: (browser, page) => run(api.openSetupBrowser(browser, page)),
-  locate: async browser => { await settingsSaveQueue; const next = await run(api.pickBrowserExecutable(browser)); if (next) apply(next); }
+  locate: async browser => { await settingsSaveQueue; const next = await run(api.pickBrowserExecutable(browser)); if (next) apply(next); },
+  saveOpenRouterKey: async key => {
+    const reply = await api.setGoalKey(key);
+    if (!reply.ok) throw new Error('Could not save the OpenRouter API key.');
+    apply(reply.data);
+    return reply.data;
+  }
 });
 // Escape the translucent sidebar's backdrop-filter containing block.
 document.body.append($('connectionPopover'));
@@ -934,6 +940,10 @@ function missingStep(
   if (config.roots.length === 0 && requiresApprovedFilesystemRoot(config)) {
     return { step: 'folder', text: t("Choose a folder to share — step {0}.", [setupStepNumber('folder')]) };
   }
+  if ((config.ui.chatProvider ?? DEFAULT_CHAT_PROVIDER) === 'openrouter') {
+    if (next.secureStorage?.available === false) return { step: 'browser', text: next.secureStorage.detail || t('Secure credential storage is unavailable.') };
+    return next.hasGoalKey ? null : { step: 'browser', text: t('Add an OpenRouter API key.') };
+  }
   if (config.tunnel.kind === 'openai') {
     if (!TUNNEL_ID_PATTERN.test(values.tunnelId)) {
       return { step: 'tunnel', text: t("Create a tunnel and paste its ID — step {0}.", [setupStepNumber('tunnel')]) };
@@ -1242,14 +1252,15 @@ function updateSummary({ bridge, update, config, status }: AppState): { text: st
   // that has not caught up yet - normal while an update downloads - and telling that user to
   // load the bundled folder again would talk them into downgrading a working extension. The
   // app sentence already owns being behind.
-  const stale =
+  const browserRequired = selectedProviderNeedsBrowser(config);
+  const stale = browserRequired &&
     bridge.extensionVersion && isNewer(update.current, bridge.extensionVersion)
       ? bridge.extensionVersion
       : null;
-  const repairExtension = bridge.extensionUpdateRequired === true;
+  const repairExtension = browserRequired && bridge.extensionUpdateRequired === true;
   // A mismatched companion can fail the protocol gate before it becomes present.
   // Retain its last observed version until a matching companion actually reports in.
-  const missing = !stale && !repairExtension && bridge.running && !selectedBrowserConnected(bridge, config.ui.chatBrowser) && isRunning(status.state) && browserExtensionRequired(config);
+  const missing = browserRequired && !stale && !repairExtension && bridge.running && !selectedBrowserConnected(bridge, config.ui.chatBrowser) && isRunning(status.state);
   if (!stale && !repairExtension && !missing && !update.latest && !update.latestRevision && update.stage === 'idle' && !update.checkedAt && !update.notInstalled) return null;
 
   const lines: string[] = [];
@@ -1886,12 +1897,19 @@ function apply(next: AppState): void {
   }
 
   const openai = config.tunnel.kind === 'openai';
-  const browserRequired = browserExtensionRequired(config);
-  step('tunnel').hidden = !openai;
-  step('key').hidden = !openai;
-  step('browser').hidden = !browserRequired;
+  const apiOnly = provider === 'openrouter';
+  step('tunnel').hidden = apiOnly || !openai;
+  step('key').hidden = apiOnly || !openai;
+  // This step also owns the provider picker and API-key form. It remains
+  // reachable even when the selected transport does not need a browser.
+  step('browser').hidden = false;
+  step('connect').hidden = apiOnly;
+  step('chatgpt').hidden = apiOnly;
+  const browserRail = document.querySelector<HTMLElement>('[data-rail-step="browser"] .setup-rail-label');
+  if (browserRail) browserRail.textContent = provider === 'openrouter' ? 'API key' : 'Browser';
   const cosBrowser = (config.ui.chatBrowser ?? 'chrome') === 'cos';
   const browserProgress = browserSetup.render(next);
+  if (apiOnly) $('browserBack').hidden = true;
   for (const other of externalSetupLinks) other.hidden = !cosBrowser;
   // A saved legacy value must not offer a second route back into embedded Google login.
   for (const button of document.querySelectorAll<HTMLButtonElement>('#wizard button[data-link]')) {
@@ -2031,15 +2049,15 @@ function apply(next: AppState): void {
   );
   if (!requiredUnverified && (reachedAt !== null || surfaces.some(surface => surface.available && pluginCreated(surface)))) done.add('chatgpt');
   // External installation and the selected execution path must both be ready.
-  if (!browserRequired || browserProgress.ready) done.add('browser');
-  const current = order.find((name) => !done.has(name)) ?? null;
+  if (browserProgress.ready) done.add('browser');
+  const shown = order.filter(name => !step(name).hidden);
+  const current = shown.find((name) => !done.has(name)) ?? null;
   for (const name of order) {
     const node = step(name);
     node.classList.toggle('is-done', done.has(name));
     node.classList.toggle('is-current', name === current);
   }
-  // Progress over the steps this setup actually shows (the browser step is hidden when unused).
-  const shown = order.filter(name => !step(name).hidden);
+  // Progress uses the same visible route as navigation and completion.
   const finished = shown.filter(name => done.has(name)).length;
   const progress = $('setupProgress');
   progress.setAttribute('aria-valuemax', String(shown.length));
@@ -2080,12 +2098,12 @@ function apply(next: AppState): void {
     nav.querySelector<HTMLButtonElement>('[data-step-nav="next"]')!.hidden = at < 0 || at === path.length - 1;
     nav.classList.toggle('is-ready', done.has(name));
     if (name === 'browser') {
-      nav.hidden = !browserProgress.choosingLocation;
+      nav.hidden = !apiOnly && !browserProgress.choosingLocation;
       nav.querySelector<HTMLButtonElement>('[data-step-nav="next"]')!.disabled = !browserProgress.ready;
     }
     if (name === 'connect') nav.querySelector<HTMLButtonElement>('[data-step-nav="next"]')!.disabled = !tailscalePublicReady(next);
   }
-  paintReady(shown, done, cosBrowser, allSet, accessLevel(next), !accessWorks(next));
+  paintReady(shown, done, cosBrowser, allSet, accessLevel(next), !accessWorks(next), apiOnly);
 
   const needsBinary = config.tunnel.kind !== 'manual';
   $<HTMLInputElement>('binaryPath').placeholder = config.tunnel.kind === 'tailscale'
@@ -2357,7 +2375,7 @@ const READY_CHECKS: Record<string, { done: string; cos?: string }> = {
  * Ready: every check of the steps above, passed or not. All passing says so plainly and offers the
  * chat; anything still open is listed as a way back to its step, never as a failure.
  */
-function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, allSet: boolean, access: AccessLevel, limited: boolean): void {
+function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, allSet: boolean, access: AccessLevel, limited: boolean, apiOnly: boolean): void {
   ui($('readyTitle'), 'textContent', () => allSet ? t('You’re all set!') : t('Almost there'));
   ui($('readyLead'), 'textContent', () => !allSet
     ? t('Finish the steps still open below.')
@@ -2377,7 +2395,7 @@ function paintReady(shown: string[], done: Set<string>, cosBrowser: boolean, all
     // Limited access is done but says what it leaves out.
     const label = () => narrowed
       ? providerT(access === 'read' ? 'Gemini can only read files' : "Gemini can't edit files or run commands")
-      : providerT(cosBrowser && check.cos ? check.cos : check.done);
+      : apiOnly && name === 'browser' ? t('API key stored') : providerT(cosBrowser && check.cos ? check.cos : check.done);
     if (passed) {
       row.append(icon(narrowed ? 'i-warning' : 'i-check-circle'), el('span', '', label));
     } else {
@@ -2819,6 +2837,7 @@ $('updateShowTerminals').addEventListener('click', () => { showTab('chat'); reve
 $('connectionPopoverToggle').addEventListener('click', () => void toggleConnection());
 $('wizConnect').addEventListener('click', () => void toggleConnection());
 $('readyStart').addEventListener('click', () => showTab('chat'));
+$('setupBackToChat').addEventListener('click', () => showTab('chat'));
 /** Setup's browser choice is the same save as choosing it in Settings, so both share one rule. */
 function chooseChatBrowser(browser: ChatBrowser): void {
   const choice = $<HTMLSelectElement>('chatBrowser');
@@ -2826,7 +2845,7 @@ function chooseChatBrowser(browser: ChatBrowser): void {
   choice.value = browser;
   choice.dispatchEvent(new Event('change', { bubbles: true }));
 }
-initProviderSettings(save);
+initProviderSettings(() => { setupOpenStep = 'browser'; return save(); });
 initRemoteSettings();
 initChatSchedules();
 $('pickBinary').addEventListener('click', async () => {

@@ -57,6 +57,17 @@ export const NATIVE_OUTPUT_ADAPTERS = {
       if (!surface.startsWith(prefix) || surface.length > 640 || /[\\\u0000-\u001f\u007f?#]/.test(surface)) return false;
       return surface.slice(prefix.length).split('/').every(part => !!part && part !== '.' && part !== '..');
     }
+  },
+  openrouter: {
+    // API-generated text is recorded by OneCode itself. There is no provider DOM,
+    // native asset picker, browser artifact surface or authenticated remote file URL.
+    message: () => false,
+    mediaAsset: () => false,
+    artifact: () => false,
+    revision: () => false,
+    roles: [],
+    exports: { image: false, video: false },
+    snapshotSurfaces: []
   }
 } satisfies Record<ChatProvider, NativeOutputAdapter>;
 

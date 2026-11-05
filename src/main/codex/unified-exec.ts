@@ -842,6 +842,8 @@ interface ProcessEntry {
 export interface OutputPublication {
   completedAt: number | null;
   failed: boolean;
+  /** Optional model-facing text ceiling for an in-process API transport. */
+  maxTextBytes?: number;
 }
 
 export interface CompletedOutputPage {
@@ -1879,7 +1881,9 @@ export class UnifiedExecProcessManager {
         const prior = this.spoolOffers.get(processId);
         if (prior && !prior.publication.failed) continue;
         const output = Buffer.from(record.pendingOutput, 'base64');
-        const start = Math.max(record.acknowledgedOffset, record.initialOutputOffset ?? 0);
+        // Initial output is an offer, not a durable delivery acknowledgement. In particular,
+        // a clipped API result or a restart must re-offer that prefix rather than skip it.
+        const start = record.acknowledgedOffset;
         if (output.length > 0 && start >= output.length) continue;
         let end = Math.min(output.length, start + Math.floor(maxBytes));
         while (end > start && end < output.length && (output[end]! & 0xc0) === 0x80) end--;

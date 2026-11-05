@@ -2,7 +2,7 @@ import type { WorkbenchBrowserState } from '../shared/workbench-browser.js';
 import { el, icon, run } from './dom.js';
 import { t, ui } from './i18n.js';
 
-export function createWorkbenchBrowserPanel(options: { onEscape?: () => void }) {
+export function createWorkbenchBrowserPanel(options: { onEscape?: () => void; onOpen?: () => void }) {
   const pane = el('section', 'workbench-browser-panel'); pane.hidden = true;
   const toolbar = el('div', 'workbench-browser-toolbar');
   const back = el('button', 'btn btn-icon') as HTMLButtonElement; back.type = 'button'; back.append(icon('i-back')); ui(back, 'title', () => t('Back'));
@@ -109,7 +109,11 @@ export function createWorkbenchBrowserPanel(options: { onEscape?: () => void }) 
   window.addEventListener('resize', schedulePresentation); document.addEventListener('visibilitychange', schedulePresentation);
   const modalObserver = new MutationObserver(schedulePresentation);
   modalObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
-  window.api.onWorkbenchBrowserChanged?.(change => { if (change.sessionId === sessionId) void refresh(false); });
+  window.api.onWorkbenchBrowserChanged?.(change => {
+    if (change.sessionId !== sessionId) return;
+    if (change.reveal) options.onOpen?.();
+    void refresh(false);
+  });
 
   return { pane, mountAt, show, hide, sync, visible: () => shown && !pane.hidden };
 }
