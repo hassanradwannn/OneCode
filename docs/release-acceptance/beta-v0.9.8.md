@@ -21,3 +21,17 @@ Final test, cloud build, asset and publication receipts follow below. Stable is 
 - These checks do not claim installed/updater or signed-in Claude acceptance. Production applications, native provider drafts and profiles remain unchanged.
 
 The final manual-Send review also covers a native skill chip retained after a failed upload's preparation lease is disposed. Composer readback can recover only its intact framed body for a human Send; native skill selection remains false and the old task grant is not revived. All 127 cases in the affected Claude adapter/skill/binding suites passed after this additional repair. The earlier unpublished candidate build `42057080785` was cancelled before replacing its draft assets and source; it is not publication evidence. Published earlier Beta tags remain unchanged.
+
+## Published release
+
+Published [Beta 0.9.8](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.8) at **2026-11-05T16:13:30Z**, with `draft=false`, `prerelease=true` and `latest=false`. Frozen application source: `a51c53317a2234e6dc3977088f3fb09c186fd64b`. The annotated remote tag dereferences to that commit. Later acceptance/documentation commits do not change the application tag.
+
+[GitHub run 42058645064](https://github.com/hassanradwannn/OneCode/actions/runs/42058645064) completed successfully. Windows and Linux each passed exact-source/draft validation, public verification, packaging, packaged-runtime smoke, curated payload validation and upload. The canonical checksum-finalizer job also succeeded. Workflow tools ran from the unchanged Stable `release` revision; application source was the separately frozen Beta SHA.
+
+- Verified exactly 21 curated assets and 18 payload SHA-256 values against GitHub digests. Fresh downloads of the small manifests, sidecars/register and Companion matched those digests. Both platform checksum registers merge exactly. Canonical register SHA-256: `af2066a3d13754794c3c63e0858a3c23dc7d574eb8743a0ca5f43e179f3b8aa2`.
+- Windows capsule: 34,865,823 bytes, native fingerprint `e456c5232264bd65be7c3b5fd7b52d2bffa8e22822edb215941e99947ccd729d`. Linux capsule: 34,857,462 bytes, native fingerprint `3c0ae8d9e70e2bb81fd331ef0e5dc2ba9d8e73adc34915f89afdb41d51d304d3`. Both match their freshly downloaded and checksum-verified published Beta 0.8.3 complete-base descriptors.
+- Companion `0.9.8 Beta`, stamp `96e2e532f019`: all 41 archive files match the frozen source after the existing Beta channel transform, including its license, byte for byte.
+- Across the local runs, **1,232 distinct cases passed**; the final affected Claude suites and public verification passed after the last application change. Repeated overlapping cases are not added again.
+- Post-publication reads confirmed the same frozen source, 21 assets and public prerelease discovery. Stable's latest release remains `v0.8.9` and its branch remains `ca9bedf630084d976624fcd0c4cc6f3a1284f7d8`.
+
+Installed/updater, signed-in Claude and real unattended-task acceptance remain pending. No production installation, native provider draft, user history, task process or profile was changed by this release work. Stable remains unfrozen and unpublished pending user acceptance.
