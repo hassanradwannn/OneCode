@@ -76,8 +76,19 @@ var CLF_DOM = (() => {
     return proof;
   }
   const composerAuthoredText = () => {
-    const box = composer(), proof = skillSelection(box); if (!proof) return blockText(box);
-    return skillBody(box, proof.token) ?? blockText(box);
+    const box = composer(), proof = skillSelection(box);
+    if (proof) return skillBody(box, proof.token) ?? blockText(box);
+    // A failed upload may retain its native chip after the preparation lease
+    // was disposed. Read its intact framed body for a later human Send, without
+    // treating that presentation as proof the skill was selected for a new task.
+    const tokens = box ? all(skillChipSelector, box) : [], token = tokens.length === 1 ? tokens[0] : null;
+    if (token && shown(token) && compact(token.textContent) === '/onecode' &&
+        all('[data-node-view-wrapper][contenteditable="false"]', token).length === 1) {
+      const leading = document.createRange(); leading.selectNodeContents(box); leading.setEndBefore(token);
+      const body = skillBody(box, token);
+      if (!compact(leading.toString()) && body !== null && userPromptText(body) !== null) return body;
+    }
+    return blockText(box);
   };
   function userPromptText(value) {
     if (typeof value !== 'string') return null;
