@@ -1,5 +1,7 @@
 # Stable 0.9.0 promotion
 
+Status: **published as latest Stable**. [OneCode 0.9.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.0) is frozen at `f91cdc069a694b3436be72463a135127f1c849e0`. [Run 42126564650](https://github.com/hassanradwannn/OneCode/actions/runs/42126564650) passed both platform builds, public verification, packaged runtime smoke and checksum finalization. All 21 assets, 18 payload digests, compatible Stable bases and 41 Companion files were verified. Public latest-release API, public redirect and the updater metadata path confirm 0.9.0. PR #1 is merged; the historical hold below is closed. Installed/native acceptance retains its documented limits.
+
 On November 6, 2026, the user approved promoting the complete Beta repair series to Stable **0.9.0** and publishing it. The earlier hold below is historical and is superseded by this authorization. Stable version owners, release notes and What's New are aligned to 0.9.0. Release source, cloud checks, artifacts and publication receipts are recorded in [Stable acceptance](release-acceptance/v0.9.0.md).
 
 The integration retains the runtime fixes through Beta 0.9.11. Stable packaging retains its own identities, profiles, updater feed and independently verified compatible Windows 0.5.9 / Linux 0.8.2 bases. No Beta profile or credential is migrated. Existing native/installed acceptance limitations remain documented.
