@@ -78,7 +78,10 @@ function openRouterOpeningInstructions(): string {
   return [
     'OpenRouter uses OneCode API sessions with locally executed tool calls. Use only the function schemas exposed in the API request.',
     'If tools are missing or the model cannot call them, report that without claiming work ran. Never replay an uncertain action.',
-    ...(effectiveCapabilities(config).read ? ['Read the selected project instructions through available OneCode tools.'] : []),
+    `Platform: ${process.platform}. Approved roots now: ${config.roots.map(root => `/${root.name} (${root.path})`).join(', ') || 'none'}. Use the selected project or inspect these roots before choosing a working directory. Do not assume a file exists because an earlier response described it.`,
+    ...(effectiveCapabilities(config).read ? ['Read the selected project instructions through available OneCode tools. Local references: /skills/.catalog.json and /sessions/.catalog.json.'] : []),
+    ...(effectiveCapabilities(config).create ? [ARTIFACT_FLOW_REMINDER] : []),
+    ...(pluginManager.tools().length ? ['Discover installed integrations through plugins {action:"list"}; inspect the returned schema before invoking a method.'] : []),
     ...(config.mcp.instructions.trim() ? ["The user's current standing instructions:", config.mcp.instructions.trim()] : [])
   ].join('\n\n');
 }
@@ -217,7 +220,7 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true || provider === 'claude' || provider === 'openrouter';
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
-    ...((provider === 'gemini' || provider === 'claude') && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
+    ...((provider === 'gemini' || provider === 'claude' || provider === 'openrouter') && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(effectiveCapabilities(getConfig()).read ? compactSkill
       ? [`${provider === 'chatgpt' ? 'Use the installed onecode-chatgpt skill. ' : ''}Live references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.`]
       : [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),

@@ -79,7 +79,8 @@ function parseCompletion(value: unknown): OpenRouterCompletion {
 }
 
 /** Assemble fragmented SSE deltas; no tool call is returned until [DONE] is observed. */
-async function streamCompletion(response: Response, onText?: (increment: string) => void): Promise<OpenRouterCompletion> {
+async function streamCompletion(response: Response, onText?: (increment: string) => void,
+  onToolCall?: (name: string) => void): Promise<OpenRouterCompletion> {
   if (!response.body) throw new OpenRouterApiError("EMPTY_STREAM");
   const reader = response.body.getReader(), decoder = new TextDecoder();
   const parts = new Map<number, { id: string; name: string; arguments: string }>();
@@ -112,6 +113,7 @@ async function streamCompletion(response: Response, onText?: (increment: string)
         }
         if (prior.arguments.length > MAX_TOOL_ARGUMENTS) throw new OpenRouterApiError("TOOL_ARGUMENTS_TOO_LARGE");
         parts.set(index, prior);
+        if (/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(prior.name)) onToolCall?.(prior.name);
       }
     }
   };
@@ -158,8 +160,11 @@ export class OpenRouterClient {
       const supportedParameters = Array.isArray(entry.supported_parameters) ?
         entry.supported_parameters.filter((item: unknown): item is string => typeof item === "string") : [];
       const pricing = isObject(entry.pricing) ? entry.pricing : {};
+      const reasoning = isObject(entry.reasoning) ? entry.reasoning : {};
       return [{ id, name: name.slice(0, 200), contextLength, maxCompletionTokens: positive(top.max_completion_tokens),
         supportsTools: supportedParameters.includes("tools"), supportedParameters,
+        ...(typeof reasoning.mandatory === 'boolean' ? { reasoningMandatory: reasoning.mandatory } : {}),
+        ...(Array.isArray(reasoning.supported_efforts) ? { reasoningEfforts: reasoning.supported_efforts.filter((value): value is string => typeof value === 'string') } : {}),
         pricing: { prompt: str(pricing.prompt), completion: str(pricing.completion) } }];
     });
   }
@@ -172,7 +177,8 @@ export class OpenRouterClient {
     if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
     const streaming = input.stream !== false;
     const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
-      ...(input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
+      ...(input.reasoningEnabled === false ? { reasoning: { enabled: false } }
+        : input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
       stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });
@@ -182,7 +188,7 @@ export class OpenRouterClient {
       headers: authHeaders(input.apiKey), body, signal: input.signal });
     if (!response.ok) throw apiFailure(response.status);
     await input.onAccepted?.();
-    if (streaming) return streamCompletion(response, input.onText);
+    if (streaming) return streamCompletion(response, input.onText, input.onToolCall);
     let value: unknown;
     try { value = JSON.parse(await boundedText(response)); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
     return parseCompletion(value);

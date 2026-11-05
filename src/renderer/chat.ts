@@ -44,7 +44,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
-import { DEFAULT_CHAT_PROVIDER, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
+import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
@@ -2145,10 +2145,11 @@ async function refreshSessionControls(): Promise<void> {
   controlledCanSendDirectly = controls?.canSendDirectly === true;
   controlledCanSendQueuedWhenIdle = controls?.canSendQueuedWhenIdle === true;
   controlledRecovery = controls?.recovery ?? [];
+  apiLiveActivity = controls?.apiActivity ?? null;
   paintDeliveryControls();
   paintStateLine();
   menu.hidden = !controls;
-  $('compactSession').hidden = !controls;
+  $('compactSession').hidden = !controls || !isBrowserChatProvider(selectedChatProvider());
   if (!controls) { $('cancelCompaction').hidden = true; return; }
   const objective = $<HTMLTextAreaElement>('sessionObjective');
   if (objective.dataset.sessionId !== id || !objective.dataset.edited) {
@@ -5253,6 +5254,7 @@ const NATIVE_STEP_NOW = /^\S+ing\b/i;
  * words it names itself. A Gemini step wears the globe its rows use. Thinking is not a step and does
  * not look like one: it shows Gemini's own sign for it, a white dot that breathes.
  */
+let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
   const call = runningToolsFor === selectedId ? runningTools.at(-1) : undefined;
   const open = tracesFor === selectedId ? openTurnId(events) : null;
@@ -5262,6 +5264,8 @@ function liveActivity(): { text: string; icon: string; working: boolean; since?:
       : { text: said.text, icon: '', working: false };
   }
   if (call) return { text: call.title, icon: KIND_ICON[call.kind] ?? KIND_ICON.other, working: true, since: call.since };
+  if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'preparing-tool')
+    return { text: t('Preparing {0}', [apiLiveActivity.tool ?? t('tool call')]), icon: KIND_ICON.other, working: true };
   const thinking = { text: t('Thinking'), icon: '', working: false };
   // A message not yet recorded opens a turn that has done nothing visible so far.
   if (messageOnItsWay()) return thinking;
@@ -7044,6 +7048,7 @@ function clearSelectedProviderReadiness(): void {
   if (status) { status.hidden = true; status.textContent = ''; }
 }
 async function ensureSelectedProvider(id: string, selection: number, poll = false): Promise<void> {
+  if (!isBrowserChatProvider(selectedChatProvider())) { clearSelectedProviderReadiness(); return; }
   if (id !== selectedId || selection !== selectionGeneration || !api.followSessionTab) return;
   // Poll the exact selection's receipt independently of transcript controls and
   // window focus. `chatView` is a hidden Timeline/Handoff picker, not this screen.

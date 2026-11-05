@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { getConfig } from "../config.js";
 import { readDurable, writeDurableNow } from "../durable.js";
-import { appendEvent, getSession, upsertMessageEvent } from "../session/store.js";
-import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, type InputEntry } from "../session/input.js";
+import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent } from "../session/store.js";
+import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, listInputs, type InputEntry } from "../session/input.js";
 import { notifyChanged } from "../session/recorder.js";
 import { estimateTokens } from "../../shared/session.js";
 import { ApiError, type ApiMessage, type ApiModel, type ApiToolCall } from "./types.js";
@@ -12,18 +12,23 @@ import { prepareSessionPrompt, prepareSkillFollowup } from "../session/prompt.js
 import { currentApiTurn, apiTools, type OwnedTurn } from "./tools.js";
 import { acknowledgeApiWorker, finishApiWorker } from "./workers.js";
 import { agentInfoForOwnedConversation, onSwarmEnd, failAgent, persistCriticalSwarmNow } from "../agents.js";
+import { apiTurns as controllers, type ActiveApiTurn } from './activity.js';
+import { generateApiTopicTitle, stopApiTitles } from './title.js';
+export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 20;
 const MAX_CALLS = 60;
 const MAX_HISTORY_MESSAGES = 2000;
 const MAX_HISTORY_BYTES = 6 * 1024 * 1024;
 const MAX_TOOL_RESULT_CHARS = 12000;
-const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. Answer clearly once work is verified.";
+const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. For build, edit, inspection or repair requests, inspect the actual workspace or saved artifact with tools, then carry out the requested work. A code example in prose is not a created or changed file. Resolve the current project and approved roots before choosing a working directory; never assume an index.html exists. Give brief public progress updates at useful milestones and report only work supported by tool results. Answer clearly once work is verified.";
 
-interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[] }
+interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[]; titleRequested?: boolean }
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
-const controllers = new Map<string, { sessionId: string; turnId: string | null; controller: AbortController }>();
 const queues = new Map<string, Promise<void>>();
+let accepting = true;
+export async function flushApiInputs(): Promise<void> { await Promise.allSettled([...queues.values()]); }
+export function resetApiRunnerForTests(): void { accepting = true; }
 
 function threadValid(value: unknown, sessionId: string, conversationId: string): value is Thread {
   if (!value || typeof value !== "object") return false;
@@ -97,11 +102,6 @@ export function stopApiTurn(sessionId: string, expectedTurnId: string): boolean 
   }
   return false;
 }
-export function apiTurnStatus(sessionId: string, turnId: string | null): 'running' | 'stopping' | null {
-  if (!turnId) return null;
-  const active = [...controllers.values()].find(item => item.sessionId === sessionId && item.turnId === turnId);
-  return active ? active.controller.signal.aborted ? 'stopping' : 'running' : null;
-}
 export function cancelApiInput(inputId: string): boolean {
   const active = controllers.get(inputId);
   if (!active || active.controller.signal.aborted) return false;
@@ -110,23 +110,46 @@ export function cancelApiInput(inputId: string): boolean {
 }
 
 export function stopApiInputs(): void {
+  accepting = false;
+  stopApiTitles();
   for (const active of controllers.values()) active.controller.abort(new Error('The app is shutting down'));
 }
 
 /** A queue is per authoritative OneCode session, not per OpenRouter request/session_id. */
 export function scheduleApiInput(entry: InputEntry): void {
-  if (!entry.sessionId || !entry.chatProvider || !apiProvider(entry.chatProvider)) return;
+  if (!accepting || !entry.sessionId || !entry.chatProvider || !apiProvider(entry.chatProvider)) return;
   const sessionId = entry.sessionId;
   const previous = queues.get(sessionId) ?? Promise.resolve();
-  const work = previous.catch(() => undefined).then(() => perform(entry));
+  const work = previous.catch(() => undefined).then(async () => {
+    const latest = (await listInputs()).find(row => row.id === entry.id);
+    if (accepting && latest?.state === 'queued') await perform(latest);
+  });
   queues.set(sessionId, work);
   void work.catch(() => undefined).finally(() => { if (queues.get(sessionId) === work) queues.delete(sessionId); });
+}
+
+/** Interrupt only the exact generation named by this durably accepted user direction.
+ * Already-dispatched tools settle under their original owner before the queued successor starts. */
+export async function steerApiInput(entry: InputEntry): Promise<void> {
+  if (!entry.sessionId || !entry.steerTurnId || !entry.steerReady || !entry.directTurn?.questionId) {
+    scheduleApiInput(entry); return;
+  }
+  const current = await getSession(entry.sessionId);
+  const question = await readLatestUserMessage(entry.sessionId);
+  if (current?.conversationId === entry.conversationId && current.activeTurnId === entry.steerTurnId &&
+      question?.messageId === entry.directTurn.questionId) {
+    const active = [...controllers.values()].find(item => item.sessionId === entry.sessionId && item.turnId === entry.steerTurnId);
+    if (active && !active.controller.signal.aborted) {
+      active.controller.abort(new Error('User supplied new direction'));
+    }
+  }
+  scheduleApiInput(entry);
 }
 
 async function perform(entry: InputEntry): Promise<void> {
   if (!entry.sessionId || !entry.model) return;
   const controller = new AbortController();
-  const active = { sessionId: entry.sessionId, turnId: null as string | null, controller };
+  const active: ActiveApiTurn = { sessionId: entry.sessionId, turnId: null, controller, activity: { phase: 'requesting' } };
   controllers.set(entry.id, active);
   const dropWorkerStop = entry.apiWorker ? onSwarmEnd((_reason, _retired, runId) => {
     if (runId === entry.apiWorker!.runId) controller.abort(new Error('Worker family ended'));
@@ -135,6 +158,11 @@ async function perform(entry: InputEntry): Promise<void> {
   let conversationId: string | null = null;
   let turnId: string | null = null;
   let painting = Promise.resolve();
+  let paintTimer: ReturnType<typeof setTimeout> | null = null;
+  let displayed = '', answerId = '', modelId = '';
+  let ownedThread: Thread | null = null;
+  let responseSaved = false;
+  const clearPaintTimer = () => { if (paintTimer) clearTimeout(paintTimer); paintTimer = null; };
   try {
     const provider = entry.chatProvider && apiProvider(entry.chatProvider);
     if (!provider) throw new ApiError("API_PROVIDER_UNAVAILABLE");
@@ -147,11 +175,11 @@ async function perform(entry: InputEntry): Promise<void> {
     const session = await getSession(entry.sessionId);
     if (!session) throw new ApiError("SESSION_UNAVAILABLE");
     conversationId = session.conversationId ?? provider.id + ":" + randomUUID();
-    const thread = await loadThread(entry.sessionId, conversationId);
+    const thread = await loadThread(entry.sessionId, conversationId); ownedThread = thread;
     const claimed = await claimOpenRouterInput(entry.id, conversationId);
     if (!claimed) return;
     admitted = true;
-    const messageId = randomUUID(), answerId = randomUUID();
+    const messageId = randomUUID(); answerId = randomUUID(); modelId = model.id;
     turnId = (provider.id === "openrouter" ? "or-" : "api-") + randomUUID(); active.turnId = turnId;
     const turn: OwnedTurn = { provider: provider.id, sessionId: entry.sessionId, conversationId, inputId: entry.id,
       messageId, turnId, signal: controller.signal };
@@ -177,16 +205,21 @@ async function perform(entry: InputEntry): Promise<void> {
     const messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
     const contextMessages: ApiMessage[] = [{ role: "system", content: system }, ...messages];
     budget(contextMessages, model, declarations, output);
-    let displayed = "", invocations = 0;
-    let paintedAt = 0;
-    const paint = (addition: string) => {
-      displayed += addition;
-      if (!accepted || Date.now() - paintedAt < 180) return;
+    let invocations = 0, paintedAt = 0;
+    const flushPaint = () => {
+      clearPaintTimer();
+      if (!accepted || controller.signal.aborted || !displayed) return;
       paintedAt = Date.now();
-      const snapshot = displayed;
-      painting = painting.then(() => upsertMessageEvent(turn.sessionId, assistantRow(snapshot, answerId, messageId, turnId!, model.id, false)))
+      const snapshot = displayed, snapshotId = answerId;
+      painting = painting.then(() => upsertMessageEvent(turn.sessionId, assistantRow(snapshot, snapshotId, messageId, turnId!, model.id, false)))
         .then(() => notifyChanged(turn.sessionId));
       void painting.catch(error => controller.abort(error));
+    };
+    const paint = (addition: string) => {
+      displayed += addition; active.activity = { phase: 'responding' };
+      if (!accepted) return;
+      if (Date.now() - paintedAt >= 180) flushPaint();
+      else if (!paintTimer) paintTimer = setTimeout(flushPaint, 180 - (Date.now() - paintedAt));
     };
     const firstAccepted = async () => {
       if (accepted) return;
@@ -202,6 +235,8 @@ async function perform(entry: InputEntry): Promise<void> {
     };
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
       controller.signal.throwIfAborted();
+      if (round > 0) { displayed = ''; answerId = randomUUID(); paintedAt = 0; responseSaved = false; }
+      active.activity = { phase: 'requesting' }; notifyChanged(turn.sessionId);
       if (round > 0 && !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
       declarations = model.supportsTools ? tools.declarations : [];
       const requestMessages: ApiMessage[] = [{ role: "system", content: system },
@@ -209,17 +244,28 @@ async function perform(entry: InputEntry): Promise<void> {
       budget(requestMessages, model, declarations, output);
       const response = await provider.complete({ model: model.id, sessionId: conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
-        reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint });
+        reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint,
+        onToolCall: name => {
+          if (!declarations.some(tool => tool.function.name === name) || controller.signal.aborted) return;
+          active.activity = { phase: 'preparing-tool' }; notifyChanged(turn.sessionId);
+        } });
       if (!accepted || !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
       const resultContent = response.content;
       if (resultContent && !displayed.endsWith(resultContent)) {
         // Streaming already painted these deltas; non-streaming and post-tool prose may be new.
         if (!displayed.endsWith(resultContent)) paint(resultContent);
       }
+      clearPaintTimer();
+      await painting;
       const calls = response.toolCalls;
+      if (calls.length && (displayed || resultContent)) {
+        await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, false));
+        notifyChanged(turn.sessionId);
+      }
       thread.messages.push({ role: "assistant", content: resultContent || null,
         ...(response.reasoningDetails.length ? { reasoning_details: response.reasoningDetails } : {}),
         ...(calls.length ? { tool_calls: calls } : {}) });
+      responseSaved = true;
       await saveThread(thread);
       if (!calls.length) {
         await painting;
@@ -228,6 +274,15 @@ async function perform(entry: InputEntry): Promise<void> {
           turnId: turn.turnId, outcome: "completed" });
         await finishApiWorker(entry, displayed || resultContent || "Worker completed without a text report.");
         notifyChanged(turn.sessionId);
+        try {
+          const summary = await getSession(turn.sessionId);
+          if (!controller.signal.aborted && !thread.titleRequested && !entry.apiWorker && summary?.titleSource !== 'manual' && summary?.titleSource !== 'provider' &&
+              (!summary?.origin || summary.origin.kind === 'desktop')) {
+            thread.titleRequested = true; await saveThread(thread);
+            const question = thread.messages.find(row => row.role === 'user')?.content ?? entry.text;
+            generateApiTopicTitle(turn.sessionId, conversationId, question ?? entry.text, displayed || resultContent, provider, model);
+          }
+        } catch { /* Optional naming cannot turn completed task work into failure. */ }
         return;
       }
       if (calls.length > 16 || invocations + calls.length > MAX_CALLS) throw new ApiError("TOOL_LIMIT");
@@ -236,9 +291,14 @@ async function perform(entry: InputEntry): Promise<void> {
         controller.signal.throwIfAborted();
         if (!await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
         const argumentsJson = JSON.parse(call.function.arguments) as unknown;
+        active.activity = { phase: 'preparing-tool', tool: call.function.name };
+        notifyChanged(turn.sessionId);
         const result = await tools.invoke(call.function.name, argumentsJson);
         invocations += 1;
-        thread.messages.push({ role: "tool", tool_call_id: call.id, content: toolOutput(result) });
+        const schema = result.isError && JSON.stringify(result.content).includes('INVALID_ARGUMENTS:')
+          ? tools.declarations.find(tool => tool.function.name === call.function.name)?.function.parameters : null;
+        thread.messages.push({ role: "tool", tool_call_id: call.id, content: toolOutput(result) +
+          (schema ? '\nExact current input schema for ' + call.function.name + ': ' + JSON.stringify(schema) : '') });
         await saveThread(thread);
         // An explicit worker finish ends its generation locally; no extra paid request or new tool.
         const worker = entry.apiWorker && agentInfoForOwnedConversation(conversationId);
@@ -254,6 +314,7 @@ async function perform(entry: InputEntry): Promise<void> {
     }
     throw new ApiError("ITERATION_LIMIT");
   } catch (error) {
+    clearPaintTimer();
     await painting.catch(() => undefined);
     const code = error instanceof ApiError ? error.code : controller.signal.aborted ? "STOPPED" : "API_REQUEST_FAILED";
     // A claimed operation may have reached OpenRouter or run local tools. Never retry it automatically.
@@ -266,7 +327,16 @@ async function perform(entry: InputEntry): Promise<void> {
       await persistCriticalSwarmNow().catch(() => false);
     }
     if (accepted && turnId) {
-      await appendEvent(entry.sessionId, { kind: "chat_error", source: "app", time: Date.now(),
+      if (controller.signal.aborted && displayed && answerId && conversationId) {
+        const question = await readLatestUserMessage(entry.sessionId).catch(() => null);
+        if (question?.messageId) await upsertMessageEvent(entry.sessionId,
+          assistantRow(displayed, answerId, question.messageId, turnId, modelId, false)).catch(() => undefined);
+        if (ownedThread && !responseSaved) {
+          ownedThread.messages.push({ role: 'assistant', content: displayed });
+          await saveThread(ownedThread).catch(() => undefined);
+        }
+      }
+      if (!controller.signal.aborted) await appendEvent(entry.sessionId, { kind: "chat_error", source: "app", time: Date.now(),
         turnId, message: { text: code, chars: code.length, truncated: false } }).catch(() => undefined);
       await appendEvent(entry.sessionId, { kind: "turn_end", source: "app", time: Date.now(),
         turnId, outcome: controller.signal.aborted ? "stopped" : "failed" }).catch(() => undefined);
@@ -275,6 +345,7 @@ async function perform(entry: InputEntry): Promise<void> {
       notifyChanged(entry.sessionId);
     }
   } finally {
+    clearPaintTimer();
     dropWorkerStop?.();
     if (controllers.get(entry.id) === active) controllers.delete(entry.id);
   }

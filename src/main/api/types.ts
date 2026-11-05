@@ -6,6 +6,8 @@ export type ApiModel = {
   maxCompletionTokens: number | null;
   supportsTools: boolean;
   supportedParameters: string[];
+  reasoningMandatory?: boolean;
+  reasoningEfforts?: string[];
   pricing: { prompt: string; completion: string };
 };
 export type ApiTool = { type: "function"; function: { name: string; description: string; parameters: object } };
@@ -33,6 +35,10 @@ export type ApiCompleteOptions = {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
   signal?: AbortSignal;
   onText?: (increment: string) => void;
+  /** A streamed function name is preparation evidence only, never execution authority. */
+  onToolCall?: (name: string) => void;
+  /** Metadata-only requests can explicitly disable model reasoning where supported. */
+  reasoningEnabled?: boolean;
   /** Remote HTTP accepted. Caller must commit its exact local Send receipt first. */
   onAccepted?: () => Promise<void>;
   stream?: boolean;

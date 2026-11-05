@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.4': {
+    lead: () => t('Follow API work as it happens and change direction immediately.'),
+    highlights: [
+      { icon: 'i-terminal', title: () => t('Live work progress'), text: () => t('See progress paragraphs, completed tools, running commands and background processes while an API task is still working.') },
+      { icon: 'i-chat', title: () => t('Steer an API task'), text: () => t('Immediate messages interrupt the current API response. Already dispatched tools settle safely, and background processes remain available.') },
+      { icon: 'i-chat', title: () => t('Topic-based chat names'), text: () => t('Generate a short subject title for an API conversation and preserve names you set yourself.') }
+    ]
+  },
   '0.9.3': {
     lead: () => t('Use local workers, tools, plugins and skills with API models.'),
     highlights: [

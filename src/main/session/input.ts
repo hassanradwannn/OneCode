@@ -13,7 +13,7 @@ import { localBindingInstructions, hasCurrentLocalBinding, usesLocalTaskCapabili
 import { positionOf } from '../../shared/chronology.js';
 import { matchesAppPrompt, userPromptText } from '../../shared/user-prompt.js';
 import { randomUUID } from 'node:crypto';
-import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
+import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, providerTrustValidationEnabled, chatProviderCapabilities, chatProviderForConversation, isChatProviderConversationId, type ChatProvider } from '../../shared/chat-provider.js';
 import { userTitle } from './title.js';
 import { readDurable, writeDurableNow, writeDurableSoon } from '../durable.js';
 import { getSession, findSessionByConversation, createSession, deleteSession, rebindSession, conversationWasSuperseded, readRecentEvents, listUsageSessions, turnHasMcpCall, questionHasMcpCall, sessionDirectoryMissing, readCompletedFinal, readLatestUserMessage } from './store.js';
@@ -274,6 +274,12 @@ export async function sessionInputPolicy(sessionId: string, observedActivity?: I
   const [end] = await readRecentEvents(sessionId, 1, { kinds: ['turn_start', 'turn_end'] });
   const session = await getSession(sessionId);
   if (!session?.conversationId || isChatBlocked(session.conversationId)) return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn: null, browserAllowed: false, settled: false };
+  if (!isBrowserChatProvider(chatProviderForConversation(session.conversationId))) {
+    const directTurn = session.activeTurnId ? await steeringSource(sessionId, session.conversationId, session.activeTurnId) : null;
+    const executing = runningToolProgress(session.conversationId) !== null;
+    return { queueAtFinish: false, canInject: false, injectionTurnId: null, directTurn,
+      browserAllowed: !session.activeTurnId && !executing, settled: !session.activeTurnId && !executing };
+  }
   const activity = observedActivity ?? deliveryHooks?.activity?.(session) ?? { possible: !!session.activeTurnId, exact: !!session.activeTurnId };
   const stopped = session.finishTurn?.released === true;
   const selection = session.selectedModel?.conversationId === session.conversationId ? session.selectedModel : null;
@@ -857,7 +863,10 @@ function append(current: InputEntry[], entry: InputEntry, stackDirect = false): 
     if (positioned.length) entry = { ...entry, queueOrder: Math.max(...positioned.map(row => row.queueOrder!)) + 1 };
   }
   // Admission is per durable session. Native composer custody stays with each claim.
-  if (!stackDirect && entry.purpose !== 'decision' && !queuedFollowup(entry) && current.some(row => row.sessionId === entry.sessionId && row.purpose !== 'decision' &&
+  const apiQueued = entry.chatProvider && !isBrowserChatProvider(entry.chatProvider);
+  // API sessions have a serialized runner rather than a single native composer slot.
+  // Accept additional explicit directions durably; claim still admits one fresh turn.
+  if (!apiQueued && !stackDirect && entry.purpose !== 'decision' && !queuedFollowup(entry) && current.some(row => row.sessionId === entry.sessionId && row.purpose !== 'decision' &&
       !(!entry.finishOwner && row.finishOwner && row.state === 'tool') &&
       (!queuedFollowup(row) || row.state === 'browser') && ['queued', 'browser', 'tool'].includes(row.state))) {
     throw new Error('One message is already awaiting delivery. Cancel it before sending another.');
@@ -2411,12 +2420,21 @@ export function claimOpenRouterInput(id: string, conversationId: string): Promis
     const entry = current.find(row => row.id === id);
     if (!entry || entry.chatProvider !== provider || entry.state !== 'queued' || entry.owner ||
         !entry.sessionId || !entry.model || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined ||
-        entry.purpose === 'decision' || entry.mode === 'finish' || entry.steerTurnId || entry.delivery ||
+        entry.purpose === 'decision' || entry.mode === 'finish' || entry.delivery ||
         entry.attachmentDelivery || entry.images?.length || entry.attachments?.length || entry.stages?.length ||
         (entry.conversationId && entry.conversationId !== conversationId)) return null;
     const session = await getSession(entry.sessionId);
     if (!session || (session.conversationId && session.conversationId !== conversationId) ||
         session.activeTurnId || session.origin?.kind === 'worker' && !entry.apiWorker) return null;
+    if (entry.steerTurnId) {
+      const source = entry.directTurn;
+      const ended = session.timelineTurns?.[entry.steerTurnId];
+      if (!entry.steerReady || source?.id !== entry.steerTurnId || !source.questionId ||
+          ended?.questionId !== source.questionId || ended.endOrigin === undefined) return null;
+      // Several explicit directions can arrive while an already-dispatched tool settles.
+      // Each starts its own fresh question once idle; none may interrupt a later generation
+      // using the earlier source turn or reuse that source's execution authority.
+    }
     if (entry.apiWorker && !await (await import('../api/workers.js')).apiWorkerInputCurrent(entry)) return null;
     const now = Date.now();
     const claimed: InputEntry = {

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.4 Beta] — 2026-11-05
+
+Make API Steer interrupt the exact current generation instead of silently queuing. Preserve in-flight tool receipts and background-process custody. Publish separate public progress segments around tools, trailing streaming updates and exact live command activity. Use API runtime activity in Desktop/Remote projections and keep API chats out of browser readiness/recovery. Generate short topic titles with a bounded tool-free request; protect manual names and do not retry uncertain metadata requests. Include exact schema feedback after rejected arguments and stronger workspace/artifact guidance. Stable preparation remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.4.md).
+
 ## [0.9.3 Beta] — 2026-11-05
 
 Add a shared local API harness and adapter interface. OpenRouter can spawn, report and reuse broker-owned workers, compose Core tools, call installed plugins and import/read managed skills without a browser. Recheck live grants and Read-only; retain exact turn identity through nested calls and cancellation. Restore API model IDs and never repeat uncertain API requests after restart. Direct written capability grants update the existing settings owner. Recheck transient task attachments at handler admission and recognize an exact credential after leading whitespace. Stable remains 0.8.9; real-provider and installed acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.3.md).
