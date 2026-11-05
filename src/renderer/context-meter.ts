@@ -20,19 +20,19 @@ export function compactTokens(value: number, language: string): string {
 /** Recorder estimates, never a claim about the provider's exact context window. */
 export function paintContextMeter(session: SessionSummary | null, config: Config,
   composer: { model: string; reasoningEffort: ReasoningEffort | null } | null = null,
-  provider: ChatProvider = config.ui?.chatProvider ?? 'gemini'): void {
+  provider: ChatProvider = config.ui?.chatProvider ?? 'gemini',apiContext:{tokens:number;limit:number}|null=null): void {
   const button = document.getElementById('contextMeterButton');
   const panel = document.getElementById('contextMeterInfo');
   const arc = document.getElementById('contextMeterArc');
   if (!button || !panel || !arc) return;
-  const used = Math.max(0, session?.contextTokens ?? 0);
+  const used = Math.max(0, provider==='openrouter' && apiContext ? apiContext.tokens : session?.contextTokens ?? 0);
   // The picker owns the next send choice; the recording may still describe the
   // preceding turn (or not exist yet in a new chat).
   const observed = session?.selectedModel;
   const selection = composer ?? (observed?.conversationId === session?.conversationId ? observed : null);
   const api = provider === 'openrouter';
   const pro = !api && isProModel(selection?.model, selection?.reasoningEffort ?? undefined);
-  const observedLimit = api ? modelContextWindow(provider, selection?.model) : null;
+  const observedLimit = api ? modelContextWindow(provider, selection?.model) ?? (apiContext?.limit || null) : null;
   const limit = api ? observedLimit ?? 0 : config.sessions.limitTokens;
   const percent = limit > 0 ? Math.round(used / limit * 100) : 0;
   const boundedPercent = Math.min(100, percent);
@@ -52,7 +52,7 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
       ? t('{0} / {1} estimated tokens · {2}% of model context', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent])
       : t('Model context unknown until the OpenRouter catalog loads')
     : t('{0} / {1} estimated tokens · {2}% of OneCode reference', [tokens(), new Intl.NumberFormat(currentLanguage()).format(limit), percent]),
-    api ? t('API auto-compaction is not available yet') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto
+    api ? config.compaction.auto ? t('API context compacts automatically near 72% of the model window; original history is retained') : t('Automatic compaction is off; use Compact context to reduce API history') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto
       ? t('Auto-compaction at {0} tokens', [new Intl.NumberFormat(currentLanguage()).format(config.compaction.autoTokens)])
     : t('Auto-compaction off'), api ? t('The upstream model chosen by OpenRouter may have a different effective limit.')
       : t('This local estimate does not block messages or tools and is not the provider’s context limit.')].join('\n');
@@ -65,7 +65,7 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
     if (label) ui(label, 'textContent', () => api ? t('Selected model context (estimate)') : t('OneCode reference'));
   }
   ui(document.getElementById('contextPercent')!, 'textContent', () => pro || api && !observedLimit ? '—' : `${percent}%`);
-  ui(document.getElementById('contextThreshold')!, 'textContent', () => api ? t('API auto-compaction unavailable') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto ? short(config.compaction.autoTokens) : t('Off'));
+  ui(document.getElementById('contextThreshold')!, 'textContent', () => api ? config.compaction.auto ? t('Automatic at ~72%') : t('Off') : pro ? t('Auto-compaction off for Pro') : config.compaction.auto ? short(config.compaction.autoTokens) : t('Off'));
   const progress = panel.querySelector<HTMLElement>('.context-progress')!;
   progress.hidden = pro || api && !observedLimit;
   progress.style.setProperty('--context-used', `${boundedPercent}%`);
@@ -74,7 +74,7 @@ export function paintContextMeter(session: SessionSummary | null, config: Config
   ui(display.querySelector('span')!, 'textContent', () => values ? t('Show percentage') : t('Show token values'));
   display.onclick = () => {
     root.dataset.display = values ? 'percent' : 'values';
-    paintContextMeter(session, config, composer, provider);
+    paintContextMeter(session, config, composer, provider,apiContext);
   };
   ui(button, 'aria-label', () => description().replaceAll('\n', '. '));
 }

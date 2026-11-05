@@ -2100,6 +2100,7 @@ async function refreshSessionControls(): Promise<void> {
   if (planHost.dataset.sessionId !== (id ?? '')) renderAgentPlan(planHost, id, null);
   const menu = $('sessionControls');
   if (controlledSessionId !== id || controlledSelection !== selectionGeneration) {
+    apiContextView=null;
     // Retire the previous selection's projection before awaiting the new owner's IPC.
     // Replace the translation binding too, so a locale refresh cannot revive its status.
     ui($('sessionControlStatus'), 'textContent', () => '');
@@ -2146,11 +2147,16 @@ async function refreshSessionControls(): Promise<void> {
   controlledCanSendQueuedWhenIdle = controls?.canSendQueuedWhenIdle === true;
   controlledRecovery = controls?.recovery ?? [];
   apiLiveActivity = controls?.apiActivity ?? null;
+  apiContextView=controls?.apiContext??null;
+  const config=deps.state()?.config;
+  if(config)paintContextMeter(sessions.find(row=>row.id===id)??null,config,confirmedComposerModel(),selectedChatProvider(),apiContextView);
   paintDeliveryControls();
   paintPendingInputs();
   paintStateLine();
   menu.hidden = !controls;
-  $('compactSession').hidden = !controls || !isBrowserChatProvider(selectedChatProvider());
+  $('compactSession').hidden = !controls;
+  const compactLabel=$('compactSession').querySelector('span');
+  if(compactLabel) ui(compactLabel,'textContent',()=>isBrowserChatProvider(selectedChatProvider())?t('Compact & resume'):t('Compact context'));
   if (!controls) { $('cancelCompaction').hidden = true; return; }
   const objective = $<HTMLTextAreaElement>('sessionObjective');
   if (objective.dataset.sessionId !== id || !objective.dataset.edited) {
@@ -2168,8 +2174,8 @@ async function refreshSessionControls(): Promise<void> {
     $<HTMLSelectElement>('loopDelivery').value = controls.loopAfterTurn ? 'after-turn' : 'finish';
   paintLoopDeliveryTitle();
   paintAutomationSwitch();
-  $<HTMLButtonElement>('compactSession').disabled = !!controls.blocked || !!controls.job?.busy;
-  $('cancelCompaction').hidden = !controls.job?.busy;
+  $<HTMLButtonElement>('compactSession').disabled = !!controls.blocked || !!controls.job?.busy || controls.apiActivity?.phase==='compacting' || controls.apiActivity?.compactionPending===true;
+  $('cancelCompaction').hidden = !controls.job?.busy && !(controls.apiActivity?.phase==='compacting' && controls.apiActivity.manual);
   ui($('sessionControlStatus'), 'textContent', () => controls.blocked === 'worker' ? t("This sub-agent is managed by its prime.") : controls.blocked === 'blocked' ? t("This chat is blocked.") : controls.job?.busy ? providerText("Compaction is running in Gemini.") : '');
 }
 
@@ -4730,7 +4736,7 @@ function paintDetail(followBottom = historyBefore === null): void {
   applyComposerSessionModel(selectedId ? `${selectedId}:${selectionGeneration}` : null, composerSessionSelection(summary) ?? null,
     acceptedAutomaticModel(summary, pendingComposerInputs));
   const config = deps.state()?.config;
-  if (config) paintContextMeter(summary, config, confirmedComposerModel(), selectedChatProvider());
+  if (config) paintContextMeter(summary, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   const project = selectedLocalProject();
   $('chatProjectContext').hidden = !project;
   $('chatProjectName').textContent = project?.name ?? '';
@@ -5258,13 +5264,15 @@ const NATIVE_STEP_NOW = /^\S+ing\b/i;
  * not look like one: it shows Gemini's own sign for it, a white dot that breathes.
  */
 let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null;
+let apiContextView:{tokens:number;limit:number}|null=null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
   if (controlledSessionId === selectedId && apiLiveActivity) {
     const labels: Partial<Record<import('../main/api/activity.js').ApiActivity['phase'], string>> = {
-      catalog: t('Loading model information'), preparing: t('Preparing API request'), requesting: t('Waiting for provider response')
+      catalog: t('Loading model information'), preparing: t('Preparing API request'), requesting: t('Waiting for provider response'),
+      compacting: t('Compacting context — running tasks are retained')
     };
     const label = labels[apiLiveActivity.phase];
-    if (label) return { text: label, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
+    if (label) return { text: apiLiveActivity.phase==='compacting' ? apiLiveActivity.reason || label : label, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
   }
   if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'recovering')
     return { text: t('Reconnecting to the model (retry {0}) — running tasks are retained', [String(apiLiveActivity.attempt ?? 1)]), icon: 'i-retry', working: true };
@@ -5549,6 +5557,9 @@ function workingLabel(turnId: string, elapsedSeconds: number): string {
 }
 
 function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad'; working?: boolean; ticking?: boolean } {
+  if(controlledSessionId===selectedId && controlledSelection===selectionGeneration && detailFor===selectedId &&
+      apiLiveActivity?.phase==='compacting' && apiLiveActivity.manual)
+    return {text:t('Compacting saved context'),tone:'is-live',working:true,ticking:true};
   if (!deps.state()?.config.ui.developerMode) {
     const summary = sessions.find(entry => entry.id === selectedId);
     if (!summary || detailFor !== selectedId) return { text: '', tone: '' };
@@ -6312,7 +6323,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyRouteSettling(state.status.routeSettlingUntil ?? 0);
   if (bridgePresent !== bridge.present) { bridgePresent = bridge.present; paintPendingInputs(); }
   if (visible && selectedId) void refreshSessionControls();
-  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider());
+  paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   applyChatModels(config, previous, selectedChatProvider());
 
   applyChatChecked($<HTMLInputElement>('autoCompact'), config.compaction.auto, previous?.compaction.auto);
@@ -7236,7 +7247,7 @@ export function initChat(next: Deps): void {
   initChatModels(() => {
     paintLoopDelivery();
     const config = deps.state()?.config;
-    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider());
+    if (config) paintContextMeter(sessions.find(session => session.id === selectedId) ?? null, config, confirmedComposerModel(), selectedChatProvider(),controlledSessionId===selectedId?apiContextView:null);
   });
   $('queueAtFinish').addEventListener('click', () => {
     if ($('queueAtFinish').hidden) return;

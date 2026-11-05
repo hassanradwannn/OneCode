@@ -51,7 +51,9 @@ export function chatErrorPresentation(error: ChatError, history: readonly Sessio
         ? t('The upstream model stopped at its completion-token limit before finishing. High reasoning may consume part of this budget.')
         : text,
       resolved: false, reloaded: false,
-      next: t('Saved results and background tasks are retained. Transient model requests are retried automatically. If recovery was exhausted or the error needs attention, address the reason above and send Continue to resume from saved results.')
+      next: /\bCONTEXT_LIMIT\b|COMPACTION_/.test(text)
+        ? t('Saved history and running tasks are retained. Use Compact context in this chat, then send Continue. If compaction cannot fit the original request, choose a model with a larger context window.')
+        : t('Saved results and background tasks are retained. Transient model requests are retried automatically. If recovery was exhausted or the error needs attention, address the reason above and send Continue to resume from saved results.')
     };
   }
   if (error.usageLimit) {

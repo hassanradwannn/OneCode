@@ -34,7 +34,14 @@ function authHeaders(apiKey: string): HeadersInit {
   return { Authorization: "Bearer " + apiKey, "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
 }
 
-function apiFailure(status: number, retryAfterMs: number | null = null): OpenRouterApiError {
+function apiFailure(status: number, retryAfterMs: number | null = null, error?: unknown): OpenRouterApiError {
+  if (isObject(error)) {
+    const metadata=isObject(error.metadata)?error.metadata:{};
+    if(metadata.error_type==='context_length_exceeded' || error.type==='context_length_exceeded' ||
+        error.code==='context_length_exceeded' || status===400 && typeof error.message==='string' &&
+        /context (?:length|window)|maximum context|prompt (?:is )?too long/i.test(error.message))
+      return new OpenRouterApiError('CONTEXT_LIMIT',status,retryAfterMs);
+  }
   const known: Record<number, string> = { 400: "BAD_REQUEST", 401: "UNAUTHORIZED", 402: "INSUFFICIENT_CREDITS",
     403: "FORBIDDEN", 404: "MODEL_UNAVAILABLE", 408: "REQUEST_TIMEOUT", 413: 'PROVIDER_REQUEST_TOO_LARGE', 429: "RATE_LIMITED" };
   return new OpenRouterApiError(known[status] ?? (status >= 500 ? "PROVIDER_UNAVAILABLE" : "API_ERROR"), status, retryAfterMs);
@@ -51,7 +58,7 @@ function retryAfter(response: Response): number | null {
 function streamFailure(payload: Record<string, unknown>): OpenRouterApiError | null {
   if (!isObject(payload.error)) return null;
   const status = typeof payload.error.code === 'number' ? payload.error.code : 502;
-  return apiFailure(status);
+  return apiFailure(status,null,payload.error);
 }
 
 async function boundedText(response: Response): Promise<string> {
@@ -207,6 +214,9 @@ export class OpenRouterClient {
     if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
     const streaming = input.stream !== false;
     const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
+      // Local handoffs retain task/tool custody. Do not let the router silently
+      // remove messages (enabled by default for some short-context endpoints).
+      plugins:[{id:'context-compression',enabled:false}],
       ...(input.reasoningEnabled === false ? { reasoning: { enabled: false } }
         : input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
@@ -224,14 +234,16 @@ export class OpenRouterClient {
         throw apiTransportError(error);
       });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw apiFailure(response.status, retryAfter(response));
+      let error:unknown;
+      try { const value:unknown=JSON.parse(await boundedText(response));if(isObject(value))error=value.error; } catch { /* Body is only typed classification evidence. */ }
+      throw apiFailure(response.status, retryAfter(response),error);
     }
     await input.onAccepted?.();
     if (streaming) return streamCompletion(response, input.onText, input.onToolCall);
     let value: unknown;
     const raw = await boundedText(response);
     try { value = JSON.parse(raw); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
+    if(isObject(value)){const failure=streamFailure(value);if(failure)throw failure;}
     return parseCompletion(value);
   }
 }

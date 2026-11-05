@@ -2466,6 +2466,7 @@ export type SessionControlsView = {
   canInject?: boolean;
   canSendDirectly?: boolean;
   apiActivity?: ApiActivity | null;
+  apiContext?: {tokens:number;limit:number} | null;
   canSendQueuedWhenIdle?: boolean;
   finishWaiting?: boolean;
   stopPending?: boolean;
@@ -2508,6 +2509,7 @@ export async function sessionControlsFor(sessionId: string): Promise<SessionCont
       queueAtFinish: false, canInject: false, canSendDirectly: !blocked && !!policy.directTurn,
       canSendQueuedWhenIdle: !blocked && policy.settled, stopPending: apiTurn === 'stopping',
       apiActivity: apiActivity(sessionId, session.activeTurnId ?? null), objective: '', loopAfterTurn: false,
+      apiContext: await (await import('./api/runner.js')).apiContextForSession(sessionId,id),
       proLoopDelivery: false, automation: 'off', blocked, job: null };
   }
   const finishHeld = !blocked && await sessionFinishHeld(sessionId, activeTurnId, id);
@@ -2732,7 +2734,14 @@ async function fileCompactionTicket(sessionId: string, id: string, automatic = f
   return { opened: continuationByToken(opened.token) ?? opened, started: !existing };
 }
 export async function compactSession(sessionId: string): Promise<SessionControlsView> {
-  const { opened } = await fileCompactionTicket(sessionId, await controlledConversation(sessionId));
+  const conversation=await controlledConversation(sessionId);
+  if(!isBrowserChatProvider(chatProviderForConversation(conversation))){
+    if(goalWorkerChat(conversation))throw new Error('worker_compaction_disabled');
+    if(isChatBlocked(conversation))throw new Error('chat_blocked');
+    await (await import('./api/runner.js')).requestApiCompaction(sessionId,conversation);
+    return sessionControlsFor(sessionId);
+  }
+  const { opened } = await fileCompactionTicket(sessionId, conversation);
   if (opened.state === 'awaiting-summary') {
     // The companion owns exact-tab discovery/opening even when Chrome is already
     // running. A cold process start alone cannot deliver a manual desktop request.
@@ -2752,7 +2761,10 @@ export async function resumeFromSavedSummary(sessionId: string, handoffId: strin
   return sessionControlsFor(sessionId);
 }
 export async function cancelSessionCompaction(sessionId: string): Promise<SessionControlsView> {
-  await controlledConversation(sessionId);
+  const conversation=await controlledConversation(sessionId);
+  if(!isBrowserChatProvider(chatProviderForConversation(conversation))){
+    (await import('./api/runner.js')).cancelApiCompaction(sessionId);return sessionControlsFor(sessionId);
+  }
   await cancelResumeNow(sessionId);
   changed();
   return sessionControlsFor(sessionId);

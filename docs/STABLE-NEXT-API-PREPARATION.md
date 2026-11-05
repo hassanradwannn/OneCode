@@ -1,12 +1,12 @@
 # Unfrozen Stable preparation — API integration
 
-Status: **draft, awaiting the user's Beta 0.9.9 testing after the Setup navigation finding**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
+Status: **draft, awaiting the user's Beta 0.9.10 testing after the API context-limit finding**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
 
 ## Prepared scope
 
 Integrate the API work developed from the current Stable ancestry: OpenRouter protected-key setup, model discovery, browserless durable sessions, local Core tools/code mode, plugins, managed skills, broker-owned workers and reuse, live effective/written permissions and exact task recovery. Include the Beta 0.9.4 repairs for immediate Steer, public progress segments, live command/background-process visibility, API readiness/recovery isolation and generated topic titles.
 
-The draft app metadata currently follows the next Beta candidate (0.9.9); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
+The draft app metadata currently follows the next Beta candidate (0.9.10); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
 
 ## Evidence available for review
 

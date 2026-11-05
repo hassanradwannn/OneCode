@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.10 Beta] — 2026-11-05
+
+Add local checkpointed API context compaction at model/tool boundaries, bounded hierarchical handoff summaries and recovery of typed upstream context rejections. Verify and retain the original source archive before atomically replacing working context. Preserve the first/latest user messages, complete recent tool exchanges, unacknowledged output pages and existing turn/process/worker ownership. Support manual Compact context for idle/failed chats and queued compaction for live tasks; honour the automatic-compaction toggle. Show compaction progress and the effective saved-context estimate. Disable OpenRouter's middle-out truncation so the local receipt owner knows which tool results were actually delivered. See [Beta notes](docs/release-notes/beta-v0.9.10.md).
+
 ## [0.9.9 Beta] — 2026-11-05
 
 Keep Setup's provider picker and API-key form reachable for OpenRouter. Exclude hidden transport steps from active-step and completion calculation, show the API Next action and use saved secure-key readiness independently of browser/tunnel state. Provider switches stay on their setup page; Back from Folder reaches the provider form. Add a visible Back to chats exit. See [Beta notes](docs/release-notes/beta-v0.9.9.md).

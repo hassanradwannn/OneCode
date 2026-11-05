@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.10': {
+    lead: () => t('Keep API tasks moving when their context fills up.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Automatic context recovery'), text: () => t('Save a handoff before the model window fills, preserve the original history and continue the same task with running processes intact.') },
+      { icon: 'i-chat', title: () => t('Compact a failed chat'), text: () => t('Use Compact context in the context menu, then Continue. Manual compaction can be cancelled and does not send another task message.') },
+      { icon: 'i-pulse', title: () => t('Effective context estimate'), text: () => t('See the reduced API working context separately from the full retained transcript.') }
+    ]
+  },
   '0.9.9': {
     lead: () => t('Switch providers and leave Setup without getting stuck.'),
     highlights: [

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from 'node:timers/promises';
 import { getConfig } from "../config.js";
 import { readDurable, writeDurableNow } from "../durable.js";
-import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent } from "../session/store.js";
+import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent, conversationWasSuperseded } from "../session/store.js";
+import { isChatBlocked } from '../session/blocked-chats.js';
 import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, noteApiInputRecovery, listInputs, type InputEntry } from "../session/input.js";
 import { notifyChanged } from "../session/recorder.js";
 import { ApiError, type ApiMessage, type ApiModel, type ApiToolCall } from "./types.js";
@@ -19,6 +20,7 @@ import { apiOutputBudget } from './budget.js';
 import { ApiRefusalWatch } from './refusals.js';
 import type { OutputPublication } from '../codex/unified-exec.js';
 import { logInfo } from '../logger.js';
+import { compactApiContext, apiContextNeedsCompaction, contextTokens, type ApiThread } from './compaction.js';
 export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 1000;
@@ -30,7 +32,7 @@ const MAX_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_TOOL_RESULT_CHARS = 64_000;
 const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. For build, edit, inspection or repair requests, inspect the actual workspace or saved artifact with tools, then carry out the requested work. A code example in prose is not a created or changed file. Resolve the current project and approved roots before choosing a working directory; never assume an index.html exists. EXEC_RESULTS_UNREAD means completed command output must be collected, not that command permission was revoked. Following tool responses include bounded retained pages; read them and use write_stdin on the listed exact owned process IDs. Do not issue PING loops or ask the user to reset or discard pending results. A live command is separate from completed results. When an owned test is hung and stopping it is appropriate, write_stdin with chars set to the Ctrl-C character can interrupt it without launching another exec command. Never kill an arbitrary OS process based only on a port or a guessed PID. Complete requested verification and cleanup before handing work back; distinguish an intentional server from an unfinished test. Give brief public progress updates at useful milestones and report only work supported by tool results. Answer clearly once work is verified.";
 
-interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[]; titleRequested?: boolean; titleVersion?: number }
+type Thread = ApiThread;
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
 const queues = new Map<string, Promise<void>>();
 let accepting = true;
@@ -42,9 +44,22 @@ function threadValid(value: unknown, sessionId: string, conversationId: string):
   const data = value as Partial<Thread>;
   if (data.version !== 1 || data.sessionId !== sessionId || data.conversationId !== conversationId ||
       !Array.isArray(data.messages) || data.messages.length > MAX_HISTORY_MESSAGES) return false;
+  if(data.toolContextTokens!==undefined && (!Number.isSafeInteger(data.toolContextTokens)||data.toolContextTokens<0||data.toolContextTokens>4_000_000))return false;
+  if([data.systemContextTokens,data.contextWindow].some(value=>value!==undefined && (!Number.isSafeInteger(value)||value<0||value>100_000_000)))return false;
+  if(data.checkpoint && (!/^ac-[a-f0-9]{32}$/.test(data.checkpoint.archive)||!/^[a-f0-9]{64}$/.test(data.checkpoint.digest)||
+      ![data.checkpoint.createdAt,data.checkpoint.beforeTokens,data.checkpoint.afterTokens].every(value=>Number.isFinite(value)&&value>=0)))return false;
   return data.messages.every(item => item && typeof item === "object" &&
     ["system", "user", "assistant", "tool"].includes(item.role) &&
     (typeof item.content === "string" || item.role === "assistant" && item.content === null));
+}
+/** Presentation derives the effective context from the existing saved thread,
+ * independently of the full canonical transcript retained for history. */
+export async function apiContextForSession(sessionId:string,conversationId:string):Promise<{tokens:number;limit:number}|null>{
+  try{
+    const thread=await readDurable<unknown>(stateName(sessionId),{strict:true});
+    if(!threadValid(thread,sessionId,conversationId))return null;
+    return {tokens:contextTokens(thread.messages)+(thread.toolContextTokens??0)+(thread.systemContextTokens??0),limit:thread.contextWindow??0};
+  }catch{return null;}
 }
 
 async function loadThread(sessionId: string, conversationId: string): Promise<Thread> {
@@ -134,6 +149,49 @@ export async function steerApiInput(entry: InputEntry): Promise<void> {
   scheduleApiInput(entry);
 }
 
+/** Manual compaction joins the same session queue. A live task consumes its
+ * request only at the next safe boundary; an idle/failed chat needs no new Send. */
+export async function requestApiCompaction(sessionId: string, expectedConversation: string): Promise<void> {
+  if(!accepting || isChatBlocked(expectedConversation) || await conversationWasSuperseded(expectedConversation))throw new ApiError('API_TURN_NOT_CURRENT');
+  const running=[...controllers.values()].find(item=>item.sessionId===sessionId);
+  if(running){
+    if(running.compactionOnly)return;
+    running.compactionRequested=true;notifyChanged(sessionId);return;
+  }
+  const previous=queues.get(sessionId) ?? Promise.resolve();
+  const work=previous.catch(()=>undefined).then(async()=>{
+    const session=await getSession(sessionId);
+    if(!accepting || !getConfig().sessions.record || !session || session.conversationId!==expectedConversation || isChatBlocked(expectedConversation))throw new ApiError('API_TURN_NOT_CURRENT');
+    const provider=apiProvider('openrouter');if(!provider)throw new ApiError('API_PROVIDER_UNAVAILABLE');
+    const controller=new AbortController(),key='compact:'+sessionId;
+    const active:ActiveApiTurn={sessionId,turnId:null,controller,compactionOnly:true,activity:{phase:'compacting',since:Date.now()}};
+    controllers.set(key,active);notifyChanged(sessionId);
+    try{
+      const input=(await listInputs()).filter(row=>row.sessionId===sessionId && row.chatProvider===provider.id && row.model).sort((a,b)=>b.createdAt-a.createdAt)[0];
+      const selected=session.selectedModel?.conversationId===expectedConversation ? session.selectedModel.model : input?.model;
+      const model=(await provider.models(controller.signal)).find(row=>row.id===selected) ?? (selected===provider.defaultModel.id?provider.defaultModel:undefined);
+      if(!model)throw new ApiError('MODEL_UNAVAILABLE');
+      const thread=await loadThread(sessionId,expectedConversation);
+      const current=async()=>!controller.signal.aborted && !isChatBlocked(expectedConversation) &&
+        !await conversationWasSuperseded(expectedConversation) && (await getSession(sessionId))?.conversationId===expectedConversation;
+      const result=await compactApiContext({thread,provider,model,system:SYSTEM,tools:[],reserveTokens:thread.toolContextTokens,signal:controller.signal,current,
+        progress:async reason=>{active.activity={phase:'compacting',since:Date.now(),reason};notifyChanged(sessionId);}});
+      if(result){if(!await current())throw new ApiError('API_TURN_NOT_CURRENT');await saveThread({...thread,...result,contextWindow:model.contextLength,
+        systemContextTokens:contextTokens([{role:'system',content:SYSTEM}])-contextTokens([])});}
+    }catch(error){
+      if(controller.signal.aborted)return;
+      throw new Error(apiFailureDescription(error));
+    }finally{if(controllers.get(key)===active)controllers.delete(key);notifyChanged(sessionId);}
+  });
+  queues.set(sessionId,work);
+  try{await work;}finally{if(queues.get(sessionId)===work)queues.delete(sessionId);}
+}
+export function cancelApiCompaction(sessionId:string): void {
+  const active=[...controllers.values()].find(item=>item.sessionId===sessionId);
+  if(active?.compactionOnly)active.controller.abort(new Error('User cancelled context compaction'));
+  else if(active)active.compactionRequested=false;
+}
+
 async function perform(entry: InputEntry): Promise<void> {
   if (!entry.sessionId || !entry.model) return;
   const controller = new AbortController();
@@ -156,6 +214,7 @@ async function perform(entry: InputEntry): Promise<void> {
   let responseSaved = false;
   let retryCount = 0;
   const publications = new Set<OutputPublication>();
+  const publicationMessages = new Map<OutputPublication, ApiMessage>();
   const clearPaintTimer = () => { if (paintTimer) clearTimeout(paintTimer); paintTimer = null; };
   try {
     const provider = entry.chatProvider && apiProvider(entry.chatProvider);
@@ -213,10 +272,9 @@ async function perform(entry: InputEntry): Promise<void> {
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
-    const messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
+    let messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
     if (entry.steerTurnId) messages[messages.length - 1] = { role: 'user', content:
       'The user supplied this direction during the ongoing task. Continue the existing objective with this update; preserve completed work, running commands and workers. Use the saved tool results and process IDs. Do not restart the task or repeat earlier actions.\n\n' + prompt };
-    apiOutputBudget(model, [{ role: 'system', content: system }, ...messages], declarations, desiredOutput);
     let invocations = 0, paintedAt = 0;
     const flushPaint = () => {
       clearPaintTimer();
@@ -272,6 +330,38 @@ async function perform(entry: InputEntry): Promise<void> {
         turnId: turn.turnId, progressId: `api-recovery:${turn.turnId}:${roundId}`, message: { text, chars: text.length, truncated: false } });
       notifyChanged(turn.sessionId);
     };
+    const compactContext = async (aggressive = false): Promise<boolean> => {
+      const pending = !accepted ? messages.at(-1) : null;
+      active.activity = {phase:'compacting',inputId:entry.id,since:Date.now()};notifyChanged(turn.sessionId);
+      const result = await compactApiContext({thread,provider,model,system,tools:declarations,signal:controller.signal,aggressive,
+        reserveTokens:pending?contextTokens([pending])-contextTokens([]):0,
+        retainMessages:new Set([...publications].flatMap(receipt=>publicationMessages.has(receipt)?[publicationMessages.get(receipt)!]:[])),
+        current: async()=> {
+          if (controller.signal.aborted || isChatBlocked(turn.conversationId) || await conversationWasSuperseded(turn.conversationId)) return false;
+          if (accepted) return currentApiTurn(turn);
+          const live=(await listInputs()).find(row=>row.id===entry.id);
+          return live?.state==='browser' && live.owner===apiInputOwner(provider.id) && live.sessionId===entry.sessionId &&
+            live.conversationId===conversationId && !live.cancelledByUser &&
+            (await getSession(entry.sessionId!))?.conversationId===conversationId;
+        }, progress: async text=>{
+          if(accepted)await recoveryNotice(text);
+          else await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),text);
+        }});
+      if(!result)return false;
+      const next={...thread,messages:result.messages,checkpoint:result.checkpoint};
+      await saveThread(next);
+      // Only the successful durable swap changes the active context. Tools and
+      // all original messages remain in the archive/canonical history.
+      thread.messages=next.messages;thread.checkpoint=next.checkpoint;
+      if(pending)messages=[...thread.messages,pending];
+      for(const receipt of publications)if(!thread.messages.includes(publicationMessages.get(receipt)!)){
+        receipt.failed=true;publications.delete(receipt);publicationMessages.delete(receipt);
+      }
+      active.compactionRequested=false;
+      const text=`Context compacted from approximately ${result.checkpoint.beforeTokens} to ${result.checkpoint.afterTokens} input tokens. Continuing the same task; original history and running processes are retained.`;
+      if(accepted)await recoveryNotice(text);else await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),text);
+      return true;
+    };
     let roundId = 0;
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
       controller.signal.throwIfAborted();
@@ -282,9 +372,15 @@ async function perform(entry: InputEntry): Promise<void> {
       active.activity = { phase: 'preparing', inputId: entry.id, since: preparationBeganAt }; notifyChanged(turn.sessionId);
       if (round > 0 && !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
       declarations = model.supportsTools ? tools.declarations : [];
-      const requestMessages: ApiMessage[] = [{ role: "system", content: system },
-        ...(round === 0 ? messages : thread.messages)];
-      const { output, maximum } = apiOutputBudget(model, requestMessages, declarations, desiredOutput);
+      thread.toolContextTokens=contextTokens([],declarations)-contextTokens([]);
+      thread.systemContextTokens=contextTokens([{role:'system',content:system}])-contextTokens([]);
+      thread.contextWindow=model.contextLength;
+      let requestMessages: ApiMessage[] = [{ role: "system", content: system }, ...(!accepted ? messages : thread.messages)];
+      if(active.compactionRequested || getConfig().compaction.auto && apiContextNeedsCompaction(model,requestMessages,declarations)){
+        await compactContext();
+        requestMessages=[{role:'system',content:system},...(!accepted?messages:thread.messages)];
+      }
+      let { output, maximum } = apiOutputBudget(model, requestMessages, declarations, desiredOutput);
       let dispatchedAt = 0;
       const complete = () => provider.complete({ model: model.id, sessionId: turn.conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
@@ -306,6 +402,7 @@ async function perform(entry: InputEntry): Promise<void> {
       let response: Awaited<ReturnType<typeof complete>>;
       let retried = false;
       retryCount = 0;
+      let contextRecoveries = 0;
       for (let attempt = 0; ; attempt++) {
         controller.signal.throwIfAborted();
         try { response = await complete(); break; }
@@ -313,6 +410,15 @@ async function perform(entry: InputEntry): Promise<void> {
           controller.signal.throwIfAborted();
           // Storage/receipt failures and tool execution never enter an inference retry.
           if (accepted && await yieldToDirection()) return;
+          if(getConfig().compaction.auto && error instanceof ApiError && error.code==='CONTEXT_LIMIT' && contextRecoveries++<2){
+            clearPaintTimer();await painting;
+            if(accepted && displayed)await upsertMessageEvent(turn.sessionId,assistantRow(displayed,answerId,messageId,turn.turnId,model.id,false));
+            displayed='';answerId=randomUUID();paintedAt=0;
+            if(!await compactContext(true))throw error;
+            requestMessages=[{role:'system',content:system},...(!accepted?messages:thread.messages)];
+            ({output,maximum}=apiOutputBudget(model,requestMessages,declarations,Math.min(desiredOutput,8192)));
+            continue;
+          }
           const delay = apiRetryDelay(error, attempt);
           if (delay === null) throw error;
           retried = true;
@@ -341,6 +447,7 @@ async function perform(entry: InputEntry): Promise<void> {
       // context. A later exact owner call can acknowledge those output pages in the kernel.
       for (const receipt of publications) receipt.completedAt = Date.now();
       publications.clear();
+      publicationMessages.clear();
       const resultContent = response.content;
       if (resultContent && !displayed.endsWith(resultContent)) {
         // Streaming already painted these deltas; non-streaming and post-tool prose may be new.
@@ -396,6 +503,7 @@ async function perform(entry: InputEntry): Promise<void> {
         continue;
       }
       if (!calls.length) {
+        if(active.compactionRequested)await compactContext();
         await painting;
         await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, true));
         await appendEvent(turn.sessionId, { kind: "turn_end", source: "app", time: Date.now(),
@@ -427,7 +535,8 @@ async function perform(entry: InputEntry): Promise<void> {
           ...(schema ? [{ type: 'text', text: '\nExact current input schema for ' + call.function.name + ': ' + JSON.stringify(schema) }] : [])] });
         if (rendered.clipped) { publication.failed = true; publications.delete(publication); }
         const repeated = refusals.observe(rendered.text, round);
-        thread.messages.push({ role: "tool", tool_call_id: call.id, content: rendered.text + repeated.guidance });
+        const toolMessage:ApiMessage={ role: "tool", tool_call_id: call.id, content: rendered.text + repeated.guidance };
+        thread.messages.push(toolMessage);publicationMessages.set(publication,toolMessage);
         await saveThread(thread);
         if (repeated.stalled) throw new ApiError('EXEC_RECOVERY_STALLED');
         // An explicit worker finish ends its generation locally; no extra paid request or new tool.
