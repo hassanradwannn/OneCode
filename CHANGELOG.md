@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.9 Beta] — 2026-11-05
+
+Keep Setup's provider picker and API-key form reachable for OpenRouter. Exclude hidden transport steps from active-step and completion calculation, show the API Next action and use saved secure-key readiness independently of browser/tunnel state. Provider switches stay on their setup page; Back from Folder reaches the provider form. Add a visible Back to chats exit. See [Beta notes](docs/release-notes/beta-v0.9.9.md).
+
 ## [0.9.8 Beta] — 2026-11-05
 
 Read a native Claude question's sole exact plain text item alongside media without importing media payloads. Suppress lossy app-frame readback until exact source or structured-chip proof is available, and recover historical chip presentation without creating Send authority. Preserve an upload's exact draft across one editor remount, accept positively settled tiles and re-read delayed upload observations without uploading again. Request API titles at the first validated response, reject directory-style metadata and upgrade older folder names once while preserving manual names. Make the Workbench browser discoverable before a manual tab exists and reveal an authorized new tab only in its selected chat. See [Beta notes](docs/release-notes/beta-v0.9.8.md).

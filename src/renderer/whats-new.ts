@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.9': {
+    lead: () => t('Switch providers and leave Setup without getting stuck.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('Reach provider setup'), text: () => t('Keep provider selection and the OpenRouter key form reachable. Back and Next follow the steps for your selected provider.') },
+      { icon: 'i-chat', title: () => t('Return to chats'), text: () => t('Use Back to chats from Setup at any time. API readiness checks your saved key without requiring a browser or tunnel.') }
+    ]
+  },
   '0.9.8': {
     lead: () => t('Keep Claude attachment questions intact and present running websites in OneCode.'),
     highlights: [
