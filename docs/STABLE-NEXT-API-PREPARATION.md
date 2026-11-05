@@ -1,12 +1,12 @@
 # Unfrozen Stable preparation — API integration
 
-Status: **draft, awaiting the user's Beta 0.9.4 testing**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
+Status: **draft, awaiting the user's next Beta testing after the 0.9.4 reliability findings**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
 
 ## Prepared scope
 
 Integrate the API work developed from the current Stable ancestry: OpenRouter protected-key setup, model discovery, browserless durable sessions, local Core tools/code mode, plugins, managed skills, broker-owned workers and reuse, live effective/written permissions and exact task recovery. Include the Beta 0.9.4 repairs for immediate Steer, public progress segments, live command/background-process visibility, API readiness/recovery isolation and generated topic titles.
 
-The draft app metadata currently follows the tested Beta candidate (0.9.4); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
+The draft app metadata currently follows the next Beta candidate (0.9.5); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
 
 ## Evidence available for review
 
@@ -25,3 +25,5 @@ The draft app metadata currently follows the tested Beta candidate (0.9.4); the 
 5. Only after the user's acceptance and publication authorization: finalize the `release` source, freeze its exact SHA/tag and dispatch the matching GitHub Stable build. Verify both platforms, curated assets, checksums and update discovery before publishing.
 
 No Stable tag, workflow dispatch, installer activation, profile change or release publication is performed by this preparation.
+
+Beta 0.9.4 user testing found disruptive stop/resend steering and opaque unrecovered API failures. The next candidate adds boundary steering and inference-only recovery. Stable remains explicitly on hold pending acceptance of those repairs; the earlier fixture/build passes did not establish unattended reliability.

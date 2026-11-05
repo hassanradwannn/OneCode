@@ -150,7 +150,7 @@ export async function sendDesktopInput(input: InputArgs, scheduleId?: string): P
     if (input.mode === 'finish' || input.images?.length || input.attachments?.length || input.delivery ||
         input.attachmentDelivery || input.stages?.length || scheduleId)
       throw new Error('This OpenRouter Beta supports text chat and local tool calls. Attachments, scheduled sends and Goal stages are not available yet.');
-    // An immediate direction interrupts the exact API generation; explicit Queue keeps it running.
+    // Steer is applied at the next model/tool boundary; explicit Queue waits for task completion.
     const sendModel = input.model || (existing?.conversationId
       ? existing.selectedModel?.model : null) || api.defaultModel.id;
     const safeInput: InputArgs = { ...input, model: sendModel };

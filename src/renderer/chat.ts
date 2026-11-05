@@ -3855,6 +3855,8 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     case 'turn_start':
       return el('p', 'meta', () => event.detail ? t("Turn reopened — {0}", [event.detail]) : t("Turn started"));
     case 'turn_end': {
+      if (event.source === 'app' && event.reason === 'steer')
+        return el('p', 'meta is-progress', () => t('Direction updated; task continues.'));
       if (stoppedTurnEnd(event, context?.history ?? events)) {
         const line = el('p', 'meta is-progress thinking-line turn-stopped');
         line.append(icon('i-check-circle', 'ico thinking-ico'), el('span', '', () => providerText("Stopped. Gemini no longer shows this turn running.")));
@@ -5256,6 +5258,8 @@ const NATIVE_STEP_NOW = /^\S+ing\b/i;
  */
 let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
+  if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'recovering')
+    return { text: t('Reconnecting to the model (retry {0}) — running tasks are retained', [String(apiLiveActivity.attempt ?? 1)]), icon: 'i-retry', working: true };
   const call = runningToolsFor === selectedId ? runningTools.at(-1) : undefined;
   const open = tracesFor === selectedId ? openTurnId(events) : null;
   const said = open ? traces[open]?.findLast(item => item.kind === 'now') : undefined;

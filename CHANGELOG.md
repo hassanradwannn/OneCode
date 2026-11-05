@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.5 Beta] — 2026-11-05
+
+Keep API tasks alive through steering and recover transient inference failures from saved tool results. Respect provider retry delays, show reconnecting/recovered status and safe HTTP/transport failure explanations, and retain running processes. Apply direction changes at model/tool boundaries without aborting inference or dispatched tools; explicitly skip proposals not yet executed. Extend long-task bounds beyond the earlier twenty-step cap. Stable remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.5.md).
+
 ## [0.9.4 Beta] — 2026-11-05
 
 Make API Steer interrupt the exact current generation instead of silently queuing. Preserve in-flight tool receipts and background-process custody. Publish separate public progress segments around tools, trailing streaming updates and exact live command activity. Use API runtime activity in Desktop/Remote projections and keep API chats out of browser readiness/recovery. Generate short topic titles with a bounded tool-free request; protect manual names and do not retry uncertain metadata requests. Include exact schema feedback after rejected arguments and stronger workspace/artifact guidance. Stable preparation remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.4.md).

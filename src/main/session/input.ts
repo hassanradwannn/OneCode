@@ -2461,6 +2461,17 @@ export function acknowledgeOpenRouterInput(id: string, conversationId: string, m
   });
 }
 
+/** Explain a live API claim's pre-header recovery without inventing a Send receipt. */
+export function noteApiInputRecovery(id: string, owner: string, error: string): Promise<void> {
+  return serial(async () => {
+    const current = await load();
+    const row = current.find(entry => entry.id === id);
+    if (!row?.chatProvider || owner !== (await import('../api/providers.js')).apiInputOwner(row.chatProvider) ||
+        row.owner !== owner || row.state !== 'browser' || row.cancelledByUser) return;
+    await commit(current.map(entry => entry === row ? { ...entry, error: error.slice(0, 500) } : entry));
+  });
+}
+
 /**
  * A first browser observation can arrive before the original opening's /input/ack response.
  * Attach the already reserved local session only when a paired browser captured the exact

@@ -6,6 +6,7 @@ export { ApiError as OpenRouterApiError } from "../api/types.js";
 export type { ApiModel as OpenRouterModel, ApiTool as OpenRouterTool, ApiToolCall as OpenRouterToolCall,
   ApiMessage as OpenRouterMessage, ApiCompletion as OpenRouterCompletion } from "../api/types.js";
 export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
+import { apiTransportError } from '../api/recovery.js';
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -32,10 +33,24 @@ function authHeaders(apiKey: string): HeadersInit {
   return { Authorization: "Bearer " + apiKey, "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
 }
 
-function apiFailure(status: number): OpenRouterApiError {
+function apiFailure(status: number, retryAfterMs: number | null = null): OpenRouterApiError {
   const known: Record<number, string> = { 400: "BAD_REQUEST", 401: "UNAUTHORIZED", 402: "INSUFFICIENT_CREDITS",
     403: "FORBIDDEN", 404: "MODEL_UNAVAILABLE", 408: "REQUEST_TIMEOUT", 429: "RATE_LIMITED" };
-  return new OpenRouterApiError(known[status] ?? (status >= 500 ? "PROVIDER_UNAVAILABLE" : "API_ERROR"), status);
+  return new OpenRouterApiError(known[status] ?? (status >= 500 ? "PROVIDER_UNAVAILABLE" : "API_ERROR"), status, retryAfterMs);
+}
+
+function retryAfter(response: Response): number | null {
+  const value = response.headers.get('retry-after');
+  if (!value) return null;
+  const seconds = Number(value);
+  const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(delay) ? Math.max(0, delay) : null;
+}
+
+function streamFailure(payload: Record<string, unknown>): OpenRouterApiError | null {
+  if (!isObject(payload.error)) return null;
+  const status = typeof payload.error.code === 'number' ? payload.error.code : 502;
+  return apiFailure(status);
 }
 
 async function boundedText(response: Response): Promise<string> {
@@ -92,6 +107,8 @@ async function streamCompletion(response: Response, onText?: (increment: string)
     let payload: unknown;
     try { payload = JSON.parse(data); } catch { throw new OpenRouterApiError("INVALID_STREAM_EVENT"); }
     if (!isObject(payload)) return;
+    const failure = streamFailure(payload);
+    if (failure) throw failure;
     id ||= str(payload.id); model ||= str(payload.model);
     if (payload.usage !== undefined) usage = parseUsage(payload.usage);
     if (!Array.isArray(payload.choices)) return;
@@ -119,7 +136,7 @@ async function streamCompletion(response: Response, onText?: (increment: string)
   };
   try {
     while (!complete) {
-      const next = await reader.read();
+      const next = await reader.read().catch(error => { throw apiTransportError(error, true); });
       if (next.done) break;
       bytes += next.value.byteLength;
       if (bytes > MAX_RESPONSE_BYTES) throw new OpenRouterApiError("RESPONSE_TOO_LARGE");
@@ -173,7 +190,7 @@ export class OpenRouterClient {
     if (!input.model || input.model.length > 200 || !/^[A-Za-z0-9._:\/-]+$/.test(input.model))
       throw new OpenRouterApiError("INVALID_MODEL");
     if (!input.sessionId || input.sessionId.length > 256) throw new OpenRouterApiError("INVALID_SESSION");
-    if (!input.messages.length || input.messages.length > 500) throw new OpenRouterApiError("INVALID_MESSAGES");
+    if (!input.messages.length || input.messages.length > 2000) throw new OpenRouterApiError("INVALID_MESSAGES");
     if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
     const streaming = input.stream !== false;
     const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
@@ -183,10 +200,17 @@ export class OpenRouterClient {
       ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
       stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });
     if (Buffer.byteLength(body) > MAX_REQUEST_BYTES) throw new OpenRouterApiError("REQUEST_TOO_LARGE");
-    // POST is never retried here. Its response may have charged tokens or requested side effects.
+    // One transport attempt only. The harness can retry inference from a saved checkpoint;
+    // no local tool is executed until a complete validated response has been returned.
     const response = await this.transport(this.baseUrl + "/chat/completions", { method: "POST",
-      headers: authHeaders(input.apiKey), body, signal: input.signal });
-    if (!response.ok) throw apiFailure(response.status);
+      headers: authHeaders(input.apiKey), body, signal: input.signal }).catch(error => {
+        if (input.signal?.aborted && input.signal.reason?.name !== 'TimeoutError') throw error;
+        throw apiTransportError(error);
+      });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw apiFailure(response.status, retryAfter(response));
+    }
     await input.onAccepted?.();
     if (streaming) return streamCompletion(response, input.onText, input.onToolCall);
     let value: unknown;

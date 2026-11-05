@@ -1,7 +1,10 @@
 /** The API runner's live turn owner, shared with presentation without browser observations. */
 export interface ApiActivity {
-  phase: 'requesting' | 'responding' | 'preparing-tool';
+  phase: 'requesting' | 'responding' | 'preparing-tool' | 'recovering';
   tool?: string;
+  attempt?: number;
+  retryAt?: number;
+  reason?: string;
 }
 export interface ActiveApiTurn {
   sessionId: string;

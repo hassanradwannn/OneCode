@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.5': {
+    lead: () => t('Keep API tasks moving through connection failures and direction changes.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Automatic API recovery'), text: () => t('Retry transient model requests from saved tool results with visible reconnecting status. Running commands and workers remain available.') },
+      { icon: 'i-chat', title: () => t('Steer without stopping the task'), text: () => t('Apply new directions at the next model or tool boundary. Dispatched tools finish, and proposals that have not started are skipped.') },
+      { icon: 'i-terminal', title: () => t('Longer agentic tasks'), text: () => t('Continue beyond the earlier twenty-step limit and explain connection, provider, storage and context failures clearly.') }
+    ]
+  },
   '0.9.4': {
     lead: () => t('Follow API work as it happens and change direction immediately.'),
     highlights: [

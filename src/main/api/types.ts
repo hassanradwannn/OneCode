@@ -45,7 +45,7 @@ export type ApiCompleteOptions = {
 };
 
 export class ApiError extends Error {
-  constructor(readonly code: string, readonly status: number | null = null) {
+  constructor(readonly code: string, readonly status: number | null = null, readonly retryAfterMs: number | null = null) {
     super(code);
     this.name = "ApiError";
   }

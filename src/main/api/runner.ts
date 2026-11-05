@@ -1,9 +1,10 @@
 /** OneCode-owned API turns: durable Send receipt, bounded model loop and no browser. */
 import { randomUUID } from "node:crypto";
+import { setTimeout as wait } from 'node:timers/promises';
 import { getConfig } from "../config.js";
 import { readDurable, writeDurableNow } from "../durable.js";
 import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent } from "../session/store.js";
-import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, listInputs, type InputEntry } from "../session/input.js";
+import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, noteApiInputRecovery, listInputs, type InputEntry } from "../session/input.js";
 import { notifyChanged } from "../session/recorder.js";
 import { estimateTokens } from "../../shared/session.js";
 import { ApiError, type ApiMessage, type ApiModel, type ApiToolCall } from "./types.js";
@@ -14,10 +15,11 @@ import { acknowledgeApiWorker, finishApiWorker } from "./workers.js";
 import { agentInfoForOwnedConversation, onSwarmEnd, failAgent, persistCriticalSwarmNow } from "../agents.js";
 import { apiTurns as controllers, type ActiveApiTurn } from './activity.js';
 import { generateApiTopicTitle, stopApiTitles } from './title.js';
+import { apiRetryDelay, apiFailureDescription, API_RETRY_LIMIT } from './recovery.js';
 export { apiTurnStatus } from './activity.js';
 
-const MAX_ITERATIONS = 20;
-const MAX_CALLS = 60;
+const MAX_ITERATIONS = 1000;
+const MAX_CALLS = 3000;
 const MAX_HISTORY_MESSAGES = 2000;
 const MAX_HISTORY_BYTES = 6 * 1024 * 1024;
 const MAX_TOOL_RESULT_CHARS = 12000;
@@ -128,21 +130,9 @@ export function scheduleApiInput(entry: InputEntry): void {
   void work.catch(() => undefined).finally(() => { if (queues.get(sessionId) === work) queues.delete(sessionId); });
 }
 
-/** Interrupt only the exact generation named by this durably accepted user direction.
- * Already-dispatched tools settle under their original owner before the queued successor starts. */
+/** Keep the running task alive. The durable direction is consumed at a model/tool boundary;
+ * an HTTP response stream cannot accept extra input while it is being generated. */
 export async function steerApiInput(entry: InputEntry): Promise<void> {
-  if (!entry.sessionId || !entry.steerTurnId || !entry.steerReady || !entry.directTurn?.questionId) {
-    scheduleApiInput(entry); return;
-  }
-  const current = await getSession(entry.sessionId);
-  const question = await readLatestUserMessage(entry.sessionId);
-  if (current?.conversationId === entry.conversationId && current.activeTurnId === entry.steerTurnId &&
-      question?.messageId === entry.directTurn.questionId) {
-    const active = [...controllers.values()].find(item => item.sessionId === entry.sessionId && item.turnId === entry.steerTurnId);
-    if (active && !active.controller.signal.aborted) {
-      active.controller.abort(new Error('User supplied new direction'));
-    }
-  }
   scheduleApiInput(entry);
 }
 
@@ -162,6 +152,7 @@ async function perform(entry: InputEntry): Promise<void> {
   let displayed = '', answerId = '', modelId = '';
   let ownedThread: Thread | null = null;
   let responseSaved = false;
+  let retryCount = 0;
   const clearPaintTimer = () => { if (paintTimer) clearTimeout(paintTimer); paintTimer = null; };
   try {
     const provider = entry.chatProvider && apiProvider(entry.chatProvider);
@@ -203,6 +194,8 @@ async function perform(entry: InputEntry): Promise<void> {
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
     const messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
+    if (entry.steerTurnId) messages[messages.length - 1] = { role: 'user', content:
+      'The user supplied this direction during the ongoing task. Continue the existing objective with this update; preserve completed work, running commands and workers. Use the saved tool results and process IDs. Do not restart the task or repeat earlier actions.\n\n' + prompt };
     const contextMessages: ApiMessage[] = [{ role: "system", content: system }, ...messages];
     budget(contextMessages, model, declarations, output);
     let invocations = 0, paintedAt = 0;
@@ -233,8 +226,37 @@ async function perform(entry: InputEntry): Promise<void> {
       await saveThread(thread);
       notifyChanged(turn.sessionId);
     };
+    const pendingDirection = async () => (await listInputs()).some(row => row.sessionId === turn.sessionId &&
+      row.conversationId === turn.conversationId && row.state === 'queued' && !row.owner &&
+      row.steerReady && row.steerTurnId === turn.turnId && row.directTurn?.questionId === turn.messageId &&
+      row.dueAt <= Date.now() && !row.cancelledByUser);
+    const yieldToDirection = async () => {
+      controller.signal.throwIfAborted();
+      if (!await pendingDirection()) return false;
+      clearPaintTimer(); await painting;
+      if (displayed) {
+        await upsertMessageEvent(turn.sessionId, assistantRow(displayed, answerId, messageId, turn.turnId, model.id, false));
+        if (!responseSaved) {
+          thread.messages.push({ role: 'assistant', content: displayed });
+          await saveThread(thread);
+          responseSaved = true;
+        }
+      }
+      await appendEvent(turn.sessionId, { kind: 'turn_end', source: 'app', time: Date.now(),
+        turnId: turn.turnId, outcome: 'interrupted', reason: 'steer', detail: 'Direction updated; task continues.' });
+      notifyChanged(turn.sessionId);
+      return true;
+    };
+    const recoveryNotice = async (text: string) => {
+      await appendEvent(turn.sessionId, { kind: 'progress', source: 'app', time: Date.now(),
+        turnId: turn.turnId, progressId: `api-recovery:${turn.turnId}:${roundId}`, message: { text, chars: text.length, truncated: false } });
+      notifyChanged(turn.sessionId);
+    };
+    let roundId = 0;
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
       controller.signal.throwIfAborted();
+      roundId = round;
+      if (accepted && await yieldToDirection()) return;
       if (round > 0) { displayed = ''; answerId = randomUUID(); paintedAt = 0; responseSaved = false; }
       active.activity = { phase: 'requesting' }; notifyChanged(turn.sessionId);
       if (round > 0 && !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
@@ -242,13 +264,45 @@ async function perform(entry: InputEntry): Promise<void> {
       const requestMessages: ApiMessage[] = [{ role: "system", content: system },
         ...(round === 0 ? messages : thread.messages)];
       budget(requestMessages, model, declarations, output);
-      const response = await provider.complete({ model: model.id, sessionId: conversationId,
+      const complete = () => provider.complete({ model: model.id, sessionId: turn.conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
         reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint,
         onToolCall: name => {
           if (!declarations.some(tool => tool.function.name === name) || controller.signal.aborted) return;
           active.activity = { phase: 'preparing-tool' }; notifyChanged(turn.sessionId);
         } });
+      let response: Awaited<ReturnType<typeof complete>>;
+      let retried = false;
+      retryCount = 0;
+      for (let attempt = 0; ; attempt++) {
+        controller.signal.throwIfAborted();
+        try { response = await complete(); break; }
+        catch (error) {
+          controller.signal.throwIfAborted();
+          // Storage/receipt failures and tool execution never enter an inference retry.
+          if (accepted && await yieldToDirection()) return;
+          const delay = apiRetryDelay(error, attempt);
+          if (delay === null) throw error;
+          retried = true;
+          retryCount = attempt + 1;
+          clearPaintTimer(); await painting;
+          if (accepted && displayed) await upsertMessageEvent(turn.sessionId,
+            assistantRow(displayed, answerId, messageId, turn.turnId, model.id, false));
+          displayed = ''; answerId = randomUUID(); paintedAt = 0;
+          const reason = apiFailureDescription(error), retryAt = Date.now() + delay;
+          active.activity = { phase: 'recovering', attempt: attempt + 1, retryAt, reason };
+          // A pre-header failure has no Send ACK yet. Keep its durable input queued/claimed
+          // with a truthful startup notice rather than fabricating a turn receipt.
+          const notice = `${reason} Retrying model step ${attempt + 1}/${API_RETRY_LIMIT} in ${Math.ceil(delay / 1000)}s. Saved tool results and running tasks are retained.`;
+          if (accepted) await recoveryNotice(notice);
+          else await noteApiInputRecovery(entry.id, apiInputOwner(provider.id), notice);
+          await wait(delay, undefined, { signal: controller.signal });
+          controller.signal.throwIfAborted();
+          if (accepted && await yieldToDirection()) return;
+          active.activity = { phase: 'requesting' }; notifyChanged(turn.sessionId);
+        }
+      }
+      if (retried && accepted) await recoveryNotice('API connection recovered. Continuing the same task from saved results.');
       if (!accepted || !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
       const resultContent = response.content;
       if (resultContent && !displayed.endsWith(resultContent)) {
@@ -267,6 +321,17 @@ async function perform(entry: InputEntry): Promise<void> {
         ...(calls.length ? { tool_calls: calls } : {}) });
       responseSaved = true;
       await saveThread(thread);
+      const skipUndispatched = async (remaining: ApiToolCall[]) => {
+        for (const call of remaining) thread.messages.push({ role: 'tool', tool_call_id: call.id,
+          content: 'NOT_EXECUTED: The user supplied a new direction before this tool was dispatched. No action ran for this call.' });
+        if (remaining.length) await saveThread(thread);
+      };
+      if (await pendingDirection()) {
+        await skipUndispatched(calls);
+        if (await yieldToDirection()) return;
+        // A cancellation between the reads cannot turn the skipped calls into executable work.
+        continue;
+      }
       if (!calls.length) {
         await painting;
         await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, true));
@@ -287,8 +352,13 @@ async function perform(entry: InputEntry): Promise<void> {
       }
       if (calls.length > 16 || invocations + calls.length > MAX_CALLS) throw new ApiError("TOOL_LIMIT");
       if (!model.supportsTools) throw new ApiError("MODEL_TOOLS_UNAVAILABLE");
-      for (const call of calls as ApiToolCall[]) {
+      for (const [index, call] of (calls as ApiToolCall[]).entries()) {
         controller.signal.throwIfAborted();
+        if (await pendingDirection()) {
+          await skipUndispatched(calls.slice(index));
+          if (await yieldToDirection()) return;
+          break;
+        }
         if (!await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
         const argumentsJson = JSON.parse(call.function.arguments) as unknown;
         active.activity = { phase: 'preparing-tool', tool: call.function.name };
@@ -316,18 +386,20 @@ async function perform(entry: InputEntry): Promise<void> {
   } catch (error) {
     clearPaintTimer();
     await painting.catch(() => undefined);
-    const code = error instanceof ApiError ? error.code : controller.signal.aborted ? "STOPPED" : "API_REQUEST_FAILED";
-    // A claimed operation may have reached OpenRouter or run local tools. Never retry it automatically.
+    const code = error instanceof ApiError ? error.code : controller.signal.aborted ? "STOPPED" : "LOCAL_EXECUTION_FAILED";
+    const description = apiFailureDescription(error) + (retryCount >= API_RETRY_LIMIT
+      ? ` Automatic recovery exhausted after ${retryCount} retries. Saved results and running processes are retained.` : '');
+    // Only the inference operation above is retryable. Never replay a local tool or storage write.
     if (!admitted && !controller.signal.aborted)
-      await noteInputStartupError(entry.id, "Message queued. OpenRouter unavailable (" + code + "). Review key, model or connection before retrying.").catch(() => undefined);
-    if (admitted && !accepted) await failBrowserInput(entry.id, apiInputOwner(entry.chatProvider ?? "openrouter"), "OpenRouter dispatch was not confirmed (" + code + ").").catch(() => undefined);
+      await noteInputStartupError(entry.id, "Message queued. " + description).catch(() => undefined);
+    if (admitted && !accepted) await failBrowserInput(entry.id, apiInputOwner(entry.chatProvider ?? "openrouter"), "API dispatch was not confirmed. " + description).catch(() => undefined);
     if (entry.apiWorker && !accepted) {
       failAgent(entry.apiWorker.agentId, 'API worker could not start (' + code + '). Inspect its saved input before assigning more work.',
         undefined, {}, entry.apiWorker.runId);
       await persistCriticalSwarmNow().catch(() => false);
     }
     if (accepted && turnId) {
-      if (controller.signal.aborted && displayed && answerId && conversationId) {
+      if (displayed && answerId && conversationId) {
         const question = await readLatestUserMessage(entry.sessionId).catch(() => null);
         if (question?.messageId) await upsertMessageEvent(entry.sessionId,
           assistantRow(displayed, answerId, question.messageId, turnId, modelId, false)).catch(() => undefined);
@@ -337,7 +409,7 @@ async function perform(entry: InputEntry): Promise<void> {
         }
       }
       if (!controller.signal.aborted) await appendEvent(entry.sessionId, { kind: "chat_error", source: "app", time: Date.now(),
-        turnId, message: { text: code, chars: code.length, truncated: false } }).catch(() => undefined);
+        turnId, message: { text: description, chars: description.length, truncated: false } }).catch(() => undefined);
       await appendEvent(entry.sessionId, { kind: "turn_end", source: "app", time: Date.now(),
         turnId, outcome: controller.signal.aborted ? "stopped" : "failed" }).catch(() => undefined);
       await finishApiWorker(entry, controller.signal.aborted ? 'Stopped by the user; work may be incomplete.'
