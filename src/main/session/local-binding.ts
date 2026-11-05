@@ -245,7 +245,14 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
     if (evidence.attribution !== attribution) fail('provider-mismatch');
     const grant = [...grants.values()].find(row => row.id === evidence.bindingId);
     if (!grant) fail();
-    const current = await status(grant!);
+    // Refresh can become ambiguous after ingress. Recheck the same exact grant
+    // at handler admission as well, without changing its task or turn.
+    const deadline = performance.now() + ATTACHMENT_RECHECK_MS;
+    let current = await status(grant!);
+    while ((current.state === 'unresolved' || current.state === 'pending') && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      current = await status(grant!);
+    }
     if (current.state !== 'ready' || current.conversationId !== evidence.conversationId ||
         current.sessionId !== evidence.sessionId || !sameTurn(current.turn, evidence.inputTurn)) fail();
   }
@@ -264,7 +271,9 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
       return { args };
     }
     const input = args as Record<string, unknown>;
-    const code = typeof input.code === 'string' ? input.code : '';
+    // Leading blanks/BOM cannot turn an exact key into an unattributed caller.
+    // Never scan later statements or other comments for a credential.
+    const code = typeof input.code === 'string' ? input.code.replace(/^[\uFEFF\s]*(?=\/\/ onecode-session:)/, '') : '';
     const hasKey = Object.prototype.hasOwnProperty.call(input, 'onecode_session_key');
     if (!hasKey && !code.startsWith('// onecode-session:')) {
       if (provider === 'claude') fail('credential-unknown');

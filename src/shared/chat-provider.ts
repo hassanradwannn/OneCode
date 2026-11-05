@@ -1,6 +1,7 @@
 /** Browser-provider identity and URL routing shared by the app, renderer and companion. */
 export const CHAT_PROVIDER_DEFINITIONS = {
   gemini: {
+    transport: 'browser',
     label: 'Gemini',
     homeUrl: 'https://gemini.google.com/app',
     conversationPrefix: 'https://gemini.google.com/app/',
@@ -15,6 +16,7 @@ export const CHAT_PROVIDER_DEFINITIONS = {
     }
   },
   chatgpt: {
+    transport: 'browser',
     label: 'ChatGPT',
     homeUrl: 'https://chatgpt.com/',
     conversationPrefix: 'https://chatgpt.com/c/',
@@ -29,6 +31,7 @@ export const CHAT_PROVIDER_DEFINITIONS = {
     }
   },
   claude: {
+    transport: 'browser',
     label: 'Claude',
     homeUrl: 'https://claude.ai/new',
     conversationPrefix: 'https://claude.ai/chat/',
@@ -43,6 +46,7 @@ export const CHAT_PROVIDER_DEFINITIONS = {
     }
   },
   openrouter: {
+    transport: 'api',
     label: 'OpenRouter',
     // An API chat has no provider browser. URL accessors reject this transport.
     homeUrl: '',
@@ -64,7 +68,7 @@ export const CHAT_PROVIDERS: readonly ChatProvider[] = Object.freeze(Object.keys
 export const BROWSER_CHAT_PROVIDERS = ['gemini', 'chatgpt', 'claude'] as const;
 export type BrowserChatProvider = typeof BROWSER_CHAT_PROVIDERS[number];
 export function isBrowserChatProvider(provider: ChatProvider): provider is BrowserChatProvider {
-  return provider !== 'openrouter';
+  return providerDefinition(provider).transport === 'browser';
 }
 export const DEFAULT_CHAT_PROVIDER: ChatProvider = 'gemini';
 

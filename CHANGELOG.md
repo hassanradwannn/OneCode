@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.3 Beta] — 2026-11-05
+
+Add a shared local API harness and adapter interface. OpenRouter can spawn, report and reuse broker-owned workers, compose Core tools, call installed plugins and import/read managed skills without a browser. Recheck live grants and Read-only; retain exact turn identity through nested calls and cancellation. Restore API model IDs and never repeat uncertain API requests after restart. Direct written capability grants update the existing settings owner. Recheck transient task attachments at handler admission and recognize an exact credential after leading whitespace. Stable remains 0.8.9; real-provider and installed acceptance remain pending. See [Beta notes](docs/release-notes/beta-v0.9.3.md).
+
 ## [0.9.2 Beta] — 2026-11-05
 
 Separate OpenRouter API readiness from browser-extension warnings without disconnecting existing browser-provider sessions. Attach OneCode API tool events to their exact turns, report the selected model route, use model-catalog context estimates instead of a global reference, and stop labeling unavailable API automatic compaction as active. Raise the previously restrictive completion budget for capable models and distinguish API truncation from browser errors. Improve first-turn tool-availability instructions across providers and briefly recheck a temporarily ambiguous task attachment after refresh, preserving strict credentials and revocations. Full signed-in native acceptance remains pending. See [Beta notes](docs/release-notes/beta-v0.9.2.md).

@@ -113,6 +113,9 @@ const entrySchema = inputArgs.extend({
   requestedModelSurface: z.enum(['chat', 'work']).optional(),
   /** Saved interval authority; only the scheduler's internal admission supplies this. */
   scheduleId: z.string().uuid().optional(),
+  /** Local broker receipt, added only by the API worker transport, never model arguments. */
+  apiWorker: z.object({ runId: z.string().uuid(), agentId: z.string().regex(/^worker-\d+$/),
+    messageIds: z.array(z.string()).max(1000) }).strict().optional(),
   steerReady: z.literal(true).optional(),
   steerClosedOnce: z.literal(true).optional(),
   warmupRecovery: warmupRecoverySchema.optional(),
@@ -2369,7 +2372,29 @@ export function acknowledgeBrowserInput(id: string, owner: string, conversationI
   return serial(() => commitBrowserInputReceipt(id, owner, conversationId, messageId, beforeChanged));
 }
 
-const API_INPUT_OWNER = 'onecode:openrouter-api';
+/** Attach the already accepted broker assignment to its ordinary durable outbox row. */
+export async function enqueueApiWorkerInput(input: InputArgs, worker: NonNullable<InputEntry['apiWorker']>): Promise<InputEntry> {
+  const entry = await enqueueInput(input);
+  return serial(async () => {
+    const current = await load();
+    const row = current.find(item => item.id === entry.id);
+    if (!row?.sessionId || !row.conversationId || !row.chatProvider ||
+        !(await import('../api/providers.js')).apiProvider(row.chatProvider)) throw new Error('API worker input is unavailable');
+    const session = await getSession(row.sessionId);
+    const broker = await import('../agents.js');
+    if (session?.origin?.kind !== 'worker' || session.origin.agentId !== worker.agentId ||
+        broker.agentConversation(worker.agentId, worker.runId) !== row.conversationId)
+      throw new Error('API worker assignment changed');
+    if (row.apiWorker) {
+      if (JSON.stringify(row.apiWorker) !== JSON.stringify(worker)) throw new Error('API worker input belongs to another assignment');
+      return { ...row };
+    }
+    if (row.state !== 'queued' || row.sendAuthorizedAt !== undefined) throw new Error('API worker input already dispatched');
+    const next = { ...row, apiWorker: worker };
+    await commit(current.map(item => item === row ? next : item));
+    return next;
+  });
+}
 
 /**
  * Admit an API-backed message to the existing durable outbox. No browser, companion,
@@ -2378,21 +2403,24 @@ const API_INPUT_OWNER = 'onecode:openrouter-api';
  */
 export function claimOpenRouterInput(id: string, conversationId: string): Promise<InputEntry | null> {
   return serial(async () => {
-    if (!isChatProviderConversationId(conversationId, 'openrouter') || isChatBlocked(conversationId) ||
+    const { apiProvider, apiInputOwner } = await import('../api/providers.js');
+    const provider = chatProviderForConversation(conversationId);
+    if (!apiProvider(provider) || !isChatProviderConversationId(conversationId, provider) || isChatBlocked(conversationId) ||
         await conversationWasSuperseded(conversationId)) return null;
     const current = await load();
     const entry = current.find(row => row.id === id);
-    if (!entry || entry.chatProvider !== 'openrouter' || entry.state !== 'queued' || entry.owner ||
+    if (!entry || entry.chatProvider !== provider || entry.state !== 'queued' || entry.owner ||
         !entry.sessionId || !entry.model || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined ||
         entry.purpose === 'decision' || entry.mode === 'finish' || entry.steerTurnId || entry.delivery ||
         entry.attachmentDelivery || entry.images?.length || entry.attachments?.length || entry.stages?.length ||
         (entry.conversationId && entry.conversationId !== conversationId)) return null;
     const session = await getSession(entry.sessionId);
     if (!session || (session.conversationId && session.conversationId !== conversationId) ||
-        session.activeTurnId || session.origin?.kind === 'worker') return null;
+        session.activeTurnId || session.origin?.kind === 'worker' && !entry.apiWorker) return null;
+    if (entry.apiWorker && !await (await import('../api/workers.js')).apiWorkerInputCurrent(entry)) return null;
     const now = Date.now();
     const claimed: InputEntry = {
-      ...entry, state: 'browser', owner: API_INPUT_OWNER, conversationId,
+      ...entry, state: 'browser', owner: apiInputOwner(provider), conversationId,
       offeredAt: now, sendAuthorizedAt: now, deliveryText: entry.text,
       // API calls use the same outbox receipt, but never require a browser-issued capability.
       requiresAuthorization: false
@@ -2406,11 +2434,12 @@ export function claimOpenRouterInput(id: string, conversationId: string): Promis
 /** Only the same app-owned API claim can commit its exact recorded input. */
 export function acknowledgeOpenRouterInput(id: string, conversationId: string, messageId: string): Promise<boolean> {
   return serial(async () => {
+    const { apiProvider, apiInputOwner } = await import('../api/providers.js');
     const row = (await load()).find(entry => entry.id === id);
-    if (!row || row.chatProvider !== 'openrouter' || row.owner !== API_INPUT_OWNER ||
-        row.conversationId !== conversationId || !isChatProviderConversationId(conversationId, 'openrouter') ||
+    if (!row?.chatProvider || !apiProvider(row.chatProvider) || row.owner !== apiInputOwner(row.chatProvider) ||
+        row.conversationId !== conversationId || !isChatProviderConversationId(conversationId, row.chatProvider) ||
         !/^[0-9a-f-]{36}$/i.test(messageId)) return false;
-    return commitBrowserInputReceipt(id, API_INPUT_OWNER, conversationId, messageId);
+    return commitBrowserInputReceipt(id, apiInputOwner(row.chatProvider), conversationId, messageId);
   });
 }
 

@@ -8,6 +8,8 @@ import { enqueueInput, cancelInput, listInputs, noteInputStartupError, releaseSt
 import { getSession } from './store.js';
 import type { QueuedInputNowIntent } from '../../shared/input.js';
 import { cancelOpenRouterInput, scheduleOpenRouterInput } from '../openrouter/runner.js';
+import { stopApiInputs } from '../api/runner.js';
+import { apiProvider } from '../api/providers.js';
 
 function wakeBrowser(entry: InputEntry, retry = false, signal?: AbortSignal): Promise<void> {
   const marker = `cos-input=${encodeURIComponent(entry.id)}`;
@@ -142,14 +144,15 @@ export async function sendDesktopInput(input: InputArgs, scheduleId?: string): P
   const existing = input.sessionId ? await getSession(input.sessionId) : null;
   const selected = input.provider ?? chatProviderForConversation(existing?.conversationId,
     getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
-  if (selected === 'openrouter') {
+  const api = apiProvider(selected);
+  if (api) {
     if (input.mode === 'finish' || input.images?.length || input.attachments?.length || input.delivery ||
         input.attachmentDelivery || input.stages?.length || scheduleId)
       throw new Error('This OpenRouter Beta supports text chat and local tool calls. Attachments, scheduled sends and Goal stages are not available yet.');
     // The API cannot inject into a streaming response. Keep the instruction for
     // this exact chat after its running turn; never replay an existing tool call.
-    const sendModel = input.model || (existing?.conversationId?.startsWith('openrouter:')
-      ? existing.selectedModel?.model : null) || 'openrouter/free';
+    const sendModel = input.model || (existing?.conversationId
+      ? existing.selectedModel?.model : null) || api.defaultModel.id;
     const safeInput: InputArgs = input.steerTurnId
       ? { ...input, model: sendModel, mode: 'after-turn', steerTurnId: undefined }
       : { ...input, model: sendModel };
@@ -175,6 +178,7 @@ export async function sendDesktopInput(input: InputArgs, scheduleId?: string): P
 }
 export function stopInputStartup(): void {
   stopped = true;
+  stopApiInputs();
   for (const controller of starting.values()) controller.abort(new Error('The app is shutting down'));
   starting.clear();
 }

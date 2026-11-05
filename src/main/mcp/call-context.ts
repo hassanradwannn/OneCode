@@ -100,6 +100,8 @@ export interface CallContext {
   caller: CallCaller;
   /** Exact turn owned by OneCode's local API runner, not an external request hint. */
   localApiTurnId?: string;
+  /** In-process harness check, inherited by children; never accepted from a model or HTTP. */
+  localApiCurrent?: () => Promise<boolean>;
   /**
    * Set by the tool guard, which is the only code that can tell a refusal apart from
    * a genuine failure — both come back to the model as an error result.

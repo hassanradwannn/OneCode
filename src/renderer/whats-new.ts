@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.3': {
+    lead: () => t('Use local workers, tools, plugins and skills with API models.'),
+    highlights: [
+      { icon: 'i-plug', title: () => t('A local API harness'), text: () => t('OpenRouter can run and reuse OneCode workers, compose Core tools, call installed plugins and use local skills without a provider browser.') },
+      { icon: 'i-folder', title: () => t('Permissions take effect now'), text: () => t('Explicit permission grants in your messages update live settings. API calls recheck approved folders, Read-only and task ownership.') },
+      { icon: 'i-retry', title: () => t('Clearer task recovery'), text: () => t('Refresh recovery retains exact task credentials and distinguishes task identity from disabled command permissions.') }
+    ]
+  },
   '0.9.2': {
     lead: () => t('Use OpenRouter tools without browser warnings and keep task authorization recoverable.'),
     highlights: [

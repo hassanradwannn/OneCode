@@ -1260,9 +1260,9 @@ export function recordToolCall(input: ToolCallInput): Promise<ToolCallRecord | n
       sessionId:
         input.sessionId ??
         (correlation?.conversationId === input.conversationId ? correlation.sessionId : null),
-      attribution: input.localApiTurnId && input.conversationId.startsWith('openrouter:') && input.sessionId
+      attribution: input.localApiTurnId && input.sessionId
         ? 'local_api_turn' : input.attributionMethod ?? 'request_id',
-      turnId: input.localApiTurnId && input.conversationId?.startsWith('openrouter:') && input.sessionId
+      turnId: input.localApiTurnId && input.sessionId
         ? input.localApiTurnId : input.attributionMethod ? input.geminiInputTurn?.turnId ?? null : live?.turnId ?? null
     };
     if (input.bind) bindAgentConversation(input.bind, input.conversationId);

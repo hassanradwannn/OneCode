@@ -686,8 +686,8 @@ export async function dispatch(
       : { transportKey, requestId, conversationId: geminiBinding?.conversationId ?? null,
           sessionId: geminiBinding?.sessionId ?? null, setupProfileId, ...(geminiBinding ? { geminiBinding } : {}) },
     // Only the in-process, current-checked API dispatch may pass an exact turn.
-    ...(parent?.localApiTurnId && mcpProvider() === 'openrouter'
-      ? { localApiTurnId: parent.localApiTurnId } : {}),
+    ...(parent?.localApiTurnId && parent.localApiCurrent
+      ? { localApiTurnId: parent.localApiTurnId, localApiCurrent: parent.localApiCurrent } : {}),
     outcome: null,
     evidence: emptyEvidence()
   };
@@ -741,6 +741,8 @@ async function dispatchTracked(
   run: () => Promise<ToolResult>,
   nested: boolean
 ): Promise<ToolResult> {
+  if (context.localApiCurrent && !await context.localApiCurrent())
+    return fail('API_TURN_NOT_CURRENT: no local tool ran.');
   if (context.caller.geminiBinding) {
     try { await validateLocalBinding(context.caller.geminiBinding); }
     catch (error) { return fail(localBindingRefusal(error, context.caller.geminiBinding)); }
@@ -1048,7 +1050,9 @@ async function dispatchTracked(
   if (admissionRefusal === STRICT_CHAT_REFUSAL) await recordUntrustedRefusalNotice(context);
   let handlerRan = false;
   markTiming('identity');
-  const invokeHandler = (): Promise<ToolResult> => {
+  const invokeHandler = async (): Promise<ToolResult> => {
+    if (context.localApiCurrent && !await context.localApiCurrent())
+      return fail('API_TURN_NOT_CURRENT: no local tool ran.');
     if (context.caller.geminiBinding && !localBindingIsCurrent(context.caller.geminiBinding)) {
       return Promise.resolve(fail(localBindingRefusal(undefined, context.caller.geminiBinding)));
     }
@@ -1560,8 +1564,8 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
       }, parent);
     },
     async invokeOwned(name, args, parent, current) {
-      if (mcpProvider() !== 'openrouter' || !parent.caller.sessionId || !parent.caller.conversationId ||
-          !parent.caller.conversationId.startsWith('openrouter:') || !await current())
+      if (!parent.localApiTurnId || parent.localApiCurrent !== current ||
+          !parent.caller.sessionId || !parent.caller.conversationId || !await current())
         return fail('API_TURN_NOT_CURRENT: no local tool ran.');
       return dispatch(name, args, null, null, surface, async () => {
         // Revalidate after all asynchronous policy checks, immediately before handler entry.

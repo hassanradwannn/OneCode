@@ -557,7 +557,11 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
               ? 'The exact native question and current turn are not yet proven. OneCode retains the grant pending exact evidence; do not resend an uncertain operation.'
               : 'The exact task is unproven; no action was taken.';
             const body = JSON.stringify({ jsonrpc: '2.0', id: typeof message.id === 'string' || typeof message.id === 'number' ? message.id : null,
-              result: { isError: true, content: [{ type: 'text', text: storage ? text : text + ' ' + explanation }] } });
+              result: { isError: true,
+                structuredContent: { refusal: storage ? 'task-storage-unavailable' : 'task-authorization',
+                  reason: storage ? 'storage-unavailable' : reason ?? 'proof-unavailable', executed: false },
+                content: [{ type: 'text', text: storage ? text : text + ' ' + explanation +
+                  ' Task authorization and command permissions are checked separately. Use the exact current task credential; compaction is not required to change permissions.' }] } });
             return new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
           }
           }) }));

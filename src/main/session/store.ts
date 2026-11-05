@@ -596,7 +596,10 @@ export async function createSession(options: {
   if (options.reservedId) {
     const existing = await getSession(id);
     if (existing) {
-      if (existing.origin?.kind !== 'desktop') throw new Error('Reserved opening session belongs to different work');
+      if (existing.origin?.kind !== 'desktop' && !(options.origin?.kind === 'worker' &&
+          existing.conversationId === options.conversationId &&
+          JSON.stringify(existing.origin) === JSON.stringify(options.origin)))
+        throw new Error('Reserved opening session belongs to different work');
       return existing;
     }
   }

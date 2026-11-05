@@ -1,18 +1,17 @@
+import { ApiError as OpenRouterApiError, type ApiModel as OpenRouterModel,
+  type ApiToolCall as OpenRouterToolCall,
+  type ApiCompletion as OpenRouterCompletion,
+  type ApiCompleteOptions } from "../api/types.js";
+export { ApiError as OpenRouterApiError } from "../api/types.js";
+export type { ApiModel as OpenRouterModel, ApiTool as OpenRouterTool, ApiToolCall as OpenRouterToolCall,
+  ApiMessage as OpenRouterMessage, ApiCompletion as OpenRouterCompletion } from "../api/types.js";
+export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_TOOL_ARGUMENTS = 64 * 1024;
 
-export type OpenRouterModel = {
-  id: string;
-  name: string;
-  contextLength: number;
-  maxCompletionTokens: number | null;
-  supportsTools: boolean;
-  supportedParameters: string[];
-  pricing: { prompt: string; completion: string };
-};
 /** OpenRouter's documented free router, even when /models omits this virtual model. */
 export const FREE_ROUTER_MODEL: OpenRouterModel = {
   // The router may select models with different context windows. Until the
@@ -22,44 +21,6 @@ export const FREE_ROUTER_MODEL: OpenRouterModel = {
   maxCompletionTokens: null, supportsTools: true, supportedParameters: ["tools"],
   pricing: { prompt: "0", completion: "0" }
 };
-export type OpenRouterTool = { type: "function"; function: { name: string; description: string; parameters: object } };
-export type OpenRouterToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
-export type OpenRouterMessage =
-  | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: OpenRouterToolCall[]; reasoning_details?: unknown[] }
-  | { role: "tool"; tool_call_id: string; content: string };
-export type OpenRouterCompletion = {
-  id: string;
-  model: string;
-  content: string;
-  toolCalls: OpenRouterToolCall[];
-  /** Opaque API reasoning metadata; round-trip unchanged without displaying it. */
-  reasoningDetails: unknown[];
-  finishReason: string | null;
-  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null;
-};
-export type CompleteOptions = {
-  apiKey: string;
-  model: string;
-  sessionId: string;
-  messages: OpenRouterMessage[];
-  tools?: OpenRouterTool[];
-  maxCompletionTokens?: number;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-  signal?: AbortSignal;
-  onText?: (increment: string) => void;
-  /** Remote HTTP accepted. Caller must commit its exact local Send receipt first. */
-  onAccepted?: () => Promise<void>;
-  stream?: boolean;
-};
-
-export class OpenRouterApiError extends Error {
-  constructor(readonly code: string, readonly status: number | null = null) {
-    super(code);
-    this.name = "OpenRouterApiError";
-  }
-}
-
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 const positive = (value: unknown): number | null =>

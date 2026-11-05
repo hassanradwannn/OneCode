@@ -1265,7 +1265,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
                 ),
               model: z
                 .string()
-                .max(80)
+                .max(200)
                 .optional()
                 .describe(
                   'Omit unless explicitly requested by the user; app settings supply defaults. Use an exact account-observed model id or provider alias. Invalid overrides return observed ids before opening; the browser confirms availability before Send.'

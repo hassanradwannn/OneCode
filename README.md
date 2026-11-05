@@ -4,7 +4,7 @@ A desktop workspace for AI providers and local tools on Windows and Linux. Work 
 
 **Stable release: [OneCode 0.8.9](https://github.com/hassanradwannn/OneCode/releases/tag/v0.8.9)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-**Experimental [OneCode Beta 0.9.2](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.2)** tests browserless OpenRouter tools, model-specific context estimates, first-turn connector guidance and exact task recovery across refreshes. Install Beta separately from Stable; signed-in native provider acceptance and API automatic compaction remain pending. See [Beta notes](docs/release-notes/beta-v0.9.2.md).
+**Experimental [OneCode Beta 0.9.3](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.3)** adds local API workers, Core code mode, plugins and skills with live permissions, written capability grants and task-authentication recovery. Install Beta separately from Stable; live-provider acceptance and API automatic compaction remain pending. See [Beta notes](docs/release-notes/beta-v0.9.3.md).
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
