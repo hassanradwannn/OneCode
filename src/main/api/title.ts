@@ -20,6 +20,7 @@ export function generateApiTopicTitle(sessionId: string, conversationId: string,
       ...(model.reasoningMandatory ? (effort ? { reasoningEffort: effort } : {})
         : model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort') ? { reasoningEnabled: false } : {}),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) });
+    if (response.finishReason === 'length') return;
     const title = response.content.trim().replace(/^['"]|['"]$/g, '').replace(/^title:\s*/i, '').trim();
     if (!title || title.length > 80 || /[\r\n\u0000-\u001f`]/.test(title) || controller.signal.aborted) return;
     const session = await getSession(sessionId);

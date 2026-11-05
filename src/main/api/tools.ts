@@ -12,6 +12,7 @@ import { withManagedSkills } from "../skill-access.js";
 import { apiInputOwner } from "./providers.js";
 import type { ChatProvider } from "../../shared/chat-provider.js";
 import type { ApiTool } from "./types.js";
+import type { OutputPublication } from '../codex/unified-exec.js';
 
 export type OwnedTurn = { provider?: ChatProvider; sessionId: string; conversationId: string; inputId: string;
   messageId: string; turnId: string; signal: AbortSignal };
@@ -52,14 +53,21 @@ export function apiTools(turn: OwnedTurn) {
         .map(item => ({ type: "function", function: { name: item.name,
           description: item.description, parameters: item.inputSchema } }));
     },
-    async invoke(name: string, args: unknown) {
+    async invoke(name: string, args: unknown, publication?: OutputPublication) {
+      const receipt = publication ?? { completedAt: null, failed: false };
       const context: CallContext = {
         startedAt: Date.now(), transportKey: null, agent: null, allowUnattributed: false,
         caller: { transportKey: null, requestId: null, conversationId: turn.conversationId,
           sessionId: turn.sessionId }, localApiTurnId: turn.turnId, localApiCurrent: current,
-        outcome: null, evidence: emptyEvidence(), publication: { completedAt: null, failed: false }
+        outcome: null, evidence: emptyEvidence(), publication: receipt
       };
-      return withMcpProvider(provider, () => registry().invokeOwned(name, args, context, current));
+      try {
+        const result = await withMcpProvider(provider, () => registry().invokeOwned(name, args, context, current));
+        // Direct in-process callers receive the complete result here. The API runner supplies
+        // its own receipt and completes it only after the actual model-facing delivery.
+        if (!publication) receipt.completedAt = Date.now();
+        return result;
+      } catch (error) { receipt.failed = true; throw error; }
     }
   };
 }

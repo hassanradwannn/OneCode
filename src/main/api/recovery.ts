@@ -2,7 +2,7 @@
 import { ApiError } from './types.js';
 
 const TRANSIENT = new Set(['NETWORK_UNAVAILABLE', 'CONNECTION_LOST', 'REQUEST_TIMEOUT',
-  'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'STREAM_INCOMPLETE', 'EMPTY_STREAM']);
+  'RATE_LIMITED', 'PROVIDER_UNAVAILABLE', 'STREAM_INCOMPLETE', 'EMPTY_STREAM', 'EMPTY_COMPLETION']);
 export const API_RETRY_LIMIT = 5;
 export function apiRetryDelay(error: unknown, attempt: number): number | null {
   if (!(error instanceof ApiError) || !TRANSIENT.has(error.code) || attempt >= API_RETRY_LIMIT) return null;
@@ -25,12 +25,16 @@ export function apiFailureDescription(error: unknown): string {
     PROVIDER_UNAVAILABLE: 'The model provider is temporarily unavailable.',
     STREAM_INCOMPLETE: 'The API stream ended before its completion marker.',
     EMPTY_STREAM: 'The API returned no response stream.',
+    EMPTY_COMPLETION: 'The API returned neither public response text nor a tool call.',
+    CONTENT_FILTERED: 'The provider stopped this response because of its content policy.',
     UNAUTHORIZED: 'The API key was rejected. Check the provider key in Settings.',
     INSUFFICIENT_CREDITS: 'The API account has insufficient credits.',
     FORBIDDEN: 'The provider refused this request or its account policy blocked it.',
     BAD_REQUEST: 'The provider rejected the request parameters.',
     MODEL_UNAVAILABLE: 'The selected model is unavailable.',
     TRUNCATED_COMPLETION: 'The model reached its output-token limit before completing this step.',
+    OUTPUT_RECOVERY_LIMIT: 'The model repeatedly exhausted its per-response output limit despite automatic continuation. Completed work and running tasks are retained; choose a different reasoning setting or model to continue.',
+    EXEC_RECOVERY_STALLED: 'Terminal output recovery made no progress after repeated identical refusals. Completed results remain saved; command permission was not revoked. Inspect the listed results before continuing.',
     CONTEXT_LIMIT: 'This conversation reached the selected model’s context limit.',
     THREAD_TOO_LARGE: 'The saved API conversation reached its local history limit.',
     TOOL_LIMIT: 'This task reached the local tool-call limit.',

@@ -6,7 +6,6 @@ import { readDurable, writeDurableNow } from "../durable.js";
 import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent } from "../session/store.js";
 import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, noteApiInputRecovery, listInputs, type InputEntry } from "../session/input.js";
 import { notifyChanged } from "../session/recorder.js";
-import { estimateTokens } from "../../shared/session.js";
 import { ApiError, type ApiMessage, type ApiModel, type ApiToolCall } from "./types.js";
 import { apiProvider, apiInputOwner } from "./providers.js";
 import { prepareSessionPrompt, prepareSkillFollowup } from "../session/prompt.js";
@@ -16,14 +15,19 @@ import { agentInfoForOwnedConversation, onSwarmEnd, failAgent, persistCriticalSw
 import { apiTurns as controllers, type ActiveApiTurn } from './activity.js';
 import { generateApiTopicTitle, stopApiTitles } from './title.js';
 import { apiRetryDelay, apiFailureDescription, API_RETRY_LIMIT } from './recovery.js';
+import { apiOutputBudget } from './budget.js';
+import { ApiRefusalWatch } from './refusals.js';
+import type { OutputPublication } from '../codex/unified-exec.js';
 export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 1000;
 const MAX_CALLS = 3000;
 const MAX_HISTORY_MESSAGES = 2000;
 const MAX_HISTORY_BYTES = 6 * 1024 * 1024;
-const MAX_TOOL_RESULT_CHARS = 12000;
-const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. For build, edit, inspection or repair requests, inspect the actual workspace or saved artifact with tools, then carry out the requested work. A code example in prose is not a created or changed file. Resolve the current project and approved roots before choosing a working directory; never assume an index.html exists. Give brief public progress updates at useful milestones and report only work supported by tool results. Answer clearly once work is verified.";
+// A normal terminal result already has a 10K-token native presentation budget. Carry
+// that complete rendering plus recovery pages instead of silently cutting it to 12K chars.
+const MAX_TOOL_RESULT_CHARS = 64_000;
+const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. For build, edit, inspection or repair requests, inspect the actual workspace or saved artifact with tools, then carry out the requested work. A code example in prose is not a created or changed file. Resolve the current project and approved roots before choosing a working directory; never assume an index.html exists. EXEC_RESULTS_UNREAD means completed command output must be collected, not that command permission was revoked. Following tool responses include bounded retained pages; read them and use write_stdin on the listed exact owned process IDs. Do not issue PING loops or ask the user to reset or discard pending results. A live command is separate from completed results. When an owned test is hung and stopping it is appropriate, write_stdin with chars set to the Ctrl-C character can interrupt it without launching another exec command. Never kill an arbitrary OS process based only on a port or a guessed PID. Complete requested verification and cleanup before handing work back; distinguish an intentional server from an unfinished test. Give brief public progress updates at useful milestones and report only work supported by tool results. Answer clearly once work is verified.";
 
 interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[]; titleRequested?: boolean }
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
@@ -72,20 +76,13 @@ async function saveThread(thread: Thread): Promise<void> {
   await writeDurableNow(stateName(thread.sessionId), thread);
 }
 
-function budget(messages: ApiMessage[], model: ApiModel, tools: object[], output: number): void {
-  const reserve = Math.max(256, output);
-  const prompt = estimateTokens(SYSTEM) + estimateTokens(JSON.stringify(messages)) +
-    estimateTokens(JSON.stringify(tools)) + 256;
-  if (prompt + reserve > model.contextLength) throw new ApiError("CONTEXT_LIMIT");
-}
-
-function toolOutput(result: { content: Array<{ type: string; text?: string }>; isError?: boolean }): string {
+function toolOutput(result: { content: Array<{ type: string; text?: string }>; isError?: boolean }): { text: string; clipped: boolean } {
   const pieces = result.content.map(part => part.type === "text" ? part.text ?? "" :
     "[Non-text tool output recorded in OneCode; see session artifact or media]");
   const text = pieces.join("\n");
   const clipped = text.length > MAX_TOOL_RESULT_CHARS ? text.slice(0, MAX_TOOL_RESULT_CHARS) +
     "\n[Tool response shortened for model context; full local record retained]" : text;
-  return result.isError ? "TOOL_ERROR: " + clipped : clipped;
+  return { text: result.isError ? "TOOL_ERROR: " + clipped : clipped, clipped: text.length > MAX_TOOL_RESULT_CHARS };
 }
 
 function assistantRow(text: string, id: string, replyTo: string, turnId: string, model: string, final: boolean) {
@@ -153,6 +150,7 @@ async function perform(entry: InputEntry): Promise<void> {
   let ownedThread: Thread | null = null;
   let responseSaved = false;
   let retryCount = 0;
+  const publications = new Set<OutputPublication>();
   const clearPaintTimer = () => { if (paintTimer) clearTimeout(paintTimer); paintTimer = null; };
   try {
     const provider = entry.chatProvider && apiProvider(entry.chatProvider);
@@ -199,11 +197,8 @@ async function perform(entry: InputEntry): Promise<void> {
       ? reasoningEffort : undefined;
     if (reasoning && !model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort'))
       throw new ApiError('MODEL_REASONING_UNAVAILABLE');
-    // High-effort reasoning consumes completion tokens before visible prose or
-    // tool calls. A hard 4096-token cap truncated legitimate long agent turns.
-    // Retain a finite budget and respect the selected model's published ceiling.
-    const output = Math.min(model.maxCompletionTokens ?? 16384, 16384,
-      Math.max(512, Math.floor(model.contextLength * 0.55)));
+    let desiredOutput = 65_536, truncatedRounds = 0;
+    const refusals = new ApiRefusalWatch();
     const system = SYSTEM + "\n" + provider.modelInstruction(model.id);
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
@@ -211,8 +206,7 @@ async function perform(entry: InputEntry): Promise<void> {
     const messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
     if (entry.steerTurnId) messages[messages.length - 1] = { role: 'user', content:
       'The user supplied this direction during the ongoing task. Continue the existing objective with this update; preserve completed work, running commands and workers. Use the saved tool results and process IDs. Do not restart the task or repeat earlier actions.\n\n' + prompt };
-    const contextMessages: ApiMessage[] = [{ role: "system", content: system }, ...messages];
-    budget(contextMessages, model, declarations, output);
+    apiOutputBudget(model, [{ role: 'system', content: system }, ...messages], declarations, desiredOutput);
     let invocations = 0, paintedAt = 0;
     const flushPaint = () => {
       clearPaintTimer();
@@ -278,7 +272,7 @@ async function perform(entry: InputEntry): Promise<void> {
       declarations = model.supportsTools ? tools.declarations : [];
       const requestMessages: ApiMessage[] = [{ role: "system", content: system },
         ...(round === 0 ? messages : thread.messages)];
-      budget(requestMessages, model, declarations, output);
+      const { output, maximum } = apiOutputBudget(model, requestMessages, declarations, desiredOutput);
       const complete = () => provider.complete({ model: model.id, sessionId: turn.conversationId,
         messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
         reasoningEffort: reasoning, onAccepted: firstAccepted, onText: paint,
@@ -319,6 +313,10 @@ async function perform(entry: InputEntry): Promise<void> {
       }
       if (retried && accepted) await recoveryNotice('API connection recovered. Continuing the same task from saved results.');
       if (!accepted || !await currentApiTurn(turn)) throw new ApiError("API_TURN_NOT_CURRENT");
+      // A validated response proves that this exact model request received its full tool
+      // context. A later exact owner call can acknowledge those output pages in the kernel.
+      for (const receipt of publications) receipt.completedAt = Date.now();
+      publications.clear();
       const resultContent = response.content;
       if (resultContent && !displayed.endsWith(resultContent)) {
         // Streaming already painted these deltas; non-streaming and post-tool prose may be new.
@@ -326,6 +324,21 @@ async function perform(entry: InputEntry): Promise<void> {
       }
       clearPaintTimer();
       await painting;
+      if (response.finishReason === 'length') {
+        if (displayed || resultContent) {
+          await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, model.id, false));
+          thread.messages.push({ role: 'assistant', content: displayed || resultContent });
+        }
+        // Truncated reasoning signatures and function arguments are not complete protocol
+        // items. Continue from safe public text and durable tool results, never dispatch them.
+        thread.messages.push({ role: 'system', content: 'OneCode runtime continuation: the previous response reached its output-token limit. No truncated tool proposal was executed. Continue the existing task from saved tool results and running process IDs. Take the next small concrete step; do not restart or repeat completed actions.' });
+        responseSaved = true; await saveThread(thread);
+        if (++truncatedRounds > 3) throw new ApiError('OUTPUT_RECOVERY_LIMIT');
+        desiredOutput = Math.min(maximum, Math.max(output + 1, output * 2));
+        await recoveryNotice(`Response output limit reached. Continuing the same task automatically (${truncatedRounds}/3); requesting up to ${desiredOutput} output tokens within the model/context limit. Incomplete tool proposals were not executed.`);
+        continue;
+      }
+      truncatedRounds = 0;
       const calls = response.toolCalls;
       if (calls.length && (displayed || resultContent)) {
         await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, false));
@@ -378,13 +391,19 @@ async function perform(entry: InputEntry): Promise<void> {
         const argumentsJson = JSON.parse(call.function.arguments) as unknown;
         active.activity = { phase: 'preparing-tool', tool: call.function.name };
         notifyChanged(turn.sessionId);
-        const result = await tools.invoke(call.function.name, argumentsJson);
+        const publication: OutputPublication = { completedAt: null, failed: false, maxTextBytes: MAX_TOOL_RESULT_CHARS - 64 };
+        publications.add(publication);
+        const result = await tools.invoke(call.function.name, argumentsJson, publication);
         invocations += 1;
         const schema = result.isError && JSON.stringify(result.content).includes('INVALID_ARGUMENTS:')
           ? tools.declarations.find(tool => tool.function.name === call.function.name)?.function.parameters : null;
-        thread.messages.push({ role: "tool", tool_call_id: call.id, content: toolOutput(result) +
-          (schema ? '\nExact current input schema for ' + call.function.name + ': ' + JSON.stringify(schema) : '') });
+        const rendered = toolOutput({ ...result, content: [...result.content,
+          ...(schema ? [{ type: 'text', text: '\nExact current input schema for ' + call.function.name + ': ' + JSON.stringify(schema) }] : [])] });
+        if (rendered.clipped) { publication.failed = true; publications.delete(publication); }
+        const repeated = refusals.observe(rendered.text, round);
+        thread.messages.push({ role: "tool", tool_call_id: call.id, content: rendered.text + repeated.guidance });
         await saveThread(thread);
+        if (repeated.stalled) throw new ApiError('EXEC_RECOVERY_STALLED');
         // An explicit worker finish ends its generation locally; no extra paid request or new tool.
         const worker = entry.apiWorker && agentInfoForOwnedConversation(conversationId);
         if (worker && ['sleeping', 'finished'].includes(worker.state)) {
@@ -432,6 +451,8 @@ async function perform(entry: InputEntry): Promise<void> {
       notifyChanged(entry.sessionId);
     }
   } finally {
+    // A result never included in a validated model request must be eligible for re-offer.
+    for (const receipt of publications) receipt.failed = true;
     clearPaintTimer();
     dropWorkerStop?.();
     if (controllers.get(entry.id) === active) controllers.delete(entry.id);

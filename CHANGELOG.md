@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.6 Beta] — 2026-11-05
+
+Use model/context-aware API response budgets and automatically continue length-truncated responses without executing incomplete tool proposals. Repair API terminal result publication and acknowledgement, carry normal terminal renderings without the former 12K-character clip, and re-offer unacknowledged restored prefixes. Preserve session/incarnation ownership and incomplete/failed delivery. Detect unchanged exec-refusal loops across model decisions and guide owned hung-process interruption without launching another command. See [Beta notes](docs/release-notes/beta-v0.9.6.md).
+
 ## [0.9.5 Beta] — 2026-11-05
 
 Keep API tasks alive through steering and recover transient inference failures from saved tool results. Respect provider retry delays, show reconnecting/recovered status and safe HTTP/transport failure explanations, and retain running processes. Apply direction changes at model/tool boundaries without aborting inference or dispatched tools; explicitly skip proposals not yet executed. Extend long-task bounds beyond the earlier twenty-step cap. Stable remains an unfrozen draft pending user acceptance. See [Beta notes](docs/release-notes/beta-v0.9.5.md).

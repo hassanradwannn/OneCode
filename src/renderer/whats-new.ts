@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.6': {
+    lead: () => t('Recover API output limits and keep terminal work moving.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Continue at output limits'), text: () => t('Use the selected model’s output capacity and automatically continue from saved work when a response reaches its limit.') },
+      { icon: 'i-terminal', title: () => t('Collect completed command results'), text: () => t('Restore command access after old results are delivered. Preserve output pages, session ownership and interrupted deliveries.') },
+      { icon: 'i-chat', title: () => t('Clearer stalled-task recovery'), text: () => t('Avoid repeated blocked probes and use existing process controls for an owned hung test. Empty model responses no longer count as completed work.') }
+    ]
+  },
   '0.9.5': {
     lead: () => t('Keep API tasks moving through connection failures and direction changes.'),
     highlights: [

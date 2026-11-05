@@ -84,10 +84,13 @@ function parseCompletion(value: unknown): OpenRouterCompletion {
   const choice = value.choices[0] as Record<string, unknown>;
   const message = isObject(choice.message) ? choice.message : null;
   if (!message) throw new OpenRouterApiError("INVALID_RESPONSE");
-  const calls = Array.isArray(message.tool_calls) ? message.tool_calls.map(validatedCall) : [];
-  if (new Set(calls.map(call => call.id)).size !== calls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
   const finishReason = str(choice.finish_reason) || null;
-  if (finishReason === "length") throw new OpenRouterApiError("TRUNCATED_COMPLETION");
+  if (finishReason === 'content_filter') throw new OpenRouterApiError('CONTENT_FILTERED');
+  if (finishReason === 'error') throw new OpenRouterApiError('PROVIDER_UNAVAILABLE');
+  // Preserve safe partial text/usage, but never turn a length-truncated proposal into a call.
+  const calls = finishReason !== 'length' && Array.isArray(message.tool_calls) ? message.tool_calls.map(validatedCall) : [];
+  if (new Set(calls.map(call => call.id)).size !== calls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
+  if (finishReason !== 'length' && !str(message.content).trim() && !calls.length) throw new OpenRouterApiError('EMPTY_COMPLETION');
   return { id: str(value.id), model: str(value.model), content: str(message.content), toolCalls: calls,
     reasoningDetails: Array.isArray(message.reasoning_details) ? message.reasoning_details : [],
     finishReason, usage: parseUsage(value.usage) };
@@ -152,10 +155,12 @@ async function streamCompletion(response: Response, onText?: (increment: string)
     }
   } finally { await reader.cancel().catch(() => undefined); }
   if (!complete) throw new OpenRouterApiError("STREAM_INCOMPLETE");
-  if (finishReason === "length") throw new OpenRouterApiError("TRUNCATED_COMPLETION");
-  const toolCalls = [...parts].sort(([a], [b]) => a - b).map(([, call]) =>
+  if (finishReason === 'content_filter') throw new OpenRouterApiError('CONTENT_FILTERED');
+  if (finishReason === 'error') throw new OpenRouterApiError('PROVIDER_UNAVAILABLE');
+  const toolCalls = finishReason === 'length' ? [] : [...parts].sort(([a], [b]) => a - b).map(([, call]) =>
     validatedCall({ id: call.id, function: { name: call.name, arguments: call.arguments } }));
   if (new Set(toolCalls.map(call => call.id)).size !== toolCalls.length) throw new OpenRouterApiError("DUPLICATE_TOOL_CALL");
+  if (finishReason !== 'length' && !content.trim() && !toolCalls.length) throw new OpenRouterApiError('EMPTY_COMPLETION');
   return { id, model, content, toolCalls, reasoningDetails, finishReason, usage };
 }
 

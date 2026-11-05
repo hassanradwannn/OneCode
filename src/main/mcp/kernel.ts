@@ -529,7 +529,7 @@ async function withBackgroundExecRecovery(
   const principal = executionPrincipal(caller.requestId, caller.sessionId);
   if (!principal) return result;
   const used = result.content.reduce((bytes, part) => bytes + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf8') : 0), 0);
-  const budget = Math.min(12_000, DEFAULT_MAX_OUTPUT_TOKENS * 4 - used) - 64;
+  const budget = Math.min(12_000, (publication.maxTextBytes ?? DEFAULT_MAX_OUTPUT_TOKENS * 4) - used) - 64;
   if (budget < 1_024) return result;
   const output = await offerBackgroundExecOutput(principal, publication, budget);
   // The page is the priority. Running-terminal reminders can wait for a later response.
@@ -1025,7 +1025,8 @@ async function dispatchTracked(
   if (!preAckPolicyRefusal && strictChatAllowlistEnabled(context.caller.conversationId)) {
     preAckPolicyRefusal = await conversationAccessRefusal(context.caller.conversationId);
   }
-  if (!nested && (requestId || context.caller.geminiBinding) && !preAckPolicyRefusal && !supersededConversation && !compacting) {
+  const exactApiOwner = context.localApiTurnId && context.localApiCurrent && await context.localApiCurrent();
+  if (!nested && (requestId || context.caller.geminiBinding || exactApiOwner) && !preAckPolicyRefusal && !supersededConversation && !compacting) {
     const explicitPoll = name === 'write_stdin' && args && typeof args === 'object'
       ? (args as { session_id?: number }).session_id : undefined;
     const principal = executionPrincipal(requestId, context.caller.sessionId);
