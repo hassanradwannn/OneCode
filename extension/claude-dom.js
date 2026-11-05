@@ -180,6 +180,12 @@ var CLF_DOM = (() => {
   function userAuthoredText(root, id) {
     const source = nativeUserBody(root, id);
     const raw = source ?? blockText(root);
+    // Collapsed native Markdown loses blank lines and hides the slash glyph.
+    // Do not journal that lossy app frame as a second authored user message
+    // while its exact public plain source is still hydrating.
+    const displayFrame = raw.replace(/^\/?onecode\s+/, '');
+    const lossyFrame = source === null && /^\[\[COS_CONTEXT:\d{1,6}\]\]/.test(displayFrame) &&
+      (displayFrame !== raw || userPromptText(displayFrame) === null);
     const accepted = acceptedSkillQuestions.get(id);
     const outgoing = outgoingSkill && outgoingSkill.current() && !outgoingSkill.prior.has(id) &&
       (!outgoingSkill.conversation || id.startsWith(`${outgoingSkill.conversation}:user:`)) ? outgoingSkill : null;
@@ -200,17 +206,21 @@ var CLF_DOM = (() => {
       const range = document.createRange(); range.selectNodeContents(root); range.setEndBefore(wrapper);
       return !compact(range.toString());
     });
-    if (chips.length !== 1) return raw;
+    if (chips.length !== 1) return lossyFrame ? '' : raw;
     const copy = root.cloneNode(true), allGroups = all(sentSkillGroup, root);
     all(sentSkillGroup, copy)[allGroups.indexOf(chips[0])]?.remove();
     const candidate = blockText(copy);
+    // After reload the outgoing lease is gone. The exact native chip plus its
+    // public plain source still lets presentation remove the transport prefix.
+    // This does not select a skill, authorize Send or manufacture an ACK.
+    if (authoredSource !== null && userPromptText(authoredSource) !== null && compact(candidate) === compact(authoredSource)) return authoredSource;
     if (accepted && candidate === accepted || outgoing && candidate === outgoing.expected) {
       if (outgoing) { acceptedSkillQuestions.set(id, candidate); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
       return candidate;
     }
     // Reloaded historical presentation can recognize the same native chip and
     // an intact app frame. This never marks a skill selected or authorizes Send.
-    return source ?? (userPromptText(candidate) !== null ? candidate : raw);
+    return source ?? (userPromptText(candidate) !== null ? candidate : lossyFrame ? '' : raw);
   }
   function waitFor(read, current, timeout = 15000) {
     return new Promise(resolve => {
@@ -387,7 +397,7 @@ var CLF_DOM = (() => {
       }
     } catch { return false; }
     if (!files.length) return true;
-    const box = composer(), route = location.href;
+    let box = composer(); const route = location.href;
     if (files.length > 20 || files.some(file => !file.name || file.name.length > 512) || !box || !composerWritable() ||
         !current() || !draft?.current() || hasComposerAttachments()) return false;
     // Fresh /new and existing chats use different native input IDs and mounts.
@@ -406,7 +416,17 @@ var CLF_DOM = (() => {
     if (!dock || !input) return false;
     let interrupted = false;
     const note = event => { if (event.isTrusted && (dock.contains(event.target) || event.target?.matches?.('input[type="file"]'))) interrupted = true; };
-    const owns = () => !interrupted && current() && draft.current() && location.href === route && composer() === box && box.isConnected;
+    let rebound = false;
+    const owns = () => {
+      if (interrupted || !current() || location.href !== route) return false;
+      if (composer() !== box) {
+        // Upload hydration can remount the editor. Adopt one replacement only
+        // through the original exact-text lease; never reinsert or reupload.
+        if (rebound || !draft.rebind?.()) return false;
+        box = composer(); rebound = true;
+      }
+      return Boolean(box?.isConnected && draft.current());
+    };
     const priorAlerts = new Set(errors().map(error => error.node));
     for (const type of ['beforeinput', 'input', 'change', 'pointerdown']) document.addEventListener(type, note, true);
     try {
@@ -421,7 +441,9 @@ var CLF_DOM = (() => {
         const rows = attachmentRows(); if (rows.length > files.length) return false;
         const proof = await readComposerFiles(owns);
         if (!owns()) return false;
-        if (proof === undefined) return false;
+        // A delayed read-only bridge reply does not mean the native upload
+        // failed. Re-read under the same deadline without another input change.
+        if (proof === undefined) continue;
         const currentRows = attachmentRows();
         if (proof && proof.uploadingFile === false && proof.uploadingSync === false && proof.placeholderCount === 0 &&
             proof.files.length === files.length && currentRows.length === files.length && enabled(sendButton())) {
@@ -431,7 +453,7 @@ var CLF_DOM = (() => {
               (item.kind === 'file' && typeof item.type === 'string' || item.kind === 'image' && /^image\//i.test(file.type)) && Number.isSafeInteger(item.size) && item.size >= 0 &&
               uuid.test(item.token || '') && currentRows.some(row => row.getAttribute('data-clf-claude-attachment-token') === item.token && attachmentName(row) === file.name &&
                 attachmentRemove(row)?.disabled !== true && attachmentRemove(row)?.getAttribute('aria-disabled') !== 'true' &&
-                !row.hasAttribute('data-state') && row.getAttribute('aria-busy') !== 'true'));
+                (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) && row.getAttribute('aria-busy') !== 'true'));
             if (at < 0) return false; unmatched.splice(at, 1); return true;
           });
           if (matches) { draft.attachments(currentRows); return draft.current(); }

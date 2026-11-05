@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.8 Beta] — 2026-11-05
+
+Read a native Claude question's sole exact plain text item alongside media without importing media payloads. Suppress lossy app-frame readback until exact source or structured-chip proof is available, and recover historical chip presentation without creating Send authority. Preserve an upload's exact draft across one editor remount, accept positively settled tiles and re-read delayed upload observations without uploading again. Request API titles at the first validated response, reject directory-style metadata and upgrade older folder names once while preserving manual names. Make the Workbench browser discoverable before a manual tab exists and reveal an authorized new tab only in its selected chat. See [Beta notes](docs/release-notes/beta-v0.9.8.md).
+
 ## [0.9.7 Beta] — 2026-11-05
 
 Raise the local API JSON transport limit from 2 to 16 MiB and the durable thread allowance from 6 to 32 MiB, independently of model context limits. Preserve existing chat history, tool outcomes and ownership. Share validated model definitions between the UI and runtime using the existing catalog owner, with expiry, explicit refresh, credential invalidation and independent cancellation. Show pending preparation/provider-wait stages and record safe per-phase timing/byte metadata without fabricating delivery receipts. See [Beta notes](docs/release-notes/beta-v0.9.7.md).

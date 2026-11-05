@@ -13,7 +13,7 @@ import { currentApiTurn, apiTools, type OwnedTurn } from "./tools.js";
 import { acknowledgeApiWorker, finishApiWorker } from "./workers.js";
 import { agentInfoForOwnedConversation, onSwarmEnd, failAgent, persistCriticalSwarmNow } from "../agents.js";
 import { apiTurns as controllers, type ActiveApiTurn } from './activity.js';
-import { generateApiTopicTitle, stopApiTitles } from './title.js';
+import { generateApiTopicTitle, stopApiTitles, apiTitleEligible, API_TITLE_VERSION } from './title.js';
 import { apiRetryDelay, apiFailureDescription, API_RETRY_LIMIT } from './recovery.js';
 import { apiOutputBudget } from './budget.js';
 import { ApiRefusalWatch } from './refusals.js';
@@ -30,7 +30,7 @@ const MAX_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_TOOL_RESULT_CHARS = 64_000;
 const SYSTEM = "You are an assistant in OneCode. The tools supplied with this request are available on the first user message, not only on follow-ups. For requested local work, use the provided tool functions rather than claiming you cannot access the approved workspace or can only draft a mockup. If no relevant tool is actually supplied or a call is refused, say so without inventing work. Tool calls are requests to OneCode, never executed by the model provider. Respect refused permissions and do not invent tool results, completed operations, receipts, or user authorizations. Unknown tool outcomes are not permission to repeat a mutation. For build, edit, inspection or repair requests, inspect the actual workspace or saved artifact with tools, then carry out the requested work. A code example in prose is not a created or changed file. Resolve the current project and approved roots before choosing a working directory; never assume an index.html exists. EXEC_RESULTS_UNREAD means completed command output must be collected, not that command permission was revoked. Following tool responses include bounded retained pages; read them and use write_stdin on the listed exact owned process IDs. Do not issue PING loops or ask the user to reset or discard pending results. A live command is separate from completed results. When an owned test is hung and stopping it is appropriate, write_stdin with chars set to the Ctrl-C character can interrupt it without launching another exec command. Never kill an arbitrary OS process based only on a port or a guessed PID. Complete requested verification and cleanup before handing work back; distinguish an intentional server from an unfinished test. Give brief public progress updates at useful milestones and report only work supported by tool results. Answer clearly once work is verified.";
 
-interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[]; titleRequested?: boolean }
+interface Thread { version: 1; sessionId: string; conversationId: string; messages: ApiMessage[]; titleRequested?: boolean; titleVersion?: number }
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
 const queues = new Map<string, Promise<void>>();
 let accepting = true;
@@ -209,7 +209,7 @@ async function perform(entry: InputEntry): Promise<void> {
       throw new ApiError('MODEL_REASONING_UNAVAILABLE');
     let desiredOutput = 65_536, truncatedRounds = 0;
     const refusals = new ApiRefusalWatch();
-    const system = SYSTEM + "\n" + provider.modelInstruction(model.id);
+    const system = SYSTEM + "\nTo present a running local website, use browser_tabs list, select OneCode’s Workbench browserId, then browser_tabs action=new with the server HTTP URL. This opens the calling chat’s sidebar. An inline artifact is a separate offline preview with no access to that server; do not recreate the website as an artifact when the user wants to run or inspect the real app.\n" + provider.modelInstruction(model.id);
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
@@ -373,6 +373,17 @@ async function perform(entry: InputEntry): Promise<void> {
         ...(calls.length ? { tool_calls: calls } : {}) });
       responseSaved = true;
       await saveThread(thread);
+      // Naming does not wait for the entire agentic task to finish. Existing
+      // folder-style provider names get one metadata upgrade in this version.
+      try {
+        const summary = await getSession(turn.sessionId);
+        if (!controller.signal.aborted && thread.titleVersion !== API_TITLE_VERSION && !entry.apiWorker && summary && apiTitleEligible(summary) &&
+            (!summary.origin || summary.origin.kind === 'desktop')) {
+          thread.titleRequested = true; thread.titleVersion = API_TITLE_VERSION; await saveThread(thread);
+          const question = thread.messages.find(row => row.role === 'user')?.content ?? entry.text;
+          generateApiTopicTitle(turn.sessionId, conversationId, question ?? entry.text, resultContent, provider, model);
+        }
+      } catch { /* Optional naming cannot fail task execution or replay tools. */ }
       const skipUndispatched = async (remaining: ApiToolCall[]) => {
         for (const call of remaining) thread.messages.push({ role: 'tool', tool_call_id: call.id,
           content: 'NOT_EXECUTED: The user supplied a new direction before this tool was dispatched. No action ran for this call.' });
@@ -391,15 +402,6 @@ async function perform(entry: InputEntry): Promise<void> {
           turnId: turn.turnId, outcome: "completed" });
         await finishApiWorker(entry, displayed || resultContent || "Worker completed without a text report.");
         notifyChanged(turn.sessionId);
-        try {
-          const summary = await getSession(turn.sessionId);
-          if (!controller.signal.aborted && !thread.titleRequested && !entry.apiWorker && summary?.titleSource !== 'manual' && summary?.titleSource !== 'provider' &&
-              (!summary?.origin || summary.origin.kind === 'desktop')) {
-            thread.titleRequested = true; await saveThread(thread);
-            const question = thread.messages.find(row => row.role === 'user')?.content ?? entry.text;
-            generateApiTopicTitle(turn.sessionId, conversationId, question ?? entry.text, displayed || resultContent, provider, model);
-          }
-        } catch { /* Optional naming cannot turn completed task work into failure. */ }
         return;
       }
       if (calls.length > 16 || invocations + calls.length > MAX_CALLS) throw new ApiError("TOOL_LIMIT");

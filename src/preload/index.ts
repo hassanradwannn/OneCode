@@ -363,8 +363,8 @@ const api = {
   workbenchBrowserPresent: (sessionId: string, tabId: number, bounds: WorkbenchBrowserBounds, visible: boolean) =>
     call<WorkbenchBrowserState>('workbenchBrowser:present', { sessionId, tabId, bounds, visible }),
   workbenchBrowserHide: (sessionId?: string) => call<boolean>('workbenchBrowser:hide', { ...(sessionId ? { sessionId } : {}) }),
-  onWorkbenchBrowserChanged: (listener: (event: { sessionId: string }) => void): (() => void) => {
-    const wrapped = (_event: unknown, change: { sessionId: string }): void => listener(change);
+  onWorkbenchBrowserChanged: (listener: (event: { sessionId: string; reveal?: boolean }) => void): (() => void) => {
+    const wrapped = (_event: unknown, change: { sessionId: string; reveal?: boolean }): void => listener(change);
     ipcRenderer.on('workbenchBrowser:changed', wrapped);
     return () => ipcRenderer.removeListener('workbenchBrowser:changed', wrapped);
   },

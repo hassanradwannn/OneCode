@@ -757,10 +757,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   registerWorkspaceTerminalIpc(getWindow);
   registerDictationIpc(getWindow);
   const workbenchBrowser = new WorkbenchBrowserController(getWindow);
-  workbenchBrowser.onChange(sessionId => {
+  workbenchBrowser.onChange((sessionId, reveal) => {
     const target = getWindow();
     if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
-    target.webContents.send('workbenchBrowser:changed', { sessionId });
+    target.webContents.send('workbenchBrowser:changed', { sessionId, ...(reveal ? { reveal: true } : {}) });
   });
   // A session row remains visible until its delete IPC resolves. Fence Trust while deletion is
   // in flight so a second click cannot recreate permission after the row's durable revoke.

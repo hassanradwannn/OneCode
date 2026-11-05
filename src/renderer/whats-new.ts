@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.8': {
+    lead: () => t('Keep Claude attachment questions intact and present running websites in OneCode.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Claude attachment delivery'), text: () => t('Read the exact question beside native media, preserve upload drafts through an editor remount and avoid displaying damaged transport instructions as your message.') },
+      { icon: 'i-browser', title: () => t('Open the running website'), text: () => t('Agents can discover the sidebar browser before you open it manually and request presentation of the actual running website.') },
+      { icon: 'i-chat', title: () => t('Earlier topic names'), text: () => t('Name API chats during the task and replace older folder-style generated names while keeping your manual titles.') }
+    ]
+  },
   '0.9.7': {
     lead: () => t('Continue larger API chats and see what Send is waiting for.'),
     highlights: [

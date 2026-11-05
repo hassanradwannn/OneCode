@@ -80,7 +80,7 @@ export class WorkbenchBrowserController {
   private readonly ses: Session;
   private readonly tabs = new Map<number, BrowserTab>();
   private readonly active = new Map<string, number>();
-  private readonly listeners = new Set<(sessionId: string) => void>();
+  private readonly listeners = new Set<(sessionId: string, reveal: boolean) => void>();
   private unregisterClient: (() => void) | null = null;
   private presentation: { sessionId: string; tabId: number; bounds: WorkbenchBrowserBounds; visible: boolean } | null = null;
   private readonly restored = new Map<string, Array<{ url: string; active: boolean }>>();
@@ -93,18 +93,18 @@ export class WorkbenchBrowserController {
     this.ses.setPermissionCheckHandler(() => false);
     this.ses.on('will-download', event => event.preventDefault());
     this.restorePromise = this.restoreMetadata();
+    this.ensureClient();
     app.once('before-quit', () => this.dispose());
   }
 
-  onChange(listener: (sessionId: string) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-  private notify(sessionId: string): void { for (const listener of this.listeners) listener(sessionId); }
+  onChange(listener: (sessionId: string, reveal: boolean) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  private notify(sessionId: string, reveal = false): void { for (const listener of this.listeners) listener(sessionId, reveal); }
 
   private ensureClient(): void {
-    if (this.unregisterClient || !this.tabs.size) return;
+    if (this.unregisterClient || this.disposing) return;
     const client: InternalBrowserClient = { id: this.browserId, name: BROWSER_NAME, enabled: true, execute: (command, allowed) => this.execute(command, allowed) };
     this.unregisterClient = browserControl.registerInternalClient(client);
   }
-  private retireClient(): void { if (this.tabs.size || !this.unregisterClient) return; this.unregisterClient(); this.unregisterClient = null; }
 
   state(sessionId: string): WorkbenchBrowserState {
     if (!SESSION_ID.test(sessionId)) throw new Error('Invalid session id');
@@ -208,7 +208,7 @@ export class WorkbenchBrowserController {
       if (next) this.active.set(tab.sessionId, next.id); else this.active.delete(tab.sessionId);
     }
     if (this.presentation?.tabId === tab.id) this.presentation = null;
-    this.persistMetadata(); this.syncPresentation(); this.notify(tab.sessionId); this.retireClient();
+    this.persistMetadata(); this.syncPresentation(); this.notify(tab.sessionId);
   }
 
   private requireTab(sessionId: string, tabId: number): BrowserTab {
@@ -431,9 +431,10 @@ export class WorkbenchBrowserController {
         if (args.action === 'list') return this.listTabs(command);
         const sessionId = ownerSession(command); if (!sessionId) throw new Error('BROWSER_IDENTITY_REQUIRED');
         if (args.action === 'new') {
-          await this.authorize(command, allowed); const tab = this.createTab(sessionId, safeUrl(String(args.url ?? 'about:blank')), false); await this.attach(tab, command, allowed);
+          await this.authorize(command, allowed); const tab = this.createTab(sessionId, safeUrl(String(args.url ?? 'about:blank')), true); await this.attach(tab, command, allowed);
+          await this.authorize(command, allowed); this.notify(sessionId, true);
           return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL() || String(args.url ?? 'about:blank'),
-            title: tab.view.webContents.getTitle(), attached: true, created: true, navigationRequested: String(args.url ?? 'about:blank') } };
+            title: tab.view.webContents.getTitle(), attached: true, created: true, presentationRequested: true, navigationRequested: String(args.url ?? 'about:blank') } };
         }
         const tab = this.modelTab(command, false);
         if (args.action === 'attach') { await this.attach(tab, command, allowed); return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle(), attached: true } }; }

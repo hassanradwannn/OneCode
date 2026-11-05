@@ -7201,7 +7201,8 @@ export function initChat(next: Deps): void {
   const docks = createWorkspaceDocks(chatHost);
   workspaceDocks = docks;
   artifactPanel = createArtifactPanel({ docks, selectedSession: () => selectedId, selectSession });
-  workbenchBrowserPanel = createWorkbenchBrowserPanel({ onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); } });
+  workbenchBrowserPanel = createWorkbenchBrowserPanel({ onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); },
+    onOpen: () => docks.activateSurface('browser') });
   mediaPanel = createMediaPanel({ onAvailabilityChanged: () => docks.sync(), onEscape: () => { docks.setOpen(false); docks.rightToggle.focus(); } });
   const agentToolGroups = new Map<string, HTMLElement>();
   const agentSays = new Map<string, { text: string; row: HTMLElement }>();
