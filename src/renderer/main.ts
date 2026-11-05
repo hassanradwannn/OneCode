@@ -1909,7 +1909,7 @@ function apply(next: AppState): void {
   if (browserRail) browserRail.textContent = provider === 'openrouter' ? 'API key' : 'Browser';
   const cosBrowser = (config.ui.chatBrowser ?? 'chrome') === 'cos';
   const browserProgress = browserSetup.render(next);
-  $('browserBack').hidden = apiOnly;
+  if (apiOnly) $('browserBack').hidden = true;
   for (const other of externalSetupLinks) other.hidden = !cosBrowser;
   // A saved legacy value must not offer a second route back into embedded Google login.
   for (const button of document.querySelectorAll<HTMLButtonElement>('#wizard button[data-link]')) {
