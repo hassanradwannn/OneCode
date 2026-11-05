@@ -54,7 +54,7 @@ function streamFailure(payload: Record<string, unknown>): OpenRouterApiError | n
 }
 
 async function boundedText(response: Response): Promise<string> {
-  const data = await response.text();
+  const data = await response.text().catch(error => { throw apiTransportError(error, true); });
   if (Buffer.byteLength(data) > MAX_RESPONSE_BYTES) throw new OpenRouterApiError("RESPONSE_TOO_LARGE");
   return data;
 }
@@ -163,10 +163,17 @@ export class OpenRouterClient {
   constructor(private readonly transport: typeof fetch = fetch, private readonly baseUrl = OPENROUTER_API) {}
 
   async models(apiKey: string, signal?: AbortSignal): Promise<OpenRouterModel[]> {
-    const response = await this.transport(this.baseUrl + "/models", { headers: authHeaders(apiKey), signal });
-    if (!response.ok) throw apiFailure(response.status);
+    const response = await this.transport(this.baseUrl + "/models", { headers: authHeaders(apiKey), signal }).catch(error => {
+      if (signal?.aborted && signal.reason?.name !== 'TimeoutError') throw error;
+      throw apiTransportError(error);
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw apiFailure(response.status, retryAfter(response));
+    }
     let value: unknown;
-    try { value = JSON.parse(await boundedText(response)); } catch { throw new OpenRouterApiError("INVALID_CATALOG"); }
+    const raw = await boundedText(response);
+    try { value = JSON.parse(raw); } catch { throw new OpenRouterApiError("INVALID_CATALOG"); }
     if (!isObject(value) || !Array.isArray(value.data)) throw new OpenRouterApiError("INVALID_CATALOG");
     return value.data.flatMap((entry: unknown): OpenRouterModel[] => {
       if (!isObject(entry)) return [];
@@ -214,7 +221,8 @@ export class OpenRouterClient {
     await input.onAccepted?.();
     if (streaming) return streamCompletion(response, input.onText, input.onToolCall);
     let value: unknown;
-    try { value = JSON.parse(await boundedText(response)); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
+    const raw = await boundedText(response);
+    try { value = JSON.parse(raw); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
     return parseCompletion(value);
   }
 }

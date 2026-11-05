@@ -1,6 +1,6 @@
 # OneCode 0.9.5 Beta — API task continuity and recovery
 
-- Retry transient network, timeout, rate-limit, provider-unavailable and incomplete-stream failures from the current saved model-step checkpoint. Up to five retries use increasing delays and respect Retry-After up to five minutes. Recovery status and successful reconnection appear in the timeline; Stop cancels a retry wait.
+- Retry transient model-discovery, network, timeout, rate-limit, provider-unavailable and incomplete-stream failures from the current saved model-step checkpoint. Up to five retries use increasing delays and respect Retry-After up to five minutes. Recovery status and successful reconnection appear in the timeline; Stop cancels a retry wait.
 - Preserve completed tool results, running commands, process IDs and worker families. Only inference is retried. Tool dispatch, local history/proof writes and uncertain tool outcomes are never automatically repeated. A retried inference request may incur additional provider tokens.
 - Apply Steer at the next model/tool boundary without aborting the running response or an already-dispatched tool. Skip proposed tools that have not started and record that no action ran. Continue the existing objective with the user's update and saved results. Explicit After this turn still waits for task completion.
 - Explain HTTP status, connection loss, timeout, credentials, credits, storage and exhausted recovery. Detect errors inside HTTP-success event streams. Do not display raw provider bodies, private URLs, credentials or local exception paths.

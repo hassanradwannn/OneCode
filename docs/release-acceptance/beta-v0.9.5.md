@@ -8,8 +8,11 @@ Validation results and publication evidence are recorded after the candidate's f
 
 ## Local validation
 
-- 1008 tests passed across 14 suites after final app changes: API transport/session/recovery, native input startup/openings, capability grants, Desktop input maintenance, parallel/session input, Remote actions, timeline rounds, provider prompts/errors and Companion integration.
+- 1008 tests passed across 14 suites before the final catalog-transport guard: API transport/session/recovery, native input startup/openings, capability grants, Desktop input maintenance, parallel/session input, Remote actions, timeline rounds, provider prompts/errors and Companion integration.
+- After the final catalog guard, all 167 tests in nine affected-owner suites passed, including catalog recovery without duplicate model requests or questions.
 - Two focused actual-renderer cases passed: API live tool/command/background work and visible recovery without a misleading Stopped row. An isolated offscreen Electron capture was inspected; it shows recovery and the background-process dock. These are fixtures, not a live upstream/installed-app result.
 - Public verification passed: privacy/history, notices/native-source references, TypeScript and production Desktop/Remote bundles. The corrected final lockfile also passed notices/type/privacy checks; its dependency graph is unchanged.
 - Covered inference retries with durable tool-result reuse, pre-header recovery without duplicate questions, incomplete tool proposals never dispatched, exhausted retries, HTTP credentials requiring attention, storage failure without replay, Stop cancelling recovery, pending-tool steering and work beyond the old twenty-step cap.
 - The local tests and private evidence remain ignored as required by repository policy. No production application was installed, restarted or stopped.
+
+The first draft build was cancelled before asset upload when a final audit found that model-catalog refresh also needed typed transient recovery. The unpublished draft source was revised; no published application tag or artifact was changed.

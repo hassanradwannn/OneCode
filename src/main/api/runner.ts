@@ -159,7 +159,22 @@ async function perform(entry: InputEntry): Promise<void> {
     if (!provider) throw new ApiError("API_PROVIDER_UNAVAILABLE");
 
     if (!getConfig().sessions.record) throw new ApiError("SESSION_RECORDING_REQUIRED");
-    const models = await provider.models(controller.signal);
+    let models: ApiModel[];
+    for (let attempt = 0; ; attempt++) {
+      controller.signal.throwIfAborted();
+      try { models = await provider.models(controller.signal); break; }
+      catch (error) {
+        controller.signal.throwIfAborted();
+        const delay = apiRetryDelay(error, attempt);
+        if (delay === null) throw error;
+        retryCount = attempt + 1;
+        await noteInputStartupError(entry.id, 'Message queued. ' + apiFailureDescription(error) +
+          ` Retrying model discovery ${retryCount}/${API_RETRY_LIMIT} in ${Math.ceil(delay / 1000)}s.`);
+        await wait(delay, undefined, { signal: controller.signal });
+      }
+    }
+    retryCount = 0;
+    await noteInputStartupError(entry.id, null);
     const model = models.find(item => item.id === entry.model) ??
       (entry.model === provider.defaultModel.id ? provider.defaultModel : undefined);
     if (!model) throw new ApiError("MODEL_UNAVAILABLE");
