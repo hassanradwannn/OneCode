@@ -1,12 +1,12 @@
 # Unfrozen Stable preparation — API integration
 
-Status: **draft, awaiting the user's next Beta testing after the 0.9.4 reliability findings**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
+Status: **draft, awaiting the user's Beta 0.9.5 testing after the 0.9.4 reliability findings**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
 
 ## Prepared scope
 
 Integrate the API work developed from the current Stable ancestry: OpenRouter protected-key setup, model discovery, browserless durable sessions, local Core tools/code mode, plugins, managed skills, broker-owned workers and reuse, live effective/written permissions and exact task recovery. Include the Beta 0.9.4 repairs for immediate Steer, public progress segments, live command/background-process visibility, API readiness/recovery isolation and generated topic titles.
 
-The draft app metadata currently follows the next Beta candidate (0.9.5); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
+The draft app metadata currently follows the tested Beta candidate (0.9.5); the final Stable version is deliberately undecided. Channel-specific identity, profiles, Companion ports and update selection remain owned by the existing Stable packaging path. No Beta profile, credential or connector URL is copied into Stable.
 
 ## Evidence available for review
 
@@ -27,3 +27,5 @@ The draft app metadata currently follows the next Beta candidate (0.9.5); the fi
 No Stable tag, workflow dispatch, installer activation, profile change or release publication is performed by this preparation.
 
 Beta 0.9.4 user testing found disruptive stop/resend steering and opaque unrecovered API failures. The next candidate adds boundary steering and inference-only recovery. Stable remains explicitly on hold pending acceptance of those repairs; the earlier fixture/build passes did not establish unattended reliability.
+
+Published [Beta 0.9.5](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.5) is frozen at `fb28d49cde6b60505857e5c0ee83f4acd81eee4b`. [Run 42007505871](https://github.com/hassanradwannn/OneCode/actions/runs/42007505871) passed both platform builds/smoke checks and checksum finalization; all 21 curated assets were verified. This supersedes 0.9.4 as the acceptance candidate and does not grant Stable publication or establish live unattended acceptance.
