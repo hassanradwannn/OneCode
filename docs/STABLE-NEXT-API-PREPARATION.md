@@ -14,7 +14,7 @@ The draft app metadata currently follows the tested Beta candidate (0.9.4); the 
 - Local broad regression: 700/700 tests across 19 suites, including 329 real-renderer timeline cases.
 - Final affected-owner regression: 99/99 tests across API, client, outbox/opening, startup and prompt suites. TypeScript and full public verification passed; Desktop and Remote bundles built.
 - An isolated Electron capture verifies the API hint is absent and progress, tool rows, live command captions and background tasks remain visible in order.
-- Beta GitHub run and artifact checks are recorded in the Beta acceptance document. These do not claim installed Stable, signed-in native or physical-device acceptance.
+- Published [Beta 0.9.4](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.4) passed [GitHub run 41994981143](https://github.com/hassanradwannn/OneCode/actions/runs/41994981143); all 21 curated assets and compatible-base/payload digests were verified. Details are recorded in the Beta acceptance document. These do not claim installed Stable, signed-in native or physical-device acceptance.
 
 ## Actions after user acceptance, before any Stable freeze
 
