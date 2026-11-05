@@ -190,6 +190,8 @@ const entrySchema = inputArgs.extend({
     nextAt: z.number().int().positive().optional(), stoppedAt: z.number().int().positive().optional() }).optional(),
   cancelledByUser: z.literal(true).optional(),
   error: z.string().max(200).optional(),
+  /** Live API preparation/recovery information; never a delivery-failure receipt. */
+  apiRecovery: z.string().max(500).optional(),
   owner: z.string().nullable(),
   /** The paired browser that obtained this exact durable claim; not a model-supplied field. */
   claimedBrowser: z.string().regex(/^[a-z0-9]{16,64}$/).optional(),
@@ -2468,7 +2470,7 @@ export function noteApiInputRecovery(id: string, owner: string, error: string): 
     const row = current.find(entry => entry.id === id);
     if (!row?.chatProvider || owner !== (await import('../api/providers.js')).apiInputOwner(row.chatProvider) ||
         row.owner !== owner || row.state !== 'browser' || row.cancelledByUser) return;
-    await commit(current.map(entry => entry === row ? { ...entry, error: error.slice(0, 500) } : entry));
+    await commit(current.map(entry => entry === row ? { ...entry, error: undefined, apiRecovery: error.slice(0, 500) } : entry));
   });
 }
 
@@ -2549,6 +2551,7 @@ async function commitBrowserInputReceipt(id: string, owner: string, conversation
     // cancelledByUser as historical intent, but never keep presenting an exact delivered message
     // as unsent/unconfirmed after its native receipt has arrived.
     error: undefined,
+    apiRecovery: undefined,
     // A user cancellation that lost the race with native Send must not resurrect automation or
     // later plan checkpoints merely because the provider eventually proved the first delivery.
     ...(entry.state === 'cancelled' && entry.cancelledByUser && entry.stages?.length ? { stagesApplied: true } : {}),

@@ -21,6 +21,7 @@ import { ApiRefusalWatch } from './refusals.js';
 import type { OutputPublication } from '../codex/unified-exec.js';
 import { logInfo } from '../logger.js';
 import { compactApiContext, apiContextNeedsCompaction, contextTokens, type ApiThread } from './compaction.js';
+import { apiCompactionProgress } from './compaction-progress.js';
 export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 1000;
@@ -48,6 +49,10 @@ function threadValid(value: unknown, sessionId: string, conversationId: string):
   if([data.systemContextTokens,data.contextWindow].some(value=>value!==undefined && (!Number.isSafeInteger(value)||value<0||value>100_000_000)))return false;
   if(data.checkpoint && (!/^ac-[a-f0-9]{32}$/.test(data.checkpoint.archive)||!/^[a-f0-9]{64}$/.test(data.checkpoint.digest)||
       ![data.checkpoint.createdAt,data.checkpoint.beforeTokens,data.checkpoint.afterTokens].every(value=>Number.isFinite(value)&&value>=0)))return false;
+  if(data.checkpoint && (data.checkpoint.workflowId!==undefined && (typeof data.checkpoint.workflowId!=='string'||!/^api-[a-f0-9-]{36}$/i.test(data.checkpoint.workflowId)) ||
+      data.checkpoint.summary!==undefined && (typeof data.checkpoint.summary!=='string'||data.checkpoint.summary.length>12000) ||
+      data.checkpoint.manual!==undefined && typeof data.checkpoint.manual!=='boolean' ||
+      data.checkpoint.resumedAt!==undefined && (!Number.isSafeInteger(data.checkpoint.resumedAt)||data.checkpoint.resumedAt<0)))return false;
   return data.messages.every(item => item && typeof item === "object" &&
     ["system", "user", "assistant", "tool"].includes(item.role) &&
     (typeof item.content === "string" || item.role === "assistant" && item.content === null));
@@ -164,9 +169,11 @@ export async function requestApiCompaction(sessionId: string, expectedConversati
     if(!accepting || !getConfig().sessions.record || !session || session.conversationId!==expectedConversation || isChatBlocked(expectedConversation))throw new ApiError('API_TURN_NOT_CURRENT');
     const provider=apiProvider('openrouter');if(!provider)throw new ApiError('API_PROVIDER_UNAVAILABLE');
     const controller=new AbortController(),key='compact:'+sessionId;
+    const workflowId='api-'+randomUUID(),progress=apiCompactionProgress(sessionId,workflowId,true);
     const active:ActiveApiTurn={sessionId,turnId:null,controller,compactionOnly:true,activity:{phase:'compacting',since:Date.now()}};
     controllers.set(key,active);notifyChanged(sessionId);
     try{
+      await progress('Preparing Compact & Resume.',{state:'archiving'});
       const input=(await listInputs()).filter(row=>row.sessionId===sessionId && row.chatProvider===provider.id && row.model).sort((a,b)=>b.createdAt-a.createdAt)[0];
       const selected=session.selectedModel?.conversationId===expectedConversation ? session.selectedModel.model : input?.model;
       const model=(await provider.models(controller.signal)).find(row=>row.id===selected) ?? (selected===provider.defaultModel.id?provider.defaultModel:undefined);
@@ -175,11 +182,19 @@ export async function requestApiCompaction(sessionId: string, expectedConversati
       const current=async()=>!controller.signal.aborted && !isChatBlocked(expectedConversation) &&
         !await conversationWasSuperseded(expectedConversation) && (await getSession(sessionId))?.conversationId===expectedConversation;
       const result=await compactApiContext({thread,provider,model,system:SYSTEM,tools:[],reserveTokens:thread.toolContextTokens,signal:controller.signal,current,
-        progress:async reason=>{active.activity={phase:'compacting',since:Date.now(),reason};notifyChanged(sessionId);}});
-      if(result){if(!await current())throw new ApiError('API_TURN_NOT_CURRENT');await saveThread({...thread,...result,contextWindow:model.contextLength,
-        systemContextTokens:contextTokens([{role:'system',content:SYSTEM}])-contextTokens([])});}
+        progress:async(reason,update)=>{active.activity={phase:'compacting',since:Date.now(),reason};await progress(reason,update??{state:'summarizing'});}});
+      if(result){
+        if(!await current())throw new ApiError('API_TURN_NOT_CURRENT');
+        await progress('Saving the reduced working context.',{state:'saving'});
+        const checkpoint={...result.checkpoint,workflowId,summary:result.summary,manual:true};
+        await saveThread({...thread,messages:result.messages,checkpoint,contextWindow:model.contextLength,
+          systemContextTokens:contextTokens([{role:'system',content:SYSTEM}])-contextTokens([])});
+        await progress('Summary saved — ready to continue in this chat.',{state:'saved',beforeTokens:checkpoint.beforeTokens,afterTokens:checkpoint.afterTokens,
+          summary:{text:result.summary,chars:result.summary.length,truncated:false}});
+      }else await progress('Context already fits; no history was replaced.',{state:'unchanged'});
     }catch(error){
-      if(controller.signal.aborted)return;
+      if(controller.signal.aborted){await progress('Compaction cancelled; original working context is retained.',{state:'cancelled'}).catch(()=>undefined);return;}
+      await progress(apiFailureDescription(error),{state:'failed',reasonCode:error instanceof ApiError?error.code:'LOCAL_STORAGE_UNAVAILABLE'}).catch(()=>undefined);
       throw new Error(apiFailureDescription(error));
     }finally{if(controllers.get(key)===active)controllers.delete(key);notifyChanged(sessionId);}
   });
@@ -332,7 +347,10 @@ async function perform(entry: InputEntry): Promise<void> {
     };
     const compactContext = async (aggressive = false): Promise<boolean> => {
       const pending = !accepted ? messages.at(-1) : null;
+      const workflowId='api-'+randomUUID(),progress=apiCompactionProgress(turn.sessionId,workflowId,false,accepted?turn.turnId:undefined);
       active.activity = {phase:'compacting',inputId:entry.id,since:Date.now()};notifyChanged(turn.sessionId);
+      try{
+      await progress('Preparing Compact & Resume.',{state:'archiving'});
       const result = await compactApiContext({thread,provider,model,system,tools:declarations,signal:controller.signal,aggressive,
         reserveTokens:pending?contextTokens([pending])-contextTokens([]):0,
         retainMessages:new Set([...publications].flatMap(receipt=>publicationMessages.has(receipt)?[publicationMessages.get(receipt)!]:[])),
@@ -343,12 +361,15 @@ async function perform(entry: InputEntry): Promise<void> {
           return live?.state==='browser' && live.owner===apiInputOwner(provider.id) && live.sessionId===entry.sessionId &&
             live.conversationId===conversationId && !live.cancelledByUser &&
             (await getSession(entry.sessionId!))?.conversationId===conversationId;
-        }, progress: async text=>{
-          if(accepted)await recoveryNotice(text);
-          else await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),text);
+        }, progress: async (text,update)=>{
+          active.activity={phase:'compacting',inputId:entry.id,since:Date.now(),reason:text};
+          await progress(text,update??{state:'summarizing'});
+          if(!accepted)await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),'Compacting context before sending.');
         }});
-      if(!result)return false;
-      const next={...thread,messages:result.messages,checkpoint:result.checkpoint};
+      if(!result){await progress('Context already fits; continuing without replacing history.',{state:'unchanged'});active.compactionRequested=false;return false;}
+      await progress('Saving the reduced working context.',{state:'saving'});
+      const checkpoint={...result.checkpoint,workflowId,summary:result.summary,manual:false};
+      const next={...thread,messages:result.messages,checkpoint};
       await saveThread(next);
       // Only the successful durable swap changes the active context. Tools and
       // all original messages remain in the archive/canonical history.
@@ -359,8 +380,15 @@ async function perform(entry: InputEntry): Promise<void> {
       }
       active.compactionRequested=false;
       const text=`Context compacted from approximately ${result.checkpoint.beforeTokens} to ${result.checkpoint.afterTokens} input tokens. Continuing the same task; original history and running processes are retained.`;
-      if(accepted)await recoveryNotice(text);else await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),text);
+      await progress(text,{state:'saved',beforeTokens:checkpoint.beforeTokens,afterTokens:checkpoint.afterTokens,
+        summary:{text:result.summary,chars:result.summary.length,truncated:false}});
+      if(!accepted)await noteApiInputRecovery(entry.id,apiInputOwner(provider.id),'Context saved; preparing to resume.');
       return true;
+      }catch(error){
+        await progress(controller.signal.aborted?'Compaction cancelled; original history is retained.':apiFailureDescription(error),
+          {state:controller.signal.aborted?'cancelled':'failed',reasonCode:error instanceof ApiError?error.code:undefined}).catch(()=>undefined);
+        throw error;
+      }
     };
     let roundId = 0;
     for (let round = 0; round < MAX_ITERATIONS; round += 1) {
@@ -387,6 +415,13 @@ async function perform(entry: InputEntry): Promise<void> {
         reasoningEffort: reasoning, onAccepted: async () => {
           if (dispatchedAt) logInfo(`api timing input=${entry.id} round=${round} header_wait_ms=${Date.now() - dispatchedAt}`);
           await firstAccepted(); active.activity = { phase: 'responding', since: Date.now() }; notifyChanged(turn.sessionId);
+          const checkpoint=thread.checkpoint;
+          if(checkpoint?.workflowId && !checkpoint.resumedAt){
+            checkpoint.resumedAt=Date.now();await saveThread(thread);
+            await apiCompactionProgress(turn.sessionId,checkpoint.workflowId,checkpoint.manual??false,turn.turnId)(
+              'Task resumed in the same chat from the saved handoff.',{state:'resumed',beforeTokens:checkpoint.beforeTokens,afterTokens:checkpoint.afterTokens,
+                ...(checkpoint.summary?{summary:{text:checkpoint.summary,chars:checkpoint.summary.length,truncated:false}}:{})});
+          }
         }, onText: paint,
         onDispatch: requestBytes => {
           networkAttempted = true;

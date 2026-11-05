@@ -4138,6 +4138,8 @@ function retainTimelinePage(source: SessionEvent[], direction: 'older' | 'newer'
  * things going on; they are one thing with three steps, and this is that thing.
  */
 interface CompactionBlock {
+  api?: import('../shared/session.js').ApiCompactionProgress;
+  apiMessage?: string;
   token: string;
   /** The row this card takes the place of. */
   seq: number;
@@ -4205,6 +4207,12 @@ function timelineItems(source: SessionEvent[]): TimelineItem[] {
     return block;
   };
   for (const event of source) {
+    if(event.kind==='progress' && event.source==='app' && event.apiCompaction && /^api-[a-f0-9-]{36}$/i.test(event.apiCompaction.id)){
+      const block=blockFor(event.apiCompaction.id,event);
+      block.seq=Math.min(block.seq,event.origin??event.seq);
+      block.api={...block.api,...event.apiCompaction};block.apiMessage=event.message.text;
+      continue;
+    }
     const marker = continuationMarker(event);
     if (marker && event.kind === 'user_message') {
       const block = blockFor(marker.token, event);
@@ -4285,6 +4293,20 @@ const ABANDONED_NOTE = /^Compact & Resume abandoned\s*[\u2014-]\s*/i;
  * in this timeline. Refused source calls are compatible with a still-running handoff.
  */
 function compactionState(block: CompactionBlock): { text: string; tone: CompactionTone } {
+  const api=block.api;
+  if(api){
+    const part=api.part&&api.total?t(' ({0}/{1})',[String(api.part),String(api.total)]):'';
+    if(api.state==='resumed')return {text:t('Task resumed in this chat'),tone:'good'};
+    if(api.state==='saved')return {text:api.manual?t('Summary saved — ready to continue in this chat'):t('Summary saved — resuming this chat…'),tone:api.manual?'good':'wait'};
+    if(api.state==='unchanged')return {text:t('Context already fits — no replacement needed'),tone:'good'};
+    if(api.state==='cancelled')return {text:t('Cancelled — original context retained'),tone:'wait'};
+    if(api.state==='failed')return {text:t('Failed — {0}',[block.apiMessage??api.reasonCode??t('Summary could not be saved')]),tone:'bad'};
+    if(api.state==='retrying')return {text:t('Retrying the handoff{0}',[api.attempt?t(' (attempt {0})',[String(api.attempt)]):'']),tone:'wait'};
+    if(api.state==='saving')return {text:t('Saving reduced context…'),tone:'wait'};
+    if(api.state==='merging')return {text:t('Merging the handoff{0}…',[part]),tone:'wait'};
+    if(api.state==='summarizing')return {text:t('Writing the summary{0}…',[part]),tone:'wait'};
+    return {text:t('Saving original history…'),tone:'wait'};
+  }
   const chars = block.handoff ? t(" ({0} characters)", [compactNumber(block.handoff.chars)]) : '';
   if (block.resume) return { text: t("New chat opened at {0}{1}", [clockTime(block.resume.time), chars]), tone: 'good' };
   const abandoned = [...block.notes].reverse().find((note) => ABANDONED_NOTE.test(note.message.text));
@@ -4330,6 +4352,29 @@ function compactionRow(block: CompactionBlock, previous?: HTMLElement, latest = 
   ui(box.querySelector<HTMLElement>('summary .state')!, 'textContent', () => compactionState(block).text);
 
   const raw = el('div', 'raw');
+  if(block.api){
+    const api=block.api;
+    raw.append(el('p','raw-facts',()=>t('Original history is retained. This API task resumes in the same chat.')));
+    if(api.state!=='unchanged'){
+      const at=api.stage?['archive','summary','save','resume'].indexOf(api.stage):api.state==='archiving'?0:['summarizing','merging','retrying'].includes(api.state)?1:api.state==='saving'?2:['saved','resumed'].includes(api.state)?3:0;
+      const steps=['Save original history','Write and merge the handoff','Save reduced context','Resume this chat'];
+      const list=el('ol','compaction-stages');
+      for(const [index,label] of steps.entries()){
+        const done=api.state==='resumed'||index<at;
+        const row=el('li','raw-facts');row.append(icon(done?'i-check':'i-clock'),el('span','',()=>t(label)));
+        if(index===at && !['resumed','saved','failed','cancelled'].includes(api.state))row.setAttribute('aria-current','step');
+        list.append(row);
+      }
+      raw.append(list);
+    }
+    if(block.apiMessage)raw.append(el('p','raw-facts',block.apiMessage));
+    if(api.beforeTokens!==undefined && api.afterTokens!==undefined)raw.append(el('p','raw-facts',()=>t('Estimated input context: {0} → {1} tokens',[compactNumber(api.beforeTokens!),compactNumber(api.afterTokens!)])));
+    if(api.summary){raw.append(el('h4','',()=>t('Saved handoff')),renderedMarkdown(api.summary.text));}
+    if(latest && api.state==='failed' && selectedId){
+      const id=selectedId,retry=el('button','btn',()=>t('Retry compaction')) as HTMLButtonElement;retry.type='button';
+      retry.addEventListener('click',()=>{retry.disabled=true;void run(window.api.compactSession(id)).finally(()=>{if(retry.isConnected)retry.disabled=false;});});raw.append(retry);
+    }
+  }
   if (block.prompt) {
     raw.append(el('h4', '', () => t("Brief request")));
     // The routing marker is the app's, not the user's; the card already says what this is.
@@ -4401,6 +4446,7 @@ function itemSignature(item: TimelineItem): string {
     const { block } = item;
     return [
       block.token,
+      JSON.stringify([block.api??null,block.apiMessage??null]),
       block.prompt?.seq ?? '',
       block.brief ? `${block.brief.seq}:${block.brief.message.chars}:${block.brief.renderedHtml?.chars ?? 0}:${block.brief.state}` : '',
       block.end ? `${block.end.seq}:${block.end.outcome}:${block.end.detail ?? ''}` : '',
@@ -5558,7 +5604,7 @@ function workingLabel(turnId: string, elapsedSeconds: number): string {
 
 function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad'; working?: boolean; ticking?: boolean } {
   if(controlledSessionId===selectedId && controlledSelection===selectionGeneration && detailFor===selectedId &&
-      apiLiveActivity?.phase==='compacting' && apiLiveActivity.manual)
+      apiLiveActivity?.phase==='compacting' && (apiLiveActivity.manual || !controlledTurnId))
     return {text:t('Compacting saved context'),tone:'is-live',working:true,ticking:true};
   if (!deps.state()?.config.ui.developerMode) {
     const summary = sessions.find(entry => entry.id === selectedId);
@@ -6478,6 +6524,8 @@ function apiPendingInputStatus(entry: InputEntry): string | null {
   if (activity?.phase === 'catalog') return t('Loading model information…');
   if (activity?.phase === 'requesting') return t('Waiting for provider acceptance…');
   if (activity?.phase === 'recovering') return t('Retrying provider connection…');
+  if (activity?.phase === 'compacting') return t('Compacting context before sending…');
+  if(entry.apiRecovery)return t(entry.apiRecovery);
   return t('Preparing API request…');
 }
 
@@ -6616,7 +6664,7 @@ function paintPendingInputs(): void {
   const host = $('inputQueue');
   const previous = new Map([...host.querySelectorAll<HTMLElement>(':scope > .pending-message')].map(row => [row.dataset.inputId, row]));
   const next = rows.filter(entry => !historicalAutomaticInput(entry)).map(entry => {
-    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
+    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.apiRecovery, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
       entry.stages, entry.attachments?.map(file => file.id), entry.images?.map(image => [image.name, image.dataUrl.length]),
       hasLaterModelActivity(entry.deliveredAt ?? entry.offeredAt ?? entry.createdAt)]);
     const old = previous.get(entry.id);

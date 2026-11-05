@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.11 Beta] — 2026-11-05
+
+Present API context compaction through the existing Compact & Resume card, with durable archive, summary, retry, save and actual request-accepted resume stages. Separate pre-Send recovery information from delivery errors. Retry invalid summary output up to three attempts per part, progressively requesting shorter handoffs and expanding truncated/empty output budgets within the model ceiling. Keep typed failure reasons and content-free diagnostics, exact archives, cached valid parts and existing task/process ownership. See [Beta notes](docs/release-notes/beta-v0.9.11.md).
+
 ## [0.9.10 Beta] — 2026-11-05
 
 Add local checkpointed API context compaction at model/tool boundaries, bounded hierarchical handoff summaries and recovery of typed upstream context rejections. Verify and retain the original source archive before atomically replacing working context. Preserve the first/latest user messages, complete recent tool exchanges, unacknowledged output pages and existing turn/process/worker ownership. Support manual Compact context for idle/failed chats and queued compaction for live tasks; honour the automatic-compaction toggle. Show compaction progress and the effective saved-context estimate. Disable OpenRouter's middle-out truncation so the local receipt owner knows which tool results were actually delivered. See [Beta notes](docs/release-notes/beta-v0.9.10.md).

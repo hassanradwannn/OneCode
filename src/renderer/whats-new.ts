@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '0.9.11': {
+    lead: () => t('Follow API compaction and resume without losing the task.'),
+    highlights: [
+      { icon: 'i-steps', title: () => t('Visible Compact & Resume'), text: () => t('See history saving, summary progress, retries and task resumption in one workflow card, with the saved handoff available to inspect.') },
+      { icon: 'i-retry', title: () => t('Recover unusable summaries'), text: () => t('Retry empty, truncated or oversized handoffs within bounds. Progress no longer appears as a red message-delivery failure.') }
+    ]
+  },
   '0.9.10': {
     lead: () => t('Keep API tasks moving when their context fills up.'),
     highlights: [
