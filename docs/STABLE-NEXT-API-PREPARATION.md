@@ -1,6 +1,8 @@
 # Unfrozen Stable preparation — API integration
 
-Status: **draft, awaiting the user's Beta 0.9.11 testing after the compaction workflow finding**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
+Status: **draft, awaiting the user's published Beta 0.9.11 testing after the compaction workflow finding**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
+
+Published [Beta 0.9.11](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.11) is the current acceptance candidate. Frozen source: `30cfa966627b34505ccaed4a11f90cd0730d0829`. [Run 42106671101](https://github.com/hassanradwannn/OneCode/actions/runs/42106671101) passed both platform verification, packaging, runtime smoke and checksum finalization. All 21 assets, 18 payload digests, compatible bases and Companion bytes were verified, followed by public updater selection of 0.9.11. Local validation passed 409 affected-owner cases and 19 selected renderer cases. This candidate adds the Desktop API Compact & Resume card, neutral pre-Send recovery status, bounded summary validation retries and category-specific failures. Installed/live-provider acceptance remains pending; Stable stays unfrozen and unpublished.
 
 ## Prepared scope
 

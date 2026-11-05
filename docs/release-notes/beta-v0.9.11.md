@@ -1,6 +1,6 @@
 # OneCode 0.9.11 Beta
 
-API chats now show the normal **Compact & Resume** workflow card. It follows saving the original history, writing and merging summary parts, retries, saving reduced context and resuming the task. Expand it to inspect the saved handoff and estimated context reduction. API execution continues in the same chat with its existing task, permissions, workers and running processes; it does not open a replacement provider chat.
+Desktop API chats now show the normal **Compact & Resume** workflow card. It follows saving the original history, writing and merging summary parts, retries, saving reduced context and resuming the task. Expand it to inspect the saved handoff and estimated context reduction. API execution continues in the same chat with its existing task, permissions, workers and running processes; it does not open a replacement provider chat.
 
 Compaction progress before Send is neutral status text. It no longer appears as a red delivery error. The card marks a task resumed only after the next task request is accepted by the provider. Manual compaction instead shows that the summary is ready, until you send Continue. Failed compaction offers a separate Retry compaction action without sending another task message.
 

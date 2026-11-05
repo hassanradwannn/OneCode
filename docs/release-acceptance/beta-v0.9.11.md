@@ -16,3 +16,17 @@ Validation uses isolated fixtures and profiles. No production chat, process, cre
 - Final public verification passed: privacy/history guards, notices/native references, TypeScript and Desktop/Remote production bundles. Existing chunk-size warnings remain.
 
 The broader legacy bridge matrix remains uncertified. The preceding 0.9.10 audit reproduced the same 175 failures against exact published 0.9.9 module bytes; this candidate does not claim those unrelated fixtures repaired or the full native matrix green. Windows/Linux installed updater and real upstream/provider acceptance remain pending.
+
+## Published release
+
+Published [Beta 0.9.11](https://github.com/hassanradwannn/OneCode/releases/tag/beta-v0.9.11) at **2026-11-05T20:55:38Z**, with `draft=false`, `prerelease=true` and `latest=false`. Frozen application source: `30cfa966627b34505ccaed4a11f90cd0730d0829`. The annotated tag dereferences to that exact commit. Later documentation commits leave the packaged source pinned.
+
+[GitHub run 42106671101](https://github.com/hassanradwannn/OneCode/actions/runs/42106671101) succeeded for Windows, Linux and canonical checksum finalization. Both platforms passed exact-source/draft checks, public verification, complete-release packaging, packaged-runtime smoke, checksum staging and curated upload. The unchanged Stable branch supplied workflow tools; the frozen Beta source supplied application bytes.
+
+- Verified exactly 21 curated assets and 18 payload digests against GitHub's asset hashes. Fresh small manifests, platform sidecars, the canonical register and Companion match their digests. The platform registers merge exactly. Canonical checksum register SHA-256: `15d41bd1722a19f09327abe4025432653d9ee65e69f8acef03d0a76687d521f3`.
+- Windows capsule: 34,871,321 bytes, native fingerprint `e456c5232264bd65be7c3b5fd7b52d2bffa8e22822edb215941e99947ccd729d`. Linux capsule: 34,862,956 bytes, native fingerprint `3c0ae8d9e70e2bb81fd331ef0e5dc2ba9d8e73adc34915f89afdb41d51d304d3`. Both retain their own freshly verified published Beta 0.8.3 complete-base descriptors. The base installer digests match that release's checksum register.
+- Companion `0.9.11 Beta`, stamp `a5875d3e00fe`: all 41 archive files match frozen source after the existing Beta channel transform, including the license, byte for byte.
+- Public by-tag reads confirm the frozen source, prerelease flags and all 21 verified asset names, sizes and digests. A focused case using the actual updater's `selectBetaRelease` against the downloaded production releases feed selects exactly `beta-v0.9.11` / `0.9.11`, including with the response array reversed. This selector case passed in addition to the local cases above.
+- Latest Stable remains `v0.8.9`; remote `release` remains `ca9bedf630084d976624fcd0c4cc6f3a1284f7d8`. Stable integration PR #1 remains Draft. No Stable freeze, build, tag or publication was performed.
+
+The new workflow card is Desktop renderer evidence. Automatic compaction remains in the shared API main-process owner, including Remote-originated sends; this release does not claim a new Remote compaction card or manual control. No production chat or live task was compacted by maintenance. Installed updater and upstream long-task acceptance remain pending. Running-process retention refers to compaction inside the running app, not an application update/restart.
