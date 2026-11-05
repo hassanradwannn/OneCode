@@ -32,4 +32,6 @@ Published [Beta 0.9.10](https://github.com/hassanradwannn/OneCode/releases/tag/b
 - Companion `0.9.10 Beta`, stamp `a019fe5adaf8`: all 41 archive files match the frozen source after the existing Beta transform, including the license, byte for byte.
 - Post-publication reads verified the same source, all 21 assets and public prerelease discovery. Latest Stable remains `v0.8.9`; `release` remains `ca9bedf630084d976624fcd0c4cc6f3a1284f7d8`.
 
+The public releases array lists some older entries before 0.9.10. A focused check of the actual updater's `selectBetaRelease` against the downloaded production `per_page=100` response selected exactly `beta-v0.9.10` / `0.9.10`; discovery does not depend on GitHub's array order. The public by-tag response independently confirmed `draft=false`, `prerelease=true` and the frozen source. This post-publication selector case passed in addition to the 767 cases above.
+
 The original user chat was not compacted, resumed or edited by maintenance. Installed/updater and live upstream long-task acceptance remain pending. App updating has its own shutdown/process-lifetime behavior; the process-retention proof here covers compaction inside the running app. Stable remains unfrozen and unpublished pending user acceptance.
