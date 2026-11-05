@@ -693,7 +693,7 @@ void app.whenReady().then(async () => {
   // Runtime GC consumes restored broker/session/exec ownership only. It owns no worker lifecycle
   // state and does not run until its first coarse interval after this point.
   startAgentRuntimeGc();
-  await (await import('./api/workers.js')).recoverApiWorkers();
+  await (await import('./api/workers.js')).recoverApiWorkersAtStartup();
 
   // Strict CSP for our own page. There is no remote content and no inline script.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

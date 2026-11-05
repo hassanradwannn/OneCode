@@ -4,7 +4,9 @@ The candidate adds a local API harness, API worker delivery/reuse, live effectiv
 
 ## Automated validation
 
-The final local run passed **335/335 tests across 17 suites**. Full `npm run verify` passed, including public-history privacy, notices/native-source references, TypeScript, and Desktop/Remote production bundles. These are automated fixtures and builds, not installed acceptance.
+The final local run passed **336/336 tests across 17 suites**. Full `npm run verify` passed, including public-history privacy, notices/native-source references, TypeScript, and Desktop/Remote production bundles. These are automated fixtures and builds, not installed acceptance.
+
+A final startup guard keeps the window reachable when API proof storage cannot be read, without dispatching unproven work.
 
 Focused local suites exercise browser task credentials and refresh/Resume, all three browser worker receipt adapters, API outbox/tool attribution, local API worker startup/report/reuse, restart without replay, Read-only and live root/capability changes, code mode/nested cancellation, managed skills, plugin dispatch, Remote actions, chronology, context display and prompts. Tests remain local and ignored under repository policy.
 

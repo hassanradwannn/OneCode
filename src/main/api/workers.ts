@@ -172,3 +172,9 @@ export async function recoverApiWorkers(): Promise<void> {
     const provider = chatProviderForStoredConversation(row.conversationId); return !!provider && !!apiProvider(provider);
   }));
 }
+
+/** Proof-storage failure must leave Settings/history recovery reachable in the desktop. */
+export async function recoverApiWorkersAtStartup(): Promise<void> {
+  try { await recoverApiWorkers(); }
+  catch { logWarn('API recovery deferred: task storage is unavailable; no unproven request will be dispatched.'); }
+}
