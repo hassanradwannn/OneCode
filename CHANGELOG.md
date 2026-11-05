@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.0] — 2026-11-06
+
+Promote the complete Beta 0.9.0–0.9.11 repair series to Stable: opt-in OpenRouter sessions and model discovery; provider-generic local tools, code mode, plugins, skills and workers; live effective/written permissions and exact task credentials; boundary steering and inference-only recovery; visible commands/background work; terminal publication acknowledgment; model-aware output and request budgets; earlier topic names; Claude attachment/draft/transcript handling; discoverable sidebar browsing; Setup navigation; and archived API context compaction with validation recovery and the normal Desktop Compact & Resume card. Preserve Stable/Beta profile and updater isolation. See [Stable notes](docs/release-notes/v0.9.0.md).
+
 ## [0.9.11 Beta] — 2026-11-05
 
 Present API context compaction through the existing Compact & Resume card, with durable archive, summary, retry, save and actual request-accepted resume stages. Separate pre-Send recovery information from delivery errors. Retry invalid summary output up to three attempts per part, progressively requesting shorter handoffs and expanding truncated/empty output budgets within the model ceiling. Keep typed failure reasons and content-free diagnostics, exact archives, cached valid parts and existing task/process ownership. See [Beta notes](docs/release-notes/beta-v0.9.11.md).

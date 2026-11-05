@@ -102,10 +102,12 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.0': {
-    lead: () => t('Try OpenRouter through OneCode Beta.'),
+    lead: () => t('Use API models with local tools and recover long tasks.'),
     highlights: [
-      { icon: 'i-plug', title: () => t('OpenRouter API models'), text: () => t('Choose an API model without a provider browser. Local tools still respect OneCode permissions.') },
-      { icon: 'i-chat', title: () => t('Safer automatic continuation'), text: () => t('Late native acknowledgments reconnect the correct new task credential, never an old or ambiguous one.') }
+      { icon: 'i-plug', title: () => t('Local API execution'), text: () => t('Connect OpenRouter and use local tools, plugins, skills and managed workers with the same effective permissions as browser chats.') },
+      { icon: 'i-pulse', title: () => t('Steer and follow live work'), text: () => t('Keep the task running while steering at safe boundaries. See commands, tool progress, background processes and clearer send status.') },
+      { icon: 'i-steps', title: () => t('Compact and recover'), text: () => t('Archive full context, retry unusable summaries and resume the same API task through a visible Compact & Resume workflow.') },
+      { icon: 'i-chat', title: () => t('Delivery and navigation fixes'), text: () => t('Keep Claude attachment questions intact, generate topic names earlier, discover the sidebar browser and switch Setup providers without getting stuck.') }
     ]
   },
   '0.8.9': {

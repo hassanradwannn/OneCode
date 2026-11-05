@@ -1,4 +1,10 @@
-# Unfrozen Stable preparation — API integration
+# Stable 0.9.0 promotion
+
+On November 6, 2026, the user approved promoting the complete Beta repair series to Stable **0.9.0** and publishing it. The earlier hold below is historical and is superseded by this authorization. Stable version owners, release notes and What's New are aligned to 0.9.0. Release source, cloud checks, artifacts and publication receipts are recorded in [Stable acceptance](release-acceptance/v0.9.0.md).
+
+The integration retains the runtime fixes through Beta 0.9.11. Stable packaging retains its own identities, profiles, updater feed and independently verified compatible Windows 0.5.9 / Linux 0.8.2 bases. No Beta profile or credential is migrated. Existing native/installed acceptance limitations remain documented.
+
+## Historical unfrozen preparation record
 
 Status: **draft, awaiting the user's published Beta 0.9.11 testing after the compaction workflow finding**. This document and the draft integration branch are mutable. They do not approve a Stable source freeze, version reservation, application tag, package build or publication. The Stable `release` branch remains at its existing 0.8.9 lane.
 
