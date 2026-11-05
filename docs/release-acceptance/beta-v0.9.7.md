@@ -17,3 +17,11 @@ Final local checks and publication evidence follow below. Stable remains on hold
 - All user-profile inspection was read-only, reported aggregate byte/timing metadata only and verified the inspected file remained unchanged. Synthetic large-history tests retain the original model checkpoint and execute no tool replay. No real provider key was copied into a fixture.
 
 - The final combined affected-owner run passed all 127 tests across ten API/terminal/code-mode/ownership suites. Together with the 997 broader cases and 36 renderer cases, 1,160 distinct tests passed. The final production verify passed with no application changes afterward.
+
+## Cloud candidate and publication status
+
+Application source is frozen at `bc5b0b9820edc326a806728be89e5b3d27266796`, tag `beta-v0.9.7`. Both the Beta source branch and mutable Stable preparation branch were pushed to that source. [GitHub run 42036122243](https://github.com/hassanradwannn/OneCode/actions/runs/42036122243) completed with conclusion `success`. Its workflow revision is the existing `release` branch; the separately validated application `source_ref` is the frozen Beta SHA above.
+
+The release remains an **unpublished prerelease draft**. Intermittent GitHub connectivity allowed the successful run status to be recorded, but subsequent local DNS and HTTPS failures prevented final retrieval and independent verification of the uploaded asset inventory, manifests and checksums. No publication request has been made. Resume with read-only inspection of that existing draft and run, complete artifact verification, then publish the same frozen candidate; do not recreate the tag or redispatch the build simply because inspection timed out.
+
+Installed Windows/Linux, signed-in provider, updater and live long-task acceptance remain pending. Stable is neither frozen nor published.
