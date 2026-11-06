@@ -2,15 +2,22 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.9.0](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.9.1](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.1)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.1/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.1/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.1/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 0.9.0 includes the complete API and reliability repair series tested through Beta 0.9.11. [Release notes](docs/release-notes/v0.9.0.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
+Stable 0.9.1 includes the complete API and reliability repair series tested through Beta 0.9.11. [Release notes](docs/release-notes/v0.9.1.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.9.1
+
+- Keep queued API chats out of browser delivery, including during startup, slow model discovery and reload.
+- Reject stale API or unknown-provider offers in the Companion before touching browser tabs. ChatGPT, Gemini and Claude browser chats keep their normal delivery path.
+
+See [0.9.1 notes](docs/release-notes/v0.9.1.md) and [verification scope](docs/release-acceptance/v0.9.1.md).
 
 ## What's new in 0.9.0
 

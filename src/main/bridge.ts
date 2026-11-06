@@ -3397,7 +3397,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         pluginRefreshRequests: chatProviderCapabilities(selectedChatProvider()).nativePluginRefresh ? (await authorizedPluginRefreshPublications(getConfig().ui.autoRefreshPlugins === true)).map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })) : [],
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
         projectCreateRequests: chatProviderCapabilities(selectedChatProvider()).nativeProjects ? await pendingProjectCreates() : [],
-        inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
+        inputOpeningIds: inputRows.filter(row => isBrowserChatProvider(chatProviderForConversation(row.conversationId,
+          row.chatProvider ?? selectedChatProvider())) && !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         // The outbox owns native input admission, including released Steer and
         // manual follow-ups while a local request survives native completion.
         // An existing chat waits out a new tunnel-client's takeover, or its next call waits ~2 min (#1220).

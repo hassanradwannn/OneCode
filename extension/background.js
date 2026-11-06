@@ -2522,6 +2522,11 @@ function desktopInputReuseCandidate(tab) {
 
 async function deliverDesktopInputs(inputs, background, reusableConversations = [], activeIds, refreshRendering = async () => {}) {
   if (!Array.isArray(inputs)) return;
+  // A stale app offer must not route an API/unknown transport through Gemini's
+  // native fallback. Reject it before querying, electing, reusing or opening tabs.
+  inputs = inputs.filter(input => input &&
+    (input.chatProvider === undefined || ['gemini', 'chatgpt', 'claude'].includes(input.chatProvider)) &&
+    (input.conversationId == null || !!cleanConversationId(input.conversationId)));
   // Only the app's complete outbox projection retires spent opening authority.
   if (Array.isArray(activeIds)) {
     const active = new Set(activeIds);

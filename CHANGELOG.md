@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.1] — 2026-11-06
+
+Keep API outbox rows out of native browser publication, claims and opening-lease projections. Recheck the resolved target transport, and reject non-browser/unknown providers or API conversation IDs in Companion delivery before querying or opening tabs. Preserve normal browser-provider delivery and local API execution. See [Stable notes](docs/release-notes/v0.9.1.md).
+
 ## [0.9.0] — 2026-11-06
 
 Promote the complete Beta 0.9.0–0.9.11 repair series to Stable: opt-in OpenRouter sessions and model discovery; provider-generic local tools, code mode, plugins, skills and workers; live effective/written permissions and exact task credentials; boundary steering and inference-only recovery; visible commands/background work; terminal publication acknowledgment; model-aware output and request budgets; earlier topic names; Claude attachment/draft/transcript handling; discoverable sidebar browsing; Setup navigation; and archived API context compaction with validation recovery and the normal Desktop Compact & Resume card. Preserve Stable/Beta profile and updater isolation. See [Stable notes](docs/release-notes/v0.9.0.md).

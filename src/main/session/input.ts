@@ -359,6 +359,11 @@ async function steeringSource(sessionId: string, conversationId: string, turnId:
     ? { id: turnId, startedAt: boundary.time, questionId: question.messageId } : null;
 }
 async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
+  // API preparation shares the durable outbox, never native composer custody.
+  // Exclude it before an opening can be advertised or claimed by a Companion.
+  if (entry.chatProvider && !isBrowserChatProvider(entry.chatProvider) ||
+      !isBrowserChatProvider(chatProviderForConversation(entry.conversationId,
+      entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER))) return false;
   if (entry.warmupRecovery && Date.now() >= entry.warmupRecovery.expiresAt) return false;
   if (entry.recovery?.phase === 'stopping') return recoveryCurrent(entry);
   if (entry.nativeRecovery && entry.nativeRecovery.phase !== 'ready')
@@ -2050,6 +2055,8 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
       if (!(await browserInputAllowed(entry))) continue;
       try {
         const conversationId = await target(entry);
+        const provider = chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
+        if (!isBrowserChatProvider(provider)) continue;
         // A new chat of a project with a native Gemini Project opens in that Project and nowhere
         // else: it waits while the Project is being created or could not be, never the root.
         const chatgptProject = chatProviderCapabilities(chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
@@ -2059,7 +2066,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
           ? await readRecentEvents(entry.sessionId, 1, { kinds: ['turn_start', 'turn_end'] }) : [];
         const silenceTurnId = entry.silenceBoundary?.turnId ?? (end?.kind === 'turn_end' && end.outcome === 'failed' &&
           end.reason === 'thinking_failed' && end.turnId && await eligibleStageEnd(entry) === end.turnId ? end.turnId : undefined);
-        result.push({ id: entry.id, conversationId, chatProvider: chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER),
+        result.push({ id: entry.id, conversationId, chatProvider: provider,
           ...(entry.modelSurface && entry.mode !== 'finish' ? { modelSurface: entry.modelSurface } : {}),
           ...(entry.recovery ? { recovery: { questionId: entry.recovery.questionId,
             ...(entry.recovery.phase === 'stopping' ? { phase: entry.recovery.phase } : {}),
@@ -2112,6 +2119,7 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
       ? await completedStageBoundary(entry, current) : manualInput(entry) ? await eligibleStageEnd(entry) : undefined;
     if (queuedFollowup(entry) && entry.recovery?.phase !== 'stopping' && entry.nativeRecovery?.phase !== 'ready-to-refresh' && !completedTurnId) return null;
     const currentTarget = await target(entry);
+    if (currentTarget && !isBrowserChatProvider(chatProviderForConversation(currentTarget))) return null;
     const unboundWarmup = currentTarget === null && entry.opening && entry.warmupRecovery &&
       (conversationId === null || entry.warmupRecovery.conversationId === conversationId);
     if (currentTarget !== conversationId && !unboundWarmup) return null;
