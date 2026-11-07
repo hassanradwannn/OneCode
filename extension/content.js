@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 127;
+  const RECORDER_VERSION = 128;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -15188,6 +15188,7 @@
         }
         files.push(new File(parts, attachment.name, { type: attachment.mimeType }));
       }
+      let attachmentFailure = '';
       const uploadUnconfirmed = () => {
         // Upload refusal is not Send or cancellation of the authored task.
         // Keep Claude's exact staged text beside any native file/error so the
@@ -15196,7 +15197,7 @@
         return fail(t(
           'content_delivery_attachment_upload_unconfirmed',
           "Attachment upload was not confirmed. Check the unsent draft and any file error in the provider before trying again."
-        ));
+        ), attachmentFailure || undefined);
       };
       // Gemini's first tool-free Send creates the native conversation. Files
       // must stay local until that warm-up has settled, or Gemini consumes them
@@ -15212,7 +15213,9 @@
         nativeAttachmentAttempted = true;
         return await CLF_DOM.uploadImages(input.images, () => sendCurrent() && onTarget() && draftCurrent(), draft, files);
       } : null;
-      if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files, { whileGenerating: Boolean(message.directTurn) }))) return uploadUnconfirmed();
+      if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files, {
+        whileGenerating: Boolean(message.directTurn), explain: reason => { attachmentFailure = reason; }
+      }))) return uploadUnconfirmed();
       // Stop/picker closure can remount the native editor on its next render.
       // Wait for this same untouched draft; never insert it twice or recapture a
       // human-edited replacement as our own. Authorization follows this barrier.

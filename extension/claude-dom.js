@@ -70,7 +70,7 @@ var CLF_DOM = (() => {
       // Only the original positive selection, unchanged question set and exact
       // frozen body can carry that proof across its native render.
       if (proof.expected === null || skillBody(box, token) !== proof.expected ||
-          messages().filter(row => row.role === 'user').map(row => row.id).join('\u0000') !== proof.questions) return null;
+          nativeQuestionKey() !== proof.questions) return null;
       proof.token = token; proof.box = box; nativeSkillSelections.set(box, proof);
     }
     return proof;
@@ -116,6 +116,8 @@ var CLF_DOM = (() => {
     const counts = new Map(); for (const row of rows) counts.set(row.id, (counts.get(row.id) || 0) + 1);
     return rows.filter(row => counts.get(row.id) === 1);
   }, []);
+  // Delayed text extraction must not change the identity of a mounted question.
+  const nativeQuestionKey = () => turns().filter(row => row.role === 'user').map(row => row.id).join('\u0000');
   const proseNodes = root => all('[data-cds="Prose"]', root).filter(node => !node.parentElement?.closest('[data-cds="Prose"]') &&
     !node.closest('[data-cds="TurnStatus"],[data-find-omitted],button') && shown(node));
   function messagesIn(turn, _index = 0, seen = new Set()) {
@@ -301,12 +303,12 @@ var CLF_DOM = (() => {
     const box = composer(), route = location.href, conversation = conversationId();
     if (!box || !composerWritable()) return unavailable('editor-unavailable');
     if (composerAuthoredText() || hasComposerAttachments() || all(skillChipSelector, box).length) return unavailable('composer-not-empty');
-    const questions = messages().filter(row => row.role === 'user').map(row => row.id).join('\u0000');
+    const questions = nativeQuestionKey();
     let interrupted = false, performing = false, success = false;
     const act = run => { performing = true; try { return run(); } finally { performing = false; } };
     const note = event => { if (event.isTrusted && !performing) interrupted = true; };
     const owns = () => !interrupted && current() && location.href === route && conversationId() === conversation && composer() === box && box.isConnected &&
-      !hasComposerAttachments() && messages().filter(row => row.role === 'user').map(row => row.id).join('\u0000') === questions;
+      !hasComposerAttachments() && nativeQuestionKey() === questions;
     const slashMenu = () => unique(all('[data-cds-portal] [role="menu"][data-positioning="native-anchor"]').filter(menu =>
       menu.style.getPropertyValue('position-anchor') === '--slash-command-menu' || menu.style.positionAnchor === '--slash-command-menu'));
     for (const type of ['pointerdown', 'keydown', 'beforeinput', 'input']) document.addEventListener(type, note, true);
@@ -398,8 +400,10 @@ var CLF_DOM = (() => {
         const proof = event.data.composer;
         if (!current() || composer() !== box || location.pathname !== route || event.data.path !== route || !proof ||
             !uuid.test(proof.token || '') || box?.getAttribute('data-clf-claude-composer-token') !== proof.token ||
-            !Array.isArray(proof.files) || proof.files.length > 20 || typeof proof.uploadingFile !== 'boolean' ||
-            typeof proof.uploadingSync !== 'boolean' || !Number.isSafeInteger(proof.placeholderCount)) return finish(null);
+            !Array.isArray(proof.files) || proof.files.length > 20 ||
+            (proof.uploadingFile !== null && typeof proof.uploadingFile !== 'boolean') ||
+            (proof.uploadingSync !== null && typeof proof.uploadingSync !== 'boolean') ||
+            (proof.placeholderCount !== null && (!Number.isSafeInteger(proof.placeholderCount) || proof.placeholderCount < 0))) return finish(null);
         finish(proof);
       };
       window.addEventListener('message', receive);
@@ -407,19 +411,20 @@ var CLF_DOM = (() => {
       window.postMessage({ type: 'onecode-claude-composer-read', nonce }, location.origin);
     });
   }
-  async function uploadImages(images = [], current = () => true, draft = null, extraFiles = []) {
+  async function uploadImages(images = [], current = () => true, draft = null, extraFiles = [], { explain } = {}) {
+    const refuse = reason => { explain?.(reason); return false; };
     const files = [...extraFiles];
     try {
       for (const image of images || []) {
         const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-zA-Z0-9+/=]+)$/.exec(image.dataUrl || '');
-        if (!match) return false;
+        if (!match) return refuse('upload-file-invalid');
         files.push(new File([Uint8Array.from(atob(match[2]), value => value.charCodeAt(0))], image.name || 'image.png', { type: match[1] }));
       }
-    } catch { return false; }
+    } catch { return refuse('upload-file-invalid'); }
     if (!files.length) return true;
-    let box = composer(); const route = location.href;
+    let box = composer(); const route = location.href, expected = composerAuthoredText();
     if (files.length > 20 || files.some(file => !file.name || file.name.length > 512) || !box || !composerWritable() ||
-        !current() || !draft?.current() || hasComposerAttachments()) return false;
+        !current() || !draft?.current() || hasComposerAttachments()) return refuse('upload-draft-unavailable');
     // Fresh /new and existing chats use different native input IDs and mounts.
     // Elect only the unique labelled native input in this editor's nearest
     // form/dock owner. An unrelated uploader elsewhere on the page cannot win.
@@ -430,59 +435,81 @@ var CLF_DOM = (() => {
       const inputs = all('input[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]', owner)
         .filter(node => node.isConnected && !node.disabled && !node.closest(OWN) &&
           (!node.closest('form') || node.closest('form') === form));
-      if (inputs.length > 1) return false;
+      if (inputs.length > 1) return refuse('upload-input-ambiguous');
       if (inputs.length === 1) { dock = owner; input = inputs[0]; break; }
     }
-    if (!dock || !input) return false;
+    if (!dock || !input) return refuse('upload-input-unavailable');
     let interrupted = false;
-    const note = event => { if (event.isTrusted && (dock.contains(event.target) || event.target?.matches?.('input[type="file"]'))) interrupted = true; };
-    let rebound = false;
+    const note = event => {
+      if (!event.isTrusted) return;
+      const button = event.target?.closest?.('button');
+      if (dock.contains(event.target) ||
+          event.target?.closest?.(`${BOX},[data-cds-composer-attachments],input[type="file"]`) ||
+          button && (button === sendButton() || button === attachButton())) interrupted = true;
+    };
+    const survives = () => !interrupted && current() && location.href === route;
     const owns = () => {
-      if (interrupted || !current() || location.href !== route) return false;
-      if (composer() !== box) {
-        // Upload hydration can remount the editor. Adopt one replacement only
-        // through the original exact-text lease; never reinsert or reupload.
-        if (rebound || !draft.rebind?.()) return false;
-        box = composer(); rebound = true;
+      if (!survives()) return false;
+      const next = composer();
+      if (next !== box) {
+        // Recheck the original text and draft lease after each native render.
+        // The single upload event remains spent across these read-only checks.
+        if (!next?.isConnected || !draft.rebind?.()) return false;
+        box = next;
       }
       return Boolean(box?.isConnected && draft.current());
     };
     const priorAlerts = new Set(errors().map(error => error.node));
-    for (const type of ['beforeinput', 'input', 'change', 'pointerdown']) document.addEventListener(type, note, true);
+    const editEvents = ['beforeinput', 'input', 'change', 'pointerdown', 'keydown', 'click'];
+    for (const type of editEvents) document.addEventListener(type, note, true);
     try {
-      if (!owns()) return false;
+      if (!owns()) return refuse('upload-draft-changed');
       const transfer = new DataTransfer(); for (const file of files) transfer.items.add(file);
       // One native input change only. A lost/ambiguous upload is left in the
       // unsent composer and is never retried or replaced automatically.
       input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
-      const deadline = Date.now() + (extraFiles.length ? 600000 : 60000);
-      while (owns() && Date.now() < deadline) {
-        if (errors().some(error => !priorAlerts.has(error.node))) return false;
-        const rows = attachmentRows(); if (rows.length > files.length) return false;
+      const bytes = files.reduce((total, file) => total + file.size, 0);
+      const smallPhotos = bytes <= 2 * 1024 * 1024 && files.every(file => /^image\//i.test(file.type));
+      const deadline = Date.now() + (extraFiles.length && !smallPhotos ? 600000 : 60000);
+      let lostAt = null, waiting = 'upload-state-unavailable';
+      while (survives() && Date.now() < deadline) {
+        if (!owns()) {
+          const visible = composerAuthoredText();
+          lostAt ??= Date.now();
+          if ((visible && visible !== expected) || Date.now() - lostAt >= 2500) return refuse('upload-draft-changed');
+          await new Promise(resolve => setTimeout(resolve, 150));
+          continue;
+        }
+        lostAt = null;
+        if (errors().some(error => !priorAlerts.has(error.node))) return refuse('native-upload-error');
+        if (attachmentRows().length > files.length) return refuse('upload-attachment-mismatch');
         const proof = await readComposerFiles(owns);
-        if (!owns()) return false;
+        if (!owns()) continue;
         // A delayed read-only bridge reply does not mean the native upload
         // failed. Re-read under the same deadline without another input change.
-        if (proof === undefined) continue;
         const currentRows = attachmentRows();
-        if (proof && proof.uploadingFile === false && proof.uploadingSync === false && proof.placeholderCount === 0 &&
+        const busy = proof?.uploadingFile === true || proof?.uploadingSync === true || (proof?.placeholderCount ?? 0) > 0;
+        waiting = busy ? 'upload-still-pending' : proof ? 'upload-readiness-unconfirmed' : 'upload-state-unavailable';
+        if (proof && box.getAttribute('data-clf-claude-composer-token') === proof.token && !busy &&
             proof.files.length === files.length && currentRows.length === files.length && enabled(sendButton())) {
+          const settled = proof.uploadingFile === false && proof.uploadingSync === false && proof.placeholderCount === 0;
           const unmatched = proof.files.slice();
           const matches = files.every(file => {
             const at = unmatched.findIndex(item => item?.name === file.name && item.ready === true &&
               (item.kind === 'file' && typeof item.type === 'string' || item.kind === 'image' && /^image\//i.test(file.type)) && Number.isSafeInteger(item.size) && item.size >= 0 &&
               uuid.test(item.token || '') && currentRows.some(row => row.getAttribute('data-clf-claude-attachment-token') === item.token && attachmentName(row) === file.name &&
                 attachmentRemove(row)?.disabled !== true && attachmentRemove(row)?.getAttribute('aria-disabled') !== 'true' &&
-                (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) && row.getAttribute('aria-busy') !== 'true'));
+                (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) &&
+                row.getAttribute('aria-busy') !== 'true' && (settled || item.kind === 'image' || row.hasAttribute('data-state'))));
             if (at < 0) return false; unmatched.splice(at, 1); return true;
           });
           if (matches) { draft.attachments(currentRows); return draft.current(); }
         }
         await new Promise(resolve => setTimeout(resolve, 150));
       }
-      return false;
-    } catch { return false; }
-    finally { for (const type of ['beforeinput', 'input', 'change', 'pointerdown']) document.removeEventListener(type, note, true); }
+      return refuse(survives() ? waiting : 'upload-draft-changed');
+    } catch { return refuse('native-upload-unavailable'); }
+    finally { for (const type of editEvents) document.removeEventListener(type, note, true); }
   }
   function usageEvidence(node, notice) {
     const exhausted = /\b(?:reached|hit|exceeded) (?:your |the )?(?:(?:usage|message|session|weekly) ){0,3}limit\b|\b(?:usage|message|session|weekly) limit (?:reached|exceeded)\b|\bout of (?:messages|usage)\b/i.test(notice);

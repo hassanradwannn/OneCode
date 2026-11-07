@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.3] — 2026-11-07
+
+Continue Claude upload observation through bounded composer remounts and recover completed images when composer-wide readiness fields are absent. Preserve native skill identity when an existing question hydrates. Report upload failure stages and refresh the recorder and native reader in open tabs. See [Stable notes](docs/release-notes/v0.9.3.md).
+
 ## [0.9.2] — 2026-11-07
 
 Expose OpenRouter model input capabilities and send supported photo, PDF, text, audio and video attachments. Validate capabilities before dispatch and separate media transport bytes from text context estimates. Keep raw media out of compaction summary requests. Recover exact Claude attachment questions from split media/text layouts and commit their native receipt independently of transcript flushing. Remove stale Beta wording from API delivery errors. See [Stable notes](docs/release-notes/v0.9.2.md).

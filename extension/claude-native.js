@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 9;
+  const VERSION = 10;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -177,7 +177,8 @@
     if (boxes.length !== 1) return null;
     const box = boxes[0], rows = [...document.querySelectorAll('[data-cds-composer-attachments] [data-testid="file-thumbnail"][data-cds-attachment]')].filter(shown);
     if (!rows.length || rows.length > 20) return null;
-    const files = [], states = [];
+    const files = [];
+    let uploadingFile = null, uploadingSync = null, placeholderCount = null;
     for (const row of rows) {
       const remove = [...row.querySelectorAll('button[data-cds-attachment-remove][aria-label^="Remove "]')];
       const name = remove.length === 1 ? remove[0].getAttribute('aria-label')?.slice('Remove '.length) : null;
@@ -192,23 +193,26 @@
         // The image variant supplies primitive upload proof on file, not a text
         // attachment. Never inspect its nativeFile, URL, user IDs or bytes.
         return fileName === name && own(file, 'file_kind') === 'image' && Number.isSafeInteger(fileSize) && fileSize >= 0 &&
-          typeof success === 'boolean' && typeof pending === 'boolean' ? [{ name, size: fileSize, kind: 'image', ready: success && !pending }] : [];
+          typeof success === 'boolean' && (pending === undefined || typeof pending === 'boolean')
+          ? [{ name, size: fileSize, kind: 'image', ready: success && pending !== true }] : [];
       }));
       if (!metadata) return null;
-      const ready = uniqueValue(props.flatMap(value => {
+      for (const value of props) {
+        if (own(value, 'inComposer') !== true && own(value, 'inCdsComposer') !== true) continue;
         const file = own(value, 'isUploadingFile'), sync = own(value, 'isUploadingSync'), count = own(value, 'attachmentPlaceholderCount');
-        return own(value, 'inComposer') === true && own(value, 'inCdsComposer') === true && typeof file === 'boolean' &&
-          typeof sync === 'boolean' && Number.isSafeInteger(count) && count >= 0 && count <= 20 ? [{ file, sync, count }] : [];
-      }));
-      if (!ready) return null;
+        // Any observed busy flag vetoes completion. Missing fields remain
+        // unknown so the isolated adapter can check positive per-file proof.
+        if (typeof file === 'boolean') uploadingFile = uploadingFile === true || file;
+        if (typeof sync === 'boolean') uploadingSync = uploadingSync === true || sync;
+        if (Number.isSafeInteger(count) && count >= 0) placeholderCount = Math.max(placeholderCount ?? 0, count);
+      }
       let token = row.getAttribute('data-clf-claude-attachment-token');
       if (!uuid.test(token || '')) { token = crypto.randomUUID(); row.setAttribute('data-clf-claude-attachment-token', token); }
-      files.push({ ...metadata, token }); states.push(ready);
+      files.push({ ...metadata, token });
     }
-    const state = uniqueValue(states); if (!state) return null;
     let token = box.getAttribute('data-clf-claude-composer-token');
     if (!uuid.test(token || '')) { token = crypto.randomUUID(); box.setAttribute('data-clf-claude-composer-token', token); }
-    return { token, files, uploadingFile: state.file, uploadingSync: state.sync, placeholderCount: state.count };
+    return { token, files, uploadingFile, uploadingSync, placeholderCount };
   }
   /** Only a mounted public visualize frame can expose its authored widget source.
    * Never walk message.content, tool-result payloads, stores or the frame's URL. */
