@@ -2,7 +2,7 @@
 import { getSecret } from "../secrets.js";
 import { readDurable, writeDurableSoon } from "../durable.js";
 import { FREE_ROUTER_MODEL, OpenRouterClient } from "./client.js";
-import type { ChatModelCatalog, ChatModelOption } from "../../shared/chat-models.js";
+import { API_INPUT_MODALITIES, type ChatModelCatalog, type ChatModelOption } from "../../shared/chat-models.js";
 import { ApiError, type ApiModel } from '../api/types.js';
 const STATE = "chat-models-openrouter-api";
 const REFRESH_MS = 15 * 60_000;
@@ -12,6 +12,11 @@ let changed: (value: ChatModelCatalog) => void = () => {};
 let keyRevision = 0;
 let definitions: { revision: number; observedAt: number; models: ApiModel[] } | null = null;
 let definitionRequest: { revision: number; work: Promise<ApiModel[]> } | null = null;
+
+export function cachedOpenRouterApiModel(id: string): ApiModel | undefined {
+  if (definitions?.revision !== keyRevision || Date.now() - definitions.observedAt >= REFRESH_MS) return undefined;
+  return definitions.models.find(model => model.id === id);
+}
 
 /** Share validated model definitions with the UI. Cancelling one chat only cancels its wait. */
 export async function loadOpenRouterApiModels(signal?: AbortSignal, force = false): Promise<ApiModel[]> {
@@ -61,6 +66,9 @@ export async function restoreOpenRouterModels(): Promise<void> {
       !Array.isArray(saved.models) || saved.models.length > 3000 ||
       !saved.models.every(row => row && typeof row.id === "string" && row.id.length <= 200 &&
         typeof row.label === "string" && Array.isArray(row.efforts) &&
+        (row.inputModalities === undefined || Array.isArray(row.inputModalities) &&
+          row.inputModalities.length <= API_INPUT_MODALITIES.length &&
+          row.inputModalities.every(modality => API_INPUT_MODALITIES.includes(modality))) &&
         Number.isSafeInteger(row.contextLength) && row.contextLength! > 0)) return;
   catalog = { ...catalog, state: "ready", models: saved.models, observedAt: saved.observedAt };
 }
@@ -89,7 +97,9 @@ export function startOpenRouterModelDiscovery(force = false): Promise<ChatModelC
         effortsObserved: true,
         contextLength: model.contextLength, maxCompletionTokens: model.maxCompletionTokens,
         supportsTools: model.supportsTools, pricing: model.pricing,
-        description: [model.supportsTools ? "OneCode tool calling" : "Text-only; no OneCode tools",
+        ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+        description: [model.supportsTools ? "OneCode tool calling" : "No OneCode tools",
+          model.inputModalities ? 'Inputs: ' + model.inputModalities.map(value => value === 'file' ? 'PDF' : value).join(', ') : 'Input capabilities unavailable',
           model.id === FREE_ROUTER_MODEL.id ? "Dynamic free route: context limit varies; local estimate " +
             model.contextLength.toLocaleString() + " tokens" :
             "Context: " + model.contextLength.toLocaleString() + " tokens",

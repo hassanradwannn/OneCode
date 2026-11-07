@@ -6,12 +6,15 @@ export function isAstraModel(model: string | null | undefined, effort?: Reasonin
     (/^(?:gpt-?)?6(?:\.0)?$/.test(normalized) && effort === 'pro');
 }
 export type NativeModelSurface = 'chat' | 'work';
+export const API_INPUT_MODALITIES = ['text', 'image', 'file', 'audio', 'video'] as const;
+export type ApiInputModality = typeof API_INPUT_MODALITIES[number];
 export type ChatModelAffinity = { provider: import('./chat-provider.js').ChatProvider; model: string; surface: NativeModelSurface };
 export type NativeReasoningControl = { kind: 'levels'; label: string } |
   { kind: 'toggle'; label: string; on: ReasoningEffort; off: ReasoningEffort; checked: boolean };
 export type ChatModelOption = { id: string; label: string; efforts: ReasoningEffort[]; aliases?: string[]; nativeSurface?: NativeModelSurface;
   /** API catalog metadata; never inferred from browser observations. */
   contextLength?: number; maxCompletionTokens?: number | null; supportsTools?: boolean;
+  inputModalities?: ApiInputModality[];
   pricing?: { prompt: string; completion: string };
   /** false means unobserved, distinct from an observed empty effort menu. Legacy adapters omit it. */
   effortsObserved?: boolean; reasoningControl?: NativeReasoningControl; description?: string; group?: string; effortLabels?: Partial<Record<ReasoningEffort, string>>; effortHints?: Partial<Record<ReasoningEffort, string>> };

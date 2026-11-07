@@ -93,11 +93,10 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.2': {
-    lead: () => t('Use OpenRouter tools without browser warnings and keep task authorization recoverable.'),
+    lead: () => t('Send attachments through OpenRouter and confirm Claude delivery.'),
     highlights: [
-      { icon: 'i-plug', title: () => t('API-first tool access'), text: () => t('OpenRouter local tools are recorded under their exact turn. First-message guidance checks actual exposed tools across providers.') },
-      { icon: 'i-chat', title: () => t('Clearer API model and context'), text: () => t('Show selected model context estimates and API completion limits without pretending that browser-only compaction is active.') },
-      { icon: 'i-retry', title: () => t('Safer task recovery'), text: () => t('Briefly recheck an uncertain browser attachment before refusing the exact original task. Stale or revoked credentials stay blocked.') }
+      { icon: 'i-file', title: () => t('OpenRouter attachments'), text: () => t('Send photos with a vision model, attach PDFs and text files, or send supported audio and video to a compatible model. Check the model picker for input capabilities.') },
+      { icon: 'i-chat', title: () => t('Claude attachment receipts'), text: () => t('Confirm delivery from the exact native question when Claude renders its text and media separately.') }
     ]
   },
   '0.9.0': {

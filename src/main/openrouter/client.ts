@@ -7,6 +7,7 @@ export type { ApiModel as OpenRouterModel, ApiTool as OpenRouterTool, ApiToolCal
   ApiMessage as OpenRouterMessage, ApiCompletion as OpenRouterCompletion } from "../api/types.js";
 export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
 import { apiTransportError } from '../api/recovery.js';
+import { API_INPUT_MODALITIES } from '../../shared/chat-models.js';
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
 // A transport memory bound, separate from the selected model's token/context limits.
@@ -20,7 +21,7 @@ export const FREE_ROUTER_MODEL: OpenRouterModel = {
   // endpoint reports a concrete limit, use an estimated local budget that
   // leaves room for OneCode's complete tool schema. It is not a route guarantee.
   id: "openrouter/free", name: "Free Models Router", contextLength: 32768,
-  maxCompletionTokens: null, supportsTools: true, supportedParameters: ["tools"],
+  maxCompletionTokens: null, supportsTools: true, supportedParameters: ["tools"], inputModalities: ['text', 'image'],
   pricing: { prompt: "0", completion: "0" }
 };
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -198,8 +199,14 @@ export class OpenRouterClient {
         entry.supported_parameters.filter((item: unknown): item is string => typeof item === "string") : [];
       const pricing = isObject(entry.pricing) ? entry.pricing : {};
       const reasoning = isObject(entry.reasoning) ? entry.reasoning : {};
+      const architecture = isObject(entry.architecture) ? entry.architecture : {};
+      const reported = architecture.input_modalities;
+      const inputModalities = Array.isArray(reported)
+        ? API_INPUT_MODALITIES.filter(modality => reported.includes(modality))
+        : id === FREE_ROUTER_MODEL.id ? FREE_ROUTER_MODEL.inputModalities : undefined;
       return [{ id, name: name.slice(0, 200), contextLength, maxCompletionTokens: positive(top.max_completion_tokens),
         supportsTools: supportedParameters.includes("tools"), supportedParameters,
+        ...(inputModalities ? { inputModalities } : {}),
         ...(typeof reasoning.mandatory === 'boolean' ? { reasoningMandatory: reasoning.mandatory } : {}),
         ...(Array.isArray(reasoning.supported_efforts) ? { reasoningEfforts: reasoning.supported_efforts.filter((value): value is string => typeof value === 'string') } : {}),
         pricing: { prompt: str(pricing.prompt), completion: str(pricing.completion) } }];
@@ -213,10 +220,15 @@ export class OpenRouterClient {
     if (!input.messages.length || input.messages.length > 2000) throw new OpenRouterApiError("INVALID_MESSAGES");
     if (input.tools && input.tools.length > 64) throw new OpenRouterApiError("TOO_MANY_TOOLS");
     const streaming = input.stream !== false;
+    const hasPdf = input.messages.some(message => message.role === 'user' && Array.isArray(message.content) &&
+      message.content.some(part => part.type === 'file'));
+    const plugins = [{ id: 'context-compression', enabled: false }];
     const body = JSON.stringify({ model: input.model, session_id: input.sessionId, messages: input.messages,
       // Local handoffs retain task/tool custody. Do not let the router silently
       // remove messages (enabled by default for some short-context endpoints).
-      plugins:[{id:'context-compression',enabled:false}],
+      plugins: hasPdf ? [...plugins, { id: 'file-parser', pdf: {
+        engine: input.inputModalities?.includes('file') ? 'native' : 'cloudflare-ai'
+      } }] : plugins,
       ...(input.reasoningEnabled === false ? { reasoning: { enabled: false } }
         : input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),

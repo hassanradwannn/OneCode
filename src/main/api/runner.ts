@@ -22,6 +22,7 @@ import type { OutputPublication } from '../codex/unified-exec.js';
 import { logInfo } from '../logger.js';
 import { compactApiContext, apiContextNeedsCompaction, contextTokens, type ApiThread } from './compaction.js';
 import { apiCompactionProgress } from './compaction-progress.js';
+import { apiUserMessage, assertApiInputSupported, validApiUserParts } from './attachments.js';
 export { apiTurnStatus } from './activity.js';
 
 const MAX_ITERATIONS = 1000;
@@ -55,7 +56,8 @@ function threadValid(value: unknown, sessionId: string, conversationId: string):
       data.checkpoint.resumedAt!==undefined && (!Number.isSafeInteger(data.checkpoint.resumedAt)||data.checkpoint.resumedAt<0)))return false;
   return data.messages.every(item => item && typeof item === "object" &&
     ["system", "user", "assistant", "tool"].includes(item.role) &&
-    (typeof item.content === "string" || item.role === "assistant" && item.content === null));
+    (typeof item.content === "string" || item.role === "assistant" && item.content === null ||
+      item.role === 'user' && validApiUserParts(item.content)));
 }
 /** Presentation derives the effective context from the existing saved thread,
  * independently of the full canonical transcript retained for history. */
@@ -287,9 +289,11 @@ async function perform(entry: InputEntry): Promise<void> {
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
-    let messages: ApiMessage[] = [...thread.messages, { role: "user", content: prompt }];
-    if (entry.steerTurnId) messages[messages.length - 1] = { role: 'user', content:
-      'The user supplied this direction during the ongoing task. Continue the existing objective with this update; preserve completed work, running commands and workers. Use the saved tool results and process IDs. Do not restart the task or repeat earlier actions.\n\n' + prompt };
+    const submitted = entry.steerTurnId
+      ? 'The user supplied this direction during the ongoing task. Continue the existing objective with this update; preserve completed work, running commands and workers. Use the saved tool results and process IDs. Do not restart the task or repeat earlier actions.\n\n' + prompt
+      : prompt;
+    const user = await apiUserMessage(submitted, claimed, model, controller.signal);
+    let messages: ApiMessage[] = [...thread.messages, user];
     let invocations = 0, paintedAt = 0;
     const flushPaint = () => {
       clearPaintTimer();
@@ -353,6 +357,7 @@ async function perform(entry: InputEntry): Promise<void> {
       await progress('Preparing Compact & Resume.',{state:'archiving'});
       const result = await compactApiContext({thread,provider,model,system,tools:declarations,signal:controller.signal,aggressive,
         reserveTokens:pending?contextTokens([pending])-contextTokens([]):0,
+        reserveBytes: pending ? Buffer.byteLength(JSON.stringify(pending)) : 0,
         retainMessages:new Set([...publications].flatMap(receipt=>publicationMessages.has(receipt)?[publicationMessages.get(receipt)!]:[])),
         current: async()=> {
           if (controller.signal.aborted || isChatBlocked(turn.conversationId) || await conversationWasSuperseded(turn.conversationId)) return false;
@@ -408,10 +413,11 @@ async function perform(entry: InputEntry): Promise<void> {
         await compactContext();
         requestMessages=[{role:'system',content:system},...(!accepted?messages:thread.messages)];
       }
+      assertApiInputSupported(model, requestMessages);
       let { output, maximum } = apiOutputBudget(model, requestMessages, declarations, desiredOutput);
       let dispatchedAt = 0;
       const complete = () => provider.complete({ model: model.id, sessionId: turn.conversationId,
-        messages: requestMessages, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
+        messages: requestMessages, inputModalities: model.inputModalities, tools: declarations, maxCompletionTokens: output, signal: controller.signal,
         reasoningEffort: reasoning, onAccepted: async () => {
           if (dispatchedAt) logInfo(`api timing input=${entry.id} round=${round} header_wait_ms=${Date.now() - dispatchedAt}`);
           await firstAccepted(); active.activity = { phase: 'responding', since: Date.now() }; notifyChanged(turn.sessionId);
@@ -522,7 +528,8 @@ async function perform(entry: InputEntry): Promise<void> {
         if (!controller.signal.aborted && thread.titleVersion !== API_TITLE_VERSION && !entry.apiWorker && summary && apiTitleEligible(summary) &&
             (!summary.origin || summary.origin.kind === 'desktop')) {
           thread.titleRequested = true; thread.titleVersion = API_TITLE_VERSION; await saveThread(thread);
-          const question = thread.messages.find(row => row.role === 'user')?.content ?? entry.text;
+          const first = thread.messages.find(row => row.role === 'user')?.content;
+          const question = typeof first === 'string' ? first : first?.[0]?.type === 'text' ? first[0].text : entry.text;
           generateApiTopicTitle(turn.sessionId, conversationId, question ?? entry.text, resultContent, provider, model);
         }
       } catch { /* Optional naming cannot fail task execution or replay tools. */ }

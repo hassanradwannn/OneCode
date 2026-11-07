@@ -123,8 +123,8 @@ var CLF_DOM = (() => {
     let value;
     if (turn.role === 'user') {
       const authored = all(':scope > div.contents', turn.node);
-      if (authored.length !== 1) return [];
-      value = userAuthoredText(authored[0], turn.id);
+      if (!authored.length) return [];
+      value = userAuthoredText(authored.length === 1 ? authored[0] : null, turn.node, turn.id);
     }
     else {
       const parts = proseNodes(turn.node).map(node => {
@@ -143,9 +143,9 @@ var CLF_DOM = (() => {
   const messages = () => { const seen = new Set(); return turns().flatMap((turn, at) => messagesIn(turn, at, seen)); };
   const nativeUserText = new WeakMap();
   let nativeUserReceiptRead = null;
-  function nativeUserBody(root, id) {
-    const node = root.parentElement, route = location.pathname, signature = root.innerHTML;
-    if (!root.isConnected || turnIdOf(node) !== id) return null;
+  function nativeUserBody(node, id) {
+    const route = location.pathname, signature = node.innerHTML;
+    if (!node.isConnected || turnIdOf(node) !== id) return null;
     let state = nativeUserText.get(node);
     if (state?.route !== route || state?.signature !== signature) {
       clearTimeout(state?.retry);
@@ -164,12 +164,12 @@ var CLF_DOM = (() => {
     let timer;
     const finish = value => {
       clearTimeout(timer); window.removeEventListener('message', receive); state.pending = false;
-      if (!node.isConnected || location.pathname !== route || turnIdOf(node) !== id || root.innerHTML !== signature || nativeUserText.get(node) !== state) return;
+      if (!node.isConnected || location.pathname !== route || turnIdOf(node) !== id || node.innerHTML !== signature || nativeUserText.get(node) !== state) return;
       if (value === null) {
         // React's public turn props can hydrate without changing its already
         // mounted HTML. A few early reads must not permanently retire that row.
         const delay = Math.min(2000, 250 * 2 ** Math.min(state.attempts - 1, 3));
-        if (Date.now() + delay < state.until) { diagnostic('waiting-for-source'); state.retry = setTimeout(() => nativeUserBody(root, id), delay); }
+        if (Date.now() + delay < state.until) { diagnostic('waiting-for-source'); state.retry = setTimeout(() => nativeUserBody(node, id), delay); }
         else diagnostic('source-deadline');
         return;
       }
@@ -188,8 +188,11 @@ var CLF_DOM = (() => {
     window.postMessage({ type: 'onecode-claude-user-read', nonce, message: native }, location.origin);
     return null;
   }
-  function userAuthoredText(root, id) {
-    const source = nativeUserBody(root, id);
+  const witnessedUserBodies = new WeakMap();
+  function userAuthoredText(root, node, id) {
+    const source = nativeUserBody(node, id);
+    const witness = witnessedUserBodies.get(node);
+    if (source === null && witness?.id === id && witness.html === node.innerHTML) return witness.text;
     const raw = source ?? blockText(root);
     // Collapsed native Markdown loses blank lines and hides the slash glyph.
     // Do not journal that lossy app frame as a second authored user message
@@ -208,7 +211,7 @@ var CLF_DOM = (() => {
       if (outgoing) { acceptedSkillQuestions.set(id, authoredSource); if (acceptedSkillQuestions.size > 512) acceptedSkillQuestions.delete(acceptedSkillQuestions.keys().next().value); }
       return authoredSource;
     }
-    const chips = all(sentSkillGroup, root).filter(wrapper => {
+    const chips = (root ? all(sentSkillGroup, root) : []).filter(wrapper => {
       const buttons = all(':scope > span[role="button"][type="button"][data-base-ui-click-trigger][aria-haspopup="dialog"]', wrapper)
         .filter(node => ['0', '-1'].includes(node.getAttribute('tabindex')));
       if (buttons.length !== 1 || compact(buttons[0].textContent) !== '/onecode') return false;
@@ -217,7 +220,13 @@ var CLF_DOM = (() => {
       const range = document.createRange(); range.selectNodeContents(root); range.setEndBefore(wrapper);
       return !compact(range.toString());
     });
-    if (chips.length !== 1) return lossyFrame ? '' : raw;
+    const restoreFramedBody = candidate => {
+      const receipt = nativeUserReceiptRead;
+      if (!receipt || receipt.prior.has(id) || !receipt.current() || userPromptText(receipt.submitted) === null ||
+          candidate.replace(/\s+/g, '') !== receipt.submitted.replace(/\s+/g, '')) return null;
+      return receipt.submitted;
+    };
+    if (chips.length !== 1) return restoreFramedBody(raw) ?? (lossyFrame ? '' : raw);
     const copy = root.cloneNode(true), allGroups = all(sentSkillGroup, root);
     all(sentSkillGroup, copy)[allGroups.indexOf(chips[0])]?.remove();
     const candidate = blockText(copy);
@@ -231,7 +240,7 @@ var CLF_DOM = (() => {
     }
     // Reloaded historical presentation can recognize the same native chip and
     // an intact app frame. This never marks a skill selected or authorizes Send.
-    return source ?? (userPromptText(candidate) !== null ? candidate : lossyFrame ? '' : raw);
+    return source ?? restoreFramedBody(candidate) ?? (userPromptText(candidate) !== null ? candidate : lossyFrame ? '' : raw);
   }
   function waitFor(read, current, timeout = 15000) {
     return new Promise(resolve => {
@@ -647,7 +656,7 @@ var CLF_DOM = (() => {
     const priorQueue = new Set(queuedSendButtons());
     // A pre-existing native queue belongs to its author, not this draft lease.
     if (whileGenerating && priorQueue.size) return refuse('queued-message-present');
-    const prior = new Set(messages().filter(row => row.role === 'user').map(row => row.id));
+    const prior = new Set(turns().filter(row => row.role === 'user').map(row => row.id));
     const noteEdit = event => {
       if (!event.isTrusted) return;
       const button = event.type === 'click' ? event.target?.closest?.('button,[role="button"]') : null;
@@ -677,7 +686,7 @@ var CLF_DOM = (() => {
       if (!current() || !enabled(button) || button !== ready) return refuse('draft-changed');
       if (whileGenerating && queuedSendButtons().length) return refuse('queued-message-present');
       if (skillSelection(box)) outgoingSkill = { expected: submitted, prior, conversation: start, current: stillCurrent };
-      rawRead = { prior, current: () => !edited && stillCurrent(), until: Date.now() + (receiptTimeoutMs || 180000) };
+      rawRead = { prior, submitted, current: () => !edited && stillCurrent(), until: Date.now() + (receiptTimeoutMs || 180000) };
       nativeUserReceiptRead = rawRead;
       onSendAttempt?.(); clicked = true; button.click();
       let elected = start;
@@ -706,6 +715,7 @@ var CLF_DOM = (() => {
         return candidate;
       }, () => !edited && stillCurrent() && (!elected || conversationId() === elected), receiptTimeoutMs || 180000);
       if (!accepted) return refuse('send-acceptance-unconfirmed');
+      witnessedUserBodies.set(accepted.node, { id: accepted.id, html: accepted.node.innerHTML, text: accepted.text });
       outgoingSkill = null;
       if (clearAcceptedDraft && composer() === box && composerAuthoredText() === submitted && stillCurrent()) clearPromptExact(submitted);
       return true;

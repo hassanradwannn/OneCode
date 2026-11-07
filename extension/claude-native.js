@@ -100,7 +100,7 @@
     if (matches.length !== 1) { diagnostic('row-unavailable', { matches: matches.length }); return null; }
     const node = matches[0];
     const bodies = node.querySelectorAll(':scope > div.contents').length;
-    if (bodies !== 1) { diagnostic('body-unavailable', { bodies }); return null; }
+    if (bodies === 0) { diagnostic('body-unavailable', { bodies }); return null; }
     const props = propsAt(node), samples = [], counts = { turnCandidates: 0, matchingIds: 0, nativeHumanIds: 0, userRoles: 0, arrays: 0, soleItems: 0, eligibleSources: 0 };
     const sources = props.flatMap((props, depth) => {
       const row = own(props, 'row');
@@ -148,7 +148,15 @@
         }
         if (texts.length !== 1) return [];
         const { item, index } = texts[0], text = own(item, 'text');
-        const eligible = own(item, 'id') === `${message}:${index}` && own(item, 'format') === 'plain' &&
+        const itemId = own(item, 'id');
+        // Text can retain its own zero-based index when Claude mounts a media
+        // item before it. Both forms still identify the same committed turn.
+        const itemIds = new Set([`${message}:${index}`, `${turnId}:${index}`, `${message}:0`, `${turnId}:0`]);
+        let duplicateId = false;
+        for (let position = 0; position < items.length; position++) {
+          if (position !== index && own(own(items, String(position)), 'id') === itemId) duplicateId = true;
+        }
+        const eligible = itemIds.has(itemId) && !duplicateId && own(item, 'format') === 'plain' &&
           typeof text === 'string' && text.length > 0 && text.length <= 240000;
         if (eligible) counts.eligibleSources++;
         return eligible ? [{ text }] : [];

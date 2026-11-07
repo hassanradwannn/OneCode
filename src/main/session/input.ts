@@ -2431,7 +2431,7 @@ export function claimOpenRouterInput(id: string, conversationId: string): Promis
     if (!entry || entry.chatProvider !== provider || entry.state !== 'queued' || entry.owner ||
         !entry.sessionId || !entry.model || entry.sendAuthorizedAt !== undefined || entry.deliveredAt !== undefined ||
         entry.purpose === 'decision' || entry.mode === 'finish' || entry.delivery ||
-        entry.attachmentDelivery || entry.images?.length || entry.attachments?.length || entry.stages?.length ||
+        entry.attachmentDelivery || entry.stages?.length ||
         (entry.conversationId && entry.conversationId !== conversationId)) return null;
     const session = await getSession(entry.sessionId);
     if (!session || (session.conversationId && session.conversationId !== conversationId) ||

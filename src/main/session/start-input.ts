@@ -10,6 +10,8 @@ import type { QueuedInputNowIntent } from '../../shared/input.js';
 import { cancelOpenRouterInput } from '../openrouter/runner.js';
 import { stopApiInputs, steerApiInput, resetApiRunnerForTests } from '../api/runner.js';
 import { apiProvider } from '../api/providers.js';
+import { assertApiAttachmentsSupported } from '../api/attachments.js';
+import { apiFailureDescription } from '../api/recovery.js';
 
 function wakeBrowser(entry: InputEntry, retry = false, signal?: AbortSignal): Promise<void> {
   const marker = `cos-input=${encodeURIComponent(entry.id)}`;
@@ -147,12 +149,17 @@ export async function sendDesktopInput(input: InputArgs, scheduleId?: string): P
     getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
   const api = apiProvider(selected);
   if (api) {
-    if (input.mode === 'finish' || input.images?.length || input.attachments?.length || input.delivery ||
+    if (input.mode === 'finish' || input.delivery ||
         input.attachmentDelivery || input.stages?.length || scheduleId)
-      throw new Error('This OpenRouter Beta supports text chat and local tool calls. Attachments, scheduled sends and Goal stages are not available yet.');
+      throw new Error('API chats support messages with attachments through Send or After this turn. Scheduled sends, Inject now and Goal stages require a browser chat.');
     // Steer is applied at the next model/tool boundary; explicit Queue waits for task completion.
     const sendModel = input.model || (existing?.conversationId
       ? existing.selectedModel?.model : null) || api.defaultModel.id;
+    const knownModel = api.cachedModel?.(sendModel) ?? (sendModel === api.defaultModel.id ? api.defaultModel : undefined);
+    if (knownModel) {
+      try { assertApiAttachmentsSupported(knownModel, input); }
+      catch (error) { throw new Error(apiFailureDescription(error)); }
+    }
     const safeInput: InputArgs = { ...input, model: sendModel };
     const entry = await enqueueInput(safeInput);
     if (entry.state === 'queued') await steerApiInput(entry);

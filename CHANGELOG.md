@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.2] — 2026-11-07
+
+Expose OpenRouter model input capabilities and send supported photo, PDF, text, audio and video attachments. Validate capabilities before dispatch and separate media transport bytes from text context estimates. Keep raw media out of compaction summary requests. Recover exact Claude attachment questions from split media/text layouts and commit their native receipt independently of transcript flushing. Remove stale Beta wording from API delivery errors. See [Stable notes](docs/release-notes/v0.9.2.md).
+
 ## [0.9.1] — 2026-11-06
 
 Keep API outbox rows out of native browser publication, claims and opening-lease projections. Recheck the resolved target transport, and reject non-browser/unknown providers or API conversation IDs in Companion delivery before querying or opening tabs. Preserve normal browser-provider delivery and local API execution. See [Stable notes](docs/release-notes/v0.9.1.md).

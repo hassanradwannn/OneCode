@@ -58,7 +58,7 @@ async function stageOne(source: AttachmentSource, used: number): Promise<InputAt
   if (size > MAX_ATTACHMENT_BYTES) throw new Error('Each attachment must be 512 MB or smaller');
   if (used + size > 2 * 1024 * 1024 * 1024) throw new Error('Attachment storage is full; finish or remove pending messages first');
   const name = typeof source === 'string' ? path.basename(source) : 'text' in source ? 'Attached text.txt' : path.basename(source.name);
-  const types: Record<string, string> = { '.md': 'text/markdown', '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg' };
+  const types: Record<string, string> = { '.md': 'text/markdown', '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav' };
   const attachment = attachmentSchema.parse({ id: randomUUID(), name, size, mimeType: types[path.extname(name).toLowerCase()] ?? 'application/octet-stream' });
   const destination = fileFor(attachment.id);
   try {
@@ -131,8 +131,23 @@ export async function previewInputAttachment(id: string): Promise<string | null>
     return `data:image/webp;base64,${preview.toString('base64')}`;
   } catch { return null; }
 }
-async function readImageBytes(attachment: InputAttachment): Promise<Buffer> {
+/** The caller owns the claimed input. Validate staged membership before reading its bytes. */
+export function readStagedInputAttachment(attachment: InputAttachment, limit: number): Promise<Buffer> {
+  const next = staging.then(async () => {
+    await validate([attachment]);
+    return readAttachmentBytes(attachment, limit);
+  });
+  staging = next.catch(() => undefined);
+  return next;
+}
+
+function readImageBytes(attachment: InputAttachment): Promise<Buffer> {
   if (attachment.size > 12 * 1024 * 1024) throw new Error('Images for injection must be 12 MB or smaller');
+  return readAttachmentBytes(attachment, 12 * 1024 * 1024);
+}
+
+async function readAttachmentBytes(attachment: InputAttachment, limit: number): Promise<Buffer> {
+  if (attachment.size > limit) throw new Error('Attachment exceeds its read limit');
   const handle = await fs.open(fileFor(attachment.id), 'r');
   try {
     if ((await handle.stat()).size !== attachment.size) throw new Error('Attachment changed; attach it again');

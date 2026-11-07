@@ -15553,7 +15553,7 @@
           // Proof that the click did not deliver: ChatGPT left this exact text in its composer and
           // showed no new user message. Clearing that exact draft lets the app send it once more;
           // anything less certain stays an unconfirmed send that is never replayed (#821).
-          if (onTarget() && sendText(CLF_DOM.composer()?.textContent) === submittedText &&
+          if (CLF_DOM.provider !== 'claude' && onTarget() && sendText(CLF_DOM.composer()?.textContent) === submittedText &&
               CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id === previousUserId) {
             let cleared = false;
             try { cleared = await draft.clear(); } catch { /* An unclearable draft is no proof. */ }
@@ -15617,7 +15617,7 @@
       if (temporary) rememberServedPlanner(message.id, input.owner);
         completeDesktopDecision();
       }
-      if (CLF_DOM.provider !== 'chatgpt' && !temporary) {
+      if (CLF_DOM.provider === 'gemini' && !temporary) {
         // A hidden page's ordinary transcript timer can run after Gemini's
         // first tools. Publish the real accepted question through the normal
         // recorder now, while this Send still holds its exact native receipt.
@@ -15645,6 +15645,12 @@
       const acknowledged = await ask({ type: 'desktop_input', id: message.id, conversationId: deliveredConversation, messageId: receipt.user?.id, owner: input.owner, lifetime: input.lifetime, ack: true });
       const accepted = acknowledged?.data?.ok === true;
       if (accepted) intakeStage('acknowledged');
+      if (accepted && CLF_DOM.provider === 'claude' && !temporary && sendingTarget()) {
+        // Delivery is already committed. A slow transcript flush cannot hold
+        // the exact Claude acknowledgement behind the assistant's stream.
+        observe();
+        void flush();
+      }
       try {
         const latest = CLF_DOM.messages().filter(row => row.role === 'user').at(-1);
         console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'native-ack', accepted,
