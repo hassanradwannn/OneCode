@@ -15,7 +15,6 @@ import { initSkills } from './skills.js';
 import { imageStorageButton } from './image-storage.js';
 import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, initChatModels, confirmedComposerModel, composerSendModel, ensureComposerModel, chatModelName, settingsModelAffinity } from './chat-models.js';
 import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
-import { decorateJsonCode } from './json-code.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
 import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
@@ -2960,7 +2959,6 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   } else formatMessageContent(box, {
     languages: codeLanguages, copy: async value => !!await run(api.writeClipboard(value)), label: t,
     bindLabel: (node, property, value) => { ui(node, property, () => t(value)); },
-    decorateCode: (code, language) => { if (language === 'json') decorateJsonCode(code); },
     copyFailed: () => toast(t('Could not copy text.'))
   });
   return box;

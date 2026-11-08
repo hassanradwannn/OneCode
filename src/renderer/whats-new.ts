@@ -77,11 +77,12 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.4': {
-    lead: () => t('Follow API work as it happens and change direction immediately.'),
+    lead: () => t('Keep parallel chats separate and read rich replies in OneCode.'),
     highlights: [
-      { icon: 'i-terminal', title: () => t('Live work progress'), text: () => t('See progress paragraphs, completed tools, running commands and background processes while an API task is still working.') },
-      { icon: 'i-chat', title: () => t('Steer an API task'), text: () => t('Immediate messages interrupt the current API response. Already dispatched tools settle safely, and background processes remain available.') },
-      { icon: 'i-chat', title: () => t('Topic-based chat names'), text: () => t('Generate a short subject title for an API conversation and preserve names you set yourself.') }
+      { icon: 'i-browser', title: () => t('Dedicated browser windows'), text: () => t('Run Claude chats in OneCode’s own browser window and keep each parallel task in its own tab.') },
+      { icon: 'i-terminal', title: () => t('Syntax highlighting'), text: () => t('Read colored code blocks in Desktop and Remote.') },
+      { icon: 'i-chat', title: () => t('OpenRouter remembers your model'), text: () => t('Continue an existing chat with its last accepted model.') },
+      { icon: 'i-file', title: () => t('Interactive replies'), text: () => t('Use supported scorecards, grading charts and copy controls directly in the transcript.') }
     ]
   },
   '0.9.3': {

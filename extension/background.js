@@ -2347,12 +2347,13 @@ async function inAppGroup(tab) {
   if (!groupsAvailable() || !Number.isInteger(tab?.groupId) || tab.groupId < 0) return false;
   return (await storedBackgroundGroup())?.id === tab.groupId;
 }
-/** Native work reuses one expanded owned window and never takes OS focus. */
+/** Native Claude openings and background work use a dedicated window unless grouped. */
 async function createChatTab(url, background = false, active = !background, sourceConversationId = null, sourceTabId = null, allowAccountHome = false) {
   url = await resolveProviderUrl(url, { sourceConversationId, sourceTabId, allowAccountHome });
-  if (!background) return chrome.tabs.create({ url, active });
+  if (!background && providerForUrl(url) !== 'claude') return chrome.tabs.create({ url, active });
+  const reveal = !background && active;
   return inBackgroundWindow(async () => {
-    if (groupsAvailable()) {
+    if (background && groupsAvailable()) {
       // A grouped tab is always inactive: selecting it would switch the user's own window.
       const grouped = await createGroupedTab(url);
       if (grouped) return grouped;
@@ -2361,11 +2362,13 @@ async function createChatTab(url, background = false, active = !background, sour
     if (existing) {
       const tab = await chrome.tabs.create({ url, windowId: existing.id, active: false });
       await rememberBackgroundWindow(existing.id, [...existing.tabs.map(member => member.id), tab.id]);
-      if (await setManagedWindowState(existing.id) && await managedWindowHasTab(tab))
+      if (await setManagedWindowState(existing.id) && await managedWindowHasTab(tab)) {
         await chrome.tabs.update(tab.id, { active: true });
+        if (reveal && await managedWindowHasTab(tab)) await chrome.windows.update(existing.id, { focused: true });
+      }
       return tab;
     }
-    const window = await chrome.windows.create({ url, type: 'normal', state: 'normal', focused: false, ...backgroundWindowBounds });
+    const window = await chrome.windows.create({ url, type: 'normal', state: 'normal', focused: reveal, ...backgroundWindowBounds });
     if (!Number.isInteger(window?.id) || !window.tabs?.[0]) throw new Error('background_window_not_ready');
     await rememberBackgroundWindow(window.id, [window.tabs[0].id]);
     await setManagedWindowState(window.id);
@@ -5727,10 +5730,9 @@ const HANDLERS = {
       await noteTabConversation(source, conversationId);
       if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     }
-    // A page in the app's tab group sits in the user's own window (#128): selecting it would
-    // switch what they are looking at, so the courtesy is skipped there.
+    // Automatic Goal and Resume focus only applies to a proven dedicated window.
     const placed = await chrome.tabs.get(source.tab).catch(() => null);
-    if (await inAppGroup(placed).catch(() => false)) {
+    if (!placed || !await managedWindowHasTab(placed) || !ownsDocument(source)) {
       return ownsDocument(source) ? { ok: true, focused: false } : { ok: false, error: 'stale_document' };
     }
     try {
@@ -6420,7 +6422,8 @@ async function placeSuccessorChat(raw, tabId) {
       // deadline remains the only truthful fallback; do not mint another opening attempt.
     }
   };
-  if (id && raw.background === true) {
+  const provider = providerForConversation(raw?.homeConversationId, selectedProvider);
+  if (id && (raw.background === true || provider === 'claude')) {
     const marker = `clf=${encodeURIComponent(id)}`;
     const model = commandModelSlug(raw.model);
     const effort = commandReasoningEffort(raw.reasoningEffort);
@@ -6429,8 +6432,8 @@ async function placeSuccessorChat(raw, tabId) {
     if (effort) query.push(`reasoning_effort=${encodeURIComponent(effort)}`);
     let created;
     try {
-      const provider = providerForConversation(raw.homeConversationId, selectedProvider);
-      created = await createChatTab(`${providerHome(provider)}?${query.join('&')}#${marker}`, true, false, raw.homeConversationId, tabId);
+      created = await createChatTab(`${providerHome(provider)}?${query.join('&')}#${marker}`,
+        raw.background === true, raw.background !== true && raw.active !== false, raw.homeConversationId, tabId);
     } catch (error) {
       await failPlacement(`successor_tab_create_failed: ${placementError(error)}`);
       return;
@@ -6470,7 +6473,6 @@ async function placeSuccessorChat(raw, tabId) {
     }
     if (typeof tabId !== 'number') {
       const base = successorChatBase(raw.project, raw.homeConversationId);
-      const provider = providerForConversation(raw.homeConversationId, selectedProvider);
       const marker = `clf=${encodeURIComponent(id)}${base !== providerHome(provider) ? '&clf_project=1' : ''}`;
       const model = commandModelSlug(raw && raw.model);
       const reasoningEffort = commandReasoningEffort(raw && raw.reasoningEffort);
@@ -6506,7 +6508,6 @@ async function placeSuccessorChat(raw, tabId) {
   // Both a query and a fragment, matching the app's commandUrl(): ChatGPT rewrites its own URL
   // during boot and which of the two survives has changed between builds.
   const base = successorChatBase(raw.project, raw.homeConversationId);
-  const provider = providerForConversation(raw.homeConversationId, selectedProvider);
   const marker = `clf=${encodeURIComponent(id)}${base !== providerHome(provider) ? '&clf_project=1' : ''}`;
   const model = commandModelSlug(raw && raw.model);
   const reasoningEffort = commandReasoningEffort(raw && raw.reasoningEffort);

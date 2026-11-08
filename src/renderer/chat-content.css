@@ -97,12 +97,9 @@
 }
 
 .msg.rich .markdown-code pre code { font-size: calc(13px * var(--text-scale, 1)); }
-.msg.rich .json-key { color: #bb4a8b; }
-.msg.rich .json-string { color: #447e33; }
-.msg.rich :is(.json-number, .json-literal) { color: #296ea6; }
-:root[data-theme='dark'] .msg.rich .json-key { color: #ee9ac2; }
-:root[data-theme='dark'] .msg.rich .json-string { color: #b7db9c; }
-:root[data-theme='dark'] .msg.rich :is(.json-number, .json-literal) { color: #a8c7fa; }
+.msg.rich .json-key { color: light-dark(#bb4a8b, #ee9ac2); }
+.msg.rich .json-string { color: light-dark(#447e33, #b7db9c); }
+.msg.rich :is(.json-number, .json-literal) { color: light-dark(#296ea6, #a8c7fa); }
 
 /* ChatGPT's writing block (#1477): the code panel's frame and header; its text reads as text, not a quote. */
 .msg.rich .markdown-writing {
@@ -301,3 +298,12 @@
   margin-inline-end: 0.5em;
   border-radius: 50%;
 }
+.markdown-code .tok-keyword,
+.markdown-code .tok-modifier { color: light-dark(#6d28d9, #c792ea); }
+.markdown-code .tok-string,
+.markdown-code .tok-string2 { color: light-dark(#047857, #c3e88d); }
+.markdown-code :is(.tok-number, .tok-bool, .tok-null, .tok-atom) { color: light-dark(#b45309, #f78c6c); }
+.markdown-code .tok-comment { color: light-dark(#666, #98a4b0); }
+.markdown-code :is(.tok-typeName, .tok-className, .tok-namespace) { color: light-dark(#0369a1, #82aaff); }
+.markdown-code :is(.tok-propertyName, .tok-function) { color: light-dark(#9d174d, #f07178); }
+.markdown-code :is(.tok-operator, .tok-regexp) { color: light-dark(#475569, #89ddff); }

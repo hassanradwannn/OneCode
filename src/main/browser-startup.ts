@@ -36,7 +36,9 @@ export async function wakeBrowserUrl(url: string, retry = false, backgroundStart
   // A changed browser choice starts a distinct attempt without adopting the old family.
   if (waking?.lastSeenAt === browser.lastSeenAt && waking.selected === selected) return waking.work;
   const work = (async () => {
-    await (backgroundStartup ? openInPreferredBrowser(url, { backgroundStartup: true }) : openInPreferredBrowser(url));
+    if (backgroundStartup) await openInPreferredBrowser(url, { backgroundStartup: true });
+    else if (authority?.authoredInput) await openInPreferredBrowser(url, { separateWindow: true });
+    else await openInPreferredBrowser(url);
   })();
   const attempt = { lastSeenAt: browser.lastSeenAt, selected, work, failed: false, finished: false, finishedAt: null as number | null };
   waking = attempt;

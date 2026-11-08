@@ -1,5 +1,4 @@
 import { chatProviderForConversation } from '../../shared/chat-provider.js';
-import { isNativeModelId } from '../../shared/chat-models.js';
 /**
  * Durable session history.
  *
@@ -27,7 +26,7 @@ import { modelFacingText } from '../../shared/content-reference.js';
 import { appendJournal, openJournal } from './journal-io.js';
 import { continuationReceipt } from '../../shared/continuation-receipt.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { isProModel } from '../../shared/chat-models.js';
+import { isNativeModelId, isProModel } from '../../shared/chat-models.js';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -973,6 +972,7 @@ async function rebuildSummaryFromHistory(
         agents: [...new Set([...checkpoint.agents, ...rebuilt.agents])]
       }
     : rebuilt;
+  restoreApiModelSelection(summary, messages.values());
   logWarn(`session ${id}: rebuilt metadata from durable event/message history`);
   await writeSummary(summary, historySeq);
   return summary;
@@ -1000,6 +1000,7 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
     const historySeq = Math.max(journalSeq, messageSeq);
     const checkpoint = await readMetaCheckpoint(id, historySeq);
     const titleRepaired = checkpoint ? refreshUserTitle(checkpoint.summary, messages.values()) : false;
+    const selectionRepaired = checkpoint ? restoreApiModelSelection(checkpoint.summary, messages.values()) : false;
 
     // A pre-taxonomy checkpoint can have a current watermark but stale outcome classification.
     if (
@@ -1015,7 +1016,7 @@ async function readDurableSnapshot(id: string): Promise<DurableSessionSnapshot |
     ) {
       // A successful no-op migration is still a completed migration. Without this stamp,
       // every launch rereads all old transcripts that happened to contain no aliases.
-      const migrated = !checkpoint.canonicalProjectionCurrent || titleRepaired;
+      const migrated = !checkpoint.canonicalProjectionCurrent || titleRepaired || selectionRepaired;
       if (migrated) await writeSummary(checkpoint.summary, historySeq);
       return { summary: checkpoint.summary, messages, historySeq, reconciled: migrated };
     }
@@ -2671,8 +2672,8 @@ function normalizeSummary(id: string, raw: string): MetaCheckpoint | null {
         typeof auto.title !== 'string' || !['fallback', 'provider'].includes(auto.source))) delete publicSummary.autoTitle;
     const selected = publicSummary.selectedModel;
     if (selected !== undefined && (!selected || typeof selected !== 'object' ||
-        typeof selected.conversationId !== 'string' || typeof selected.model !== 'string' ||
-        !/^[a-zA-Z0-9 ._-]{1,80}$/.test(selected.model) || !Number.isFinite(selected.observedAt))) {
+        typeof selected.conversationId !== 'string' || !validSessionModel(selected.model, selected.conversationId) ||
+        !Number.isFinite(selected.observedAt))) {
       delete publicSummary.selectedModel;
     }
     const lastToolActivity = publicSummary.lastToolActivity;
@@ -3581,12 +3582,19 @@ export async function clearSessionName(id: string): Promise<void> {
   });
 }
 
+function validSessionModel(model: unknown, conversationId: string): model is string {
+  const provider = chatProviderForConversation(conversationId);
+  return provider === 'claude' || provider === 'openrouter'
+    ? isNativeModelId(model, provider)
+    : typeof model === 'string' && /^[a-zA-Z0-9 ._-]{1,80}$/.test(model);
+}
+
 /** Persist current provider selection independently of recording/history replay. */
 export async function observeSessionModel(
   id: string, conversationId: string, model: string, observedAt: number,
   reasoningEffort?: ReasoningEffort, modelSurface?: import('../../shared/chat-models.js').NativeModelSurface
 ): Promise<void> {
-  if (!(chatProviderForConversation(conversationId) === 'claude' ? isNativeModelId(model, 'claude') : /^[a-zA-Z0-9 ._-]{1,80}$/.test(model)) || !Number.isFinite(observedAt)) return;
+  if (!validSessionModel(model, conversationId) || !Number.isFinite(observedAt)) return;
   const entry = await ensureOpen(id);
   await enqueueSessionOperation(entry, 'model-selection', async () => {
     // Late old-document reports cannot change the replacement's policy. Repeated observations
@@ -3600,6 +3608,23 @@ export async function observeSessionModel(
     entry.summary = staged;
     publishAttachmentSummary(staged);
   });
+}
+
+/** Recover older API selections from the latest accepted authored input. */
+function restoreApiModelSelection(summary: SessionSummary, events: Iterable<CanonicalEvent>): boolean {
+  const conversationId = summary.conversationId;
+  if (!conversationId || chatProviderForConversation(conversationId) !== 'openrouter' ||
+      summary.selectedModel?.conversationId === conversationId) return false;
+  let latest: Extract<SessionEvent, { kind: 'user_message' }> | undefined;
+  for (const event of events) {
+    if (event.kind === 'user_message' && event.source === 'app' && event.inputId &&
+        event.inputDelivery === 'confirmed' && validSessionModel(event.model, conversationId) &&
+        (!latest || positionOf(event) > positionOf(latest))) latest = event;
+  }
+  if (!latest?.model) return false;
+  summary.selectedModel = { conversationId, model: latest.model, observedAt: latest.time,
+    ...(latest.reasoningEffort ? { reasoningEffort: latest.reasoningEffort } : {}) };
+  return true;
 }
 
 /** Bind once before publishing project work; a task never silently changes folders. */

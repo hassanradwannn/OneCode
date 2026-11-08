@@ -124,6 +124,7 @@ export interface PreferredBrowserOpenOptions {
   browser?: ChatBrowser;
   /** Start the owned helper without activating its Windows startup window. */
   backgroundStartup?: boolean;
+  separateWindow?: boolean;
   /**
    * An explicit user action such as "open this chat". Only the CoS browser distinguishes it: it
    * brings its window forward, while every other URL opens in a window that stays hidden.
@@ -365,15 +366,17 @@ export async function openInPreferredBrowser(
   }
   const label = selected === 'edge' ? 'Microsoft Edge' : selected === 'brave' ? 'Brave Browser' : selected === 'firefox' ? 'Firefox' : 'Google Chrome / Chromium';
   const bounds = browserWindowBounds();
+  const separate = options.backgroundStartup || options.separateWindow;
   // These switches only affect a newly started Chrome process; handing a URL to an
   // existing instance cannot change its policy. Memory Saver exclusions alone do not
   // prevent background timer/renderer throttling of long-running orchestration tabs.
   // Firefox knows none of these Chromium switches; it gets the URL alone.
   const args = selected === 'firefox' ? [...await firefoxProfileArgs(platform, env, options.prepareProfile),
-    ...(options.backgroundStartup ? ['--new-window'] : []), url] : [
+    ...(separate ? ['--new-window'] : []), url] : [
     ...isolatedChromiumArgs(platform, env, BUILD_CHANNEL, undefined, selected),
     ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
-    ...(options.backgroundStartup ? ['--new-window', `--window-size=${bounds.width},${bounds.height}`] : []),
+    ...(separate ? ['--new-window'] : []),
+    ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
     url
   ];
   let lastError: unknown = null;

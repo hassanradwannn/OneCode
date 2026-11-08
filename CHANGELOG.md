@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.4] — 2026-11-08
+
+Isolate managed browser windows, preserve parallel Claude chats and skip silent recovery while ChatGPT is still streaming. Restore portable scorecards and grading charts, highlight code in Desktop and Remote, and retain each OpenRouter chat’s accepted model. Restrict packaged build output to app directories. See [Stable notes](docs/release-notes/v0.9.4.md).
+
 ## [0.9.3] — 2026-11-07
 
 Continue Claude upload observation through bounded composer remounts and recover completed images when composer-wide readiness fields are absent. Preserve native skill identity when an existing question hydrates. Report upload failure stages and refresh the recorder and native reader in open tabs. See [Stable notes](docs/release-notes/v0.9.3.md).
