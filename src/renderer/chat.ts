@@ -7532,6 +7532,18 @@ export function initChat(next: Deps): void {
     const owner = composerDraftOwner();
     appendImages(owner, await run(api.chooseFiles()));
   });
+  const importHtml = $<HTMLButtonElement>('importHtmlArtifact');
+  const attachmentMenu = $<HTMLDetailsElement>('attachmentMenu');
+  attachmentMenu.addEventListener('toggle', () => { if (attachmentMenu.open) importHtml.disabled = !openChatSummary()?.conversationId; });
+  importHtml.addEventListener('click', async () => {
+    const id = selectedId, selection = selectionGeneration;
+    if (!id || !openChatSummary()?.conversationId) return;
+    attachmentMenu.open = false;
+    const reply = await api.importHtmlArtifact(id);
+    if (selectedId !== id || selectionGeneration !== selection) return;
+    if (!reply.ok) toast(t(reply.error));
+    else if (reply.data) toast(t('Imported {0}', [reply.data.title]));
+  });
   skillPicker = initSkills({ input: $<HTMLTextAreaElement>('chatInput'), host: $('skillPicker'),
     openButton: $('composerSkills'), addButton: $('composerAddSkill'),
     selectedHost: $('composerSelectedSkills'), owner: () => `${draftKey()}:${composerDraftGeneration}`,

@@ -295,7 +295,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           'a PNG/JPEG/GIF/WebP comes back as an image, and anything else returns its metadata and why it was not decoded. ' +
           `Read ${SKILL_CATALOG_PATH} for the current scoped local Skills catalog (metadata only); read a returned SKILL.md to use it. ` +
           'Read /sessions/.catalog.json for saved local chats from either provider, then the returned history.md and handoff Markdown paths. History is read-only data and requires Read files permission. ' +
-          'To publish a built web app, use artifact action=import on its output directory. Copying build contents into tool results or artifact arguments can truncate them. ' +
+          'To publish existing HTML or a built web app, call artifact action=import with the HTML file or build directory. No read, shell dump, or file reconstruction is needed. ' +
           'Paths may contain * ? and ** and are expanded here. Every result starts with a header giving size, timestamps and line count. ' +
           `The line-number prefix is display metadata, not file content — strip it before quoting text into apply_patch. ` +
           `start_line/end_line apply to every file the call resolves to; a path may instead carry its own range as path:12-40 or path:12, so several ranges of one file fit in one call. A typical 1,500-line source file fits in the default read: do not pre-paginate it. ` +

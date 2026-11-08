@@ -1,6 +1,6 @@
 import { chatScheduler } from './chat-schedules.js';
 import { registerWorkspaceTerminalIpc } from './workspace-terminal-ipc.js';
-import { CHAT_PROVIDERS, chatProviderConversationUrl, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
+import { CHAT_PROVIDERS, chatProviderConversationUrl, DEFAULT_CHAT_PROVIDER, chatProviderCapabilities, chatProviderForConversation, chatProviderForStoredConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import type { ChatModelAffinity } from '../shared/chat-models.js';
 import { forgetSurfaceTokens } from './mcp/persistent-paths.js';
 import { firefoxAddonUrl } from '../shared/firefox-addon.js';
@@ -112,9 +112,10 @@ import { addProject, expireArmedProjectCreates, getSessionProject, listProjects,
 import { createProjectEntry, listProjectDirectory, previewProjectFile, projectFileTarget, renameProjectEntry, revalidateProjectFileTarget, saveProjectTextFile } from './project-files.js';
 import { ProjectFileWatchSet } from './project-file-watcher.js';
 import { ProjectGitWatchSet, readProjectGitDiff, readProjectGitSnapshot } from './project-git.js';
-import { listArtifacts, patchArtifact, readArtifact } from './artifacts/service.js';
+import { artifactSummary, listArtifacts, patchArtifact, readArtifact } from './artifacts/service.js';
 import { onArtifactOpen } from './artifacts/events.js';
 import { exportArtifactToProject } from './artifacts/export.js';
+import { importWebBuild } from './artifacts/import-web-build.js';
 import { nativeMediaConversation, listNativeMedia, prepareNativeVideoPlayback, preparePresentedVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback, saveNativeMediaToProject } from './native-media.js';
 import { WorkbenchBrowserController } from './workbench-browser.js';
 import { hasSecret, isEncryptionAvailable, secureStorageStatus, setAsideUnreadableSecrets, setSecret, storedSecretsUnreadable } from './secrets.js';
@@ -1284,6 +1285,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       mimeType: z.string().min(1).max(128).optional(), language: z.string().min(1).max(64).optional() }).strict(),
     z.object({ op: z.literal('delete'), path: artifactPath }).strict()
   ]);
+  handle('artifacts:importHtml', async payload => {
+    const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload);
+    const session = await getSession(sessionId);
+    const conversationId = session?.conversationId;
+    const provider = conversationId ? chatProviderForStoredConversation(conversationId) : null;
+    if (!session || !conversationId || !provider) throw new Error('Open an existing chat to import an HTML artifact.');
+    const caps = effectiveCapabilities(getConfig());
+    if (!caps.read || !caps.create) throw new Error('Importing an HTML artifact requires Read and Create permissions.');
+    const window = getWindow();
+    if (!window) throw new Error('No window');
+    const choice = await dialog.showOpenDialog(window, { title: 'Import HTML artifact', properties: ['openFile'],
+      filters: [{ name: 'HTML files', extensions: ['html', 'htm'] }] });
+    const file = choice.filePaths[0];
+    if (choice.canceled || !file) return null;
+    if (window.isDestroyed() || getWindow() !== window) throw new Error('The desktop window changed during import.');
+    const snapshot = await importWebBuild({
+      path: file, roots: getConfig().roots, sessionId, projectId: session.projectId,
+      origin: { provider, conversationId },
+      current: async () => (await getSession(sessionId))?.conversationId === conversationId
+    });
+    return snapshot ? artifactSummary(snapshot.artifact) : null;
+  }, getWindow);
   handle('artifacts:list', async payload => {
     const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload);
     return listArtifacts(sessionId);

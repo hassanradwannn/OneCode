@@ -31,7 +31,7 @@ export function currentModelChoiceLabel(provider?: import('./chat-provider.js').
   return provider === 'claude' ? 'Current model' : 'Automatic';
 }
 export function currentEffortChoiceLabel(provider?: import('./chat-provider.js').ChatProvider): string {
-  return provider === 'claude' ? 'Current effort' : 'Automatic';
+  return provider === 'claude' ? 'Current effort' : provider === 'openrouter' ? 'Provider default' : 'Automatic';
 }
 /** Native label identifiers are opaque; syntax alone never proves account availability. */
 export function isNativeModelId(value: unknown, provider?: import('./chat-provider.js').ChatProvider): value is string {

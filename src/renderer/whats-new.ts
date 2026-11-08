@@ -53,11 +53,11 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.7': {
-    lead: () => t('Continue larger API chats and see what Send is waiting for.'),
+    lead: () => t('Turn an existing HTML file into an artifact and choose effort with the slider.'),
     highlights: [
-      { icon: 'i-chat', title: () => t('Larger API conversations'), text: () => t('Remove the former two-MiB request blocker while preserving your saved conversation, completed results and running work.') },
-      { icon: 'i-retry', title: () => t('Clear send stages'), text: () => t('See request preparation and provider acceptance separately. A message is marked sent only after the provider accepts it.') },
-      { icon: 'i-plug', title: () => t('Reuse model information'), text: () => t('Share a validated model catalog between Send and the model picker instead of fetching it again on every message.') }
+      { icon: 'i-file', title: () => t('Import HTML from disk'), text: () => t('Choose Import HTML artifact in the attachment menu, or ask the agent to import the file by path.') },
+      { icon: 'i-retry', title: () => t('Continue from the finished file'), text: () => t('Artifact guidance carries the source path and pending presentation through context compaction.') },
+      { icon: 'i-steps', title: () => t('OpenRouter effort slider'), text: () => t('Use the levels reported by the model or select Provider default.') }
     ]
   },
   '0.9.6': {

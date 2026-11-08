@@ -13,6 +13,7 @@ import { currentCall, currentCaller } from './call-context.js';
 import { fail, failIdentity, type SurfaceRegistrar } from './kernel.js';
 import { mcpProvider } from './provider-context.js';
 import { toolDeclaration } from './tool-declarations.js';
+import { ARTIFACT_IMPORT_INSTRUCTIONS } from './artifact-discovery.js';
 
 const artifactId = z.string().uuid().describe('Exact UUID returned by begin/create/read. Never invent an ID or use a conversation ID.');
 const artifactFile = z.object({
@@ -59,7 +60,7 @@ const inputSchema = z.object({
   artifact_id: artifactId.optional().describe('read/patch/present/open: exact artifact.id from create/list/read.'),
   files: z.array(artifactFile).min(1).max(128).optional().describe('create only: complete files, never a patch operation.'),
   entrypoint: z.string().min(1).max(1024).optional(),
-  path: z.string().min(1).max(4096).optional().describe('import: approved build directory containing index.html, such as /project/dist. image/video: approved local file path; MP4/WebM videos up to 128 MiB.'),
+  path: z.string().min(1).max(4096).optional().describe('import: approved standalone HTML file or build directory containing index.html. image/video: approved local file path; MP4/WebM videos up to 128 MiB.'),
   revision: z.number().int().min(1).optional().describe('read/present/open: retained revision; omit for latest.'),
   expected_revision: z.number().int().min(1).optional().describe('patch requires the latest revision returned by read/create/patch.'),
   operations: z.array(patchOperation).max(128).optional().describe('patch only: [{op:"upsert",path,text}] or [{op:"delete",path}].')
@@ -87,12 +88,13 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
   if (!exposedCaps.read && !exposedCaps.metadata && !exposedCaps.create && !exposedCaps.edit) return;
   reg.register('artifact', toolDeclaration('artifact', () => ({
     title: 'Interactive canvas and artifacts',
-    description: 'Create interactive canvas mockups, HTML prototypes, charts and presentations inline in OneCode. Create, read, patch, list, or open OneCode-owned interactive artifacts in this durable session lineage. Compact & Resume replacement chats inherit the session artifacts; unrelated sessions cannot access them. ' +
+    description: ARTIFACT_IMPORT_INSTRUCTIONS + ' ' +
+      'Create interactive canvas mockups, HTML prototypes, charts and presentations inline in OneCode. Create, read, patch, list, or open OneCode-owned interactive artifacts in this durable session lineage. Compact & Resume replacement chats inherit the session artifacts; unrelated sessions cannot access them. ' +
       'Artifact identity is stable even when titles match. After creation, every patch must include expected_revision from the latest read/create result; stale revisions are rejected instead of overwriting newer human edits. ' +
-      'For interactive HTML, begin with title and kind="web", then create with its presentation_id, kind="web", entrypoint="index.html", files:[{path:"index.html",text:"complete HTML/CSS/JavaScript"}]. Legacy html means web. For locally generated photos or videos, begin with kind="image" or "video", then use that action, exact presentation_id and approved local path (PNG/JPEG/WebP; MP4/WebM up to 128 MiB). Media appears inline with playback in desktop and Remote. ' +
+      'For new HTML you are authoring directly in the tool, begin with title and kind="web", then create with its presentation_id, kind="web", entrypoint="index.html", files:[{path:"index.html",text:"complete HTML/CSS/JavaScript"}]. Legacy html means web. For locally generated photos or videos, begin with kind="image" or "video", then use that action, exact presentation_id and approved local path (PNG/JPEG/WebP; MP4/WebM up to 128 MiB). Media appears inline with playback in desktop and Remote. ' +
       'create can inherit title from its exact pending presentation_id. Keep the begin result and reuse its UUID verbatim. Check isError after every call; never claim an artifact was created after an error. Nested exec calls inherit routing: omit conversation_id/session_key. ' +
       'Ready artifacts and patched revisions appear inline at the latest reply. Use present to bring the same artifact back to the bottom of chat; use open only when the user requests the workbench side panel. Never recreate an artifact to show it again. Use fail if generation cannot finish. ' +
-      'Import a built site with action=import and path to its build directory (such as /project/dist). This reads the actual build directly, without copying file contents into tool arguments. It requires Read and Create. Bundle JS into a standalone file and inline binary assets. ' +
+      'Import requires Read and Create. A direct HTML file must be self-contained. Use a build directory for a site with local assets. Bundle JS into a standalone file and inline binary assets. ' +
       'Interactive web previews need self-contained HTML, CSS and browser JavaScript with artifact-relative files. They have no Node, network or CDN access; compile JSX/TypeScript before supplying preview JavaScript. ' +
       'Artifact file paths are logical artifact-relative paths. Media actions read an approved completed local file, never a provider URL.',
     inputSchema,
@@ -106,7 +108,9 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
         const presentation = await beginPresentation(session.id, { title: input.title, kind: input.kind === 'html' ? 'web' : input.kind, provider });
         return json({ action: 'begin', presentation_id: presentation.id, kind: presentation.kind,
           next_action: presentation.kind === 'image' || presentation.kind === 'video' ? presentation.kind : 'create',
-          instruction: 'Keep this presentation_id. Complete this presentation next; do not call begin again for this deliverable.' });
+          instruction: presentation.kind === 'web'
+            ? 'For an existing HTML file or build directory, call artifact action=import with its path and this presentation_id. Use create only for new source authored directly in the tool.'
+            : 'Keep this presentation_id. Complete this presentation next; do not call begin again for this deliverable.' });
       });
       if (input.action === 'image') return reg.guarded('create', 'artifact', () => reg.guarded('read', 'artifact', async () =>
         json({ action: 'image', presentation: await presentImage(session.id, input.presentation_id, provider, reg.ctx.roots, input.path) })));
@@ -123,7 +127,7 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
           return fail('ARTIFACT_PRESENTATION_NOT_PENDING: use the exact pending web presentation_id from this session.');
         const call = currentCall();
         const snapshot = await importWebBuild({
-          directory: input.path, title: input.title ?? pending?.title, presentationId: input.presentation_id,
+          path: input.path, title: input.title ?? pending?.title, presentationId: input.presentation_id,
           roots: reg.ctx.roots, sessionId: session.id, projectId: session.projectId ?? undefined,
           origin: { provider, conversationId: session.conversationId ?? undefined, turnId: call?.localApiTurnId },
           current: async () => (await ownedSession())?.id === session.id && (!call?.localApiCurrent || await call.localApiCurrent())

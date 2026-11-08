@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.7] — 2026-11-09
+
+Import an existing standalone HTML file directly, clarify artifact handoffs after context compaction, and restore the per-model OpenRouter effort slider. See [Stable notes](docs/release-notes/v0.9.7.md).
+
 ## [0.9.6] — 2026-11-09
 
 Isolate Workbench browsers by chat, import standalone web builds directly, load per-model OpenRouter reasoning levels, allow larger concurrent worker batches in automatic mode, and wait for active API work before installing. See [Stable notes](docs/release-notes/v0.9.6.md).

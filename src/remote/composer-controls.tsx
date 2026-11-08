@@ -37,14 +37,16 @@ export function ModelMenu({ models, model, effort, disabled, provider, unverifie
   const [showModels, setShowModels] = useState(false);
   const supported = unverified ? [] : COMPOSER_EFFORTS.filter(value => selected?.efforts.includes(value));
   const effortLabel = (value: string) => selected?.effortLabels?.[value as ReasoningEffort] ?? EFFORT_NAMES[value] ?? currentEffortChoiceLabel(provider);
-  const label = effortLabel(effort);
+  const effortIndex = supported.indexOf(effort as ReasoningEffort);
+  const effortUnavailable = provider === 'openrouter' && !!selected && !!effort && effortIndex < 0;
+  const label = effortUnavailable ? 'Effort unavailable' : effortLabel(effort);
   useEffect(() => {
     const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && root.current) root.current.open = false; };
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && root.current?.open) { root.current.open = false; root.current.querySelector('summary')?.focus(); } };
     document.addEventListener('pointerdown', close); document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, []);
-  return <details ref={root} className="model-menu" onToggle={() => { if (root.current?.open) setShowModels(unverified || !control); }}>
+  return <details ref={root} className="model-menu" onToggle={() => { if (root.current?.open) setShowModels(unverified || !control && !effortUnavailable); }}>
     <summary aria-label={control ? `Model and ${control.label}` : 'Model'} aria-disabled={disabled} onClick={event => { if (disabled) event.preventDefault(); }}>
       <span>{unverified ? `${model} · previously observed` : selected?.label ?? (model ? `${model} · unavailable` : currentModelChoiceLabel(provider))}{effort && (provider !== 'claude' || control) ? ` · ${label}` : ''}</span><Icon name="chevron" />
     </summary>
@@ -57,18 +59,20 @@ export function ModelMenu({ models, model, effort, disabled, provider, unverifie
           <button type="button" data-model={row.id} disabled={disabled} aria-pressed={!unverified && row.id === selected?.id} onClick={() => { choose(row.id, ''); setShowModels(false); if (provider === 'claude' && (row.effortsObserved === false || !row.reasoningControl && row.efforts.length > 0)) requestEfforts?.(row.id); else if (!nativeReasoningControl(row, provider) && root.current) root.current.open = false; }}><span className="model-choice-caption">{row.label}{row.description && <small>{row.description}</small>}</span>{!unverified && row.id === selected?.id && <span>✓</span>}</button>
         </div>)}
       </div> : control?.kind === 'toggle' ? <NativeReasoningSwitch control={control} effort={effort} disabled={disabled} choose={value => choose(selected!.id, value)} />
-      : control?.kind === 'levels' && !!supported.length && (provider === 'openrouter'
-        ? <div className="power-effort"><select aria-label="Thinking effort" value={effort} disabled={disabled}
-          onChange={event => choose(selected!.id, event.target.value)}>
-          <option value="">Provider default</option>
-          {effort && !supported.includes(effort as ReasoningEffort) && <option value={effort} disabled>{label} · unavailable</option>}
-          {supported.map(value => <option key={value} value={value}>{effortLabel(value)}</option>)}
-        </select></div>
-        : <div className="power-effort"><input type="range" aria-label={control.label} aria-valuetext={label} min={0} max={supported.length - 1} step={1} value={Math.max(0, supported.indexOf(effort as typeof supported[number]))} disabled={disabled} onChange={event => choose(selected!.id, supported[Number(event.target.value)]!)} />
-        <div className="power-endpoints"><span>{effortLabel(supported[0]!)}</span><span>{effortLabel(supported.at(-1)!)}</span></div>
-        {selected?.effortHints?.[effort as ReasoningEffort] && <p className="hint model-effort-hint">{selected.effortHints[effort as ReasoningEffort]}</p>}
-        <button type="button" className="effort-default" data-effort="" aria-pressed={!effort} onClick={() => choose(selected!.id, '')}>{provider === 'claude' ? 'Current effort' : 'Automatic effort'}</button>
-      </div>)}
+      : ((control?.kind === 'levels' && supported.length > 0) || effortUnavailable) && <div className="power-effort">
+        {control?.kind === 'levels' && supported.length > 0 && <>
+          <input type="range" aria-label={control.label} aria-valuetext={label} min={0} max={supported.length - 1} step={1}
+            value={Math.max(0, effortIndex)} disabled={disabled} data-unselected={provider === 'openrouter' && effortIndex < 0}
+            onChange={event => choose(selected!.id, supported[Number(event.target.value)]!)}
+            onPointerUp={event => { if (provider === 'openrouter' && effortIndex < 0) choose(selected!.id, supported[Number(event.currentTarget.value)]!); }}
+            onKeyDown={event => { if (provider === 'openrouter' && effortIndex < 0 && event.key === 'Home') choose(selected!.id, supported[0]!); }} />
+          <div className="power-endpoints"><span>{effortLabel(supported[0]!)}</span><span>{effortLabel(supported.at(-1)!)}</span></div>
+        </>}
+        {effortUnavailable ? <p className="hint">This model no longer offers the saved effort. Choose an available level or Provider default.</p>
+          : selected?.effortHints?.[effort as ReasoningEffort] && <p className="hint model-effort-hint">{selected.effortHints[effort as ReasoningEffort]}</p>}
+        <button type="button" className="effort-default" data-effort="" aria-pressed={!effort} disabled={disabled}
+          onClick={() => choose(selected!.id, '')}>{provider === 'claude' || provider === 'openrouter' ? currentEffortChoiceLabel(provider) : 'Automatic effort'}</button>
+      </div>}
     </div>
   </details>;
 }

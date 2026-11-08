@@ -59,7 +59,7 @@ export function apiWebPreview(sessionId: string) {
       event.kind === 'progress' && event.turnId === turn.turnId && event.presentation?.kind === 'web');
     if (existing.some(event => event.kind === 'progress' && event.presentation?.status === 'ready')) return;
     await importWebBuild({
-      sessionId: turn.sessionId, directory: build, roots: config.roots, since,
+      sessionId: turn.sessionId, path: build, roots: config.roots, since,
       origin: { provider: turn.provider ?? 'openrouter', conversationId: turn.conversationId, turnId: turn.turnId },
       current: () => currentApiTurn(turn)
     });

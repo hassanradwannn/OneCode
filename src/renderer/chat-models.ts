@@ -158,7 +158,7 @@ function paintComposerContext(): void {
   const match = observed && observedModel(observed.model);
   // An unknown session model must not inherit the previous chat's valid Send choice.
   paintPair('composerModel', 'composerReasoning', match?.id ?? observed?.model ?? 'not-observed',
-    observed?.reasoningEffort ?? (match && !match.efforts.length ? '' : 'not-observed'));
+    observed?.reasoningEffort ?? (activeProvider === 'openrouter' || match && !match.efforts.length ? '' : 'not-observed'));
 }
 
 /** Scope comes from the caller's session + selection generation; no browser mutation.
@@ -501,7 +501,12 @@ function paintComposerChoices(): void {
   if (control) powers.setAttribute('aria-label', control.label);
   if (control && title) ui(title, 'textContent', () => control.label);
   const hint = el('p', 'hint model-effort-hint');
-  const paintHint = () => { hint.textContent = choice?.effortHints?.[effort.value as ReasoningEffort] ?? ''; hint.hidden = !hint.textContent; };
+  const paintHint = () => {
+    hint.textContent = activeProvider === 'openrouter' && effort.value && !supported.includes(effort.value as ReasoningEffort)
+      ? t('This model no longer offers the saved effort. Choose an available level or Provider default.')
+      : choice?.effortHints?.[effort.value as ReasoningEffort] ?? '';
+    hint.hidden = !hint.textContent;
+  };
   paintHint(); powers.append(hint);
   const choose = (power: ReasoningEffort | string): void => {
     rememberComposerModel(selected.value, false);
@@ -535,21 +540,17 @@ function paintComposerChoices(): void {
     }
     return;
   }
-  if (activeProvider === 'openrouter') {
-    const picker = document.createElement('select');
-    picker.className = 'api-effort-select';
-    ui(picker, 'aria-label', () => t('Thinking effort'));
-    options(picker, [{ id: '', label: () => t('Provider default') },
-      ...supported.map(id => ({ id, label: () => effortLabel(id) }))], effort.value);
-    picker.addEventListener('change', () => choose(picker.value));
-    powers.append(picker);
-    return;
-  }
-  if (activeProvider === 'claude') {
+  if (activeProvider === 'claude' || activeProvider === 'openrouter') {
     const keep = el('button', 'btn power-single', currentEffortLabel) as HTMLButtonElement;
     keep.type = 'button'; keep.dataset.keepMenu = 'true'; keep.dataset.effort = '';
     keep.setAttribute('aria-pressed', String(!effort.value));
-    keep.addEventListener('click', event => { event.stopPropagation(); choose(''); keep.setAttribute('aria-pressed', 'true'); });
+    keep.addEventListener('click', event => {
+      event.stopPropagation();
+      choose('');
+      delete models.dataset.signature;
+      paintComposerChoices();
+      powers.querySelector<HTMLButtonElement>('[data-effort=""]')?.focus();
+    });
     powers.append(keep);
   }
   // One effort (an Instant model) is not a choice: no slider, just its name. A stale saved
@@ -580,7 +581,7 @@ function paintComposerChoices(): void {
   slider.dataset.unselected = String(current < 0);
   paintPosition(shown);
   if (current >= 0) announce(shown);
-  else ui(slider, 'aria-valuetext', () => t('Choose an available model and effort'));
+  else ui(slider, 'aria-valuetext', () => !effort.value && activeProvider === 'openrouter' ? currentEffortLabel() : t('Choose an available model and effort'));
   const pick = (index: number): void => {
     slider.dataset.unselected = 'false';
     announce(index);
@@ -663,9 +664,12 @@ function paintComposerLabel(): void {
   const preserved = requested?.model && (requested.modelSurface || observedModel(requested.model)?.effortsObserved === false) ? requested : null;
   const modelLabel = confirmed ? confirmed.model === 'gemini-current' ? currentModelLabel() : catalog.models.find(model => model.id === confirmed.model)!.label : '';
   const showEffort = confirmed && displayEffort(confirmed.reasoningEffort, observedModel(confirmed.model));
+  const apiEffortUnavailable = !confirmed && activeProvider === 'openrouter'
+    ? observedModel($<HTMLSelectElement>('composerModel').value) : undefined;
   const label = () => confirmed
     ? !showEffort ? modelLabel : chatModelDisplayLabel(modelLabel, confirmed.reasoningEffort!, effortLabel(confirmed.reasoningEffort!))
     : preserved ? chatModelName(preserved.model!, preserved.reasoningEffort ?? undefined)
+    : apiEffortUnavailable ? t('{0} · Effort unavailable', [apiEffortUnavailable.label])
     : automaticApplies() ? currentModelLabel()
     : catalog.state === 'pending' ? t("Loading models…") : t("Select model");
   const node = $('composerModelLabel');

@@ -324,6 +324,7 @@ const api = {
   deleteProjectFileEntry: (projectId: string, path: string) => call<boolean>('projectFiles:delete', { projectId, path }),
   revealProjectFileEntry: (projectId: string, path = '') => call<boolean>('projectFiles:reveal', { projectId, path }),
   attachProjectFile: (projectId: string, path: string) => call<InputAttachment>('projectFiles:attach', { projectId, path }),
+  importHtmlArtifact: (sessionId: string) => call<ArtifactSummary | null>('artifacts:importHtml', { sessionId }),
   listArtifacts: (sessionId: string) => call<ArtifactSummary[]>('artifacts:list', { sessionId }),
   createArtifactPreviewDocument: (sessionId: string, artifactId: string, revision: number | undefined, document: string) =>
     call<{ id: string; url: string }>('artifacts:previewDocument', { sessionId, artifactId, ...(revision !== undefined ? { revision } : {}), document }),

@@ -4,14 +4,42 @@ import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import type { Root } from '../../shared/types.js';
 import { effectiveCapabilities, getConfig } from '../config.js';
 import { rawPromises as fs } from '../rawfs.js';
-import { resolvePath } from '../sandbox.js';
+import { resolvePath, type Resolved } from '../sandbox.js';
 import { createArtifact, type CreateArtifactInput } from './service.js';
 
 const MAX_FILES = 128, MAX_FILE = 2 * 1024 * 1024, MAX_BUNDLE = 8 * 1024 * 1024;
 
-async function readBuild(roots: readonly Root[], directory: string, since?: number): Promise<CreateArtifactInput['files']> {
-  const root = await resolvePath(roots, directory);
-  directory = root.virtual;
+async function readBuildFile(roots: readonly Root[], file: Resolved, remaining: number): Promise<Buffer> {
+  const handle = await fs.open(file.real, 'r');
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > Math.min(MAX_FILE, remaining))
+      throw new Error('ARTIFACT_BUILD_INVALID: A file exceeds the artifact size limit.');
+    const data = Buffer.alloc(before.size);
+    for (let offset = 0; offset < data.length;) {
+      const read = await handle.read(data, offset, data.length - offset, offset);
+      if (!read.bytesRead) throw new Error('Build file changed during import');
+      offset += read.bytesRead;
+    }
+    const checked = await resolvePath(roots, file.virtual);
+    const after = await fs.stat(checked.real);
+    if (checked.real !== file.real || before.dev !== after.dev || before.ino !== after.ino ||
+        before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs)
+      throw new Error('Build file changed during import');
+    return data;
+  } finally { await handle.close(); }
+}
+
+function decodeBuildFile(file: string, data: Buffer): CreateArtifactInput['files'][number] {
+  try {
+    return { path: file, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data) };
+  } catch {
+    throw new Error('ARTIFACT_BUILD_UNSUPPORTED: Offline web files must use UTF-8 text. Save the file as UTF-8 and import it again.');
+  }
+}
+
+async function readBuild(roots: readonly Root[], root: Resolved, since?: number): Promise<CreateArtifactInput['files']> {
+  const directory = root.virtual;
   const entry = await resolvePath(roots, `${directory}/index.html`);
   const entryStat = await fs.stat(entry.real);
   if (!entryStat.isFile()) throw new Error('ARTIFACT_BUILD_INVALID: The build must contain index.html.');
@@ -32,25 +60,9 @@ async function readBuild(roots: readonly Root[], directory: string, since?: numb
       const file = await resolvePath(roots, `${directory}/${relative}`);
       if (path.relative(root.real, file.real) !== relative.split('/').join(path.sep))
         throw new Error('Build file moved outside its original directory');
-      const handle = await fs.open(file.real, 'r');
-      try {
-        const before = await handle.stat();
-        if (!before.isFile() || before.size > MAX_FILE || bytes + before.size > MAX_BUNDLE)
-          throw new Error('Build exceeds the artifact size limit');
-        const data = Buffer.alloc(before.size);
-        for (let offset = 0; offset < data.length;) {
-          const read = await handle.read(data, offset, data.length - offset, offset);
-          if (!read.bytesRead) throw new Error('Build file changed during import');
-          offset += read.bytesRead;
-        }
-        const checked = await resolvePath(roots, `${directory}/${relative}`);
-        const after = await fs.stat(checked.real);
-        if (checked.real !== file.real || before.dev !== after.dev || before.ino !== after.ino ||
-            before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs)
-          throw new Error('Build file changed during import');
-        files.push({ path: relative, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data) });
-        bytes += data.length;
-      } finally { await handle.close(); }
+      const data = await readBuildFile(roots, file, MAX_BUNDLE - bytes);
+      files.push(decodeBuildFile(relative, data));
+      bytes += data.length;
     }
   };
   await walk('', 0);
@@ -133,16 +145,24 @@ async function validateBuild(files: CreateArtifactInput['files'], html: string):
 }
 
 export async function importWebBuild(input: Pick<CreateArtifactInput, 'sessionId' | 'projectId' | 'origin' | 'presentationId'> & {
-  directory: string; roots: readonly Root[]; current: () => Promise<boolean>; title?: string; since?: number;
+  path: string; roots: readonly Root[]; current: () => Promise<boolean>; title?: string; since?: number;
 }): Promise<Awaited<ReturnType<typeof createArtifact>> | null> {
-  const approved = await resolvePath(input.roots, input.directory);
-  const files = await readBuild(input.roots, approved.virtual, input.since);
+  const approved = await resolvePath(input.roots, input.path);
+  const stat = await fs.stat(approved.real);
+  const filename = path.basename(approved.real);
+  if (!stat.isDirectory() && (input.since !== undefined || !stat.isFile() || !/\.html?$/i.test(filename)))
+    throw new Error('ARTIFACT_BUILD_INVALID: Choose a standalone HTML file or a build directory containing index.html.');
+  const entrypoint = stat.isDirectory() ? 'index.html' : filename;
+  // A file import reads only the chosen HTML. A build directory is the explicit
+  // boundary for retaining related assets and never expands to an arbitrary parent.
+  const files = stat.isDirectory() ? await readBuild(input.roots, approved, input.since)
+    : [decodeBuildFile(entrypoint, await readBuildFile(input.roots, approved, MAX_FILE))];
   if (!files.length && input.since !== undefined) return null;
-  const entry = files.find(file => file.path === 'index.html');
+  const entry = files.find(file => file.path === entrypoint);
   if (!entry) throw new Error('ARTIFACT_BUILD_INVALID: The build must contain index.html.');
   const title = await validateBuild(files, entry.text);
   const live = getConfig(), caps = effectiveCapabilities(live);
-  if (!caps.read || !caps.create || (await resolvePath(live.roots, input.directory)).real !== approved.real || !await input.current())
+  if (!caps.read || !caps.create || (await resolvePath(live.roots, input.path)).real !== approved.real || !await input.current())
     throw new Error('ARTIFACT_IMPORT_REVOKED: The chat or its Read and Create permissions changed during import.');
   return createArtifact({
     sessionId: input.sessionId, projectId: input.projectId, origin: input.origin, presentationId: input.presentationId,
