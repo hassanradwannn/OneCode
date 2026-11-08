@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 128;
+  const RECORDER_VERSION = 129;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2760,6 +2760,40 @@
    * user bubble that caused it. Both used to read as "the user has moved on", which closed a
    * turn that had not ended. See `authoredNow`.
    */
+  function portableMessageMarkup(message) {
+    const roots = CLF_DOM.richMessageNodes?.(message) ?? [];
+    const controls = 'input[type="range"], [role="slider"], button[data-copy-text]';
+    if (!roots.some(root => root.querySelector(controls))) return '';
+    // Use only the adapter's exact visible answer body. Carry portable values
+    // and structure, never provider handlers, widget frames or URLs from controls.
+    const shell = document.createElement('div');
+    shell.setAttribute('data-onecode-rich-message', message.id);
+    for (const root of roots) {
+      const copy = root.cloneNode(true);
+      for (const node of copy.querySelectorAll('script, style, iframe, object, embed, template, svg, img, video, audio, action-card, remy-confirmation-card, generated-image, generated-video, immersive-entry-chip, [hidden], [aria-hidden="true"], [role="toolbar"], input:not([type="text"]):not([type="range"])'))
+        node.remove();
+      for (const node of copy.querySelectorAll('*')) {
+        const { flexGrow, backgroundColor } = node.style || {};
+        for (const attr of [...node.attributes]) {
+          const keep = ['id', 'dir', 'colspan', 'rowspan', 'role', 'aria-labelledby', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow'].includes(attr.name) ||
+            (node.matches('label') && attr.name === 'for') ||
+            (node.matches('input') && ['type', 'value', 'min', 'max'].includes(attr.name)) ||
+            (node.matches('a') && attr.name === 'href' && /^https?:\/\//i.test(attr.value)) ||
+            (node.matches('button') && attr.name === 'data-copy-text');
+          if (!keep) node.removeAttribute(attr.name);
+        }
+        if (/^[1-9]\d{0,3}$/.test(flexGrow || '') && /^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$/.test(backgroundColor || '')) {
+          node.style.flexGrow = flexGrow;
+          node.style.backgroundColor = backgroundColor;
+        }
+      }
+      shell.append(...copy.childNodes);
+    }
+    if (!shell.querySelector(controls)) return '';
+    const markup = shell.outerHTML;
+    return markup.length <= 120_000 ? markup : '';
+  }
+
   function reportMessages(nowGenerating) {
     // See resumeIdentityPending: until the app has said what it already holds for this chat,
     // this transcript is unreadable rather than merely unopenable.
@@ -2908,12 +2942,14 @@
           const owned = turnId && latest?.id === message.id && newestUserId === openedUserMessageId && afterQuestion ? turnId : prior?.owner || '';
           const complete = CLF_DOM.messageComplete?.(message) === true;
           const state = complete ? 'final' : 'streaming';
-          const signature = `${state}\u0000${message.text}\u0000${owned}`;
-          if (!message.text || prior?.signature === signature) continue;
+          const renderedHtml = complete ? portableMessageMarkup(message) : '';
+          const signature = `${state}\u0000${message.text}\u0000${renderedHtml}\u0000${owned}`;
+          if ((!message.text && !renderedHtml) || prior?.signature === signature) continue;
           messagesReported.set(message.id, { signature, owner: owned, conflicted: false, text: message.text });
           if (owned && !complete && prior?.text !== message.text) noteTurnProgress(owned, 'page-text');
           emit({ kind: 'assistant_message', messageId: message.id, providerMessageId: message.id,
-            text: message.text, state, final: complete, ...(owned ? { turnId: owned, activeNow: true } : {}),
+            text: message.text, state, final: complete, ...(renderedHtml ? { renderedHtml } : {}),
+            ...(owned ? { turnId: owned, activeNow: true } : {}),
             ...(complete && owned && goalTerminalCandidate('completed', owned, false) ? { goalEligible: true } : {}) });
           continue;
         }

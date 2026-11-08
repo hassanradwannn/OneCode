@@ -120,6 +120,8 @@ var CLF_DOM = (() => {
   const nativeQuestionKey = () => turns().filter(row => row.role === 'user').map(row => row.id).join('\u0000');
   const proseNodes = root => all('[data-cds="Prose"]', root).filter(node => !node.parentElement?.closest('[data-cds="Prose"]') &&
     !node.closest('[data-cds="TurnStatus"],[data-find-omitted],button') && shown(node));
+  const richMessageNodes = message => message.role === 'assistant' && message.node?.isConnected &&
+    turnIdOf(message.node) === message.id ? proseNodes(message.node) : [];
   function messagesIn(turn, _index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id || turn.id !== turnIdOf(turn.node) || seen.has(turn.id)) return [];
     let value;
@@ -803,7 +805,7 @@ var CLF_DOM = (() => {
     projectHomeId: () => null, projectCreateControl: () => null, projectCreateForm: () => null, projectIdsShown: () => [],
     revealSidebar: () => false, fillProjectName: () => false, enterProject: async () => false,
     pluginRefreshView: async () => null, pluginInstalledButtons: () => null, pluginManagementIdle: () => false,
-    nativeOutputs, readNativeArtifacts,
+    nativeOutputs, readNativeArtifacts, richMessageNodes,
     pageTheme: () => document.documentElement.classList.contains('dark') || getComputedStyle(document.documentElement).colorScheme === 'dark' ? 'dark' : 'light',
     clearRevivalResidue: () => false, progressLine: () => null, progressItems: () => [], interrupted: () => false, markProgress: () => {},
     toolBlocks: () => [], activityItems: () => [], isConnectorBlock: () => false, markLocalBlock: () => {}, hasConnectorRow: () => false,

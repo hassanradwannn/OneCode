@@ -41,6 +41,7 @@ import type { TurnTrace } from '../shared/turn-trace.js';
 import { initContextMeter, paintContextMeter } from './context-meter.js';
 import { installComposerDockMotion, installComposerHeightMotion } from './composer-motion.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
+import { nativeMessageMarkup, stageNativeMessageContent, type NativeMessageActions } from './native-message-content.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
@@ -2807,16 +2808,19 @@ function nativePromptCards(root: ParentNode): Array<{ group: Element; anchor: st
   return cards;
 }
 
-export function renderedMarkdown(source: string, capture?: StoredText, references?: readonly MessageReference[], fileLink?: (href: string) => void): HTMLElement {
+export function renderedMarkdown(source: string, capture?: StoredText, references?: readonly MessageReference[], fileLink?: (href: string) => void,
+  native?: { messageId?: string; actions: NativeMessageActions }): HTMLElement {
   // Fiber's canonical text can be complete while a background provider tab still
   // paints its first words. Render this revision directly; captured DOM HTML is
   // never evidence that it contains the current message revision.
   let text = withoutMessageReaction(source).slice(0, MAX_RENDERED_HTML_CHARS);
+  if (native && nativeMessageMarkup(capture, native.messageId))
+    return renderedMessage(capture, text, fileLink, native.actions, true);
   // A Gemini directive this app cannot draw (#574 and whatever Gemini adds next): the page's own
   // recorded rendering is the faithful presentation; without one, the directive lines are dropped.
   if (hasProviderDirective(text)) {
     const plain = withoutProviderDirectives(text);
-    if (resolvedCapture(capture)) return renderedMessage(capture, plain, fileLink);
+    if (resolvedCapture(capture)) return renderedMessage(capture, plain, fileLink, native?.actions);
     text = plain || t('This reply points to content from another message that was not recorded.');
   }
   const citations = text.includes('\uE200') ? citationLabels(text, capture) : new Map<string, string>();
@@ -2868,7 +2872,7 @@ export function renderedMarkdown(source: string, capture?: StoredText, reference
     }
   }] });
   const html = parser.parse(separateDisplayMath(text), { async: false });
-  const box = renderedMessage({ text: html, chars: html.length, truncated: html.length > MAX_RENDERED_HTML_CHARS }, text, fileLink);
+  const box = renderedMessage({ text: html, chars: html.length, truncated: html.length > MAX_RENDERED_HTML_CHARS }, text, fileLink, native?.actions);
   drawMath(box, math);
   writingPanels(box, writing);
   if (capture?.text && !capture.truncated && capture.text.length <= MAX_RENDERED_HTML_CHARS) {
@@ -2896,7 +2900,8 @@ export function renderedMarkdown(source: string, capture?: StoredText, reference
   return box;
 }
 
-export function renderedMessage(html: StoredText | null | undefined, fallback: string, fileLink?: (href: string) => void): HTMLElement {
+export function renderedMessage(html: StoredText | null | undefined, fallback: string, fileLink?: (href: string) => void,
+  actions?: NativeMessageActions, nativeCapture = false): HTMLElement {
   const box = el('div', 'msg');
   // Same reason as textBlock, for the markdown path — and it is the fallback rather than the
   // authority: an element below that carried its own direction keeps it.
@@ -2915,6 +2920,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   // Parsing untrusted captured HTML constructs a second tree before sanitisation. Bound it
   // before innerHTML so a valid but huge recorded turn cannot freeze/OOM the renderer.
   template.innerHTML = html.text.slice(0, MAX_RENDERED_HTML_CHARS);
+  const mountNative = actions && stageNativeMessageContent(template.content, actions, nativeCapture);
   const codeLanguages = new WeakMap<Element, string>();
   for (const code of template.content.querySelectorAll('pre > code')) {
     const language = code.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1];
@@ -2930,6 +2936,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
     safeHref: safeRenderedHref,
     preserveDirection: true
   });
+  mountNative?.();
   // Only reapply our own presentation class, after the capture's untrusted classes are gone.
   for (const prompt of prompts) prompt.card.classList.add('native-prompt-readonly');
   box.append(template.content);
@@ -3713,6 +3720,13 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       const owner = context?.id ?? selectedId;
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references, href => {
         if (owner && event.messageId) void run(api.openSessionFileLink(owner, event.messageId, href));
+      }, {
+        messageId: event.final ? event.providerMessageId ?? event.messageId : undefined,
+        actions: {
+          key: JSON.stringify([owner, event.messageId ?? event.origin ?? event.seq]),
+          copy: async value => !!await run(api.writeClipboard(value)),
+          ...(owner ? { openOriginal: () => void run(api.openSessionChat(owner)) } : {})
+        }
       }));
       return box;
     }

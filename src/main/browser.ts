@@ -369,10 +369,11 @@ export async function openInPreferredBrowser(
   // existing instance cannot change its policy. Memory Saver exclusions alone do not
   // prevent background timer/renderer throttling of long-running orchestration tabs.
   // Firefox knows none of these Chromium switches; it gets the URL alone.
-  const args = selected === 'firefox' ? [...await firefoxProfileArgs(platform, env, options.prepareProfile), url] : [
+  const args = selected === 'firefox' ? [...await firefoxProfileArgs(platform, env, options.prepareProfile),
+    ...(options.backgroundStartup ? ['--new-window'] : []), url] : [
     ...isolatedChromiumArgs(platform, env, BUILD_CHANNEL, undefined, selected),
     ...(platform === 'win32' ? ['--disable-renderer-backgrounding', '--disable-background-timer-throttling'] : []),
-    ...(options.backgroundStartup ? [`--window-size=${bounds.width},${bounds.height}`] : []),
+    ...(options.backgroundStartup ? ['--new-window', `--window-size=${bounds.width},${bounds.height}`] : []),
     url
   ];
   let lastError: unknown = null;
@@ -382,7 +383,7 @@ export async function openInPreferredBrowser(
     try {
       // A windowless Chrome exits once extensions load unless the profile has a
       // persistent background app. Launch the marked helper itself so its tab
-      // owns browser lifetime; the extension adopts that same tab, never a second.
+      // owns browser lifetime and can receive its exact pending input in a separate window.
       const cwd = (platform === 'win32' ? path.win32 : path.posix).dirname(browser);
       if (options.backgroundStartup && platform === 'win32') {
         // Start-Process joins ArgumentList; supply one correctly quoted Windows

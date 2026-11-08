@@ -284,7 +284,7 @@ async function sessionDetail(id: string, params: URLSearchParams): Promise<Contr
 
 // ---------------------------------------------------------------- events
 
-export function projectEvent(event: SessionEvent): ControlApiEvent {
+export function projectEvent(event: SessionEvent, includeNativeMarkup = false): ControlApiEvent {
   const base: ControlApiEvent = {
     seq: event.seq,
     // Where the row sits in history. A revised message keeps its first position but carries its
@@ -318,8 +318,15 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
         images: event.assets?.length ?? 0
       };
     }
-    case 'assistant_message':
-      return { ...base, message: stored(event.message), messageId: event.messageId, final: event.final, state: event.state, resolvedModel: event.resolvedModel };
+    case 'assistant_message': {
+      const nativeId = event.providerMessageId ?? event.messageId;
+      const capture = event.renderedHtml;
+      const nativeMarkup = includeNativeMarkup && event.final && nativeId && capture && !capture.truncated &&
+        capture.text.length <= 256 * 1024 && /data-(?:dil-response|onecode-rich-message)/.test(capture.text)
+        ? { messageId: nativeId, capture: stored(capture, 256 * 1024) } : undefined;
+      return { ...base, message: stored(event.message), messageId: event.messageId, final: event.final,
+        state: event.state, resolvedModel: event.resolvedModel, ...(nativeMarkup ? { nativeMarkup } : {}) };
+    }
     case 'native_image':
     case 'native_video':
       return { ...base, previewStatus: event.previewStatus, providerStatus: event.providerStatus, messageId: event.messageId,
@@ -377,21 +384,22 @@ export function projectEvent(event: SessionEvent): ControlApiEvent {
 }
 
 /** One row that cannot be read must not take the rest of the page with it. */
-export function projectReadableEvent(event: SessionEvent): ControlApiEvent {
+export function projectReadableEvent(event: SessionEvent, includeNativeMarkup = false): ControlApiEvent {
   try {
-    return projectEvent(event);
+    return projectEvent(event, includeNativeMarkup);
   } catch {
     return { seq: event.seq, position: event.seq, time: event.time, kind: event.kind, source: event.source, unreadable: true };
   }
 }
 
 async function sessionEvents(id: string, params: URLSearchParams): Promise<ControlApiEvents> {
-  const query = parseQuery(params, {
+  const { rich, ...query } = parseQuery(params, {
     from: integer(0, 10_000_000).optional(),
     before: integer(1, 10_000_000).optional(),
     after: integer(0, 10_000_000).optional(),
     limit: integer(1, MAX_EVENTS).optional(),
-    kinds: csv(keysOf(EVENT_KINDS)).optional()
+    kinds: csv(keysOf(EVENT_KINDS)).optional(),
+    rich: z.literal('1').optional()
   });
   // `from` follows live revisions; `before` and `after` page through history. They are two
   // cursors over different orders, and mixing them would silently ignore one.
@@ -401,7 +409,7 @@ async function sessionEvents(id: string, params: URLSearchParams): Promise<Contr
   return heavy(async () => {
     const page = await readSessionEvents(id, { ...query, limit: query.limit ?? 50, byResidence: false });
     if (!page) throw new RequestError(404, 'session_not_found');
-    return { events: page.events.map(projectReadableEvent), total: page.total, nextFrom: page.nextFrom,
+    return { events: page.events.map(event => projectReadableEvent(event, rich === '1')), total: page.total, nextFrom: page.nextFrom,
       ...(page.nextBefore !== undefined ? { nextBefore: page.nextBefore } : {}) };
   });
 }
@@ -431,7 +439,7 @@ export function streamEvents(id: string, from: number, kinds: SessionEventKind[]
   return heavy(async () => {
     const page = await readSessionEvents(id, { from, limit: STREAM_PAGE, ...(kinds ? { kinds } : {}) });
     if (!page) throw new RequestError(404, 'session_not_found');
-    return { events: page.events.map(projectReadableEvent), total: page.total, nextFrom: page.nextFrom };
+    return { events: page.events.map(event => projectReadableEvent(event)), total: page.total, nextFrom: page.nextFrom };
   });
 }
 

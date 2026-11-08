@@ -201,3 +201,103 @@
 .agent-plan-step[data-status='in_progress'] .agent-plan-marker { border-color: var(--ink); color: var(--ink); }
 .agent-plan-step[data-status='completed'] .agent-plan-marker { color: var(--soft); border-color: transparent; }
 .agent-plan-details { padding: 0 14px 10px 32px; color: var(--faint); font-size: calc(12px * var(--text-scale, 1)); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.rich .native-content-card {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 12px;
+  padding: 12px;
+  margin-block: 12px;
+}
+
+.msg.rich .native-content-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.msg.rich .native-content-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.msg.rich .native-content-card input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  color: inherit;
+}
+
+.msg.rich .native-content-card input[type='text'] {
+  font: inherit;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.msg.rich .native-content-card output {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.2em;
+  font-weight: 650;
+}
+
+.msg.rich .native-content-card fieldset {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  min-width: 0;
+  padding: 8px 0 0;
+  margin: 12px 0;
+}
+
+.msg.rich .native-content-card legend {
+  font-weight: 600;
+  padding-inline-end: 8px;
+}
+
+.msg.rich .native-content-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.msg.rich .native-content-card button,
+.msg.rich button.native-content-original {
+  color: inherit;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 26%, transparent);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.msg.rich .native-content-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-block: 8px;
+}
+
+.msg.rich .native-content-bar span {
+  flex-basis: 0;
+}
+
+.msg.rich .native-content-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  gap: 4px 12px;
+}
+
+.msg.rich .native-content-legend li span {
+  display: inline-block;
+  width: 0.65em;
+  height: 0.65em;
+  margin-inline-end: 0.5em;
+  border-radius: 50%;
+}

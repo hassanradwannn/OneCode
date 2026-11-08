@@ -257,6 +257,7 @@ export type ControlApiEvent = {
   images?: number;
   /** `assistant_message`. */
   final?: boolean;
+  nativeMarkup?: { messageId: string; capture: ControlApiText };
   state?: string;
   resolvedModel?: string;
   /** `session_start`. */

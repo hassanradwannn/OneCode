@@ -314,7 +314,7 @@ function Workspace({ disconnect, initialBootstrap }: { disconnect(): void; initi
     const target = selected, before = nextBefore, node = pane.current, height = node?.scrollHeight ?? 0, top = node?.scrollTop ?? 0;
     following.current = false; setLoadingEarlier(true);
     try {
-      const page = await request<ControlApiEvents>(`sessions/${encodeURIComponent(target)}/events?before=${before}&limit=100`);
+      const page = await request<ControlApiEvents>(`sessions/${encodeURIComponent(target)}/events?before=${before}&limit=100&rich=1`);
       if (selectedRef.current !== target || earlierFlight.current !== flight) return;
       setEvents(rows => mergeHistory(rows, page.events)); setNextBefore(page.nextBefore ?? null);
       requestAnimationFrame(() => { if (pane.current && selectedRef.current === target) pane.current.scrollTop = top + pane.current.scrollHeight - height; });
@@ -345,7 +345,7 @@ function Workspace({ disconnect, initialBootstrap }: { disconnect(): void; initi
         <div className="transcript">{!selected && <div className="welcome"><h2>What are we working on?</h2><p>Start a task on {bootstrap.host}.</p></div>}
           {selected && loadingEarlier && <div className="history-loading" role="status">Loading earlier messages…</div>}
           {selected && earlierFailed && <button type="button" onClick={() => void loadEarlier(true)}>Retry earlier messages</button>}
-          {selected && <Transcript events={events} sessionId={selected} openRequestId={focusOpenId} />}
+          {selected && <Transcript events={events} sessionId={selected} conversationId={detail?.session.id === selected ? detail.session.conversationId : null} openRequestId={focusOpenId} />}
           {pendingMessages(optimistic, inputs, events, selected, composerKey).map(row => <article className="human optimistic" key={row.id}><div className="msg" dir="auto">{row.text}</div><small>{row.receipt?.delivery === 'sent' ? 'Sent ✓' : row.receipt?.delivery === 'not_sent' ? 'Not sent' : row.state === 'unconfirmed' || row.receipt?.delivery === 'unconfirmed' ? 'Delivery unconfirmed' : 'Sending…'}</small></article>)}
           {activeTurn && <div className="thinking" role="status"><span className="thinking-dot" />{events.some(event => event.turnId === activeTurn && ['assistant_message', 'tool_call'].includes(event.kind)) ? 'Working…' : 'Thinking…'}</div>}
         </div>

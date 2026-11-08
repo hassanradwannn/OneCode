@@ -8,6 +8,10 @@ See [browser conversations and local sessions](PROVIDER-SESSIONS.md) for native 
 
 Native capture, durable storage, history/live projection and renderer reconciliation are separate synchronization boundaries. An incomplete desktop view can coexist with a byte-identical native reply already saved in a canonical message shard. Trace exact message/question/turn identity through `extension/content.js`, `session/recorder.ts`, `store.ts`/`read-model.ts`, IPC/history cursor responses and `renderer/chat.ts` before choosing an owner to repair. Preserve authored origin separately from the latest revision sequence, including replies containing native writing/document envelopes; message presence alone is not display parity.
 
+Desktop and Remote share the renderer for portable answer controls. A complete native capture must identify the exact assistant message. OneCode extracts labelled fields, score ranges, chart values and declared copy payloads before sanitizing the markup and builds its own controls from those values. A provider action whose payload exists only inside the provider's UI opens the recorded chat on explicit user input. Native artifacts with exportable source use the separate sandboxed preview.
+
+External background startup requests a separate browser window. The Companion tracks window membership in browser session storage using the IDs of tabs it placed there. Automatic selection and restore check the live membership, and conversation URLs alone supply no window ownership. Explicit Open can still reveal a chat in the window where it already lives.
+
 ChatGPT's MAIN-world Fiber projection is intentionally bounded per scan, but that bound is not a history cutoff. The latest user/assistant boundary remains present on every scan for live ownership while a conversation-scoped cursor rotates the remaining slots through older mounted turn groups. The isolated recorder advances that cursor only after the reply still belongs to the same route and navigation epoch. A Companion/recorder revision change fences the helper pair so an already-open page cannot keep an older non-progressive importer after update.
 
 ## Data and control flow

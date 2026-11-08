@@ -432,6 +432,11 @@ var CLF_DOM = (() => {
   }, []);
   const messageNode = turn => turn.role === 'user' ? turn.node.querySelector('.query-text,[id^="user-query-content-"]') || turn.node :
     turn.node.querySelector('message-content') || turn.node.querySelector('.model-response-text .markdown,.markdown');
+  const richMessageNodes = message => {
+    if (message.role !== 'assistant' || !message.node?.isConnected || nativeId(message.node, 'assistant') !== message.id) return [];
+    const node = messageNode(message);
+    return node ? [node] : [];
+  };
   function messagesIn(turn, index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id) return [];
     const node = messageNode(turn), id = turn.id;
@@ -1978,7 +1983,7 @@ var CLF_DOM = (() => {
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
     conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt, recoveryTerminalReceipt,
-    nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts,
+    nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts, richMessageNodes,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,
     composerStack: () => { const box = composerBox(); return box?.parentElement ? { host: box.parentElement, before: box } : null; },

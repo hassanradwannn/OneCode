@@ -7,6 +7,8 @@ import { usageLimitResetText, usageLimitTitle } from '../shared/provider-usage-l
 import { hasProviderDirective, withoutProviderDirectives } from '../shared/content-reference.js';
 import { formatMessageContent, MESSAGE_TAGS, MESSAGE_DROP_TAGS, MAX_MESSAGE_MARKUP } from '../renderer/message-format.js';
 import { sanitizeHtmlTree } from '../renderer/sanitize-html.js';
+import { nativeMessageMarkup, stageNativeMessageContent } from '../renderer/native-message-content.js';
+import { chatProviderForStoredConversation, chatProviderConversationUrl, isBrowserChatProvider, isChatProviderConversationId } from '../shared/chat-provider.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '../renderer/math.js';
 import { renderAgentPlan } from '../renderer/agent-plan.js';
 import { RichPresentation } from './presentation.js';
@@ -17,7 +19,8 @@ import { request } from './api.js';
 async function copyText(value: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(value); return true; } catch { return false; }
 }
-export function Markdown({ text, sessionId, messageId }: { text: string; sessionId?: string | null; messageId?: string }) {
+export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl }: { text: string; sessionId?: string | null;
+  messageId?: string; nativeMarkup?: ControlApiEvent['nativeMarkup']; originalUrl?: string }) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const box = host.current; if (!box) return;
@@ -30,7 +33,13 @@ export function Markdown({ text, sessionId, messageId }: { text: string; session
       renderer: () => ''
     }] });
     const template = document.createElement('template');
-    template.innerHTML = parser.parse(separateDisplayMath(source), { async: false });
+    const native = nativeMessageMarkup(nativeMarkup?.capture, nativeMarkup?.messageId);
+    template.innerHTML = native ?? parser.parse(separateDisplayMath(source), { async: false });
+    const mountNative = stageNativeMessageContent(template.content, {
+      key: JSON.stringify([sessionId, messageId]),
+      copy: copyText,
+      ...(originalUrl ? { openOriginal: () => { window.open(originalUrl, '_blank', 'noopener,noreferrer'); } } : {})
+    }, native !== null);
     const languages = new WeakMap<Element, string>();
     for (const code of template.content.querySelectorAll('pre > code')) {
       const language = code.className.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1];
@@ -38,6 +47,7 @@ export function Markdown({ text, sessionId, messageId }: { text: string; session
     }
     sanitizeHtmlTree(template.content, { allowedTags: MESSAGE_TAGS, dropTags: MESSAGE_DROP_TAGS, preserveDirection: true,
       safeHref: value => { const href = value.trim(); return href.startsWith('#') || safeExternalLink(href) || safeProviderFileLink(href) ? href : null; } });
+    mountNative();
     box.replaceChildren(template.content);
     if (!box.textContent?.trim() && source) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
@@ -71,7 +81,7 @@ export function Markdown({ text, sessionId, messageId }: { text: string; session
       if (!sessionId || !messageId) { link.setAttribute('aria-disabled', 'true'); notice.textContent = 'This file’s recorded source is unavailable.'; }
     }
     return () => { disposed = true; abort.abort(); };
-  }, [text, sessionId, messageId]);
+  }, [text, sessionId, messageId, nativeMarkup, originalUrl]);
   return <div ref={host} className="msg rich" dir="auto" />;
 }
 export function CurrentPlan({ sessionId, plan }: { sessionId: string | null; plan?: AgentPlan | null }) {
@@ -99,7 +109,11 @@ function ToolGroup({ events }: { events: ControlApiEvent[] }) {
     </details>)}</div>
   </details>;
 }
-export function Transcript({ events, sessionId, openRequestId }: { events: ControlApiEvent[]; sessionId: string; openRequestId: string | null }) {
+export function Transcript({ events, sessionId, conversationId, openRequestId }: { events: ControlApiEvent[]; sessionId: string;
+  conversationId?: string | null; openRequestId: string | null }) {
+  const provider = chatProviderForStoredConversation(conversationId);
+  const originalUrl = provider && isBrowserChatProvider(provider) && isChatProviderConversationId(conversationId, provider)
+    ? chatProviderConversationUrl(provider, conversationId) : undefined;
   const ordered = chronological(events.map(event => ({ ...event, origin: event.position })));
   const rows: Array<ControlApiEvent | ControlApiEvent[]> = [];
   for (const event of ordered) {
@@ -113,14 +127,15 @@ export function Transcript({ events, sessionId, openRequestId }: { events: Contr
     if (Array.isArray(row)) return <ToolGroup key={`tools:${row[0]!.position}`} events={row} />;
     const rawText = row.message?.text ?? row.detail ?? '';
     const text = row.kind === 'assistant_message' && hasProviderDirective(rawText) ? withoutProviderDirectives(rawText) : rawText;
-    if (row.kind === 'assistant_message' && !text.trim()) return null;
+    if (row.kind === 'assistant_message' && !text.trim() && !row.nativeMarkup) return null;
     if (!row.presentation && ['progress', 'page_tool'].includes(row.kind)) return <div className="activity-row" key={row.position}><Icon name="check-circle" /><span>{text || row.label || 'Working'}</span></div>;
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
       {row.presentation || row.kind === 'native_image' || row.kind === 'native_video'
         ? <RichPresentation event={row} sessionId={sessionId} openRequestId={openRequestId} ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)} />
         : row.kind === 'user_message' ? <div className="msg" dir="auto">{text}</div> : <>
           {row.kind === 'chat_error' && row.usageLimit && <><strong>{usageLimitTitle(row.usageLimit)}</strong><p>{usageLimitResetText(row.usageLimit) ? `Reset reported: ${usageLimitResetText(row.usageLimit)}. Retry manually when access is available.` : 'The provider did not report a reset time. Retry manually when access is available.'}</p></>}
-          <Markdown text={text} sessionId={sessionId} messageId={row.kind === 'assistant_message' ? row.messageId : undefined} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
+          <Markdown text={text} sessionId={sessionId} messageId={row.kind === 'assistant_message' ? row.messageId : undefined}
+            nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
     </article>;
   })}</>;
 }
