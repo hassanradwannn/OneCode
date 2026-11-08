@@ -6,6 +6,7 @@ import { load as loadYaml } from 'js-yaml';
 import hotfixContract from '../resources/updater/hotfix-contract.cjs';
 
 const normalize = value => value.replace(/\\/g, '/').replace(/^\/+/, '');
+const compiledOutputs = new Set(['main', 'preload', 'renderer', 'remote']);
 const privatePath = /(?:^|\/)(?:\.env(?:\.[^/]*)?|secrets\.bin|[^/]*\.private\.(?:json|txt))$/i;
 const browserCredentialFile = /(?:^|\/)(?:Cookies(?:-journal)?|Login Data(?:-journal)?|Web Data(?:-journal)?|Local State)$/i;
 // Vendor modules legitimately contain source directories named cookies. Browser databases
@@ -27,6 +28,8 @@ export function assertWindowsPackageIsolation(resources) {
   for (const raw of listPackage(archive)) {
     const file = normalize(raw);
     if (!['node_modules', 'out', 'package.json'].includes(file.split('/')[0])) throw new Error(`Unapproved top-level app input: ${file}`);
+    if (file.startsWith('out/') && !compiledOutputs.has(file.split('/')[1]))
+      throw new Error(`Unapproved compiled output: ${file}`);
     const isDirectory = 'files' in statFile(archive, file.split('/').join(path.sep), false);
     if (isPrivate(file, isDirectory) || file.startsWith('out/') && /(?:\.map$|(?:^|\/)(?:test|fixtures|runtime|scratch|app-setup)(?:\/|$))/i.test(file))
       throw new Error(`Private/development file in packaged app: ${file}`);

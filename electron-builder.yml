@@ -17,7 +17,10 @@ directories:
 # Only built output + runtime dependencies ship. Native prebuilds are narrowed again in each
 # platform section so a package never carries another OS/CPU's executable payload.
 files:
-  - out/**
+  - out/main/**
+  - out/preload/**
+  - out/renderer/**
+  - out/remote/**
   - package.json
   - '!node_modules/@img/sharp-*/**/*'
   - '!node_modules/@img/sharp-libvips-*/**/*'
