@@ -307,3 +307,24 @@
 .markdown-code :is(.tok-typeName, .tok-className, .tok-namespace) { color: light-dark(#0369a1, #82aaff); }
 .markdown-code :is(.tok-propertyName, .tok-function) { color: light-dark(#9d174d, #f07178); }
 .markdown-code :is(.tok-operator, .tok-regexp) { color: light-dark(#475569, #89ddff); }
+.msg.rich .native-reply-images {
+  display: grid;
+  gap: 12px;
+  margin-block: 1em;
+}
+
+.msg.rich .native-reply-images.has-columns {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+}
+
+.msg.rich .native-reply-images figure { margin: 0; }
+.msg.rich .native-reply-images img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 12px;
+}
+.msg.rich .native-reply-images img[hidden] { display: none; }
+.msg.rich .native-reply-images figcaption { padding-top: 5px; }
+.msg.rich .native-reply-images figcaption p { margin: 0.2em 0 0; }

@@ -954,17 +954,12 @@ function chatHeldElsewhere(conversationId: string, browser: string | null): bool
 }
 
 /**
- * "Open in Gemini" for a chat this app knows, shown by the extension instead of the OS.
- *
- * The OS hands a URL to whichever browser window last had focus. On #882 (2026-10-04) that was a
- * second Chrome signed in to another Gemini account and without this extension, so the user got
- * "you don't have access to this conversation". A browser running the extension focuses the
- * chat's tab or opens it there. It goes to the browser already holding the chat, else to the
- * first one that asks. Extensions that predate this say nothing about it in their /status body
- * and are never handed one; the caller then opens the URL through the OS as before.
+ * Explicit Open hands the conversation to a Companion that can reveal it in the
+ * managed window. Older Companions can still report ordinary selection readiness.
  */
 const REVEAL_COLLECT_MS = 4_000;
 const revealBrowsers = new Map<string, number>();
+const managedRevealBrowsers = new Map<string, number>();
 const pendingReveals: Array<{ conversationId: string; settle: (shown: boolean) => void }> = [];
 
 /** Browsers whose extension can fetch a generated image's original for the image export (#889). */
@@ -983,16 +978,17 @@ function revealCapable(): boolean {
   return [...revealBrowsers.values()].some(at => now - at < OPENING_CUSTODY_MS);
 }
 
-/** Resolves true once a browser took the chat, false when the caller should open it itself. */
-export function revealChatInBrowser(conversationId: string): Promise<boolean> {
-  if (!browserWakeConnected() || !revealCapable()) return Promise.resolve(false);
+/** Resolves true when a managed Companion takes the exact reveal. */
+export function revealChatInBrowser(conversationId: string, waitForCompanion = false): Promise<boolean> {
+  const managed = [...managedRevealBrowsers.values()].some(at => Date.now() - at < OPENING_CUSTODY_MS);
+  if (!waitForCompanion && (!browserWakeConnected() || !managed)) return Promise.resolve(false);
   return new Promise(resolve => {
     const entry = { conversationId, settle: (shown: boolean) => { clearTimeout(timer); resolve(shown); } };
     const timer = setTimeout(() => {
       const index = pendingReveals.indexOf(entry);
       if (index >= 0) pendingReveals.splice(index, 1);
       resolve(false);
-    }, REVEAL_COLLECT_MS);
+    }, waitForCompanion ? 15_000 : REVEAL_COLLECT_MS);
     timer.unref?.();
     pendingReveals.push(entry);
     wakeBrowserWork();
@@ -2876,6 +2872,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (!originAllowed) return json(res, 403, { error: 'forbidden_origin' }, null);
 
+  if (route === '/browser-window' && req.method === 'GET') {
+    const { pendingBrowserWindowLaunch } = await import('./browser-startup.js');
+    const pending = pendingBrowserWindowLaunch(port);
+    if (!pending || new URL(pending).search !== url.search) return json(res, 404, { error: 'window_launch_unavailable' }, null);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+      'content-security-policy': "default-src 'none'; frame-ancestors 'none'", 'referrer-policy': 'no-referrer' });
+    res.end('<!doctype html><title>OneCode browser window</title><p>Waiting for the OneCode Companion.</p>');
+    return;
+  }
+
   // A forwarded WSL loopback port is not the browser's native host. Fence both
   // discovery-to-pair races and authenticated writes without changing credentials.
   const declaredPlatform = req.headers['x-extension-platform'];
@@ -3012,6 +3018,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // consume the browser's shared budget before failing origin/authentication.
   if (rateLimited()) return json(res, 429, { error: 'rate_limited' }, origin);
   if (noteBrowserSeen(req)) changed();
+  if (route === '/browser-window/claim' && req.method === 'POST') {
+    if (req.headers['x-extension-host'] !== 'browser') return json(res, 403, { error: 'external_browser_required' }, origin);
+    const body = await readBody(req) as { nonce?: unknown };
+    const { claimBrowserWindowLaunch } = await import('./browser-startup.js');
+    const launch = await claimBrowserWindowLaunch(port, body?.nonce);
+    return json(res, launch ? 200 : 409, launch ?? { error: 'window_launch_unavailable' }, origin);
+  }
   const cosLoginBrowser = req.headers['x-extension-host'] === 'cos' ? browserOf(req) : null;
   const cosLoginLease = cosLoginBrowser ? cosBrowserSignInLease(cosLoginBrowser) : null;
   const publishCosLogin = (signedIn: boolean | null, provider: ChatProvider): void => {
@@ -3312,10 +3325,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     let openConversations: string[] = [];
     let stalledConversations: string[] = [];
     let revealRequested = false;
+    let managedWindows = false;
     let imageExportRequested = false;
     let videoExportRequested = false;
     if (req.method === 'POST') {
-      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; canExportImages?: unknown; canExportVideos?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown; provider?: unknown };
+      const body = await readBody(req) as { openConversations?: unknown; stalledConversations?: unknown; updateHold?: unknown; canReveal?: unknown; managedWindows?: unknown; canExportImages?: unknown; canExportVideos?: unknown; chatGptSignedIn?: unknown; chatgptAccess?: unknown; provider?: unknown };
       if (!Array.isArray(body?.openConversations) || body.openConversations.length > 10_000 || body.openConversations.some(id => !conversationId(id))) {
         return json(res, 400, { error: 'invalid_open_conversations' }, origin);
       }
@@ -3327,6 +3341,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       stalledConversations = (body.stalledConversations ?? []) as string[];
       noteExtensionUpdateHold(body.updateHold);
       revealRequested = body.canReveal === true;
+      managedWindows = body.managedWindows === true;
       imageExportRequested = body.canExportImages === true;
       videoExportRequested = body.canExportVideos === true;
       if (req.headers['x-extension-host'] === 'browser' && externalExtension?.browserId !== undefined &&
@@ -3375,6 +3390,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (browser && req.method === 'POST') browserChats.set(browser, openSet);
     const canReveal = req.method === 'POST' && revealRequested;
     if (canReveal) revealBrowsers.set(browser ?? '', Date.now());
+    const managedReveal = canReveal && managedWindows && req.headers['x-extension-host'] !== 'cos';
+    if (managedReveal) managedRevealBrowsers.set(browser ?? '', Date.now());
+    const windowStartup = managedReveal && req.headers['x-extension-host'] === 'browser'
+      ? (await import('./browser-startup.js')).pendingBrowserWindowLaunch(port) : null;
     const follow = canReveal ? takeFollow(browser) : null;
     if (req.method === 'POST' && imageExportRequested) imageExportBrowsers.set(browser ?? '', Date.now());
     const pendingInputs = await pendingBrowserInputs();
@@ -3421,7 +3440,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         revival,
         revivals,
         placement: pendingBrowserPlacement(null, browser),
-        ...(canReveal ? { reveals: takeReveals(browser) } : {}),
+        ...(managedReveal ? { reveals: takeReveals(browser) } : {}),
+        ...(windowStartup ? { windowStartup } : {}),
         ...(follow ? { follow } : {}),
         selectedChats: await takeSelectedChatReadiness(browser),
         ...(req.method === 'POST' && imageExportRequested ? { imageExports: pendingImageExports() } : {}),
@@ -12641,6 +12661,7 @@ export function resetBridgeForTests(): void {
   browserSeenAt.clear();
   browserChats.clear();
   revealBrowsers.clear();
+  managedRevealBrowsers.clear();
   imageExportBrowsers.clear();
   for (const entry of pendingReveals.splice(0)) entry.settle(false);
   pendingFollow = null;

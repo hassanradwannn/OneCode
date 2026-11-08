@@ -3723,6 +3723,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
         actions: {
           key: JSON.stringify([owner, event.messageId ?? event.origin ?? event.seq]),
           copy: async value => !!await run(api.writeClipboard(value)),
+          ...(owner && event.messageId ? { loadImage: (url: string) => run(api.getReplyImage(owner, event.messageId!, url)) } : {}),
           ...(owner ? { openOriginal: () => void run(api.openSessionChat(owner)) } : {})
         }
       }));

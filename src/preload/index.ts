@@ -380,6 +380,7 @@ const api = {
     return () => ipcRenderer.removeListener('projectGit:changed', wrapped);
   },
   getSessionImage: (id: string, assetId: string) => call<string | null>('sessions:image', { id, assetId }),
+  getReplyImage: (id: string, messageId: string, url: string) => call<string | null>('sessions:replyImage', { id, messageId, url }),
   getImageStorage: () => call<ImageStorageInfo>('sessions:imageStorage'),
   clearImageStorage: (mode: ImageStorageClearMode) => call<ImageStorageClearResult>('sessions:clearImageStorage', { mode }),
     getSession: (id: string, options?: { from?: number; before?: number; after?: number; limit?: number }) =>

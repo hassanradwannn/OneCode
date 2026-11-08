@@ -45,6 +45,7 @@ import { validateInputImages } from './session/input-images.js';
 import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { approveFolder, applyWrittenFolderApproval } from './root-approval.js';
 import { recordedProviderFileLink } from './provider-file-links.js';
+import { recordedReplyImage } from './provider-reply-images.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -56,7 +57,7 @@ import { randomUUID } from 'node:crypto';
 import { retryGoalBrowserHelper } from './goal.js';
 import { requestBrowserPreferences } from './browser-preferences.js';
 import { sendDesktopInput, sendQueuedDesktopInputNow, cancelDesktopInput, retryQueuedInputBrowser } from './session/start-input.js';
-import { wakeBrowserUrl } from './browser-startup.js';
+import { openManagedConversation, wakeBrowserUrl } from './browser-startup.js';
 import { registerPluginIpc } from './plugins-ipc.js';
 import { deletePet, importPet, loadPetAsset, petLibraryState, setPetEnabled, setPetFavorite } from './pet-library.js';
 import { petOverlayControlState, refreshPetOverlayActivities, refreshPetOverlayAppearance, setPetOverlayVisible } from './pet-overlay.js';
@@ -130,7 +131,6 @@ import {
   sessionControlsFor, cancelAssistantRecovery, stopSessionTurn, setSessionAutomation, setSessionObjective, compactSession, resumeFromSavedSummary, cancelSessionCompaction,
   cancelWorkerCommands,
   chatUrl,
-  revealChatInBrowser,
   pendingCommands,
   onBridgeChange,
   startBridge,
@@ -725,7 +725,7 @@ function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>, deskto
   });
 }
 
-/** Shows a recorded chat's Gemini page: its open tab when there is one, else a new one. */
+/** Shows the recorded conversation in OneCode's managed browser. */
 export async function openSessionChat(id: string): Promise<void> {
   const summary = await getSession(id);
   const conversationId = summary?.conversationId;
@@ -734,15 +734,7 @@ export async function openSessionChat(id: string): Promise<void> {
   }
   if (chatProviderForConversation(conversationId) === 'openrouter')
     throw new Error('OpenRouter API chats live in OneCode; there is no provider browser page.');
-  // The selected browser owns this explicit action. In particular, a connected companion in
-  // Chrome/Edge must not override the user's choice to open the chat in the CoS browser.
-  if (getConfig().ui.chatBrowser === 'cos') {
-    await openInPreferredBrowser(chatUrl(conversationId), { reveal: true });
-    return;
-  }
-  // For an explicitly selected external browser, reveal its existing chat first; otherwise open
-  // the conversation in that same preferred browser (never the system default by accident).
-  if (!(await revealChatInBrowser(conversationId))) await openInPreferredBrowser(chatUrl(conversationId), { reveal: true });
+  await openManagedConversation(conversationId, chatUrl(conversationId));
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
@@ -1326,7 +1318,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   handle('nativeMedia:openProvider', async payload => {
     const { sessionId, messageId, assetId } = nativeMediaReference.parse(payload);
     const conversationId = await nativeMediaConversation(sessionId, messageId, assetId);
-    if (!await revealChatInBrowser(conversationId)) await openInPreferredBrowser(chatProviderConversationUrl(chatProviderForConversation(conversationId), conversationId), { reveal: true });
+    await openManagedConversation(conversationId, chatProviderConversationUrl(chatProviderForConversation(conversationId), conversationId));
     return true;
   });
   handle('nativeMedia:prepareVideo', async payload => {
@@ -1940,6 +1932,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     const { id } = sessionIdArg.parse(payload);
     await openSessionChat(id);
     return true;
+  });
+  handle('sessions:replyImage', async payload => {
+    const { id, messageId, url } = z.object({ id: z.string().uuid(), messageId: z.string().min(1).max(200),
+      url: z.string().max(2100) }).strict().parse(payload);
+    return recordedReplyImage(id, messageId, url);
   });
   handle('sessions:openFileLink', async payload => {
     const { id, messageId, href } = z.object({ id: z.string().uuid(), messageId: z.string().min(1).max(200), href: z.string().max(2100) }).strict().parse(payload);

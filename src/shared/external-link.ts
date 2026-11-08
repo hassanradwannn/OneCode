@@ -18,3 +18,8 @@ export function safeProviderFileLink(value: string): boolean {
     return !/[\\\u0000-\u001f\u007f]/.test(decoded) && decoded.split('/').every(part => Boolean(part) && part !== '.' && part !== '..');
   } catch { return false; }
 }
+
+/** Public image previews declared by the provider's captured answer. */
+export function safeRecordedReplyImage(value: string): boolean {
+  return /^https:\/\/images\.openai\.com\/static-rsc-\d{1,3}\/[A-Za-z0-9_-]{16,2000}(?:\?purpose=inline)?$/.test(value);
+}

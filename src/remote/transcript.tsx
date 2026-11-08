@@ -24,6 +24,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const box = host.current; if (!box) return;
+    const abort = new AbortController();
     const source = text.slice(0, MAX_MESSAGE_MARKUP), math: MathSlots = { formulas: [] };
     const parser = new Marked({ gfm: true, extensions: [...mathExtensions(math), {
       name: 'providerInlineReference', level: 'inline',
@@ -38,6 +39,8 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     const mountNative = stageNativeMessageContent(template.content, {
       key: JSON.stringify([sessionId, messageId]),
       copy: copyText,
+      ...(sessionId && messageId ? { loadImage: async (url: string) =>
+        (await request<{ image: string | null }>('reply-image', { sessionId, messageId, url }, abort.signal)).image } : {}),
       ...(originalUrl ? { openOriginal: () => { window.open(originalUrl, '_blank', 'noopener,noreferrer'); } } : {})
     }, native !== null);
     const languages = new WeakMap<Element, string>();
@@ -52,7 +55,6 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     if (!box.textContent?.trim() && source) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
     let disposed = false;
-    const abort = new AbortController();
     for (const link of box.querySelectorAll<HTMLAnchorElement>('a[href]')) {
       const href = link.getAttribute('href')!;
       if (safeExternalLink(href)) { link.target = '_blank'; link.rel = 'noopener noreferrer'; continue; }

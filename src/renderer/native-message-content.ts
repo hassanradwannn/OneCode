@@ -1,7 +1,9 @@
 import { MAX_MESSAGE_MARKUP } from './message-format.js';
+import { safeRecordedReplyImage } from '../shared/external-link.js';
 
 type Capture = { text: string; truncated: boolean };
-export type NativeMessageActions = { key: string; copy(value: string): Promise<boolean>; openOriginal?(): void };
+export type NativeMessageActions = { key: string; copy(value: string): Promise<boolean>; openOriginal?(): void;
+  loadImage?(url: string): Promise<string | null> };
 type Criterion = { label: string; max: number; values: number[] };
 type Scorecard = { names: string[]; labels: string[]; criteria: Criterion[] };
 type ScoreState = { names: string[]; scores: number[][] };
@@ -197,17 +199,103 @@ function weightsView(card: Element): HTMLElement | null {
   return box;
 }
 
+function replyImage(node: Element | null, caption: string[] = []) {
+  if (!node || node.closest('[hidden], [aria-hidden="true"]')) return null;
+  const url = node.getAttribute('src') ?? '';
+  return safeRecordedReplyImage(url) ? { url, alt: node.getAttribute('alt')?.slice(0, 300) ?? '', caption } : null;
+}
+
+function imageGrid(items: NonNullable<ReturnType<typeof replyImage>>[], options: NativeMessageActions) {
+  const view = document.createElement('div'), gallery = document.createElement('div');
+  gallery.className = items.length === 1 ? 'native-reply-images' : 'native-reply-images has-columns';
+  view.append(gallery);
+  const fallback = options.openOriginal ? action('Open original in provider', options.openOriginal) : null;
+  if (fallback) { fallback.className = 'native-content-original'; fallback.hidden = true; view.append(fallback); }
+  const load = items.map(item => {
+    const figure = document.createElement('figure'), image = document.createElement('img');
+    const status = document.createElement('span');
+    status.textContent = 'Loading image…';
+    image.alt = item.alt;
+    image.hidden = true;
+    figure.append(image, status);
+    if (item.caption.length) {
+      const caption = document.createElement('figcaption'), heading = document.createElement('strong');
+      heading.textContent = item.caption[0]!;
+      caption.append(heading);
+      for (const description of item.caption.slice(1)) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = description;
+        caption.append(paragraph);
+      }
+      figure.append(caption);
+    }
+    gallery.append(figure);
+    const unavailable = () => {
+      image.hidden = true;
+      status.hidden = false;
+      status.textContent = item.alt || 'Image unavailable';
+      if (fallback) fallback.hidden = false;
+    };
+    return () => void options.loadImage!(item.url).then(data => {
+      if (!data || !/^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(data)) return unavailable();
+      image.addEventListener('error', unavailable, { once: true });
+      image.src = data;
+      image.hidden = false;
+      status.hidden = true;
+    }).catch(unavailable);
+  });
+  return { view, load: () => load.forEach(start => start()) };
+}
+
 /** Extract typed values from inert markup. Mount only app-owned DOM after the caller sanitizes. */
 export function stageNativeMessageContent(fragment: DocumentFragment, options: NativeMessageActions, nativeCapture = false): () => void {
-  const cards: Array<{ slot: Element; view: HTMLElement }> = [];
-  const stage = (source: Element, view: HTMLElement) => {
+  const cards: Array<{ slot: Element; view: HTMLElement; load?: () => void }> = [];
+  const stage = (source: Element, view: HTMLElement, load?: () => void) => {
     const slot = document.createElement('div');
     source.replaceWith(slot);
-    cards.push({ slot, view });
+    cards.push({ slot, view, load });
   };
   const responses = nativeCapture ? [...fragment.querySelectorAll('[data-dil-response], [data-onecode-rich-message]')] : [];
   const visible = (node: Element) => !node.closest('[hidden], [aria-hidden="true"], script, style, pre, code, svg, template');
   for (const response of responses) {
+    if (options.loadImage) {
+      for (const grid of response.querySelectorAll('[data-d-component="grid"]')) {
+        if (grid.children.length < 2 || grid.children.length > 8 || !visible(grid) || !fragment.contains(grid)) continue;
+        const items = [...grid.children].map(column => {
+          if (!column.matches('[data-d-component="grid-item"]')) return null;
+          const sources = column.querySelectorAll('[data-d-component="image"] > img');
+          if (sources.length !== 1) return null;
+          const caption = [...column.children].slice(1).filter(node => node.tagName === 'P' && visible(node))
+            .map(node => node.textContent?.trim().slice(0, 3000) ?? '').filter(Boolean);
+          return replyImage(sources[0]!, caption);
+        });
+        if (items.every(item => item !== null)) {
+          const { view, load } = imageGrid(items, options);
+          stage(grid, view, load);
+        }
+      }
+      for (const frame of [...response.querySelectorAll('[data-d-component="image"]')].slice(0, 8)) {
+        const item = visible(frame) ? replyImage(frame.querySelector(':scope > img')) : null;
+        if (item) {
+          const { view, load } = imageGrid([item], options);
+          stage(frame, view, load);
+        }
+      }
+    }
+    for (const widget of response.querySelectorAll('[data-client-defined-widget="code_block"]')) {
+      if (!visible(widget)) continue;
+      const sources = widget.querySelectorAll('[data-code-block-source] > code');
+      const source = sources.length === 1 ? sources[0] : undefined;
+      if (!source?.textContent || source.closest('[hidden], [aria-hidden="true"]')) continue;
+      const pre = document.createElement('pre'), code = document.createElement('code');
+      const nativeLabel = label(widget.querySelector('[data-markdown-copy="exclude"]')).toLowerCase();
+      const language = source.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1] ??
+        (nativeLabel === 'plain text' ? 'text' : nativeLabel);
+      if (/^[a-z0-9_+#.-]{1,24}$/i.test(language)) code.className = `language-${language.toLowerCase()}`;
+      code.textContent = source.textContent;
+      pre.append(code);
+      widget.replaceWith(pre);
+    }
     for (const card of [...response.children]) {
       if (!visible(card)) continue;
       const view = weightsView(card);
@@ -226,27 +314,43 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
     }
   }
   for (const button of fragment.querySelectorAll(nativeCapture ? 'button[data-copy-text], [data-dil-response] button' : 'button[data-copy-text]')) {
-    if (!visible(button)) continue;
+    if (!visible(button) || button.closest('[data-code-block-controls], [data-markdown-copy="exclude"]')) continue;
     const title = label(button) || 'Copy';
     const payload = button.getAttribute('data-copy-text');
+    const row = button.parentElement, card = row?.parentElement;
+    const promptCard = /^copy prompt$/i.test(title) && row?.matches('[data-d-component="row"]') &&
+      row.children.length === 2 && row.lastElementChild === button &&
+      card?.matches('[data-d-component="box"]') && card.children.length === 2 &&
+      card.lastElementChild?.tagName === 'P';
+    let view: HTMLElement;
     if (payload?.trim() && payload.length <= 64_000) {
-      stage(button, copyButton(title, () => payload, options.copy));
-    } else if (button.closest('[data-dil-response]') && /^(?:copy\s|copy$)/i.test(title)) {
+      view = copyButton(title, () => payload, options.copy);
+    } else if (button.closest('[data-dil-response]') && label(button) &&
+        (button.matches('[data-d-component="button"]') && /^copy\s/i.test(title) || /^copy prompt$/i.test(title))) {
       const openLabel = /^copy prompt$/i.test(title) ? 'Open original prompt in provider' : 'Open original in provider';
-      const view = options.openOriginal ? action(openLabel, options.openOriginal) : document.createElement('span');
+      view = options.openOriginal ? action(openLabel, options.openOriginal) : document.createElement('span');
       if (!options.openOriginal) view.textContent = 'Available in the original provider chat';
       view.title = title;
       view.className = 'native-content-original';
+    } else continue;
+    if (promptCard && row && card) {
+      const box = panel(), heading = document.createElement('strong'), detail = document.createElement('p');
+      heading.textContent = label(row.firstElementChild);
+      detail.textContent = label(card.lastElementChild);
+      box.append(heading, detail, view);
+      stage(card, box);
+    } else {
       stage(button, view);
     }
   }
   for (const response of responses) {
-    if (!options.openOriginal || !response.querySelector('input, button, select, textarea, [role="slider"], iframe')) continue;
+    if (!options.openOriginal || ![...response.querySelectorAll('input, button, select, textarea, [role="slider"], iframe')]
+      .some(control => visible(control) && !control.closest('[data-code-block-controls], [data-markdown-copy="exclude"]'))) continue;
     const slot = document.createElement('div');
     response.append(slot);
     const view = action('Open interactive content in provider', options.openOriginal);
     view.className = 'native-content-original';
     cards.push({ slot, view });
   }
-  return () => { for (const { slot, view } of cards) slot.replaceWith(view); };
+  return () => { for (const { slot, view, load } of cards) { slot.replaceWith(view); load?.(); } };
 }
