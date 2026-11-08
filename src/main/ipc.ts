@@ -302,7 +302,7 @@ const settingsPatch = z.object({
     defaultModel: z.string().max(80).optional(),
     defaultModelAffinity: chatModelAffinity,
     defaultReasoning: z.enum(['', ...REASONING_EFFORTS]).optional(),
-    maxWorkers: z.number().int().min(1).max(8),
+    maxWorkers: z.number().int().min(0).max(8),
     globalMaxWorkers: z.number().int().min(0).max(64).optional(),
     allowUnattributedCalls: z.boolean(),
     strictChatAllowlist: z.boolean().optional(),
@@ -1342,7 +1342,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   const browserBounds = z.object({ x: z.number().finite().min(0).max(20000), y: z.number().finite().min(0).max(20000),
     width: z.number().finite().min(0).max(20000), height: z.number().finite().min(0).max(20000) }).strict();
   const browserSession = async (sessionId: string): Promise<void> => { if (!await getSession(sessionId)) throw new Error('Session was not found'); };
-  const workbenchPresentationEpoch = new Map<string, number>();
+  let workbenchPresentationEpoch = 0;
   handle('workbenchBrowser:state', async payload => {
     const { sessionId } = z.object({ sessionId: artifactSessionId }).strict().parse(payload); await browserSession(sessionId); return workbenchBrowser.state(sessionId);
   });
@@ -1373,14 +1373,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   });
   handle('workbenchBrowser:present', async payload => {
     const { sessionId, tabId, bounds, visible } = z.object({ sessionId: artifactSessionId, tabId: browserTabId, bounds: browserBounds, visible: z.boolean() }).strict().parse(payload);
-    const epoch = workbenchPresentationEpoch.get(sessionId) ?? 0;
+    const epoch = ++workbenchPresentationEpoch;
     await browserSession(sessionId);
-    if ((workbenchPresentationEpoch.get(sessionId) ?? 0) !== epoch) return workbenchBrowser.state(sessionId);
+    if (workbenchPresentationEpoch !== epoch) return workbenchBrowser.state(sessionId);
     return workbenchBrowser.present(sessionId, tabId, bounds, visible);
   });
   handle('workbenchBrowser:hide', async payload => {
     const { sessionId } = z.object({ sessionId: artifactSessionId.optional() }).strict().parse(payload);
-    if (sessionId) workbenchPresentationEpoch.set(sessionId, (workbenchPresentationEpoch.get(sessionId) ?? 0) + 1);
+    workbenchPresentationEpoch++;
     workbenchBrowser.hide(sessionId); return true;
   });
 

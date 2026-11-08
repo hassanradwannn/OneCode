@@ -757,6 +757,8 @@ export async function requestUpdateInstall(expectedVersion: string, mode: 'when-
   requestedVersion = expectedVersion;
   requestedMode = mode;
   installEpoch++;
+  if (installPoll) clearTimeout(installPoll);
+  installPoll = null;
   set({ installRequested: true, installMode: mode, busyReasons: [] });
   if (installCheck) await installCheck;
   await checkInstallIntent();
@@ -772,10 +774,20 @@ export async function requestBetaUpdateInstall(expectedRevision: string): Promis
     throw new Error('This Beta branch update is no longer current. Check for updates again.');
   requestedBetaRevision = expectedRevision;
   installEpoch++;
+  if (installPoll) clearTimeout(installPoll);
+  installPoll = null;
   set({ installRequested: true, busyReasons: [] });
   if (installCheck) await installCheck;
   await checkBetaInstallIntent();
   return runAfterInstall ? 'restarting' : 'waiting';
+}
+
+function deferBusyInstall(reasons: UpdateBusyReason[], check: () => Promise<void>): boolean {
+  set({ busyReasons: reasons });
+  if (!reasons.length) return false;
+  installPoll = setTimeout(() => { installPoll = null; void check(); }, 2000);
+  installPoll.unref();
+  return true;
 }
 
 function checkInstallIntent(): Promise<void> {
@@ -809,17 +821,18 @@ function checkInstallIntent(): Promise<void> {
       }
     }
     if (!current()) return;
-    set({ busyReasons: reasons });
-    if (reasons.length && mode !== 'now') {
-      installPoll = setTimeout(() => { installPoll = null; void checkInstallIntent(); }, 2000);
-      installPoll.unref(); return;
-    }
+    if (mode === 'now') set({ busyReasons: reasons });
+    else if (deferBusyInstall(reasons, checkInstallIntent)) return;
     try { await preflightUpdateShutdown?.(); }
     catch (error) {
       if (current()) { cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); }
       return;
     }
     if (!current()) return;
+    if (mode !== 'now') {
+      reasons = await busyProjection().catch((): UpdateBusyReason[] => ['unavailable']);
+      if (!current() || deferBusyInstall(reasons, checkInstallIntent)) return;
+    }
     if (markInstallOnQuit(version!)) {
       if (mode === 'now') logInfo(`update: explicit immediate install of ${version}; stopping app-owned work through shutdown`);
       quitForUpdate!();
@@ -852,17 +865,15 @@ function checkBetaInstallIntent(): Promise<void> {
       }
     }
     if (!current()) return;
-    set({ busyReasons: reasons });
-    if (reasons.length) {
-      installPoll = setTimeout(() => { installPoll = null; void checkBetaInstallIntent(); }, 2000);
-      installPoll.unref(); return;
-    }
+    if (deferBusyInstall(reasons, checkBetaInstallIntent)) return;
     try { await preflightUpdateShutdown?.(); }
     catch (error) {
       if (current()) { cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); }
       return;
     }
     if (!current()) return;
+    reasons = await busyProjection().catch((): UpdateBusyReason[] => ['unavailable']);
+    if (!current() || deferBusyInstall(reasons, checkBetaInstallIntent)) return;
     runAfterInstall = true;
     quitForUpdate!();
   })().finally(() => { if (installCheck === run) installCheck = null; });

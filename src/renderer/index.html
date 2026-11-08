@@ -1152,16 +1152,16 @@
                   <div class="setting">
                     <span class="setting-text">
                       <b id="maWorkersTitle">Sub-agent workers</b>
-                      <em>Needs the browser extension to be connected. This sets the most worker chats one run may open.</em>
+                      <em>Maximum workers running at once in one chat. Set 0 for automatic capacity up to 8. A value from 1 to 8 sets a hard limit.</em>
                     </span>
-                    <input id="maWorkers" aria-labelledby="maWorkersTitle" class="num" type="number" min="1" max="8" step="1" />
+                    <input id="maWorkers" aria-labelledby="maWorkersTitle" class="num" type="number" min="0" max="8" step="1" />
                     <span class="unit">max</span>
                   </div>
 
                   <div class="setting">
                     <span class="setting-text">
                       <b id="globalMaWorkersTitle">Workers across all chats</b>
-                      <em>The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.</em>
+                      <em>The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps its own limit.</em>
                     </span>
                     <input id="globalMaWorkers" aria-labelledby="globalMaWorkersTitle" class="num" type="number" min="0" max="64" step="1" />
                   </div>

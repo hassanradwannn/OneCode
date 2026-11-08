@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { ARTIFACT_KINDS } from '../../shared/artifact.js';
 import { chatProviderForStoredConversation } from '../../shared/chat-provider.js';
 import { artifactSummary, createArtifact, listArtifacts, patchArtifact, readArtifact } from '../artifacts/service.js';
+import { importWebBuild } from '../artifacts/import-web-build.js';
 import { requestArtifactOpen } from '../artifacts/events.js';
 import { beginPresentation, findPresentation, writePresentation } from '../artifacts/presentation.js';
 import { presentImage } from '../artifacts/present-image.js';
 import { presentVideo } from '../artifacts/present-video.js';
 import { findSessionByConversation, getSession } from '../session/store.js';
-import { currentCaller } from './call-context.js';
+import { currentCall, currentCaller } from './call-context.js';
 import { fail, failIdentity, type SurfaceRegistrar } from './kernel.js';
 import { mcpProvider } from './provider-context.js';
 import { toolDeclaration } from './tool-declarations.js';
@@ -30,6 +31,8 @@ const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('begin'), title: z.string().trim().min(1).max(200), kind: z.enum([...ARTIFACT_KINDS, 'html', 'image', 'video']) }).strict(),
   z.object({ action: z.literal('image'), presentation_id: artifactId, path: z.string().min(1).max(4096) }).strict(),
   z.object({ action: z.literal('video'), presentation_id: artifactId, path: z.string().min(1).max(4096) }).strict(),
+  z.object({ action: z.literal('import'), path: z.string().trim().min(1).max(4096),
+    title: z.string().trim().min(1).max(200).optional(), presentation_id: artifactId.optional() }).strict(),
   z.object({ action: z.literal('fail'), presentation_id: artifactId }).strict(),
   z.object({ action: z.literal('create'), title: z.string().min(1).max(200).optional(), kind: z.enum([...ARTIFACT_KINDS, 'html']).optional(),
     presentation_id: artifactId.optional(),
@@ -49,14 +52,14 @@ const actionSchema = z.discriminatedUnion('action', [
 // fields hidden solely inside a union; the original action validator still owns
 // required/forbidden arguments and runs before any handler mutation.
 const inputSchema = z.object({
-  action: z.enum(['begin', 'image', 'video', 'fail', 'create', 'read', 'patch', 'list', 'present', 'open']),
-  title: z.string().min(1).max(200).optional().describe('begin/create title; create may inherit from its exact pending presentation_id.'),
+  action: z.enum(['begin', 'image', 'video', 'fail', 'create', 'import', 'read', 'patch', 'list', 'present', 'open']),
+  title: z.string().min(1).max(200).optional().describe('begin/create/import title; create and import may inherit from their exact pending presentation_id.'),
   kind: z.enum([...ARTIFACT_KINDS, 'html', 'image', 'video']).optional().describe('web for interactive HTML; image/video are begin-only.'),
-  presentation_id: artifactId.optional().describe('create/image/video/fail: exact UUID from the successful begin result.'),
+  presentation_id: artifactId.optional().describe('create/import/image/video/fail: exact UUID from the successful begin result.'),
   artifact_id: artifactId.optional().describe('read/patch/present/open: exact artifact.id from create/list/read.'),
   files: z.array(artifactFile).min(1).max(128).optional().describe('create only: complete files, never a patch operation.'),
   entrypoint: z.string().min(1).max(1024).optional(),
-  path: z.string().min(1).max(4096).optional().describe('image/video: approved local file path; MP4/WebM videos up to 128 MiB.'),
+  path: z.string().min(1).max(4096).optional().describe('import: approved build directory containing index.html, such as /project/dist. image/video: approved local file path; MP4/WebM videos up to 128 MiB.'),
   revision: z.number().int().min(1).optional().describe('read/present/open: retained revision; omit for latest.'),
   expected_revision: z.number().int().min(1).optional().describe('patch requires the latest revision returned by read/create/patch.'),
   operations: z.array(patchOperation).max(128).optional().describe('patch only: [{op:"upsert",path,text}] or [{op:"delete",path}].')
@@ -89,6 +92,7 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
       'For interactive HTML, begin with title and kind="web", then create with its presentation_id, kind="web", entrypoint="index.html", files:[{path:"index.html",text:"complete HTML/CSS/JavaScript"}]. Legacy html means web. For locally generated photos or videos, begin with kind="image" or "video", then use that action, exact presentation_id and approved local path (PNG/JPEG/WebP; MP4/WebM up to 128 MiB). Media appears inline with playback in desktop and Remote. ' +
       'create can inherit title from its exact pending presentation_id. Keep the begin result and reuse its UUID verbatim. Check isError after every call; never claim an artifact was created after an error. Nested exec calls inherit routing: omit conversation_id/session_key. ' +
       'Ready artifacts and patched revisions appear inline at the latest reply. Use present to bring the same artifact back to the bottom of chat; use open only when the user requests the workbench side panel. Never recreate an artifact to show it again. Use fail if generation cannot finish. ' +
+      'Import a built site with action=import and path to its build directory (such as /project/dist). This reads the actual build directly, without copying file contents into tool arguments. It requires Read and Create. Bundle JS into a standalone file and inline binary assets. ' +
       'Interactive web previews need self-contained HTML, CSS and browser JavaScript with artifact-relative files. They have no Node, network or CDN access; compile JSX/TypeScript before supplying preview JavaScript. ' +
       'Artifact file paths are logical artifact-relative paths. Media actions read an approved completed local file, never a provider URL.',
     inputSchema,
@@ -113,6 +117,20 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
         if (!row || row.provider !== provider || row.status !== 'generating') return fail('No matching pending presentation');
         await writePresentation(session.id, { ...row, status: 'failed' }); return json({ action: 'fail' });
       });
+      if (input.action === 'import') return await reg.guarded('create', 'artifact', () => reg.guarded('read', 'artifact', async () => {
+        const pending = input.presentation_id ? (await findPresentation(session.id, input.presentation_id))?.presentation : null;
+        if (input.presentation_id && (!pending || pending.provider !== provider || pending.kind !== 'web' || pending.status !== 'generating'))
+          return fail('ARTIFACT_PRESENTATION_NOT_PENDING: use the exact pending web presentation_id from this session.');
+        const call = currentCall();
+        const snapshot = await importWebBuild({
+          directory: input.path, title: input.title ?? pending?.title, presentationId: input.presentation_id,
+          roots: reg.ctx.roots, sessionId: session.id, projectId: session.projectId ?? undefined,
+          origin: { provider, conversationId: session.conversationId ?? undefined, turnId: call?.localApiTurnId },
+          current: async () => (await ownedSession())?.id === session.id && (!call?.localApiCurrent || await call.localApiCurrent())
+        });
+        return snapshot ? json({ action: 'import', artifact: artifactSummary(snapshot.artifact), revision: snapshot.revision.revision })
+          : fail('ARTIFACT_BUILD_INVALID: No built files were imported.');
+      }));
       if (input.action === 'create') return reg.guarded('create', 'artifact', async () => {
         const pending = input.presentation_id ? (await findPresentation(session.id, input.presentation_id))?.presentation : null;
         if (input.presentation_id && (!pending || pending.provider !== provider || pending.status !== 'generating'))

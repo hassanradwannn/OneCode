@@ -39,7 +39,9 @@ type Thread = ApiThread;
 const stateName = (id: string): string => "or-" + id.replaceAll("-", "");
 const queues = new Map<string, Promise<void>>();
 let accepting = true;
+let checkingCompaction = 0;
 export async function flushApiInputs(): Promise<void> { await Promise.allSettled([...queues.values()]); }
+export function hasActiveApiWork(): boolean { return checkingCompaction > 0 || queues.size > 0 || controllers.size > 0; }
 export function resetApiRunnerForTests(): void { accepting = true; }
 
 function threadValid(value: unknown, sessionId: string, conversationId: string): value is Thread {
@@ -160,7 +162,11 @@ export async function steerApiInput(entry: InputEntry): Promise<void> {
 /** Manual compaction joins the same session queue. A live task consumes its
  * request only at the next safe boundary; an idle/failed chat needs no new Send. */
 export async function requestApiCompaction(sessionId: string, expectedConversation: string): Promise<void> {
-  if(!accepting || isChatBlocked(expectedConversation) || await conversationWasSuperseded(expectedConversation))throw new ApiError('API_TURN_NOT_CURRENT');
+  if (!accepting || isChatBlocked(expectedConversation)) throw new ApiError('API_TURN_NOT_CURRENT');
+  checkingCompaction++;
+  try {
+    if (await conversationWasSuperseded(expectedConversation) || !accepting) throw new ApiError('API_TURN_NOT_CURRENT');
+  } finally { checkingCompaction--; }
   const running=[...controllers.values()].find(item=>item.sessionId===sessionId);
   if(running){
     if(running.compactionOnly)return;
@@ -274,20 +280,16 @@ async function perform(entry: InputEntry): Promise<void> {
     turnId = (provider.id === "openrouter" ? "or-" : "api-") + randomUUID(); active.turnId = turnId;
     const turn: OwnedTurn = { provider: provider.id, sessionId: entry.sessionId, conversationId, inputId: entry.id,
       messageId, turnId, signal: controller.signal };
-    const preview = apiWebPreview();
-    const tools = apiTools(turn, entry.apiWorker ? undefined : preview.observe);
+    const preview = apiWebPreview(turn.sessionId);
+    const tools = apiTools(turn, preview.observe);
     let declarations = model.supportsTools ? tools.declarations : [];
     if (model.supportsTools && declarations.length === 0)
       throw new ApiError("CORE_TOOLS_UNAVAILABLE");
-    const reasoningEffort = entry.reasoningEffort;
-    const reasoning = reasoningEffort === 'minimal' || reasoningEffort === 'low' ||
-      reasoningEffort === 'medium' || reasoningEffort === 'high' || reasoningEffort === 'xhigh'
-      ? reasoningEffort : undefined;
-    if (reasoning && !model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort'))
-      throw new ApiError('MODEL_REASONING_UNAVAILABLE');
+    const reasoning = model.reasoningEfforts?.find(effort => effort === entry.reasoningEffort);
+    if (entry.reasoningEffort && !reasoning) throw new ApiError('MODEL_REASONING_UNAVAILABLE');
     let desiredOutput = 65_536, truncatedRounds = 0;
     const refusals = new ApiRefusalWatch();
-    const system = SYSTEM + "\nPresent interactive web deliverables in OneCode by default. Build and start the app with exec_command workdir set to the actual project folder. OneCode can present a successful Vite bundle as an inline artifact and show a verified running Vite server in the calling chat’s Workbench. For a standalone HTML deliverable, use artifact create with its actual self-contained source. For a server-backed site, use browser_tabs action=new with its exact loopback HTTP URL when needed. Use the returned Workbench tab for testing. Keep one live tab, and describe the presentation only when confirmed.\n" + provider.modelInstruction(model.id);
+    const system = SYSTEM + "\nPresent interactive web deliverables in OneCode by default. For a new independent project with no assigned directory, inspect the workspace and create an unused directory even when another project has the same name. Build and start the app with exec_command workdir set to that actual project folder. Keep the server as an owned background command and use its actual bound loopback URL from startup output. For an explicitly requested Vite port use --strictPort and report a collision before switching ports. Confirm the owned process is still running and verify a project-specific page marker or response from the files you just built. An HTTP 200 by itself cannot prove that your server started. For a server-backed site, use browser_tabs action=new with the verified URL and test the returned Workbench tab. If Workbench reports a port conflict, use a different port for this chat’s server. For an offline artifact, import the actual built bundle directly with artifact action=import. Do not read, transcribe, simplify, or rewrite the build to fit tool output. Describe the presentation only when confirmed.\n" + provider.modelInstruction(model.id);
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
@@ -550,7 +552,12 @@ async function perform(entry: InputEntry): Promise<void> {
         if(active.compactionRequested)await compactContext();
         await painting;
         await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, true));
-        if (!entry.apiWorker) await preview.present(turn, startedAt).catch(() => undefined);
+        if (!entry.apiWorker) await preview.present(turn, startedAt).catch(async (error: unknown) => {
+          if (!(error instanceof Error) || !error.message.startsWith('ARTIFACT_BUILD_UNSUPPORTED:') || !await currentApiTurn(turn)) return;
+          const text = error.message.slice('ARTIFACT_BUILD_UNSUPPORTED: '.length);
+          await appendEvent(turn.sessionId, { kind: 'progress', source: 'app', time: Date.now(), turnId: turn.turnId,
+            message: { text, chars: text.length, truncated: false } }).catch(() => undefined);
+        });
         await appendEvent(turn.sessionId, { kind: "turn_end", source: "app", time: Date.now(),
           turnId: turn.turnId, outcome: "completed" });
         await finishApiWorker(entry, displayed || resultContent || "Worker completed without a text report.");

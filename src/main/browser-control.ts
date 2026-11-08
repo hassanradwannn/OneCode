@@ -18,6 +18,7 @@ export interface InternalBrowserClient {
   enabled: boolean;
   execute(command: BrowserCommand, allowed: () => Promise<boolean>): Promise<BrowserResult>;
   presentLocal?(sessionId: string, url: string, allowed: () => Promise<boolean>): Promise<boolean>;
+  trackLocalPreview?(sessionId: string, url: string, isRunning: () => boolean): void;
 }
 const uuid = /^[a-f\d-]{36}$/i;
 const tabHandle = /^([a-f\d-]{36}):(\d+)$/i;
@@ -52,6 +53,10 @@ export class BrowserControlBroker {
     const url = localWorkbenchUrl(value);
     const workbench = [...this.internal.values()].find(client => client.enabled && client.presentLocal);
     return !!url && !!workbench?.presentLocal && await workbench.presentLocal(sessionId, url, allowed);
+  }
+
+  trackLocalPreview(sessionId: string, url: string, isRunning: () => boolean): void {
+    for (const client of this.internal.values()) client.trackLocalPreview?.(sessionId, url, isRunning);
   }
 
   poll(browserId: string, name: string, enabled: boolean): { epoch: string; requests: string[] } {

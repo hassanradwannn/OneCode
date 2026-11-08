@@ -3766,6 +3766,7 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 .power-track { --power-thumb: 28px; --power-at: calc(var(--power-thumb) / 2 + (100% - var(--power-thumb)) * var(--power-fraction, 0)); position: relative; height: 28px; margin: 0 0 8px; border-radius: var(--pill); background: linear-gradient(to right, var(--accent-fill, var(--accent)) var(--power-at), var(--control-selected) var(--power-at)); }
 .power-stop { position: absolute; top: 50%; left: calc(var(--power-thumb) / 2 + (100% - var(--power-thumb)) * var(--power-stop)); width: 4px; height: 4px; border-radius: 50%; background: var(--soft); transform: translate(-50%, -50%); pointer-events: none; }
 .power-single { width: 100%; justify-content: center; }
+.api-effort-select { width: 100%; }
 .effort-endpoints { display: flex; justify-content: space-between; color: var(--soft); font-size: calc(11px * var(--text-scale, 1)); }
 #composerPowerChoices input[type='range'] { position: absolute; inset: 0; appearance: none; width: 100%; height: 28px; border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; }
 #composerPowerChoices input[type='range']:disabled { cursor: default; }
@@ -4087,7 +4088,10 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 .workbench-browser-toolbar > .btn-icon { flex: 0 0 auto; width: 28px; height: 28px; padding: 6px; }
 .workbench-browser-address { min-width: 80px; flex: 1 1 auto; height: 30px; padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--sunk); color: var(--ink); font: inherit; font-size: calc(11px * var(--text-scale, 1)); }
 .workbench-browser-address:focus { outline: 1px solid var(--accent-edge); outline-offset: -1px; }
-.workbench-browser-tabs { min-width: 86px; max-width: 150px; height: 30px; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--card); color: var(--ink); font: inherit; font-size: calc(10px * var(--text-scale, 1)); }
+.workbench-browser-tabs { display: flex; flex: 0 0 auto; gap: 4px; padding: 4px 8px; overflow-x: auto; background: var(--card); border-bottom: 1px solid var(--line); }
+.workbench-browser-tabs[hidden] { display: none; }
+.workbench-browser-tabs > .btn { flex: 0 0 auto; display: block; max-width: 150px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11px * var(--text-scale, 1)); }
+.workbench-browser-tabs > [aria-selected="true"] { background: var(--accent-wash); color: var(--accent); }
 .workbench-browser-agent { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 4px 7px; border: 1px solid var(--accent-edge); border-radius: var(--pill); background: var(--accent-wash); color: var(--accent); font-size: calc(9px * var(--text-scale, 1)); font-weight: 650; white-space: nowrap; }
 .workbench-browser-agent[hidden] { display: none; }
 .workbench-browser-agent .ico { --ico: 12px; --glyph: 12px; }

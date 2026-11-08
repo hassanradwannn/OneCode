@@ -31,6 +31,7 @@ export function apiFailureDescription(error: unknown): string {
     INSUFFICIENT_CREDITS: 'The API account has insufficient credits.',
     FORBIDDEN: 'The provider refused this request or its account policy blocked it.',
     BAD_REQUEST: 'The provider rejected the request parameters.',
+    MODEL_REASONING_UNAVAILABLE: 'The selected model does not offer this reasoning effort. Choose an available effort for this chat.',
     MODEL_UNAVAILABLE: 'The selected model is unavailable.',
     MODEL_IMAGE_UNAVAILABLE: 'The selected model does not advertise vision. Choose an image-capable model for this chat.',
     MODEL_AUDIO_UNAVAILABLE: 'The selected model does not advertise audio input. Choose an audio-capable model for this chat.',

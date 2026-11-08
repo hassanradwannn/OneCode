@@ -291,13 +291,14 @@ export function createWorkspaceDocks(host: HTMLElement) {
     if (!current) return;
     current.menu.remove(); current.quick.remove(); launchers.delete(id);
   };
-  const addAction = (id: string, label: string, glyph: string, shortcut?: number): void => {
+  const addAction = (id: string, label: string, glyph: string, shortcut?: number, menuAction?: { label: string; run: () => void }): void => {
     removeAction(id);
-    const item = el('button', 'btn work-dock-menu-item', () => t(label)) as HTMLButtonElement;
+    const item = el('button', 'btn work-dock-menu-item', () => t(menuAction?.label ?? label)) as HTMLButtonElement;
     item.type = 'button'; item.dataset.surfaceId = id; item.dataset.view = id; item.prepend(icon(glyph));
     item.addEventListener('click', () => {
       add.open = false;
-      if (id === 'terminal') newRightTerminal(); else activateKey(id);
+      if (menuAction) menuAction.run();
+      else if (id === 'terminal') newRightTerminal(); else activateKey(id);
     }); menu.append(item);
     const quick = el('button', 'btn work-dock-quick') as HTMLButtonElement;
     quick.type = 'button'; quick.dataset.surfaceId = id; quick.dataset.view = id;
@@ -309,11 +310,11 @@ export function createWorkspaceDocks(host: HTMLElement) {
   };
   const registerSurface = (ref: WorkbenchSurfaceRef, show: (mount: HTMLElement) => void, hide: () => void,
     available: () => boolean, unavailableTitle?: () => string,
-    options: { launcher?: boolean; shortcut?: number } = {}): void => {
+    options: { launcher?: boolean; shortcut?: number; menuAction?: { label: string; run: () => void } } = {}): void => {
     if (!ref.id || ref.id.startsWith('terminal:')) throw new Error('Workbench surface id is reserved or empty');
     const existing = views.get(ref.id);
     views.set(ref.id, { ref, label: ref.title, glyph: ref.icon, show, hide, available, unavailableTitle });
-    if (options.launcher) addAction(ref.id, ref.title, ref.icon, options.shortcut);
+    if (options.launcher) addAction(ref.id, ref.title, ref.icon, options.shortcut, options.menuAction);
     else if (existing) removeAction(ref.id);
     if (!existing && restoreApplied && !layoutChangedSinceRestore && restoredLayout?.opened.includes(ref.id) && available()) {
       const desired = restoredLayout.opened.indexOf(ref.id);

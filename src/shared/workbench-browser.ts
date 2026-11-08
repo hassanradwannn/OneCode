@@ -7,6 +7,7 @@ export interface WorkbenchBrowserTab {
   canGoBack: boolean;
   canGoForward: boolean;
   modelControlled: boolean;
+  previewConflict?: true;
 }
 
 export interface WorkbenchBrowserState {
@@ -27,9 +28,29 @@ export function localWorkbenchUrl(value: string): string | null {
   if (!value || value.length > 2048 || /[\s\\]/.test(value)) return null;
   try {
     const url = new URL(value);
-    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
+    return url.protocol === 'http:' && workbenchLoopbackPort(url.href) !== null &&
       url.port && !url.username && !url.password ? url.href : null;
   } catch { return null; }
+}
+
+/** Local aliases can address the same listener even when the URL paths differ. */
+export function workbenchLoopbackPort(value: string): number | null {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol)) return null;
+    const host = url.hostname.replace(/\.$/, '');
+    if (host !== 'localhost' && !host.endsWith('.localhost') && host !== '[::1]' &&
+        !/^\[::ffff:7f[\da-f]{2}:[\da-f]{1,4}\]$/i.test(host) && !/^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host)) return null;
+    return Number(url.port || (['https:', 'wss:'].includes(url.protocol) ? 443 : 80));
+  } catch { return null; }
+}
+
+/** The human address bar accepts hostnames without a scheme. Tool URLs remain explicit. */
+export function workbenchAddress(value: string): string {
+  const address = value.trim();
+  if (/^(?:localhost\.?|127\.(?:\d{1,3}\.){2}\d{1,3}|\[::1\])(?=[:/?#]|$)/i.test(address)) return 'http://' + address;
+  if (/^(?:[\p{L}\d-]+\.)+[\p{L}\d-]+(?=[:/?#]|$)/iu.test(address)) return 'https://' + address;
+  return address;
 }
 
 /**

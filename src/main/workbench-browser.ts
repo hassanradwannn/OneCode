@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { app, session, WebContentsView, type BrowserWindow, type Rectangle, type Session } from 'electron';
 import { BROWSER_LIMITS, type BrowserCommand, type BrowserResult } from '../shared/browser-control.js';
-import { localWorkbenchUrl, workbenchBrowserContentBounds, type WorkbenchBrowserBounds, type WorkbenchBrowserState, type WorkbenchBrowserTab } from '../shared/workbench-browser.js';
+import { localWorkbenchUrl, workbenchAddress, workbenchBrowserContentBounds, workbenchLoopbackPort, type WorkbenchBrowserBounds, type WorkbenchBrowserState, type WorkbenchBrowserTab } from '../shared/workbench-browser.js';
 import { browserControl, type InternalBrowserClient } from './browser-control.js';
 import { readDurable, writeDurableSoon } from './durable.js';
 import { workbenchBrowserBoundedValue, workbenchBrowserPage } from './workbench-browser-page.js';
 import { getSession } from './session/store.js';
 
-const PARTITION = 'persist:onecode-workbench-browser';
 const BROWSER_NAME = 'OneCode Workbench';
 const SESSION_ID = /^[0-9a-z-]{8,64}$/i;
 const MAX_TABS = 24;
 const STATE_NAME = 'workbench-browser';
-interface BrowserRestoreState { version: 1; tabs: Array<{ sessionId: string; url: string; active: boolean }> }
+interface BrowserRestoreState { version: 1; tabs: Array<{ sessionId: string; url: string; active: boolean; managed?: boolean }> }
 
 interface BrowserConsoleRow { seq: number; pageId: string; level: string; message: string; url?: string; timestamp: number }
 interface BrowserNetworkRow { seq: number; requestId: string; pageId: string; url: string; method?: string; status?: number; mimeType?: string; failed?: string; finished?: boolean }
@@ -21,6 +20,7 @@ interface BrowserTab {
   id: number;
   sessionId: string;
   requestedUrl: string;
+  managed: boolean;
   presentedUrl?: string;
   view: WebContentsView;
   parent: BrowserWindow | null;
@@ -79,24 +79,35 @@ function keyEvent(chord: string): { key: string; code: string; windowsVirtualKey
 
 export class WorkbenchBrowserController {
   private readonly browserId = randomUUID();
-  private readonly ses: Session;
+  private readonly partitions = new Map<string, Session>();
+  private readonly previews = new Map<number, Array<{ sessionId: string; url: string; isRunning: () => boolean }>>();
   private readonly tabs = new Map<number, BrowserTab>();
   private readonly active = new Map<string, number>();
   private readonly listeners = new Set<(sessionId: string, reveal: boolean) => void>();
   private unregisterClient: (() => void) | null = null;
   private presentation: { sessionId: string; tabId: number; bounds: WorkbenchBrowserBounds; visible: boolean } | null = null;
-  private readonly restored = new Map<string, Array<{ url: string; active: boolean }>>();
+  private readonly restored = new Map<string, Array<{ url: string; active: boolean; managed?: boolean }>>();
   private readonly restorePromise: Promise<void>;
   private disposing = false;
 
   constructor(private readonly getWindow: () => BrowserWindow | null) {
-    this.ses = session.fromPartition(PARTITION);
-    this.ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    this.ses.setPermissionCheckHandler(() => false);
-    this.ses.on('will-download', event => event.preventDefault());
     this.restorePromise = this.restoreMetadata();
     this.ensureClient();
     app.once('before-quit', () => this.dispose());
+  }
+
+  private partition(sessionId: string): Session {
+    const current = this.partitions.get(sessionId);
+    if (current) return current;
+    const isolated = session.fromPartition(`persist:onecode-workbench-${sessionId}`);
+    isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    isolated.setPermissionCheckHandler(() => false);
+    isolated.on('will-download', event => event.preventDefault());
+    isolated.webRequest.onBeforeRequest((details, done) => {
+      done({ cancel: this.foreignPreviewPort(sessionId, details.url) !== null });
+    });
+    this.partitions.set(sessionId, isolated);
+    return isolated;
   }
 
   onChange(listener: (sessionId: string, reveal: boolean) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -106,7 +117,8 @@ export class WorkbenchBrowserController {
     if (this.unregisterClient || this.disposing) return;
     const client: InternalBrowserClient = { id: this.browserId, name: BROWSER_NAME, enabled: true,
       execute: (command, allowed) => this.execute(command, allowed),
-      presentLocal: (sessionId, url, allowed) => this.presentLocal(sessionId, url, allowed) };
+      presentLocal: (sessionId, url, allowed) => this.presentLocal(sessionId, url, allowed),
+      trackLocalPreview: (sessionId, url, isRunning) => this.trackLocalPreview(sessionId, url, isRunning) };
     this.unregisterClient = browserControl.registerInternalClient(client);
   }
 
@@ -121,39 +133,89 @@ export class WorkbenchBrowserController {
     const contents = tab.view.webContents;
     return { id: tab.id, sessionId: tab.sessionId, title: contents.getTitle() || contents.getURL() || 'New tab',
       url: contents.getURL() || 'about:blank', loading: contents.isLoading(), canGoBack: contents.navigationHistory.canGoBack(),
-      canGoForward: contents.navigationHistory.canGoForward(), modelControlled: tab.attached };
+      canGoForward: contents.navigationHistory.canGoForward(), modelControlled: tab.attached,
+      ...(this.previewConflict(tab) ? { previewConflict: true } : {}) };
+  }
+
+  private restoreSessionTabs(sessionId: string): void {
+    const entries = this.restored.get(sessionId);
+    if (!entries?.length) return;
+    this.restored.delete(sessionId);
+    for (const { url, active, managed } of entries.slice(0, MAX_TABS - this.tabs.size)) {
+      const destination = this.foreignPreviewPort(sessionId, url) === null ? url : 'about:blank';
+      this.createTab(sessionId, destination, active, managed);
+    }
   }
 
   async ensure(sessionId: string, url = 'about:blank'): Promise<WorkbenchBrowserState> {
     await this.restorePromise;
-    const current = this.state(sessionId);
-    if (!current.tabs.length) {
-      const restored = this.restored.get(sessionId); this.restored.delete(sessionId);
-      if (restored?.length) for (const entry of restored.slice(0, MAX_TABS)) this.createTab(sessionId, entry.url, entry.active);
-      else this.createTab(sessionId, url, true);
-    }
+    this.restoreSessionTabs(sessionId);
+    if (!this.active.has(sessionId)) this.createTab(sessionId, url, true);
     return this.state(sessionId);
   }
 
-  newTab(sessionId: string, url = 'about:blank'): WorkbenchBrowserState { this.createTab(sessionId, url, true); return this.state(sessionId); }
+  async newTab(sessionId: string, url = 'about:blank'): Promise<WorkbenchBrowserState> {
+    await this.restorePromise;
+    this.restoreSessionTabs(sessionId);
+    this.createTab(sessionId, url, true);
+    return this.state(sessionId);
+  }
 
   private findLocalTab(sessionId: string, url: string): BrowserTab | undefined {
     return [...this.tabs.values()].find(tab => tab.sessionId === sessionId &&
-      (tab.view.webContents.getURL() === url || tab.requestedUrl === url));
+      tab.requestedUrl === url);
   }
 
   private async presentLocal(sessionId: string, url: string, allowed: () => Promise<boolean>): Promise<boolean> {
     await this.restorePromise;
-    if (!await allowed() || this.disposing) return false;
-    const tab = this.findLocalTab(sessionId, url) ?? this.createTab(sessionId, url, true);
+    if (!await allowed() || this.disposing || this.foreignPreviewPort(sessionId, url) !== null) return false;
+    this.restoreSessionTabs(sessionId);
+    const tab = this.findLocalTab(sessionId, url) ?? this.createTab(sessionId, url, true, true);
+    tab.managed = true;
+    this.persistMetadata();
     this.reveal(tab, url);
     return true;
+  }
+
+  private trackLocalPreview(sessionId: string, url: string, isRunning: () => boolean): void {
+    const port = workbenchLoopbackPort(url);
+    if (port === null) return;
+    for (const [key, rows] of this.previews) {
+      const live = rows.filter(row => row.isRunning());
+      if (live.length) this.previews.set(key, live); else this.previews.delete(key);
+    }
+    const entries = this.previews.get(port) ?? [];
+    this.previews.set(port, [...entries, { sessionId, url, isRunning }]);
+    this.syncPresentation();
+    for (const tab of this.tabs.values()) {
+      if (workbenchLoopbackPort(tab.requestedUrl) === port) this.notify(tab.sessionId);
+    }
+  }
+
+  private foreignPreviewPort(sessionId: string, url: string): number | null {
+    const port = workbenchLoopbackPort(url);
+    if (port === null) return null;
+    const terminal = this.previews.get(port)?.some(row => row.sessionId !== sessionId && row.isRunning());
+    const tab = [...this.tabs.values()].some(row => row.managed && row.sessionId !== sessionId &&
+      (workbenchLoopbackPort(row.requestedUrl) === port || workbenchLoopbackPort(row.view.webContents.getURL()) === port));
+    return terminal || tab ? port : null;
+  }
+
+  private previewConflict(tab: BrowserTab): boolean {
+    return this.foreignPreviewPort(tab.sessionId, tab.requestedUrl) !== null ||
+      this.foreignPreviewPort(tab.sessionId, tab.view.webContents.getURL()) !== null;
+  }
+
+  private requireOwnPreview(sessionId: string, url: string): void {
+    const port = this.foreignPreviewPort(sessionId, url);
+    if (port !== null) throw new Error(`BROWSER_PREVIEW_PORT_IN_USE: Port ${port} is in use by another chat’s preview. Use the actual URL of this chat’s own server on a different port.`);
   }
 
   private reveal(tab: BrowserTab, url: string, repeat = false): void {
     if (!repeat && tab.presentedUrl === url) return;
     tab.presentedUrl = url;
     this.active.set(tab.sessionId, tab.id);
+    this.syncPresentation();
     this.notify(tab.sessionId, true);
   }
 
@@ -166,12 +228,20 @@ export class WorkbenchBrowserController {
   }
 
   navigate(sessionId: string, tabId: number, value: string): WorkbenchBrowserState {
-    const tab = this.requireTab(sessionId, tabId); const url = safeUrl(value); tab.requestedUrl = url;
+    const tab = this.requireTab(sessionId, tabId); const url = safeUrl(workbenchAddress(value));
+    this.requireOwnPreview(sessionId, url);
+    tab.requestedUrl = url;
     void tab.view.webContents.loadURL(url).catch(() => undefined); return this.state(sessionId);
   }
 
   history(sessionId: string, tabId: number, action: 'back' | 'forward' | 'reload' | 'stop'): WorkbenchBrowserState {
     const tab = this.requireTab(sessionId, tabId), contents = tab.view.webContents;
+    if (action !== 'stop') {
+      const navigation = contents.navigationHistory;
+      const index = navigation.getActiveIndex() + (action === 'back' ? -1 : action === 'forward' ? 1 : 0);
+      const url = navigation.getEntryAtIndex(index)?.url;
+      if (url) this.requireOwnPreview(sessionId, url);
+    }
     if (action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
     else if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     else if (action === 'reload') contents.reload();
@@ -180,7 +250,8 @@ export class WorkbenchBrowserController {
   }
 
   present(sessionId: string, tabId: number, bounds: WorkbenchBrowserBounds, visible: boolean): WorkbenchBrowserState {
-    const tab = this.requireTab(sessionId, tabId); this.active.set(sessionId, tab.id);
+    this.requireTab(sessionId, tabId);
+    if (this.active.get(sessionId) !== tabId) return this.state(sessionId);
     this.presentation = { sessionId, tabId, bounds, visible }; this.syncPresentation(); return this.state(sessionId);
   }
 
@@ -195,18 +266,27 @@ export class WorkbenchBrowserController {
     this.unregisterClient?.(); this.unregisterClient = null; this.listeners.clear();
   }
 
-  private createTab(sessionId: string, requested: string, activate: boolean): BrowserTab {
+  private createTab(sessionId: string, requested: string, activate: boolean, managed = false): BrowserTab {
     if (!SESSION_ID.test(sessionId)) throw new Error('Invalid session id');
     if (this.tabs.size >= MAX_TABS) throw new Error('Workbench browser tab limit reached');
     const url = safeUrl(requested);
-    const view = new WebContentsView({ webPreferences: { session: this.ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
+    this.requireOwnPreview(sessionId, url);
+    const view = new WebContentsView({ webPreferences: { session: this.partition(sessionId), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     view.setVisible(false); view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    const tab: BrowserTab = { id: view.webContents.id, sessionId, requestedUrl: url, view, parent: null, pageId: randomUUID(), frameId: null, contextId: null, attached: false,
+    const tab: BrowserTab = { id: view.webContents.id, sessionId, requestedUrl: url, managed, view, parent: null, pageId: randomUUID(), frameId: null, contextId: null, attached: false,
       seq: 0, console: [], network: new Map(), screenshot: null, dialog: null };
     this.tabs.set(tab.id, tab); if (activate || !this.active.has(sessionId)) this.active.set(sessionId, tab.id);
-    view.webContents.on('will-navigate', (event, next) => { try { safeUrl(next); } catch { event.preventDefault(); } });
+    const checkNavigation = (event: { preventDefault(): void }, next: string) => {
+      try {
+        const target = safeUrl(next);
+        this.requireOwnPreview(sessionId, target);
+        tab.requestedUrl = target;
+      } catch { event.preventDefault(); }
+    };
+    view.webContents.on('will-navigate', checkNavigation);
+    view.webContents.on('will-redirect', (event, next, _same, main) => { if (main) checkNavigation(event, next); });
     view.webContents.on('did-start-loading', () => this.notify(sessionId));
-    view.webContents.on('did-stop-loading', () => { this.persistMetadata(); this.notify(sessionId); });
+    view.webContents.on('did-stop-loading', () => { this.persistMetadata(); this.syncPresentation(); this.notify(sessionId); });
     view.webContents.on('did-navigate', (_event, url) => { tab.requestedUrl = url; });
     view.webContents.on('did-fail-load', (_event, _code, _reason, url, main) => {
       if (main && tab.requestedUrl === url) tab.requestedUrl = view.webContents.getURL();
@@ -248,7 +328,7 @@ export class WorkbenchBrowserController {
     const presentation = this.presentation, window = this.getWindow();
     for (const tab of this.tabs.values()) {
       this.attachParent(tab);
-      const visible = !!presentation?.visible && presentation.tabId === tab.id && presentation.sessionId === tab.sessionId && !!window && !window.isDestroyed();
+      const visible = !!presentation?.visible && presentation.tabId === tab.id && presentation.sessionId === tab.sessionId && this.active.get(tab.sessionId) === tab.id && !!window && !window.isDestroyed() && !this.previewConflict(tab);
       if (visible && window) tab.view.setBounds(boundedRect(presentation!.bounds, window));
       tab.view.setVisible(visible);
     }
@@ -263,7 +343,7 @@ export class WorkbenchBrowserController {
       if (!entry || !SESSION_ID.test(entry.sessionId) || typeof entry.url !== 'string' || typeof entry.active !== 'boolean') continue;
       try { safeUrl(entry.url); } catch { continue; }
       if (!await getSession(entry.sessionId)) continue;
-      const rows = this.restored.get(entry.sessionId) ?? []; rows.push({ url: entry.url, active: entry.active }); this.restored.set(entry.sessionId, rows);
+      const rows = this.restored.get(entry.sessionId) ?? []; rows.push({ url: entry.url, active: entry.active, managed: entry.managed === true }); this.restored.set(entry.sessionId, rows);
     }
   }
 
@@ -272,11 +352,11 @@ export class WorkbenchBrowserController {
     const liveSessions = new Set([...this.tabs.values()].map(tab => tab.sessionId));
     const tabs: BrowserRestoreState['tabs'] = [];
     for (const [sessionId, entries] of this.restored) if (!liveSessions.has(sessionId)) {
-      for (const entry of entries) tabs.push({ sessionId, url: entry.url, active: entry.active });
+      for (const entry of entries) tabs.push({ sessionId, url: entry.url, active: entry.active, managed: entry.managed });
     }
     for (const tab of this.tabs.values()) {
       const raw = tab.view.webContents.getURL() || 'about:blank'; let url: string; try { url = safeUrl(raw); } catch { continue; }
-      tabs.push({ sessionId: tab.sessionId, url, active: this.active.get(tab.sessionId) === tab.id });
+      tabs.push({ sessionId: tab.sessionId, url, active: this.active.get(tab.sessionId) === tab.id, managed: tab.managed });
     }
     writeDurableSoon(STATE_NAME, { version: 1, tabs: tabs.slice(0, MAX_TABS) } satisfies BrowserRestoreState);
   }
@@ -301,6 +381,8 @@ export class WorkbenchBrowserController {
 
   private async attach(tab: BrowserTab, command: BrowserCommand, allowed: () => Promise<boolean>): Promise<void> {
     await this.authorize(command, allowed);
+    this.requireOwnPreview(tab.sessionId, tab.requestedUrl);
+    tab.managed = true;
     if (!tab.attached) {
       if (tab.view.webContents.debugger.isAttached()) throw new Error('BROWSER_TAB_OWNED: another debugger owns this Workbench tab.');
       tab.view.webContents.debugger.attach('1.3'); tab.attached = true;
@@ -460,25 +542,41 @@ export class WorkbenchBrowserController {
         if (args.action === 'list') return this.listTabs(command);
         const sessionId = ownerSession(command); if (!sessionId) throw new Error('BROWSER_IDENTITY_REQUIRED');
         if (args.action === 'new') {
+          await this.restorePromise;
           await this.authorize(command, allowed);
+          this.restoreSessionTabs(sessionId);
           const url = safeUrl(String(args.url ?? 'about:blank'));
+          this.requireOwnPreview(sessionId, url);
           const existing = localWorkbenchUrl(url) ? this.findLocalTab(sessionId, url) : undefined;
-          const tab = existing ?? this.createTab(sessionId, url, true);
+          const tab = existing ?? this.createTab(sessionId, url, true, true);
+          tab.managed = true;
+          this.persistMetadata();
           this.reveal(tab, url, true);
           let attachError: string | undefined;
           try { await this.attach(tab, command, allowed); }
           catch (error) { attachError = error instanceof Error ? error.message.slice(0, 1500) : 'Browser attach failed'; }
           return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL() || url,
             title: tab.view.webContents.getTitle(), attached: tab.attached, created: !existing, presentationRequested: true,
+            ...(localWorkbenchUrl(url) && !this.previews.get(workbenchLoopbackPort(url)!)?.some(row => row.sessionId === sessionId && row.url === url && row.isRunning())
+              ? { previewOwnership: 'Unverified listener. Confirm this exact URL against your running command’s startup output and a project-specific marker before using its response as evidence.' } : {}),
             ...(!existing ? { navigationRequested: url } : {}), ...(attachError ? { attachError } : {}) } };
         }
         const tab = this.modelTab(command, false);
-        if (args.action === 'attach') { await this.attach(tab, command, allowed); return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle(), attached: true } }; }
+        if (args.action === 'attach') {
+          this.requireOwnPreview(tab.sessionId, tab.requestedUrl);
+          this.requireOwnPreview(tab.sessionId, tab.view.webContents.getURL());
+          await this.attach(tab, command, allowed);
+          tab.managed = true; this.persistMetadata();
+          return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle(), attached: true } }; }
         if (args.action === 'release') { if (!tab.attached) throw new Error('BROWSER_TAB_NOT_OWNED'); await this.release(tab); return { value: { tabId: `${this.browserId}:${tab.id}`, released: true } }; }
         if (args.action === 'close') { if (!tab.attached) throw new Error('BROWSER_TAB_NOT_OWNED'); await this.authorize(command, allowed); this.destroyTab(tab); return { value: { tabId: `${this.browserId}:${tab.id}`, closed: true } }; }
         throw new Error('BROWSER_TABS_ACTION_UNKNOWN');
       }
       const tab = this.modelTab(command);
+      if (tool !== 'browser_navigate') {
+        this.requireOwnPreview(tab.sessionId, tab.requestedUrl);
+        this.requireOwnPreview(tab.sessionId, tab.view.webContents.getURL());
+      }
       if (tool === 'browser_snapshot') return this.snapshot(tab, args);
       if (tool === 'browser_screenshot') return this.screenshot(tab, args, command);
       if (tool === 'browser_action') return this.action(tab, args, command, allowed);
@@ -493,15 +591,27 @@ export class WorkbenchBrowserController {
         await this.authorize(command, allowed);
         if (args.action === 'url') {
           const url = safeUrl(String(args.url ?? ''));
-          const result = await this.send(tab, 'Page.navigate', { url });
-          if (result.errorText) throw new Error(`BROWSER_NAVIGATION_FAILED: ${String(result.errorText)}`);
+          this.requireOwnPreview(tab.sessionId, url);
+          const prior = tab.requestedUrl;
           tab.requestedUrl = url;
+          try {
+            const result = await this.send(tab, 'Page.navigate', { url });
+            if (result.errorText) throw new Error(`BROWSER_NAVIGATION_FAILED: ${String(result.errorText)}`);
+          } catch (error) {
+            if (tab.requestedUrl === url) tab.requestedUrl = prior;
+            throw error;
+          }
           if (localWorkbenchUrl(url) && await allowed()) this.reveal(tab, url);
         }
-        else if (args.action === 'reload') await this.send(tab, 'Page.reload');
+        else if (args.action === 'reload') {
+          this.requireOwnPreview(tab.sessionId, tab.view.webContents.getURL());
+          await this.send(tab, 'Page.reload');
+        }
         else {
           const history = await this.send(tab, 'Page.getNavigationHistory'); const delta = args.action === 'back' ? -1 : 1; const next = history.entries?.[history.currentIndex + delta];
-          if (!next) throw new Error('BROWSER_HISTORY_EMPTY'); await this.send(tab, 'Page.navigateToHistoryEntry', { entryId: next.id });
+          if (!next) throw new Error('BROWSER_HISTORY_EMPTY');
+          this.requireOwnPreview(tab.sessionId, next.url);
+          await this.send(tab, 'Page.navigateToHistoryEntry', { entryId: next.id });
         }
         this.invalidate(tab); return { value: { tabId: `${this.browserId}:${tab.id}`, accepted: true, message: 'Navigation requested. Snapshot again when the destination loads.' } };
       }

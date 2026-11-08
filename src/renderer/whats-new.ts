@@ -61,11 +61,12 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.6': {
-    lead: () => t('Recover API output limits and keep terminal work moving.'),
+    lead: () => t('Browse in each chat and import the web app you built.'),
     highlights: [
-      { icon: 'i-retry', title: () => t('Continue at output limits'), text: () => t('Use the selected model’s output capacity and automatically continue from saved work when a response reaches its limit.') },
-      { icon: 'i-terminal', title: () => t('Collect completed command results'), text: () => t('Restore command access after old results are delivered. Preserve output pages, session ownership and interrupted deliveries.') },
-      { icon: 'i-chat', title: () => t('Clearer stalled-task recovery'), text: () => t('Avoid repeated blocked probes and use existing process controls for an owned hung test. Empty model responses no longer count as completed work.') }
+      { icon: 'i-browser', title: () => t('Workbench browser tabs'), text: () => t('Open and select browser tabs in the owning chat. Local previews guard against ports reserved by another chat.') },
+      { icon: 'i-file', title: () => t('Import web builds directly'), text: () => t('Show supported builds as offline artifacts without copying the bundle through chat.') },
+      { icon: 'i-steps', title: () => t('Model effort and parallel workers'), text: () => t('Choose reasoning levels reported by OpenRouter. Automatic worker capacity lets a chat start more workers together.') },
+      { icon: 'i-retry', title: () => t('Wait for API work to finish'), text: () => t('Install when done waits for API turns, retries and manual compaction before restarting.') }
     ]
   },
   '0.9.5': {

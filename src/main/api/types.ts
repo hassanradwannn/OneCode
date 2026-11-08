@@ -1,6 +1,9 @@
 /** Transport-neutral model, message, tool and completion contracts for the local API harness. */
 import type { ApiInputModality } from '../../shared/chat-models.js';
 
+export const API_REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ApiReasoningEffort = (typeof API_REASONING_EFFORTS)[number];
+
 export type ApiModel = {
   id: string;
   name: string;
@@ -10,7 +13,7 @@ export type ApiModel = {
   inputModalities?: ApiInputModality[];
   supportedParameters: string[];
   reasoningMandatory?: boolean;
-  reasoningEfforts?: string[];
+  reasoningEfforts?: ApiReasoningEffort[];
   pricing: { prompt: string; completion: string };
 };
 export type ApiTool = { type: "function"; function: { name: string; description: string; parameters: object } };
@@ -43,7 +46,7 @@ export type ApiCompleteOptions = {
   inputModalities?: ApiInputModality[];
   tools?: ApiTool[];
   maxCompletionTokens?: number;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort?: ApiReasoningEffort;
   signal?: AbortSignal;
   onText?: (increment: string) => void;
   /** A streamed function name is preparation evidence only, never execution authority. */

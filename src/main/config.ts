@@ -175,11 +175,10 @@ const DEFAULT_GOAL: GoalSettings = {
   objectivePrompt: DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT,
   loopPrompt: DEFAULT_GOAL_LOOP_SYSTEM_PROMPT
 };
-// Retain the reference's conservative two-worker cap. Gemini's actual concurrency
-// allowance belongs to the signed-in account and is not inferred from that default.
 const DEFAULT_MULTI_AGENT: MultiAgentSettings = {
   enabled: false,
-  maxWorkers: 2,
+  // Zero admits the requested batch up to the broker limit. Preserve saved numeric ceilings.
+  maxWorkers: 0,
   // Preserve the historical behavior unless the user explicitly opts into a cap shared by
   // independent prime families. Existing per-family maxWorkers remains authoritative too.
   globalMaxWorkers: 0,
@@ -439,7 +438,7 @@ const configSchema = z.object({
     defaultModel: z.string().max(80).optional(),
     defaultModelAffinity: chatModelAffinitySchema,
     defaultReasoning: z.enum(['', ...REASONING_EFFORTS]).optional(),
-      maxWorkers: z.number().int().min(1).max(8).optional().default(DEFAULT_MULTI_AGENT.maxWorkers),
+      maxWorkers: z.number().int().min(0).max(8).optional().default(DEFAULT_MULTI_AGENT.maxWorkers),
       globalMaxWorkers: z.number().int().min(0).max(64).optional().default(DEFAULT_MULTI_AGENT.globalMaxWorkers ?? 0),
       allowUnattributedCalls: z.boolean().optional().default(DEFAULT_MULTI_AGENT.allowUnattributedCalls),
       strictChatAllowlist: z.boolean().optional().default(DEFAULT_MULTI_AGENT.strictChatAllowlist ?? false),

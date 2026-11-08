@@ -1270,7 +1270,7 @@ export function statusForCaller(caller: Caller): CallerSwarmStatus {
         self: { ...member.info },
         state: stateForAgents(run.agents, true),
         runId: run.runId,
-        freeWorkerSlots: freeWorkerSlots(run.runId)
+        freeWorkerSlots: Math.min(freeWorkerSlots(run.runId), globalFreeWorkerSlots())
       };
     }
   }
@@ -1282,11 +1282,11 @@ export function statusForCaller(caller: Caller): CallerSwarmStatus {
       self: { ...member.info },
       state: stateForAgents(dormant.agents, false),
       runId: null,
-      freeWorkerSlots: getConfig().multiAgent.maxWorkers
+      freeWorkerSlots: Math.min(workerLimit(), globalFreeWorkerSlots())
     };
   }
   return { self: null, state: stateForAgents(new Map(), false, false), runId: null,
-    freeWorkerSlots: getConfig().multiAgent.maxWorkers };
+    freeWorkerSlots: Math.min(workerLimit(), globalFreeWorkerSlots()) };
 }
 
 /**
@@ -1456,6 +1456,10 @@ function makePrime(conversationId: string | null): Agent {
 
 // --------------------------------------------------------------------- slots
 
+function workerLimit(): number {
+  return getConfig().multiAgent.maxWorkers || 8;
+}
+
 /** Workers currently holding one of the run's slots, awake or being woken. */
 function workingWorkers(run: Run | null): Agent[] {
   if (!run) return [];
@@ -1473,8 +1477,8 @@ function workingWorkers(run: Run | null): Agent[] {
  */
 export function freeWorkerSlots(runId?: string): number {
   const run = scopedRun(runId);
-  if (!run) return runId === undefined && runs.size === 0 ? getConfig().multiAgent.maxWorkers : 0;
-  return Math.max(0, getConfig().multiAgent.maxWorkers - workingWorkers(run).length);
+  if (!run) return runId === undefined && runs.size === 0 ? workerLimit() : 0;
+  return Math.max(0, workerLimit() - workingWorkers(run).length);
 }
 
 /**
@@ -2079,7 +2083,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
       'SPAWN_IN_PROGRESS: another worker spawn is still crossing its durable acceptance barrier. Retry this spawn after that call finishes.'
     );
   }
-  const max = getConfig().multiAgent.maxWorkers;
+  const max = workerLimit();
   if (input.workers.length === 0) throw new AgentError('At least one worker is required');
 
   const context = input.context?.trim() ?? '';
@@ -2201,7 +2205,10 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     const total = live.length + planned.length;
     if (resumedDormant) parkRun(run, 'a new spawn was rejected before changing its dormant history');
     else if (createdFreshRun) runs.delete(run.runId);
-    throw new AgentError(`That would make ${total} live workers; the limit set in the app is ${max}.`);
+    const setting = getConfig().multiAgent.maxWorkers
+      ? ' Ask the user to raise Sub-agent workers or set it to 0 for automatic capacity in Settings → Agents & automation → Workers & recovery.'
+      : '';
+    throw new AgentError(`WORKER_LIMIT: That would make ${total} live workers; the limit for this chat is ${max}.${setting}`);
   }
 
   const globalMax = getConfig().multiAgent.globalMaxWorkers ?? 0;
@@ -2211,7 +2218,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     else if (createdFreshRun) runs.delete(run.runId);
     throw new AgentError(
       `GLOBAL_WORKER_LIMIT: that would make ${globalTotal} live workers across all prime families; ` +
-        `the global worker admission limit set in the app is ${globalMax}. Wait for a worker to stop and try again.`
+        `the global worker admission limit set in the app is ${globalMax}. Wait for a worker to stop or ask the user to raise Workers across all chats in Settings → Agents & automation → Workers & recovery.`
     );
   }
 
@@ -2675,8 +2682,8 @@ function stageMessagesActive(
       if (!reserved.has(to)) {
         if (freeWorkerSlots(run?.runId) - reserved.size <= 0) {
           throw new AgentError(
-            `NO_FREE_SLOT: ${toId} is asleep and all ${getConfig().multiAgent.maxWorkers} worker slots are busy, so it ` +
-              `cannot be woken right now${where}. Nothing was sent. Wait for a worker to report and try again.`
+            `NO_FREE_SLOT: ${toId} is asleep and all ${workerLimit()} worker slots are busy, so it ` +
+              `cannot be woken right now${where}. Nothing was sent. Wait for a worker to report or check Sub-agent workers in Settings → Agents & automation → Workers & recovery.`
           );
         }
         const globalMax = getConfig().multiAgent.globalMaxWorkers ?? 0;
@@ -3089,7 +3096,7 @@ function planFinish(agent: Agent, result: string): { info: AgentInfo; report: Ag
   // that capacity back to use, because "finished" reads as an ending rather than as capacity
   // coming back. Counting is done against the workers that outlive this one, since `agent`
   // still holds its slot at plan time.
-  const max = getConfig().multiAgent.maxWorkers;
+  const max = workerLimit();
   const stillWorking = run
     ? [...run.agents.values()].filter(
         (other) =>

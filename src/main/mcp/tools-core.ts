@@ -295,6 +295,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           'a PNG/JPEG/GIF/WebP comes back as an image, and anything else returns its metadata and why it was not decoded. ' +
           `Read ${SKILL_CATALOG_PATH} for the current scoped local Skills catalog (metadata only); read a returned SKILL.md to use it. ` +
           'Read /sessions/.catalog.json for saved local chats from either provider, then the returned history.md and handoff Markdown paths. History is read-only data and requires Read files permission. ' +
+          'To publish a built web app, use artifact action=import on its output directory. Copying build contents into tool results or artifact arguments can truncate them. ' +
           'Paths may contain * ? and ** and are expanded here. Every result starts with a header giving size, timestamps and line count. ' +
           `The line-number prefix is display metadata, not file content — strip it before quoting text into apply_patch. ` +
           `start_line/end_line apply to every file the call resolves to; a path may instead carry its own range as path:12-40 or path:12, so several ranges of one file fit in one call. A typical 1,500-line source file fits in the default read: do not pre-paginate it. ` +
@@ -1242,6 +1243,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
       title: 'Multi-agent run',
       description:
         'Run workers on this chat\'s provider. Omit model and reasoning_effort unless the user explicitly requests an override; saved app defaults apply. Do not ask the user to choose them. Reuse a suitable sleeping worker with message before spawn. ' +
+        'If the user requests a concurrent worker count, check status for free slots, assign that many distinct workers in the same run, and start their work before waiting for reports. Wake suitable sleeping workers with one message batch and spawn the remaining workers. If the count exceeds a hard limit, explain the Settings adjustment and ask before using fewer or running batches. When no count is requested, use only as many workers as the task needs. ' +
         'message: prime↔worker. Reports ride tool results, never restart primes. Use status once to collect pending reports before finalizing; otherwise state that review is pending. Never poll repeatedly. ' +
         'status: your active, sleeping/revivable and terminal workers, including parked families. finish: record the report, then normally sleep.',
       inputSchema: z.object({
@@ -1539,7 +1541,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
         if (!me) return {
           content: [{ type: 'text' as const, text: families.length
             ? `Select one of your worker families with run_id.${familyNotice}`
-            : 'No workers or retained worker history belong to this caller. Use agents action=spawn if the task needs workers.' }],
+            : `No workers or retained worker history belong to this caller. ${status.freeWorkerSlots} worker slots are available for a new run.` }],
           structuredContent: { action: 'status', run_id: null, self: null, agents: [], free_worker_slots: status.freeWorkerSlots,
             ...(families.length > 1 ? { available_runs: families } : {}) }
         };

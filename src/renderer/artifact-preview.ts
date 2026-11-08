@@ -38,7 +38,7 @@ function previewStorageScript(): string {
 
 function consoleBridgeScript(channel: string): string {
   const key = JSON.stringify(channel);
-  return `(function(){const key=${key};let sent=0;const emit=(level,args)=>{if(sent++>100)return;let text='';try{text=args.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ').slice(0,4000)}catch{text='[unserializable]'};parent.postMessage({__onecodeArtifactPreview:key,level,text},'*')};for(const level of ['log','info','warn','error']){const original=console[level]?.bind(console);console[level]=(...args)=>{emit(level,args);original?.(...args)}};addEventListener('error',e=>emit('error',[e.message||'Preview error']));addEventListener('unhandledrejection',e=>emit('error',[String(e.reason||'Unhandled rejection')]))})();`;
+  return `(function(){const key=${key};let sent=0;const emit=(level,args)=>{if(sent++>100)return;let text='';try{text=args.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ').slice(0,4000)}catch{text='[unserializable]'};parent.postMessage({__onecodeArtifactPreview:key,level,text},'*')};for(const level of ['log','info','warn','error']){const original=console[level]?.bind(console);console[level]=(...args)=>{emit(level,args);original?.(...args)}};addEventListener('error',e=>emit('error',[e.message||'Preview error']));addEventListener('unhandledrejection',e=>emit('error',[String(e.reason||'Unhandled rejection')]));addEventListener('securitypolicyviolation',e=>emit('error',['Offline preview blocked a resource ('+e.effectiveDirective+').']))})();`;
 }
 
 function previewShell(body: string, head: string, channel: string): string {

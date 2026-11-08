@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.6] — 2026-11-09
+
+Isolate Workbench browsers by chat, import standalone web builds directly, load per-model OpenRouter reasoning levels, allow larger concurrent worker batches in automatic mode, and wait for active API work before installing. See [Stable notes](docs/release-notes/v0.9.6.md).
+
 ## [0.9.5] — 2026-11-08
 
 Present supported OpenRouter web builds as inline artifacts and open live Vite sites in their chat’s Workbench. Reuse the dedicated Brave window and restore imported image cards and code blocks. See [Stable notes](docs/release-notes/v0.9.5.md).

@@ -1,10 +1,10 @@
 /** A read projection of existing work owners, never an alternate work scheduler. */
 export type UpdateBusyReason = NonNullable<import('../shared/types.js').UpdateStatus['busyReasons']>[number];
 export async function updateBusyReasons(): Promise<UpdateBusyReason[]> {
-  const [calls, recorder, inputs, agents, goal, continuation, bridge, exec, tasks, terminals] = await Promise.all([
+  const [calls, recorder, inputs, agents, goal, continuation, bridge, exec, tasks, terminals, api] = await Promise.all([
     import('./mcp/call-context.js'), import('./session/recorder.js'), import('./session/input.js'),
     import('./agents.js'), import('./goal.js'), import('./session/continuation.js'), import('./bridge.js'),
-    import('./codex/manager.js'), import('./task-request.js'), import('./workspace-terminal-ipc.js')
+    import('./codex/manager.js'), import('./task-request.js'), import('./workspace-terminal-ipc.js'), import('./api/runner.js')
   ]);
   const outbox = await inputs.listInputs();
   // Read the synchronous owners after the asynchronous outbox read, closest to the decision.
@@ -13,7 +13,7 @@ export async function updateBusyReasons(): Promise<UpdateBusyReason[]> {
     ...goal.snapshotGoalSwitches().switches.map(row => row.conversationId)]);
   const reasons: UpdateBusyReason[] = [];
   if (calls.inFlightMcpRequests() || calls.inFlightToolCalls()) reasons.push('tools');
-  if (live.some(row => row.generating || row.activeTurnId)) reasons.push('generation');
+  if (api.hasActiveApiWork() || live.some(row => row.generating || row.activeTurnId)) reasons.push('generation');
   if (outbox.some(row => !['sent', 'failed', 'cancelled'].includes(row.state))) reasons.push('messages');
   if (agents.pendingWorkerSpawns().length || agents.swarmState().agents.some(row => row.role === 'worker' &&
       ['invited', 'active', 'detached', 'waking'].includes(row.state))) reasons.push('workers');

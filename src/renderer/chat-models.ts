@@ -354,7 +354,7 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
     nextEffort = '';
   }
   const supported = models.find(item => item.id === nextModel)?.efforts;
-  const keepNativeEffort = pairProvider === 'claude';
+  const keepNativeEffort = pairProvider === 'claude' || pairProvider === 'openrouter';
   if (supported?.length && !nextEffort && !allowEmpty && !keepNativeEffort) {
     nextEffort = supported.includes('high') ? 'high' : supported[0] ?? '';
   }
@@ -535,6 +535,16 @@ function paintComposerChoices(): void {
     }
     return;
   }
+  if (activeProvider === 'openrouter') {
+    const picker = document.createElement('select');
+    picker.className = 'api-effort-select';
+    ui(picker, 'aria-label', () => t('Thinking effort'));
+    options(picker, [{ id: '', label: () => t('Provider default') },
+      ...supported.map(id => ({ id, label: () => effortLabel(id) }))], effort.value);
+    picker.addEventListener('change', () => choose(picker.value));
+    powers.append(picker);
+    return;
+  }
   if (activeProvider === 'claude') {
     const keep = el('button', 'btn power-single', currentEffortLabel) as HTMLButtonElement;
     keep.type = 'button'; keep.dataset.keepMenu = 'true'; keep.dataset.effort = '';
@@ -641,7 +651,7 @@ export function confirmedComposerModel(): { model: string; reasoningEffort: Reas
   const choice = composerModels().find(choice => choice.id === model);
   const modelSurface = composerModelSurface(model), surface = modelSurface ? { modelSurface } : {};
   if (modelSurface && choice?.nativeSurface && choice.nativeSurface !== modelSurface) return null;
-  if (choice && (!choice.efforts.length || activeProvider === 'claude') && !reasoningEffort) return { model, reasoningEffort: null, ...surface };
+  if (choice && (!choice.efforts.length || activeProvider === 'claude' || activeProvider === 'openrouter') && !reasoningEffort) return { model, reasoningEffort: null, ...surface };
   const confirmed = choice?.efforts.find(effort => effort === reasoningEffort);
   return confirmed ? { model, reasoningEffort: confirmed, ...surface } : null;
 }
@@ -880,7 +890,7 @@ export function initChatModels(onPaint?: () => void): void {
       const provider = modelId === 'composerModel' ? activeProvider : settingsProvider;
       const choices = modelId === 'composerModel' ? catalog : catalogs[settingsProvider] ?? (settingsProvider === activeProvider ? catalog : undefined);
       const supported = choices?.models.find(item => item.id === model.value)?.efforts ?? [];
-      const nextEffort = provider === 'claude' ? '' : allowEmpty
+      const nextEffort = provider === 'claude' || provider === 'openrouter' ? '' : allowEmpty
         ? supported.includes(effort.value as ReasoningEffort) ? effort.value : ''
         : model.value ? supported.includes('high') ? 'high' : supported[0] ?? '' : '';
       paintPair(modelId, effortId, model.value, nextEffort, allowEmpty);

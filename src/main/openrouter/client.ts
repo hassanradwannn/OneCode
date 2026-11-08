@@ -1,4 +1,4 @@
-import { ApiError as OpenRouterApiError, type ApiModel as OpenRouterModel,
+import { API_REASONING_EFFORTS, ApiError as OpenRouterApiError, type ApiModel as OpenRouterModel,
   type ApiToolCall as OpenRouterToolCall,
   type ApiCompletion as OpenRouterCompletion,
   type ApiCompleteOptions } from "../api/types.js";
@@ -198,7 +198,11 @@ export class OpenRouterClient {
       const supportedParameters = Array.isArray(entry.supported_parameters) ?
         entry.supported_parameters.filter((item: unknown): item is string => typeof item === "string") : [];
       const pricing = isObject(entry.pricing) ? entry.pricing : {};
-      const reasoning = isObject(entry.reasoning) ? entry.reasoning : {};
+      const reasoning = isObject(entry.reasoning) ? entry.reasoning : null;
+      const efforts = reasoning?.supported_efforts;
+      const reasoningEfforts = reasoning ? API_REASONING_EFFORTS.filter(effort =>
+        (effort !== 'none' || reasoning.mandatory !== true) &&
+        (efforts === null || Array.isArray(efforts) && efforts.includes(effort))) : undefined;
       const architecture = isObject(entry.architecture) ? entry.architecture : {};
       const reported = architecture.input_modalities;
       const inputModalities = Array.isArray(reported)
@@ -207,8 +211,8 @@ export class OpenRouterClient {
       return [{ id, name: name.slice(0, 200), contextLength, maxCompletionTokens: positive(top.max_completion_tokens),
         supportsTools: supportedParameters.includes("tools"), supportedParameters,
         ...(inputModalities ? { inputModalities } : {}),
-        ...(typeof reasoning.mandatory === 'boolean' ? { reasoningMandatory: reasoning.mandatory } : {}),
-        ...(Array.isArray(reasoning.supported_efforts) ? { reasoningEfforts: reasoning.supported_efforts.filter((value): value is string => typeof value === 'string') } : {}),
+        ...(typeof reasoning?.mandatory === 'boolean' ? { reasoningMandatory: reasoning.mandatory } : {}),
+        ...(reasoningEfforts ? { reasoningEfforts } : {}),
         pricing: { prompt: str(pricing.prompt), completion: str(pricing.completion) } }];
     });
   }
@@ -230,7 +234,7 @@ export class OpenRouterClient {
         engine: input.inputModalities?.includes('file') ? 'native' : 'cloudflare-ai'
       } }] : plugins,
       ...(input.reasoningEnabled === false ? { reasoning: { enabled: false } }
-        : input.reasoningEffort ? { reasoning: { enabled: true, effort: input.reasoningEffort } } : {}),
+        : input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
       ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       ...(input.maxCompletionTokens ? { max_completion_tokens: input.maxCompletionTokens } : {}),
       stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}) });

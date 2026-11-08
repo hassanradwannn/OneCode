@@ -5,6 +5,7 @@ import { FREE_ROUTER_MODEL, OpenRouterClient } from "./client.js";
 import { API_INPUT_MODALITIES, type ChatModelCatalog, type ChatModelOption } from "../../shared/chat-models.js";
 import { ApiError, type ApiModel } from '../api/types.js';
 const STATE = "chat-models-openrouter-api";
+const CATALOG_VERSION = 2;
 const REFRESH_MS = 15 * 60_000;
 let catalog: ChatModelCatalog = { provider: "openrouter", state: "unknown", requestedAt: null, observedAt: null, models: [] };
 let request: Promise<ChatModelCatalog> | null = null;
@@ -61,8 +62,8 @@ export function invalidateOpenRouterModels(): void {
   publish();
 }
 export async function restoreOpenRouterModels(): Promise<void> {
-  const saved = await readDurable<{ observedAt: number; models: ChatModelOption[] }>(STATE);
-  if (catalog.state !== "unknown" || !saved || !Number.isSafeInteger(saved.observedAt) ||
+  const saved = await readDurable<{ version: number; observedAt: number; models: ChatModelOption[] }>(STATE);
+  if (catalog.state !== "unknown" || !saved || saved.version !== CATALOG_VERSION || !Number.isSafeInteger(saved.observedAt) ||
       !Array.isArray(saved.models) || saved.models.length > 3000 ||
       !saved.models.every(row => row && typeof row.id === "string" && row.id.length <= 200 &&
         typeof row.label === "string" && Array.isArray(row.efforts) &&
@@ -92,8 +93,8 @@ export function startOpenRouterModelDiscovery(force = false): Promise<ChatModelC
       const models: ChatModelOption[] = [...response,
         ...(!response.some(model => model.id === FREE_ROUTER_MODEL.id) ? [FREE_ROUTER_MODEL] : [])].map(model => ({
         id: model.id, label: model.name,
-        efforts: model.supportedParameters.some(param => param === 'reasoning' || param === 'reasoning_effort')
-          ? ['low', 'medium', 'high'] : [],
+        efforts: model.reasoningEfforts ?? [],
+        ...(model.reasoningEfforts?.includes('none') ? { effortLabels: { none: 'Off' } } : {}),
         effortsObserved: true,
         contextLength: model.contextLength, maxCompletionTokens: model.maxCompletionTokens,
         supportsTools: model.supportsTools, pricing: model.pricing,
@@ -108,7 +109,7 @@ export function startOpenRouterModelDiscovery(force = false): Promise<ChatModelC
       }));
       const observedAt = Date.now();
       catalog = { provider: "openrouter", state: "ready", requestedAt: old.requestedAt, observedAt, models };
-      writeDurableSoon(STATE, { observedAt, models });
+      writeDurableSoon(STATE, { version: CATALOG_VERSION, observedAt, models });
     } catch (error) {
       if (revision !== keyRevision) return snapshot();
       const message = error instanceof Error ? error.message : "Model catalog could not be loaded.";

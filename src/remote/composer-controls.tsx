@@ -57,11 +57,18 @@ export function ModelMenu({ models, model, effort, disabled, provider, unverifie
           <button type="button" data-model={row.id} disabled={disabled} aria-pressed={!unverified && row.id === selected?.id} onClick={() => { choose(row.id, ''); setShowModels(false); if (provider === 'claude' && (row.effortsObserved === false || !row.reasoningControl && row.efforts.length > 0)) requestEfforts?.(row.id); else if (!nativeReasoningControl(row, provider) && root.current) root.current.open = false; }}><span className="model-choice-caption">{row.label}{row.description && <small>{row.description}</small>}</span>{!unverified && row.id === selected?.id && <span>✓</span>}</button>
         </div>)}
       </div> : control?.kind === 'toggle' ? <NativeReasoningSwitch control={control} effort={effort} disabled={disabled} choose={value => choose(selected!.id, value)} />
-      : control?.kind === 'levels' && !!supported.length && <div className="power-effort"><input type="range" aria-label={control.label} aria-valuetext={label} min={0} max={supported.length - 1} step={1} value={Math.max(0, supported.indexOf(effort as typeof supported[number]))} disabled={disabled} onChange={event => choose(selected!.id, supported[Number(event.target.value)]!)} />
+      : control?.kind === 'levels' && !!supported.length && (provider === 'openrouter'
+        ? <div className="power-effort"><select aria-label="Thinking effort" value={effort} disabled={disabled}
+          onChange={event => choose(selected!.id, event.target.value)}>
+          <option value="">Provider default</option>
+          {effort && !supported.includes(effort as ReasoningEffort) && <option value={effort} disabled>{label} · unavailable</option>}
+          {supported.map(value => <option key={value} value={value}>{effortLabel(value)}</option>)}
+        </select></div>
+        : <div className="power-effort"><input type="range" aria-label={control.label} aria-valuetext={label} min={0} max={supported.length - 1} step={1} value={Math.max(0, supported.indexOf(effort as typeof supported[number]))} disabled={disabled} onChange={event => choose(selected!.id, supported[Number(event.target.value)]!)} />
         <div className="power-endpoints"><span>{effortLabel(supported[0]!)}</span><span>{effortLabel(supported.at(-1)!)}</span></div>
         {selected?.effortHints?.[effort as ReasoningEffort] && <p className="hint model-effort-hint">{selected.effortHints[effort as ReasoningEffort]}</p>}
         <button type="button" className="effort-default" data-effort="" aria-pressed={!effort} onClick={() => choose(selected!.id, '')}>{provider === 'claude' ? 'Current effort' : 'Automatic effort'}</button>
-      </div>}
+      </div>)}
     </div>
   </details>;
 }

@@ -5910,7 +5910,7 @@ export function chatSettingsPatch(current: Config, provider: ChatProvider = curr
       // The exposure switch lives with every other Gemini tool switch, on Home. Settings owns
       // the per-family worker limit and the optional broker-wide admission cap below.
       enabled: $<HTMLInputElement>('homeMaEnabled').checked,
-      maxWorkers: number('maWorkers', current.multiAgent.maxWorkers, 1, 8),
+      maxWorkers: number('maWorkers', current.multiAgent.maxWorkers, 0, 8),
       globalMaxWorkers: number('globalMaWorkers', current.multiAgent.globalMaxWorkers ?? 0, 0, 64),
       allowUnattributedCalls: $<HTMLInputElement>('allowUnattributedCalls').checked,
       // Save the checkbox into the provider currently painted in state. During a provider
@@ -7518,7 +7518,12 @@ export function initChat(next: Deps): void {
   docks.register('agents', 'Sub-agents', 'i-agents', () => agentPanel?.show(), () => agentPanel?.hide(), () => selectedId !== null);
   docks.registerSurface({ id: 'browser', kind: 'browser', title: 'Browser', icon: 'i-browser', closable: true }, mount => {
     workbenchBrowserPanel?.mountAt(mount); void workbenchBrowserPanel?.show();
-  }, () => workbenchBrowserPanel?.hide(), () => selectedId !== null, () => t('Open a chat to use the Workbench browser'), { launcher: true });
+  }, () => workbenchBrowserPanel?.hide(), () => selectedId !== null, () => t('Open a chat to use the Workbench browser'), {
+    launcher: true,
+    menuAction: { label: 'New browser tab', run: () => {
+      void workbenchBrowserPanel?.newTab().then(created => { if (created) docks.activateSurface('browser'); });
+    } }
+  });
   docks.registerSurface({ id: 'media', kind: 'media', title: 'Media', icon: 'i-image', closable: true }, mount => {
     mediaPanel?.mountAt(mount); mediaPanel?.show();
   }, () => mediaPanel?.hide(), () => mediaPanel?.available() === true, () => t('This chat has no recorded generated media'), { launcher: true });
