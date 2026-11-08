@@ -21,6 +21,7 @@ export function createWorkbenchBrowserPanel(options: { onEscape?: () => void; on
   pane.append(toolbar, viewport);
 
   let sessionId: string | null = null, state: WorkbenchBrowserState | null = null, shown = false, generation = 0, frame = 0;
+  const pendingReveals = new Set<string>();
   const current = () => state?.tabs.find(tab => tab.id === state?.activeId) ?? null;
 
   function modalOpen(): boolean { return document.querySelector('dialog[open]') !== null; }
@@ -77,7 +78,8 @@ export function createWorkbenchBrowserPanel(options: { onEscape?: () => void; on
     if (next === sessionId) return; const previous = sessionId; sessionId = next; state = null; generation++;
     if (previous) void window.api.workbenchBrowserHide(previous);
     if (!next) { hide(); return; }
-    if (shown) void refresh(true);
+    if (pendingReveals.delete(next)) options.onOpen?.();
+    else if (shown) void refresh(true);
   }
 
   const history = async (action: 'back' | 'forward' | 'reload' | 'stop') => {
@@ -110,7 +112,10 @@ export function createWorkbenchBrowserPanel(options: { onEscape?: () => void; on
   const modalObserver = new MutationObserver(schedulePresentation);
   modalObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
   window.api.onWorkbenchBrowserChanged?.(change => {
-    if (change.sessionId !== sessionId) return;
+    if (change.sessionId !== sessionId) {
+      if (change.reveal) pendingReveals.add(change.sessionId);
+      return;
+    }
     if (change.reveal) options.onOpen?.();
     void refresh(false);
   });

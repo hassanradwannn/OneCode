@@ -13,6 +13,7 @@ import { apiInputOwner } from "./providers.js";
 import type { ChatProvider } from "../../shared/chat-provider.js";
 import type { ApiTool } from "./types.js";
 import type { OutputPublication } from '../codex/unified-exec.js';
+import type { ApiWebObserver } from './web-preview.js';
 
 export type OwnedTurn = { provider?: ChatProvider; sessionId: string; conversationId: string; inputId: string;
   messageId: string; turnId: string; signal: AbortSignal };
@@ -31,7 +32,7 @@ export async function currentApiTurn(turn: OwnedTurn): Promise<boolean> {
   return !turn.signal.aborted && latest?.messageId === turn.messageId && latest.inputId === turn.inputId;
 }
 
-export function apiTools(turn: OwnedTurn) {
+export function apiTools(turn: OwnedTurn, observeWeb?: ApiWebObserver) {
   const provider = turn.provider ?? 'openrouter';
   const current = () => currentApiTurn(turn);
   const registry = () => withMcpProvider(provider, () => {
@@ -58,7 +59,7 @@ export function apiTools(turn: OwnedTurn) {
       const context: CallContext = {
         startedAt: Date.now(), transportKey: null, agent: null, allowUnattributed: false,
         caller: { transportKey: null, requestId: null, conversationId: turn.conversationId,
-          sessionId: turn.sessionId }, localApiTurnId: turn.turnId, localApiCurrent: current,
+          sessionId: turn.sessionId }, localApiTurnId: turn.turnId, localApiCurrent: current, localApiWeb: observeWeb,
         outcome: null, evidence: emptyEvidence(), publication: receipt
       };
       try {

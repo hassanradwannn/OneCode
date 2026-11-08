@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.5] — 2026-11-08
+
+Present supported OpenRouter web builds as inline artifacts and open live Vite sites in their chat’s Workbench. Reuse the dedicated Brave window and restore imported image cards and code blocks. See [Stable notes](docs/release-notes/v0.9.5.md).
+
 ## [0.9.4] — 2026-11-08
 
 Isolate managed browser windows, preserve parallel Claude chats and skip silent recovery while ChatGPT is still streaming. Restore portable scorecards and grading charts, highlight code in Desktop and Remote, and retain each OpenRouter chat’s accepted model. Restrict packaged build output to app directories. See [Stable notes](docs/release-notes/v0.9.4.md).

@@ -10,6 +10,7 @@ import { notifyChanged } from "../session/recorder.js";
 import { ApiError, type ApiMessage, type ApiModel, type ApiToolCall } from "./types.js";
 import { apiProvider, apiInputOwner } from "./providers.js";
 import { prepareSessionPrompt, prepareSkillFollowup } from "../session/prompt.js";
+import { apiWebPreview } from './web-preview.js';
 import { currentApiTurn, apiTools, type OwnedTurn } from "./tools.js";
 import { acknowledgeApiWorker, finishApiWorker } from "./workers.js";
 import { agentInfoForOwnedConversation, onSwarmEnd, failAgent, persistCriticalSwarmNow } from "../agents.js";
@@ -273,7 +274,8 @@ async function perform(entry: InputEntry): Promise<void> {
     turnId = (provider.id === "openrouter" ? "or-" : "api-") + randomUUID(); active.turnId = turnId;
     const turn: OwnedTurn = { provider: provider.id, sessionId: entry.sessionId, conversationId, inputId: entry.id,
       messageId, turnId, signal: controller.signal };
-    const tools = apiTools(turn);
+    const preview = apiWebPreview();
+    const tools = apiTools(turn, entry.apiWorker ? undefined : preview.observe);
     let declarations = model.supportsTools ? tools.declarations : [];
     if (model.supportsTools && declarations.length === 0)
       throw new ApiError("CORE_TOOLS_UNAVAILABLE");
@@ -285,7 +287,7 @@ async function perform(entry: InputEntry): Promise<void> {
       throw new ApiError('MODEL_REASONING_UNAVAILABLE');
     let desiredOutput = 65_536, truncatedRounds = 0;
     const refusals = new ApiRefusalWatch();
-    const system = SYSTEM + "\nTo present a running local website, use browser_tabs list, select OneCode’s Workbench browserId, then browser_tabs action=new with the server HTTP URL. This opens the calling chat’s sidebar. An inline artifact is a separate offline preview with no access to that server; do not recreate the website as an artifact when the user wants to run or inspect the real app.\n" + provider.modelInstruction(model.id);
+    const system = SYSTEM + "\nPresent interactive web deliverables in OneCode by default. Build and start the app with exec_command workdir set to the actual project folder. OneCode can present a successful Vite bundle as an inline artifact and show a verified running Vite server in the calling chat’s Workbench. For a standalone HTML deliverable, use artifact create with its actual self-contained source. For a server-backed site, use browser_tabs action=new with its exact loopback HTTP URL when needed. Use the returned Workbench tab for testing. Keep one live tab, and describe the presentation only when confirmed.\n" + provider.modelInstruction(model.id);
     const prompt = entry.apiWorker ? entry.deliveryText ?? entry.text : thread.messages.length
       ? await prepareSkillFollowup(entry.text, entry.text, undefined, { sessionId: entry.sessionId, chatProvider: provider.id })
       : await prepareSessionPrompt(entry.text, { sessionId: entry.sessionId, chatProvider: provider.id, autoSkills: entry.autoSkills });
@@ -548,6 +550,7 @@ async function perform(entry: InputEntry): Promise<void> {
         if(active.compactionRequested)await compactContext();
         await painting;
         await upsertMessageEvent(turn.sessionId, assistantRow(displayed || resultContent, answerId, messageId, turn.turnId, response.model || model.id, true));
+        if (!entry.apiWorker) await preview.present(turn, startedAt).catch(() => undefined);
         await appendEvent(turn.sessionId, { kind: "turn_end", source: "app", time: Date.now(),
           turnId: turn.turnId, outcome: "completed" });
         await finishApiWorker(entry, displayed || resultContent || "Worker completed without a text report.");

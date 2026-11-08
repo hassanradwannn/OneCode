@@ -16,6 +16,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AssetRef, FileChange, RunningToolActivity, ToolOutcome } from '../../shared/session.js';
 import type { OutputPublication, ProcessCompletion } from '../codex/unified-exec.js';
 import type { LocalBindingEvidence } from '../session/local-binding.js';
+import type { ApiWebObserver } from '../api/web-preview.js';
 
 export interface CallEvidence {
   processCompletion?: Promise<ProcessCompletion>;
@@ -102,6 +103,7 @@ export interface CallContext {
   localApiTurnId?: string;
   /** In-process harness check, inherited by children; never accepted from a model or HTTP. */
   localApiCurrent?: () => Promise<boolean>;
+  localApiWeb?: ApiWebObserver;
   /**
    * Set by the tool guard, which is the only code that can tell a refusal apart from
    * a genuine failure — both come back to the model as an error result.

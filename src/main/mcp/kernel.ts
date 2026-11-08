@@ -687,7 +687,7 @@ export async function dispatch(
           sessionId: geminiBinding?.sessionId ?? null, setupProfileId, ...(geminiBinding ? { geminiBinding } : {}) },
     // Only the in-process, current-checked API dispatch may pass an exact turn.
     ...(parent?.localApiTurnId && parent.localApiCurrent
-      ? { localApiTurnId: parent.localApiTurnId, localApiCurrent: parent.localApiCurrent } : {}),
+      ? { localApiTurnId: parent.localApiTurnId, localApiCurrent: parent.localApiCurrent, localApiWeb: parent.localApiWeb } : {}),
     outcome: null,
     evidence: emptyEvidence()
   };

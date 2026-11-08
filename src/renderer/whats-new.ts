@@ -69,11 +69,11 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.5': {
-    lead: () => t('Keep API tasks moving through connection failures and direction changes.'),
+    lead: () => t('See the website OneCode built directly in your chat.'),
     highlights: [
-      { icon: 'i-retry', title: () => t('Automatic API recovery'), text: () => t('Retry transient model requests from saved tool results with visible reconnecting status. Running commands and workers remain available.') },
-      { icon: 'i-chat', title: () => t('Steer without stopping the task'), text: () => t('Apply new directions at the next model or tool boundary. Dispatched tools finish, and proposals that have not started are skipped.') },
-      { icon: 'i-terminal', title: () => t('Longer agentic tasks'), text: () => t('Continue beyond the earlier twenty-step limit and explain connection, provider, storage and context failures clearly.') }
+      { icon: 'i-browser', title: () => t('Automatic web previews'), text: () => t('Open a running local site in Workbench and show a supported Vite build as an inline artifact.') },
+      { icon: 'i-chat', title: () => t('One dedicated browser window'), text: () => t('Reuse the managed Brave window for parallel chats and explicit provider reveals.') },
+      { icon: 'i-file', title: () => t('Imported reply content'), text: () => t('See the original code block layout and image cards with their captions.') }
     ]
   },
   '0.9.4': {

@@ -22,6 +22,16 @@ export interface WorkbenchBrowserBounds {
   height: number;
 }
 
+/** Automatic site previews are limited to local HTTP servers with an explicit port. */
+export function localWorkbenchUrl(value: string): string | null {
+  if (!value || value.length > 2048 || /[\s\\]/.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
+      url.port && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
 /**
  * Renderer layout coordinates are CSS pixels. A native WebContentsView is positioned in
  * BrowserWindow content DIPs, so Electron page zoom must be applied exactly once here. OS display

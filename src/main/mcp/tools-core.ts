@@ -980,6 +980,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               conversationId: caller.conversationId,
               setupProfileId: caller.setupProfileId
             });
+            currentCall()?.localApiWeb?.(processId, output, dir.virtual);
             const publication = currentCall()?.publication;
             if (output.completedSessionId !== undefined && publication) {
               await unifiedExecManager.noteCompletedOutputPublication(output.completedSessionId, publication, 'exec');
@@ -1141,6 +1142,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               maxOutputTokens: undefined,
               truncationPolicy: EXEC_OUTPUT_CEILING_POLICY
             });
+            currentCall()?.localApiWeb?.(input.session_id, output);
             const publication = currentCall()?.publication;
             if (output.completedSessionId !== undefined && publication) {
               await unifiedExecManager.noteCompletedOutputPublication(output.completedSessionId, publication, 'poll');

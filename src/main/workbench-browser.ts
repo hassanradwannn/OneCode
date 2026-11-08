@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { app, session, WebContentsView, type BrowserWindow, type Rectangle, type Session } from 'electron';
 import { BROWSER_LIMITS, type BrowserCommand, type BrowserResult } from '../shared/browser-control.js';
-import { workbenchBrowserContentBounds, type WorkbenchBrowserBounds, type WorkbenchBrowserState, type WorkbenchBrowserTab } from '../shared/workbench-browser.js';
+import { localWorkbenchUrl, workbenchBrowserContentBounds, type WorkbenchBrowserBounds, type WorkbenchBrowserState, type WorkbenchBrowserTab } from '../shared/workbench-browser.js';
 import { browserControl, type InternalBrowserClient } from './browser-control.js';
 import { readDurable, writeDurableSoon } from './durable.js';
 import { workbenchBrowserBoundedValue, workbenchBrowserPage } from './workbench-browser-page.js';
@@ -20,6 +20,8 @@ interface ScreenshotState { id: string; pageId: string; width: number; height: n
 interface BrowserTab {
   id: number;
   sessionId: string;
+  requestedUrl: string;
+  presentedUrl?: string;
   view: WebContentsView;
   parent: BrowserWindow | null;
   pageId: string;
@@ -102,7 +104,9 @@ export class WorkbenchBrowserController {
 
   private ensureClient(): void {
     if (this.unregisterClient || this.disposing) return;
-    const client: InternalBrowserClient = { id: this.browserId, name: BROWSER_NAME, enabled: true, execute: (command, allowed) => this.execute(command, allowed) };
+    const client: InternalBrowserClient = { id: this.browserId, name: BROWSER_NAME, enabled: true,
+      execute: (command, allowed) => this.execute(command, allowed),
+      presentLocal: (sessionId, url, allowed) => this.presentLocal(sessionId, url, allowed) };
     this.unregisterClient = browserControl.registerInternalClient(client);
   }
 
@@ -133,6 +137,26 @@ export class WorkbenchBrowserController {
 
   newTab(sessionId: string, url = 'about:blank'): WorkbenchBrowserState { this.createTab(sessionId, url, true); return this.state(sessionId); }
 
+  private findLocalTab(sessionId: string, url: string): BrowserTab | undefined {
+    return [...this.tabs.values()].find(tab => tab.sessionId === sessionId &&
+      (tab.view.webContents.getURL() === url || tab.requestedUrl === url));
+  }
+
+  private async presentLocal(sessionId: string, url: string, allowed: () => Promise<boolean>): Promise<boolean> {
+    await this.restorePromise;
+    if (!await allowed() || this.disposing) return false;
+    const tab = this.findLocalTab(sessionId, url) ?? this.createTab(sessionId, url, true);
+    this.reveal(tab, url);
+    return true;
+  }
+
+  private reveal(tab: BrowserTab, url: string, repeat = false): void {
+    if (!repeat && tab.presentedUrl === url) return;
+    tab.presentedUrl = url;
+    this.active.set(tab.sessionId, tab.id);
+    this.notify(tab.sessionId, true);
+  }
+
   select(sessionId: string, tabId: number): WorkbenchBrowserState {
     const tab = this.requireTab(sessionId, tabId); this.active.set(sessionId, tab.id); this.syncPresentation(); this.notify(sessionId); return this.state(sessionId);
   }
@@ -142,7 +166,8 @@ export class WorkbenchBrowserController {
   }
 
   navigate(sessionId: string, tabId: number, value: string): WorkbenchBrowserState {
-    const tab = this.requireTab(sessionId, tabId); const url = safeUrl(value); void tab.view.webContents.loadURL(url).catch(() => undefined); return this.state(sessionId);
+    const tab = this.requireTab(sessionId, tabId); const url = safeUrl(value); tab.requestedUrl = url;
+    void tab.view.webContents.loadURL(url).catch(() => undefined); return this.state(sessionId);
   }
 
   history(sessionId: string, tabId: number, action: 'back' | 'forward' | 'reload' | 'stop'): WorkbenchBrowserState {
@@ -176,12 +201,16 @@ export class WorkbenchBrowserController {
     const url = safeUrl(requested);
     const view = new WebContentsView({ webPreferences: { session: this.ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     view.setVisible(false); view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    const tab: BrowserTab = { id: view.webContents.id, sessionId, view, parent: null, pageId: randomUUID(), frameId: null, contextId: null, attached: false,
+    const tab: BrowserTab = { id: view.webContents.id, sessionId, requestedUrl: url, view, parent: null, pageId: randomUUID(), frameId: null, contextId: null, attached: false,
       seq: 0, console: [], network: new Map(), screenshot: null, dialog: null };
     this.tabs.set(tab.id, tab); if (activate || !this.active.has(sessionId)) this.active.set(sessionId, tab.id);
     view.webContents.on('will-navigate', (event, next) => { try { safeUrl(next); } catch { event.preventDefault(); } });
     view.webContents.on('did-start-loading', () => this.notify(sessionId));
     view.webContents.on('did-stop-loading', () => { this.persistMetadata(); this.notify(sessionId); });
+    view.webContents.on('did-navigate', (_event, url) => { tab.requestedUrl = url; });
+    view.webContents.on('did-fail-load', (_event, _code, _reason, url, main) => {
+      if (main && tab.requestedUrl === url) tab.requestedUrl = view.webContents.getURL();
+    });
     view.webContents.on('page-title-updated', () => this.notify(sessionId));
     view.webContents.on('did-start-navigation', (_event, _url, _same, main) => { if (main) this.invalidate(tab); });
     view.webContents.on('did-navigate-in-page', () => this.invalidate(tab));
@@ -431,10 +460,17 @@ export class WorkbenchBrowserController {
         if (args.action === 'list') return this.listTabs(command);
         const sessionId = ownerSession(command); if (!sessionId) throw new Error('BROWSER_IDENTITY_REQUIRED');
         if (args.action === 'new') {
-          await this.authorize(command, allowed); const tab = this.createTab(sessionId, safeUrl(String(args.url ?? 'about:blank')), true); await this.attach(tab, command, allowed);
-          await this.authorize(command, allowed); this.notify(sessionId, true);
-          return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL() || String(args.url ?? 'about:blank'),
-            title: tab.view.webContents.getTitle(), attached: true, created: true, presentationRequested: true, navigationRequested: String(args.url ?? 'about:blank') } };
+          await this.authorize(command, allowed);
+          const url = safeUrl(String(args.url ?? 'about:blank'));
+          const existing = localWorkbenchUrl(url) ? this.findLocalTab(sessionId, url) : undefined;
+          const tab = existing ?? this.createTab(sessionId, url, true);
+          this.reveal(tab, url, true);
+          let attachError: string | undefined;
+          try { await this.attach(tab, command, allowed); }
+          catch (error) { attachError = error instanceof Error ? error.message.slice(0, 1500) : 'Browser attach failed'; }
+          return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL() || url,
+            title: tab.view.webContents.getTitle(), attached: tab.attached, created: !existing, presentationRequested: true,
+            ...(!existing ? { navigationRequested: url } : {}), ...(attachError ? { attachError } : {}) } };
         }
         const tab = this.modelTab(command, false);
         if (args.action === 'attach') { await this.attach(tab, command, allowed); return { value: { tabId: `${this.browserId}:${tab.id}`, pageId: tab.pageId, url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle(), attached: true } }; }
@@ -446,11 +482,22 @@ export class WorkbenchBrowserController {
       if (tool === 'browser_snapshot') return this.snapshot(tab, args);
       if (tool === 'browser_screenshot') return this.screenshot(tab, args, command);
       if (tool === 'browser_action') return this.action(tab, args, command, allowed);
-      if (tool === 'browser_evaluate') return this.evaluate(tab, args, command, allowed);
+      if (tool === 'browser_evaluate') {
+        const result = await this.evaluate(tab, args, command, allowed);
+        const url = localWorkbenchUrl(tab.view.webContents.getURL());
+        if (url && await allowed()) this.reveal(tab, url);
+        return result;
+      }
       if (tool === 'browser_console' || tool === 'browser_network') return this.diagnostics(tab, tool, args);
       if (tool === 'browser_navigate') {
         await this.authorize(command, allowed);
-        if (args.action === 'url') await this.send(tab, 'Page.navigate', { url: safeUrl(String(args.url ?? '')) });
+        if (args.action === 'url') {
+          const url = safeUrl(String(args.url ?? ''));
+          const result = await this.send(tab, 'Page.navigate', { url });
+          if (result.errorText) throw new Error(`BROWSER_NAVIGATION_FAILED: ${String(result.errorText)}`);
+          tab.requestedUrl = url;
+          if (localWorkbenchUrl(url) && await allowed()) this.reveal(tab, url);
+        }
         else if (args.action === 'reload') await this.send(tab, 'Page.reload');
         else {
           const history = await this.send(tab, 'Page.getNavigationHistory'); const delta = args.action === 'back' ? -1 : 1; const next = history.entries?.[history.currentIndex + delta];

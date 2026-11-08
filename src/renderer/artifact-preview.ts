@@ -18,9 +18,9 @@ function htmlEscape(value: string): string {
 
 function resolveArtifactReference(fromPath: string, reference: string): string | null {
   const raw = reference.trim();
-  if (!raw || raw.startsWith('#') || raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw)) return null;
+  if (!raw || raw.startsWith('#') || raw.startsWith('//') || raw.includes('\\') || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw)) return null;
   const clean = raw.split(/[?#]/, 1)[0]!;
-  const parts = fromPath.split('/').slice(0, -1);
+  const parts = raw.startsWith('/') ? [] : fromPath.split('/').slice(0, -1);
   for (const part of clean.split('/')) {
     if (!part || part === '.') continue;
     if (part === '..') { if (!parts.length) return null; parts.pop(); }

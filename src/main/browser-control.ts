@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { BROWSER_LIMITS, type BrowserCommand, type BrowserResult, type BrowserTool } from '../shared/browser-control.js';
 import { wakeBrowserWork } from './browser-wake.js';
+import { localWorkbenchUrl } from '../shared/workbench-browser.js';
 
 interface Pending {
   browserId: string;
@@ -16,6 +17,7 @@ export interface InternalBrowserClient {
   name: string;
   enabled: boolean;
   execute(command: BrowserCommand, allowed: () => Promise<boolean>): Promise<BrowserResult>;
+  presentLocal?(sessionId: string, url: string, allowed: () => Promise<boolean>): Promise<boolean>;
 }
 const uuid = /^[a-f\d-]{36}$/i;
 const tabHandle = /^([a-f\d-]{36}):(\d+)$/i;
@@ -44,6 +46,12 @@ export class BrowserControlBroker {
     if (this.internal.has(client.id) || this.clients.has(client.id)) throw new Error('Browser identity already registered');
     this.internal.set(client.id, client);
     return () => { if (this.internal.get(client.id) === client) this.internal.delete(client.id); };
+  }
+
+  async presentLocal(sessionId: string, value: string, allowed: () => Promise<boolean>): Promise<boolean> {
+    const url = localWorkbenchUrl(value);
+    const workbench = [...this.internal.values()].find(client => client.enabled && client.presentLocal);
+    return !!url && !!workbench?.presentLocal && await workbench.presentLocal(sessionId, url, allowed);
   }
 
   poll(browserId: string, name: string, enabled: boolean): { epoch: string; requests: string[] } {
@@ -100,6 +108,11 @@ export class BrowserControlBroker {
       if (!match || !Number.isSafeInteger(Number(match[2]))) return { error: 'BROWSER_TAB_INVALID: use a tabId returned by browser_tabs.' };
       browserId = match[1]!;
       args.tabId = Number(match[2]);
+    }
+    if (!browserId) {
+      if (tool === 'browser_tabs' && args.action === 'new' && owner.startsWith('session:') &&
+          typeof args.url === 'string' && localWorkbenchUrl(args.url))
+        browserId = [...this.internal.values()].find(client => client.enabled && client.presentLocal)?.id;
     }
     if (!browserId) {
       if (browsers.length !== 1) return tool === 'browser_tabs' && args.action === 'list'
