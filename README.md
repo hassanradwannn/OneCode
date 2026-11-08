@@ -2,15 +2,23 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.9.4](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.4)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.4/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.4/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.4/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.9.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.5)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 0.9.4 adds dedicated Claude windows, syntax highlighting, interactive reply controls and persistent OpenRouter model selection. [Release notes](docs/release-notes/v0.9.4.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
+Stable 0.9.5 automatically presents supported OpenRouter web builds and live previews, improves the managed Brave window, and renders captured reply images and code in OneCode. [Release notes](docs/release-notes/v0.9.5.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.9.5
+
+- Open a verified Vite server in the owning OpenRouter chat’s Workbench and show supported standalone builds as inline artifacts.
+- Reuse OneCode’s managed Brave window across provider chats and keep parallel chats in separate tabs.
+- Render captured image cards and preserve whitespace and local Copy in code blocks.
+
+See [0.9.5 notes](docs/release-notes/v0.9.5.md) and [verification scope](docs/release-acceptance/v0.9.5.md).
 
 ## What's new in 0.9.4
 
