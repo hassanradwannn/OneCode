@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 134;
+  const RECORDER_VERSION = 135;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -15107,32 +15107,16 @@
           detail && /^[a-z-]{1,40}$/.test(detail) ? `${error} (${detail})` : error;
         await ask({ type: 'desktop_input', id: input.id, owner: input.owner, fail: true, error: why, ...(detail ? { detail } : {}) }); return false;
       };
-      // ChatGPT restores its shared home draft even in a newly opened input tab.
-      // This exact claimed bootstrap owns replacement text; existing chats and
-      // attachment drafts remain protected. Re-evaluate after model selection,
-      // since React can hydrate that autosaved text while the picker is open.
-      /*
-       * The one draft this may overwrite is its own.
-       *
-       * Refusing to clobber typing is right, but the guard could not tell the user's draft from the
-       * residue of a previous attempt by this same delivery: insert the text, fail to press Send,
-       * release the claim — and from then on the composer holds exactly what the next attempt would
-       * type, so every attempt refuses. Measured on 2026-09-26: a recovery ticket claimed 181 times
-       * against its own 352 characters, alternating `After-turn pickup was withdrawn before Send.`
-       * and this refusal, for thirteen hours. Its original Send failed because the send control was
-       * unfindable on the new composer shell; the deadlock outlived that cause by a whole day.
-       *
-       * Byte-identical text is not a draft to protect — inserting would produce it again. Compared
-       * with the same `sendText` normaliser the pre-Send check below uses, so the two agree on what
-       * "the same message" means. Attachments still block regardless: an attachment draft is not
-       * something this delivery could have produced.
-       */
-      const ownResidue = sendText(CLF_DOM.composerAuthoredText()) === sendText(input.text);
+      // A fresh ChatGPT page can hydrate shared text. Preserve Claude's draft
+      // and existing-chat text unless it matches this claim. Files can only
+      // be carried forward with the live attachment proof from staging.
+      const canReplaceHomeDraft = () => CLF_DOM.provider !== 'claude' && ownsFreshPage();
+      const protectedDraft = () => CLF_DOM.hasComposerAttachments() || (!canReplaceHomeDraft() && composerHasDraft() &&
+        sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text));
       intakeStage('draft');
-      if ((!ownsFreshPage() && composerHasDraft() && !ownResidue) || CLF_DOM.hasComposerAttachments()) return fail(t(
-        'content_delivery_existing_draft',
-        "The provider already contains an unsent draft. Send or clear that draft in Chrome before trying again."
-      ));
+      if (protectedDraft()) return fail(CLF_DOM.provider === 'claude'
+        ? t('content_delivery_claude_existing_draft', 'Claude already had a draft before OneCode could send. Review the existing draft in the Claude tab.')
+        : t('content_delivery_existing_draft', 'The provider already contains an unsent draft. Send or clear that draft in the browser before trying again.'));
       if (message.directTurn) {
         intakeStage('direct-turn');
         // The offer only wakes this document. The just-committed outbox claim names the exact turn
@@ -15197,13 +15181,8 @@
           "The provider editor did not become writable before sending."
         ), changed === 'turn-progressed' && turnProgressSource ? `${changed}-${turnProgressSource}` : changed || 'editor-unavailable');
       }
-      // Same allowance as the draft check above, for the same reason: text this delivery itself left
-      // behind is not a composer that "changed". Re-read rather than reusing `ownResidue`, because
-      // model selection and the writability wait sit between the two and can replace the editor.
-      if (!onTarget() || (CLF_DOM.generating() && !message.directTurn) ||
-          (!ownsFreshPage() && composerHasDraft() &&
-            sendText(CLF_DOM.composerAuthoredText()) !== sendText(input.text)) ||
-          CLF_DOM.hasComposerAttachments()) return fail(t(
+      // Model selection can hydrate a native draft or replace the editor.
+      if (!onTarget() || (CLF_DOM.generating() && !message.directTurn) || protectedDraft()) return fail(t(
         'content_delivery_composer_changed',
         "The provider composer changed before sending"
       ));
@@ -15214,7 +15193,7 @@
         if (!inputNativeSkill) return fail('The optional native skill changed the protected draft. Nothing was submitted.');
         input.text = inputNativeSkill.text;
       }
-      if (!CLF_DOM.insertPrompt(input.text, ownsFreshPage(), reason => { insertionFailure = reason; }))
+      if (!CLF_DOM.insertPrompt(input.text, canReplaceHomeDraft(), reason => { insertionFailure = reason; }))
         return fail(t(
           'content_delivery_text_not_accepted',
           "The provider did not accept the text$1",
@@ -15622,6 +15601,10 @@
           !(!CLF_DOM.warmupRecoveryPending?.() && !authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
         if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return false;
         if (!authorizing && !sendAttempted && !receipt && nativeSendRefusal === 'attachment-upload-unconfirmed') return uploadUnconfirmed();
+        if (CLF_DOM.provider === 'claude' && !authorizing && !sendAttempted && !receipt && nativeSendRefusal && onTarget()) {
+          preserveAttachmentDraft = Boolean(input.images?.length || input.attachments?.length);
+          return fail('Claude could not send the prepared message. Nothing was submitted by OneCode.', nativeSendRefusal);
+        }
         // Send was clicked, but no row proved it. Say so instead of keeping the claim open: the
         // app retires it as an uncertain send, never a replay, and this document takes the next
         // input. The reason is a fixed code the app recognises (see failBrowserInput).

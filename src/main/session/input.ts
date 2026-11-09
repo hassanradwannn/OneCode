@@ -2503,7 +2503,7 @@ export function attachRecordedOpeningInput(
     const current = await load();
     const candidates = current.filter(row => row.opening && row.chatProvider === provider &&
       row.conversationId === null && row.sessionId && row.owner && row.claimedBrowser === browser &&
-      row.state === 'browser' && row.requiresAuthorization && row.offeredAt !== undefined &&
+      (row.state === 'browser' || unconfirmedAuthorizedInput(row)) && row.requiresAuthorization && row.offeredAt !== undefined &&
       row.sendAuthorizedAt !== undefined && row.deliveredAt === undefined && !row.cancelledByUser &&
       row.deliveryText && !companionOf(current, row));
     if (!candidates.length) return false;

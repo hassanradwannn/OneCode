@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.2': {
+    lead: () => t('Send photos through Claude’s native composer.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Paste photos into Claude'), text: () => t('OneCode keeps the prepared photo and prompt through a composer redraw and clicks Send once the button is enabled.') },
+      { icon: 'i-chat', title: () => t('Confirm a late Claude send'), text: () => t('The exact message posted in Claude can confirm delivery after the original wait expires.') }
+    ]
+  },
   '1.0.1': {
     lead: () => t('Send files from Claude’s updated composer.'),
     highlights: [

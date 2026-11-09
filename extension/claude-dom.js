@@ -299,6 +299,7 @@ var CLF_DOM = (() => {
   const clearPromptExact = expected => composerAuthoredText() === clean(expected) && editPrompt('', true, null, false);
   function captureComposerDraft(expected, current = () => true) {
     let box = composer(), retired = false, attached = null;
+    const text = clean(expected);
     const selectedSkill = skillSelection(box);
     const owns = () => {
       if (retired || !current()) return false;
@@ -306,13 +307,17 @@ var CLF_DOM = (() => {
       // A selected skill has its own stronger native-render continuity proof.
       // Carry only that exact proof across a host replacement, including Goal
       // and command drafts; ordinary and human-authored drafts stay node-bound.
-      if (next !== box && selectedSkill && skillSelection(next) === selectedSkill && composerAuthoredText() === clean(expected)) box = next;
-      return next === box && box?.isConnected && composerAuthoredText() === clean(expected) &&
+      if (next !== box && selectedSkill && skillSelection(next) === selectedSkill && composerAuthoredText() === text) box = next;
+      return next === box && box?.isConnected && composerAuthoredText() === text &&
         (!attached || ownsAttachments(attached));
     };
-    return { current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: (nodes, names) => { attached = { nodes, names }; },
-      rebind: () => { if (retired || !current() || composerAuthoredText() !== clean(expected)) return false; box = composer(); return Boolean(box); } };
+    return { text, current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
+      dispose: () => { retired = true; }, attachments: (nodes, names) => { attached = { nodes, names, previews: nodes.map(blobPreview) }; },
+      rebind: () => {
+        if (retired || !current() || composerAuthoredText() !== text || (attached && !ownsAttachments(attached))) return false;
+        box = composer();
+        return Boolean(box);
+      } };
   }
   async function prepareNativeSkill(name, current = () => true) {
     const noteStage = stage => { try { document.documentElement.setAttribute('data-onecode-claude-skill-diagnostic', JSON.stringify({ stage,
@@ -390,13 +395,16 @@ var CLF_DOM = (() => {
   function attachmentRows() {
     const tile = '[data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])';
     const box = composer(), dock = box?.closest('[data-cds-dock-group]');
-    const owner = dock || box?.closest('form');
-    const legacy = all(`[data-cds-composer-attachments] ${tile}`);
+    const form = box?.closest('form'), owner = dock || form;
+    if (!owner) return [];
     // Current Claude renders the strip beside the editor's form, inside the
     // same dock. Only count tiles in the dock that owns the active composer.
-    const current = owner ? all(`[data-cds="MessageAttachments"][data-cds-composer-attachments-row] > ${tile}`, owner)
-      .filter(row => dock ? row.closest('[data-cds-dock-group]') === dock : row.closest('form') === owner) : [];
-    return [...new Set([...legacy, ...current])].filter(shown);
+    return all(`[data-cds-composer-attachments] ${tile}, [data-cds="MessageAttachments"][data-cds-composer-attachments-row] > ${tile}`, owner)
+      .filter(row => {
+        const rowForm = row.closest('form');
+        return shown(row) && !row.closest('[data-cds="UserMessage"],[data-testid="user-message"]') &&
+          (!rowForm || rowForm === form) && (!dock || row.closest('[data-cds-dock-group]') === dock);
+      });
   }
   const attachmentRemove = row => {
     const controls = all('button[data-cds-attachment-remove][aria-label^="Remove "]', row);
@@ -418,9 +426,24 @@ var CLF_DOM = (() => {
       return true;
     });
   }
-  function ownsAttachments({ nodes, names }) {
+  function blobPreview(row) {
+    const image = row.querySelector('img[data-cds-tile-picture]');
+    const url = image?.src || image?.currentSrc;
+    return url?.startsWith('blob:') ? url : null;
+  }
+  function ownsAttachments({ nodes, names, previews }) {
     const rows = attachmentRows();
-    return nodes.every(node => rows.includes(node)) && attachmentsMatch(rows, names);
+    if (!attachmentsMatch(rows, names)) return false;
+    const remaining = new Set(rows);
+    return nodes.every((node, index) => {
+      const preview = previews[index], observed = blobPreview(node);
+      const match = remaining.has(node) && (!preview || !observed || observed === preview) ? node :
+        preview && [...remaining].find(row => blobPreview(row) === preview);
+      if (!match) return false;
+      remaining.delete(match);
+      previews[index] ??= blobPreview(match);
+      return true;
+    });
   }
   const hasComposerAttachments = () => attachmentRows().length > 0;
   const composerAttachmentNames = () => attachmentRows().map(attachmentName).filter(Boolean).sort();
@@ -449,26 +472,29 @@ var CLF_DOM = (() => {
     let box = composer(); const route = location.href, expected = composerAuthoredText();
     if (files.length > 20 || files.some(file => !file.name || file.name.length > 512) || !box || !composerWritable() ||
         !current() || !draft?.current() || hasComposerAttachments()) return refuse('upload-draft-unavailable');
-    // Fresh /new and existing chats use different native input IDs and mounts.
-    // Elect only the unique labelled native input in this editor's nearest
-    // form/dock owner. An unrelated uploader elsewhere on the page cannot win.
-    let dock = null, input = null;
+    const paste = files.every(file => /^image\//i.test(file.type));
     const form = box.closest('form');
-    for (let owner = box.parentElement; owner && owner !== document.body; owner = owner.parentElement) {
-      if (!owner.matches('form,[data-cds-dock-group]')) continue;
-      const inputs = all('input[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]', owner)
-        .filter(node => node.isConnected && !node.disabled && !node.closest(OWN) &&
-          (!node.closest('form') || node.closest('form') === form));
-      if (inputs.length > 1) return refuse('upload-input-ambiguous');
-      if (inputs.length === 1) { dock = owner; input = inputs[0]; break; }
+    const dock = box.closest('[data-cds-dock-group]') || form;
+    if (!dock) return refuse('upload-draft-unavailable');
+    let input = null;
+    if (!paste) {
+      // Non-image files keep the existing native file input route.
+      for (const owner of new Set([form, dock])) {
+        if (!owner) continue;
+        const inputs = all('input[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]', owner)
+          .filter(node => node.isConnected && !node.disabled && !node.closest(OWN) &&
+            (!node.closest('form') || node.closest('form') === form));
+        if (inputs.length > 1) return refuse('upload-input-ambiguous');
+        if (inputs.length === 1) { input = inputs[0]; break; }
+      }
+      if (!input) return refuse('upload-input-unavailable');
     }
-    if (!dock || !input) return refuse('upload-input-unavailable');
     let interrupted = false;
     const note = event => {
       if (!event.isTrusted) return;
       const button = event.target?.closest?.('button');
       if (dock.contains(event.target) ||
-          event.target?.closest?.(`${BOX},[data-cds-composer-attachments],input[type="file"]`) ||
+          event.target?.closest?.(`${BOX},[data-cds-composer-attachments],[data-cds-composer-attachments-row],input[type="file"]`) ||
           button && (button === sendButton() || button === attachButton())) interrupted = true;
     };
     const survives = () => !interrupted && current() && location.href === route;
@@ -489,9 +515,9 @@ var CLF_DOM = (() => {
     try {
       if (!owns()) return refuse('upload-draft-changed');
       const transfer = new DataTransfer(); for (const file of files) transfer.items.add(file);
-      // One native input change only. A lost/ambiguous upload is left in the
-      // unsent composer and is never retried or replaced automatically.
-      input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+      // Dispatch exactly one native paste or file change for the owned draft.
+      if (paste) box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true, composed: true }));
+      else { input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true })); }
       const names = files.map(file => file.name);
       const staged = await waitFor(() => {
         if (!owns()) return composer() === box && composerAuthoredText() !== expected ? { error: 'upload-draft-changed' } : null;
@@ -500,12 +526,12 @@ var CLF_DOM = (() => {
         if (rows.length > files.length) return { error: 'upload-attachment-mismatch' };
         return attachmentsMatch(rows, names) ? { rows } : null;
       }, survives);
-      if (!staged?.rows || !owns()) return refuse(staged?.error || (survives() ? 'upload-not-staged' : 'upload-draft-changed'));
+      if (!staged?.rows || !owns()) return refuse(staged?.error || (!survives() ? 'upload-draft-changed' : paste ? 'paste-not-staged' : 'upload-not-staged'));
       // Native Send owns the timing of upload completion. Lease the staged
       // tiles now and let send() use the first enabled provider Send button.
       draft.attachments(staged.rows, names);
       return draft.current();
-    } catch { return refuse('native-upload-unavailable'); }
+    } catch { return refuse(paste ? 'native-paste-unavailable' : 'native-upload-unavailable'); }
     finally { for (const type of editEvents) document.removeEventListener(type, note, true); }
   }
   function usageEvidence(node, notice) {
@@ -672,8 +698,9 @@ var CLF_DOM = (() => {
     matchesUser = null, receiptTimeoutMs = null, acceptanceTimeoutMs = 30000, explain = null, whileGenerating = false,
     initialDraft = null, prepareAttachments = null, onSendAttempt = null } = {}) {
     const refuse = reason => { explain?.(reason); return false; };
-    const box = composer(), start = conversationId(), submitted = composerAuthoredText(), route = location.href;
-    if (!box || !submitted || !composerWritable() || !stillCurrent() || initialDraft && !initialDraft.current()) return refuse('editor-not-ready');
+    let box = composer();
+    const start = conversationId(), submitted = initialDraft?.text ?? composerAuthoredText(), route = location.href;
+    if (!submitted || !stillCurrent() || (!initialDraft && !composerWritable())) return refuse('editor-not-ready');
     if (generating() && !whileGenerating) return refuse('page-busy');
     if (whileGenerating && (!start || typeof acceptUserReceipt !== 'function')) return refuse('page-busy');
     let edited = false, clicked = false, stopped = false, rawRead = null, queueCommitAttempted = false;
@@ -687,12 +714,21 @@ var CLF_DOM = (() => {
       const queued = clicked && whileGenerating ? queuedSendButtons().filter(node => !priorQueue.has(node)) : [];
       // A person's Send now commits the same queued input. Do not click it again.
       if (button && queued.length === 1 && queued[0] === button) { queueCommitAttempted = true; return; }
-      if (event.target?.closest?.(BOX) || event.type === 'click' &&
-          (event.target?.closest?.('[role="menu"]') || button === attachButton())) edited = true;
+      if (event.target?.closest?.(`${BOX},[data-cds-composer-attachments],[data-cds-composer-attachments-row]`) ||
+          button && (event.target?.closest?.('[role="menu"]') || button === attachButton() || button === sendButton())) edited = true;
     };
-    const current = () => !edited && stillCurrent() && location.href === route && composer() === box &&
-      composerAuthoredText() === submitted && (!initialDraft || initialDraft.current());
-    for (const type of ['beforeinput', 'input', 'click']) document.addEventListener(type, noteEdit, true);
+    const lease = () => !edited && stillCurrent() && location.href === route;
+    const current = () => {
+      if (!lease()) return false;
+      const next = composer();
+      if (next !== box) {
+        if (!next || !initialDraft?.rebind?.()) return false;
+        box = next;
+      }
+      return composerWritable() && composerAuthoredText() === submitted && (!initialDraft || initialDraft.current());
+    };
+    const edits = ['beforeinput', 'input', 'paste', 'drop', 'click'];
+    for (const type of edits) document.addEventListener(type, noteEdit, true);
     try {
       // Claude keeps its MCP connector enabled at account/chat setup. Ordinary
       // sends neither mention it nor open/toggle its native connector picker.
@@ -700,10 +736,11 @@ var CLF_DOM = (() => {
       // own every local tool call; native connector settings are not caller proof.
       if (prepareAttachments && !await prepareAttachments(current)) return refuse('attachment-upload-unconfirmed');
       const ready = await waitFor(() => {
+        if (!current()) return null;
         if (enabled(sendButton()) && (!generating() || whileGenerating)) return sendButton();
-        if (whileGenerating && !stopped && enabled(stopButton()) && current()) { stopped = true; stopButton().click(); }
+        if (whileGenerating && !stopped && enabled(stopButton())) { stopped = true; stopButton().click(); }
         return null;
-      }, current, acceptanceTimeoutMs);
+      }, initialDraft ? lease : current, acceptanceTimeoutMs);
       if (!ready || !current()) return refuse('send-not-ready');
       if (beforeSend && await beforeSend(current) !== true) return refuse('not-authorized');
       const button = sendButton();
@@ -746,7 +783,7 @@ var CLF_DOM = (() => {
     } catch { return refuse(clicked ? 'send-acceptance-unconfirmed' : 'page-unavailable'); }
     finally {
       if (nativeUserReceiptRead === rawRead) nativeUserReceiptRead = null;
-      for (const type of ['beforeinput', 'input', 'click']) document.removeEventListener(type, noteEdit, true);
+      for (const type of edits) document.removeEventListener(type, noteEdit, true);
     }
   }
   const conversationTitle = () => document.title.replace(/\s*[-–|]\s*Claude\s*$/, '').trim();

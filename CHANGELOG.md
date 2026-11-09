@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.2] — 2026-11-10
+
+Paste photos into Claude’s composer, keep the prepared message through a redraw, and reconcile late native delivery receipts. See [1.0.2 notes](docs/release-notes/v1.0.2.md).
+
 ## [1.0.1] — 2026-11-09
 
 Recognize Claude’s current attachment strip so a staged file can reach native Send and an existing attachment stays with its original draft. See [1.0.1 notes](docs/release-notes/v1.0.1.md).
