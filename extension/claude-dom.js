@@ -387,7 +387,17 @@ var CLF_DOM = (() => {
   const approvalWaiting = () => Boolean(approvalCard());
   const generating = () => Boolean(stopButton()) || approvalWaiting() || turns().filter(row => row.role === 'assistant').at(-1)?.node.getAttribute('data-is-streaming') === 'true';
   const stopGeneration = current => { const button = stopButton(); if (!current() || !enabled(button)) return false; button.click(); return true; };
-  const attachmentRows = () => all('[data-cds-composer-attachments] [data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])').filter(shown);
+  function attachmentRows() {
+    const tile = '[data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])';
+    const box = composer(), dock = box?.closest('[data-cds-dock-group]');
+    const owner = dock || box?.closest('form');
+    const legacy = all(`[data-cds-composer-attachments] ${tile}`);
+    // Current Claude renders the strip beside the editor's form, inside the
+    // same dock. Only count tiles in the dock that owns the active composer.
+    const current = owner ? all(`[data-cds="MessageAttachments"][data-cds-composer-attachments-row] > ${tile}`, owner)
+      .filter(row => dock ? row.closest('[data-cds-dock-group]') === dock : row.closest('form') === owner) : [];
+    return [...new Set([...legacy, ...current])].filter(shown);
+  }
   const attachmentRemove = row => {
     const controls = all('button[data-cds-attachment-remove][aria-label^="Remove "]', row);
     return controls.length === 1 ? controls[0] : null;

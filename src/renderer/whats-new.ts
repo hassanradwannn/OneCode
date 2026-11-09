@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.1': {
+    lead: () => t('Send files from Claude’s updated composer.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Detect staged Claude attachments'), text: () => t('OneCode recognizes the files beside the editor and preserves any files already in the draft.') }
+    ]
+  },
   '1.0.0': {
     lead: () => t('Send attached files through the native provider composer.'),
     highlights: [
