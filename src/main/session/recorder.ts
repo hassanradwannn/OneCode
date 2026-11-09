@@ -40,6 +40,7 @@ import { continuedRequestTurn, overlappingRequestTurns, recordedRequestTurn, res
 import { getConfig } from '../config.js';
 import { logInfo, logWarn } from '../logger.js';
 import { redactCredentialText } from '../redaction.js';
+import { validateInputImages } from './input-images.js';
 import { currentCall, emptyEvidence, runningToolCalls, type CallEvidence } from '../mcp/call-context.js';
 import {
   MAX_MESSAGE_CHARS,
@@ -2350,17 +2351,33 @@ async function recordChatObservationsNow(
         // A message with no ChatGPT identity cannot participate in the canonical transcript.
         // Dropping it is safer than minting a local id that can collide on reload.
         if (!item.messageId) continue;
-        const written = await upsertMessageEvent(sessionId, {
+        const row = {
           ...base,
-          kind: 'user_message',
+          kind: 'user_message' as const,
           message: await storeText(sessionId, item.text ?? '', MAX_USER_MESSAGE_CHARS),
           ...(item.attachments?.length ? { attachments: item.attachments } : {}),
           ...(item.reaction !== undefined ? { reaction: item.reaction } : {}),
           ...(item.model ? { model: item.model } : {}),
           messageId: item.messageId,
           ...(item.historyBeforeQuestionId ? { historyBeforeQuestionId: item.historyBeforeQuestionId } : {})
-        }, { preferTime: item.authoredTime === true, work: item.authoredNow === true });
+        };
+        const written = await upsertMessageEvent(sessionId, row, { preferTime: item.authoredTime === true, work: item.authoredNow === true });
         if (!written.changed) continue;
+        // Native user images captured from the provider DOM ride as webp
+        // preview attachments. Retain them as session assets so Desktop and
+        // Remote render the same saved bytes; a quota or validation failure
+        // only skips the enrichment, never the message row.
+        const previews = (item.attachments ?? []).filter(file => file.mimeType === 'image/webp' &&
+          file.preview?.startsWith('data:image/webp;base64,')).slice(0, 4);
+        if (previews.length) {
+          try {
+            await validateInputImages(previews.map(file => ({ name: file.name, dataUrl: file.preview! })));
+            const assets = [];
+            for (const file of previews)
+              assets.push(await writeAsset(sessionId, Buffer.from(file.preview!.split(',')[1]!, 'base64'), 'image/webp'));
+            await upsertMessageEvent(sessionId, { ...row, assets });
+          } catch { logWarn('native user image asset retention failed; transcript row retained'); }
+        }
         if (item.authoredNow === true) {
           activity.meaningful = true; activity.at = Math.max(activity.at ?? 0, item.time);
           activity.working = true;

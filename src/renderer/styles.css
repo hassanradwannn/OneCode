@@ -3702,7 +3702,12 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 
 .message-attachments { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .message-attachments img { display: block; width: 96px; height: 96px; object-fit: contain; border: 1px solid var(--line); border-radius: 12px; }
+.message-attachments .is-previewable, .message-attachments img.is-previewable { cursor: zoom-in; outline-offset: 2px; }
+.message-attachments .is-previewable:focus-visible, .message-attachments img.is-previewable:focus-visible { outline: 2px solid var(--accent); }
 .user-image-slot { flex: 0 0 96px; width: 96px; height: 124px; display: grid; grid-template-rows: 96px 28px; justify-items: center; align-items: center; overflow: hidden; }
+.user-image-slot.is-previewable { cursor: zoom-in; border-radius: 12px; }
+.user-image-slot.is-previewable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.user-image-slot.is-previewable img { cursor: zoom-in; }
 .user-image-slot > .meta { margin: 0; padding: 6px; text-align: center; font-size: calc(11px * var(--text-scale, 1)); }
 .user-image-slot > .retained-image-notice { padding: 2px 0; color: var(--soft); font-size: calc(10px * var(--text-scale, 1)); line-height: 12px; text-align: center; }
 .generated-image-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 34rem; margin: 12px 0; }

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.8] — 2026-11-09
+
+Keep active API turns running through brief Windows checkpoint locks, bound OpenRouter’s wait for response headers, and improve authored links, image previews and copied prompts. See [0.9.8 notes](docs/release-notes/v0.9.8.md).
+
 ## [0.9.7] — 2026-11-09
 
 Import an existing standalone HTML file directly, clarify artifact handoffs after context compaction, and restore the per-model OpenRouter effort slider. See [Stable notes](docs/release-notes/v0.9.7.md).

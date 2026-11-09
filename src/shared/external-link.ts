@@ -11,6 +11,50 @@ export function safeExternalLink(value: string): boolean {
   }
 }
 
+export interface AuthoredUrlSegment { text: string; href: string | null }
+
+function countChar(value: string, char: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index++) if (value[index] === char) count++;
+  return count;
+}
+
+// Trailing sentence punctuation is not part of the URL. A closing bracket
+// is stripped only when it is unbalanced, so "(https://x/(y))" keeps its
+// balanced pair while "(https://x)" leaves the outer ")" as text.
+function trimTrailingUrlPunctuation(url: string): string {
+  let end = url.length;
+  while (end > 0) {
+    const char = url[end - 1]!;
+    if ('.,;:!?'.includes(char)) { end--; continue; }
+    if ((char === ')' && countChar(url.slice(0, end), '(') < countChar(url.slice(0, end), ')')) ||
+        (char === ']' && countChar(url.slice(0, end), '[') < countChar(url.slice(0, end), ']')) ||
+        (char === '}' && countChar(url.slice(0, end), '{') < countChar(url.slice(0, end), '}'))) { end--; continue; }
+    break;
+  }
+  return url.slice(0, end);
+}
+
+/** Split authored text into plain and safe-link segments without parsing HTML. */
+export function authoredUrlSegments(value: string): AuthoredUrlSegment[] {
+  if (!value) return [];
+  const segments: AuthoredUrlSegment[] = [];
+  let plainStart = 0;
+  const pattern = /(?:https?:\/\/[^\s<>"']+|mailto:[^\s<>"']+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    const url = trimTrailingUrlPunctuation(match[0]);
+    if (!url || !safeExternalLink(url)) continue;
+    const start = match.index;
+    if (start > plainStart) segments.push({ text: value.slice(plainStart, start), href: null });
+    segments.push({ text: url, href: url });
+    plainStart = start + url.length;
+  }
+  if (plainStart < value.length) segments.push({ text: value.slice(plainStart), href: null });
+  if (!segments.length && value) segments.push({ text: value, href: null });
+  return segments;
+}
+
 /** Provider-local downloadable files are opened through that exact native chat. */
 export function safeProviderFileLink(value: string): boolean {
   if (!/^sandbox:\/mnt\/data\/[^?#]{1,2048}$/.test(value) || /[\s\\]/.test(value)) return false;

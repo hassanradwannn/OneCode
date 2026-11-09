@@ -344,8 +344,19 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
     }
   }
   for (const response of responses) {
-    if (!options.openOriginal || ![...response.querySelectorAll('input, button, select, textarea, [role="slider"], iframe')]
-      .some(control => visible(control) && !control.closest('[data-code-block-controls], [data-markdown-copy="exclude"]'))) continue;
+    // A copy button is not interactive content: a plain copiable prompt
+    // (copy prompt / copy text) must not gain an "open in provider" row.
+    // Only a real widget control (iframe, form field, slider, or a
+    // non-copy button) counts as interactive content that OneCode cannot
+    // import locally; exportable native artifacts take the artifact path.
+    const interactive = [...response.querySelectorAll('input, button, select, textarea, [role="slider"], iframe')]
+      .some(control => {
+        if (!visible(control) || control.closest('[data-code-block-controls], [data-markdown-copy="exclude"]')) return false;
+        if (control.tagName === 'BUTTON' &&
+            (control.hasAttribute('data-copy-text') || /^copy\b/i.test(label(control)))) return false;
+        return true;
+      });
+    if (!options.openOriginal || !interactive) continue;
     const slot = document.createElement('div');
     response.append(slot);
     const view = action('Open interactive content in provider', options.openOriginal);

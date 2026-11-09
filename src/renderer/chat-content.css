@@ -124,6 +124,12 @@
   text-decoration: underline;
 }
 
+.user-message-text a, .pending-message-text a {
+  color: var(--accent);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 /* A source ChatGPT cites inline, drawn as its page draws it: a small pill with the source's name
    and how many more sources stand behind it. */
 .msg.rich a.citation-pill {

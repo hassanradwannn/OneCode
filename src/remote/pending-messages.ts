@@ -1,5 +1,6 @@
 import type { ControlApiEvent, ControlApiInput } from '../shared/control-api.js';
-export type OptimisticMessage = { id: string; sessionId: string | null; composerKey?: string; text: string; state: 'sending' | 'accepted' | 'unconfirmed'; receipt?: ControlApiInput };
+import type { InputAttachment } from '../shared/input.js';
+export type OptimisticMessage = { id: string; sessionId: string | null; composerKey?: string; text: string; attachments?: InputAttachment[]; state: 'sending' | 'accepted' | 'unconfirmed'; receipt?: ControlApiInput };
 /** Receipt identity is the only join; identical text and nearby timestamps prove nothing. */
 export function pendingMessages(rows: OptimisticMessage[], inputs: ControlApiInput[], events: ControlApiEvent[], sessionId: string | null, composerKey?: string): OptimisticMessage[] {
   return rows.flatMap(row => {

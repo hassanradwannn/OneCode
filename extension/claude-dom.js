@@ -17,6 +17,63 @@ var CLF_DOM = (() => {
   const enabled = node => shown(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
   const unique = nodes => { const found = [...new Set(nodes)].filter(shown); return found.length === 1 ? found[0] : null; };
   const safe = (read, fallback = null) => { try { return read() ?? fallback; } catch { return fallback; } };
+  // Rendered images in a native user row, captured once per mounted node.
+  // Claude keeps media items beside the text item in its turn props and the
+  // exact text read deliberately skips them; the pixels are only in the DOM.
+  // Fetch exactly the URL the mounted <img> already loaded and downscale it
+  // through canvas, mirroring the app's normalized webp bound. Cross-origin
+  // or tainted pixels fail closed and simply record no image.
+  const userImageCaptures = new WeakMap();
+  const MAX_USER_IMAGES = 4, MAX_CAPTURED_BYTES = 12 * 1024 * 1024, MAX_CAPTURED_DIM = 1600;
+  async function captureUserImage(node, src) {
+    let url;
+    try { url = new URL(src, location.href); } catch { return null; }
+    if (!['blob:', 'data:', 'https:'].includes(url.protocol)) return null;
+    if (url.protocol === 'https:' && url.origin !== location.origin) return null;
+    if (url.protocol === 'data:' && !/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(src)) return null;
+    let bytes;
+    try {
+      const response = await fetch(src);
+      if (!response.ok) return null;
+      const type = response.headers.get('content-type') || '';
+      if (!/^image\/(?:png|jpe?g|webp|gif)/i.test(type) && !src.startsWith('data:')) return null;
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch { return null; }
+    if (!bytes.length || bytes.length > MAX_CAPTURED_BYTES) return null;
+    const bitmap = await safe(() => createImageBitmap(new Blob([bytes])), null);
+    if (!bitmap || !bitmap.width || !bitmap.height) return null;
+    const scale = Math.min(1, MAX_CAPTURED_DIM / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    return safe(() => canvas.toDataURL('image/webp', 0.82), null);
+  }
+  function userImages(turnNode) {
+    const imgs = all('img', turnNode).filter(node => shown(node) &&
+      (node.currentSrc || node.src) && !node.closest(`${OWN},button,[data-cds="TurnStatus"]`));
+    if (!imgs.length || imgs.length > 10) return [];
+    let captured = userImageCaptures.get(turnNode);
+    if (!captured) { captured = new Map(); userImageCaptures.set(turnNode, captured); }
+    const result = [];
+    for (const img of imgs.slice(0, MAX_USER_IMAGES)) {
+      const src = img.currentSrc || img.src;
+      let entry = captured.get(src);
+      if (!entry) {
+        entry = { dataUrl: null, done: false };
+        captured.set(src, entry);
+        captureUserImage(turnNode, src).then(dataUrl => {
+          entry.dataUrl = dataUrl; entry.done = true;
+          document.dispatchEvent(new Event('onecode-claude-user-image'));
+        }, () => { entry.done = true; document.dispatchEvent(new Event('onecode-claude-user-image')); });
+      }
+      if (entry.dataUrl) result.push({ dataUrl: entry.dataUrl, alt: (img.alt || '').slice(0, 120) });
+    }
+    return result;
+  }
   const isAppHomePath = path => /^\/new\/?$/.test(path);
   const conversationFromPath = path => {
     const native = new RegExp(`^/chat/(${UUID})/?$`, 'i').exec(path)?.[1];
@@ -138,11 +195,15 @@ var CLF_DOM = (() => {
       });
       value = parts.filter(Boolean).join('\n\n');
     }
-    if (!value) return [];
+    // Image-only user sends have no text worth returning, but the row is
+    // still a real authored message once its pixels are captured.
+    if (!value && !(turn.role === 'user' && userImages(turn.node).length)) return [];
     seen.add(turn.id);
     // Full user readback stays private evidence for the durable exact task receipt.
     // Only userPromptText removes its app frame in presentation.
-    return [{ id: turn.id, role: turn.role, text: value, turnId: turn.id, node: turn.node, interrupted: false }];
+    const images = turn.role === 'user' ? userImages(turn.node) : [];
+    return [{ id: turn.id, role: turn.role, text: value, turnId: turn.id, node: turn.node, interrupted: false,
+      ...(images.length ? { images } : {}) }];
   }
   const messages = () => { const seen = new Set(); return turns().flatMap((turn, at) => messagesIn(turn, at, seen)); };
   const nativeUserText = new WeakMap();

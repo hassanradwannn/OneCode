@@ -16,7 +16,7 @@ import { imageStorageButton } from './image-storage.js';
 import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, initChatModels, confirmedComposerModel, composerSendModel, ensureComposerModel, chatModelName, settingsModelAffinity } from './chat-models.js';
 import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
-import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
+import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
 import { createFilePanel } from './file-panel.js';
 import { renderAgentPlan } from './agent-plan.js';
@@ -685,7 +685,12 @@ function paintComposerImages(): void {
 }
 
 async function openComposerImagePreview(image: InputImage | InputAttachment): Promise<void> {
-  const source = 'dataUrl' in image ? image.dataUrl : await run(api.previewInputAttachment(image.id));
+  // Staged attachments resolve full bytes from the input store. Native
+  // captured attachments have no staged file, so they fall back to the
+  // bounded preview bytes carried on the record itself.
+  const source = 'dataUrl' in image ? image.dataUrl
+    : await run(api.previewInputAttachment(image.id)) ??
+    (typeof image.preview === 'string' && image.preview.startsWith('data:image/') ? image.preview : null);
   if (!source) { toast(t('Image preview unavailable')); return; }
   const dialog = document.createElement('dialog'); dialog.className = 'composer-image-preview-dialog';
   const close = el('button', 'composer-image-preview-close', '×') as HTMLButtonElement; close.type = 'button';
@@ -697,6 +702,16 @@ async function openComposerImagePreview(image: InputImage | InputAttachment): Pr
   dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog); dialog.showModal(); close.focus();
+}
+/** Transcript thumbnails reuse the compose-time dialog on click and on Enter/Space. */
+function makePreviewable(node: HTMLElement, image: InputImage | InputAttachment, label: string): void {
+  node.classList.add('is-previewable');
+  node.setAttribute('role', 'button');
+  node.tabIndex = 0;
+  ui(node, 'aria-label', () => t('Preview {0}', [label]));
+  const open = (): void => { void openComposerImagePreview(image); };
+  node.addEventListener('click', open);
+  node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
 }
 function attachmentCard(file: InputAttachment, inComposer = false): HTMLElement {
   if (file.preview) {
@@ -2372,6 +2387,48 @@ function textBlock(className: string, value: string, truncated: boolean, chars: 
   return node;
 }
 
+/** Authored text one segment at a time: textContent stays exact, HTML stays inert. */
+function fillAuthoredText(node: HTMLElement, value: string): void {
+  for (const segment of authoredUrlSegments(value)) {
+    if (segment.href) {
+      const link = document.createElement('a');
+      link.href = segment.href;
+      link.textContent = segment.text;
+      node.append(link);
+    } else if (segment.text) {
+      node.append(document.createTextNode(segment.text));
+    }
+  }
+}
+
+/** The existing main-process link API owns the actual opening, on click or Enter. */
+function bindAuthoredLinks(node: HTMLElement): void {
+  const open = (event: MouseEvent | KeyboardEvent): void => {
+    const anchor = (event.target as Element | null)?.closest?.('a[href]');
+    if (!anchor || !node.contains(anchor)) return;
+    if (event.type === 'auxclick' && (event as MouseEvent).button !== 1) return;
+    if (event.type === 'keydown' && (event as KeyboardEvent).key !== 'Enter') return;
+    const href = safeRenderedHref(anchor.getAttribute('href') ?? '');
+    event.preventDefault();
+    if (!href || href.startsWith('#') || safeProviderFileLink(href)) return;
+    void run(api.openLink(href));
+  };
+  node.addEventListener('click', open);
+  node.addEventListener('auxclick', open);
+  node.addEventListener('keydown', open);
+}
+
+function userMessageTextBlock(className: string, value: string, truncated: boolean, chars: number): HTMLElement {
+  const node = el('p', className);
+  node.setAttribute('dir', 'auto');
+  fillAuthoredText(node, value);
+  if (truncated) {
+    node.append(el('span', 'cut', () => t(" … cut, {0} characters in the original", [compactNumber(chars)])));
+  }
+  bindAuthoredLinks(node);
+  return node;
+}
+
 
 function safeRenderedHref(value: string): string | null {
   const trimmed = value.trim();
@@ -3659,15 +3716,21 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       box.classList.add('has-reaction-slot');
       box.append(el('b', '', () => t("You")));
       const attachments = el('div', 'message-attachments');
-      if (event.attachments?.length) attachments.append(...event.attachments.map(file => attachmentCard(file)));
+      if (event.attachments?.length) attachments.append(...event.attachments.map(file => {
+        const node = attachmentCard(file);
+        if (file.mimeType.startsWith('image/')) makePreviewable(node, file, file.name);
+        return node;
+      }));
       const assets = event.assets?.filter(asset => asset.mimeType === 'image/webp').slice(0, MAX_INPUT_IMAGES) ?? [];
       const retained = retainedInputImages(event, context?.id ?? selectedId);
-      const preview = (data: string, retainedOnly = false, slot?: HTMLElement) => {
+      const preview = (data: string, retainedOnly = false, slot?: HTMLElement, source?: InputImage) => {
         const image = document.createElement('img');
         image.src = data; image.alt = t("User attachment"); image.loading = 'lazy';
         const frame = slot ?? el('div', 'user-image-slot');
         frame.replaceChildren(image);
         if (!slot) attachments.append(frame);
+        const payload: InputImage = source ?? { name: t("User attachment"), dataUrl: data };
+        makePreviewable(frame, payload, payload.name);
         if (retainedOnly) {
           const notice = el('span', 'retained-image-notice', () => t("Not saved to history"));
           ui(notice, 'title', () => t("Image preview retained with this delivery; not yet saved to history."));
@@ -3683,11 +3746,11 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
         return slot;
       });
       if (event.attachments?.length || assets.length || retained.length) box.append(attachments);
-      if (!assets.length) for (const image of retained) preview(image.dataUrl, true);
+      if (!assets.length) for (const image of retained) preview(image.dataUrl, true, undefined, image);
       // Native Gemini can prepend a blank paragraph. Ignore it only when a
       // complete instruction frame validates; keep the authored suffix exact.
       const userText = event.authoredText ?? geminiUserText(event.message.text);
-      if (userText) box.append(textBlock('msg user-message-text', userText, event.authoredText === undefined && event.message.truncated, event.authoredText?.length ?? event.message.chars));
+      if (userText) box.append(userMessageTextBlock('msg user-message-text', userText, event.authoredText === undefined && event.message.truncated, event.authoredText?.length ?? event.message.chars));
       paintMessageReaction(box, event.reaction);
       if (event.inputDelivery) {
         box.classList.add('has-input-receipt');
@@ -3704,8 +3767,8 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
             const data = await run(api.getSessionImage(id, asset.id));
             if (context ? !context.current() : id !== selectedId || generation !== selectionGeneration) return;
             const slot = slots[index]!;
-            if (data) preview(data, false, slot);
-            else if (retained[index]) preview(retained[index]!.dataUrl, true, slot);
+            if (data) preview(data, false, slot, retained[index] ? { name: retained[index]!.name, dataUrl: data } : { name: asset.id, dataUrl: data });
+            else if (retained[index]) preview(retained[index]!.dataUrl, true, slot, retained[index]);
             else slot.replaceChildren(el('span', 'meta', () => t("Image unavailable")));
           }
         })();
@@ -5326,12 +5389,18 @@ let apiLiveActivity: import('../main/api/activity.js').ApiActivity | null = null
 let apiContextView:{tokens:number;limit:number}|null=null;
 function liveActivity(): { text: string; icon: string; working: boolean; since?: number } | null {
   if (controlledSessionId === selectedId && apiLiveActivity) {
+    // OpenRouter free budget as of the last dispatched request. Keep it
+    // visible while the turn runs so a low remaining count is seen early.
+    const free = apiLiveActivity.freeRequests;
+    const lowFree = free && free.remaining <= 5 ? t(' Low free requests — consider a different model or waiting for the reset.') : '';
+    const freeText = free ? t(' · {0} free requests left ({1} of {2} small-model budget used today)',
+      [String(free.remaining), String(free.used), String(free.limit)]) + lowFree : '';
     const labels: Partial<Record<import('../main/api/activity.js').ApiActivity['phase'], string>> = {
       catalog: t('Loading model information'), preparing: t('Preparing API request'), requesting: t('Waiting for provider response'),
       compacting: t('Compacting context — running tasks are retained')
     };
     const label = labels[apiLiveActivity.phase];
-    if (label) return { text: apiLiveActivity.phase==='compacting' ? apiLiveActivity.reason || label : label, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
+    if (label) return { text: (apiLiveActivity.phase==='compacting' ? apiLiveActivity.reason || label : label) + freeText, icon: 'i-pulse', working: true, since: apiLiveActivity.since };
   }
   if (controlledSessionId === selectedId && apiLiveActivity?.phase === 'recovering')
     return { text: t('Reconnecting to the model (retry {0}) — running tasks are retained', [String(apiLiveActivity.attempt ?? 1)]), icon: 'i-retry', working: true };
@@ -6535,7 +6604,11 @@ function apiPendingInputStatus(entry: InputEntry): string | null {
   const activity = controlledSessionId === selectedId && apiLiveActivity?.inputId === entry.id ? apiLiveActivity : null;
   if (!activity && entry.steerTurnId && controlledUnfinishedTurnId === entry.steerTurnId) return t('Waiting for the current step to finish');
   if (activity?.phase === 'catalog') return t('Loading model information…');
-  if (activity?.phase === 'requesting') return t('Waiting for provider acceptance…');
+  if (activity?.phase === 'requesting') {
+    const free = activity.freeRequests;
+    return t('Waiting for provider acceptance…') +
+      (free ? t(' {0} free requests left ({1} of {2} used)', [String(free.remaining), String(free.used), String(free.limit)]) : '');
+  }
   if (activity?.phase === 'recovering') return t('Retrying provider connection…');
   if (activity?.phase === 'compacting') return t('Compacting context before sending…');
   if(entry.apiRecovery)return t(entry.apiRecovery);
@@ -6559,12 +6632,18 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
   const status = () => entry.error ? t(entry.error) : apiStatus ?? (held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued")));
   const files = el('div', 'message-attachments');
-  if (entry.attachments?.length) files.append(...entry.attachments.map(file => attachmentCard(file)));
-  for (const image of entry.images ?? []) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; files.append(preview); }
+  if (entry.attachments?.length) files.append(...entry.attachments.map(file => {
+    const node = attachmentCard(file);
+    if (file.mimeType.startsWith('image/')) makePreviewable(node, file, file.name);
+    return node;
+  }));
+  for (const image of entry.images ?? []) { const thumbnail = document.createElement('img'); thumbnail.src = image.dataUrl; thumbnail.alt = image.name; makePreviewable(thumbnail, image, image.name); files.append(thumbnail); }
   if (files.childElementCount) row.append(files);
   if (entry.text) {
-    const text = el('div', 'pending-message-text', entry.text);
+    const text = el('div', 'pending-message-text');
     text.setAttribute('dir', 'auto');
+    fillAuthoredText(text, entry.text);
+    bindAuthoredLinks(text);
     row.append(text);
   }
   const receipt = el('span', 'pending-message-status');

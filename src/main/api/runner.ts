@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from 'node:timers/promises';
 import { getConfig } from "../config.js";
-import { readDurable, writeDurableNow } from "../durable.js";
+import { flushDurableName, readDurable, writeDurableNow } from "../durable.js";
 import { appendEvent, getSession, readLatestUserMessage, upsertMessageEvent, conversationWasSuperseded } from "../session/store.js";
 import { isChatBlocked } from '../session/blocked-chats.js';
 import { acknowledgeOpenRouterInput, claimOpenRouterInput, failBrowserInput, noteInputStartupError, noteApiInputRecovery, listInputs, type InputEntry } from "../session/input.js";
@@ -73,7 +73,14 @@ export async function apiContextForSession(sessionId:string,conversationId:strin
   }catch{return null;}
 }
 
-async function loadThread(sessionId: string, conversationId: string): Promise<Thread> {
+export async function loadThread(sessionId: string, conversationId: string): Promise<Thread> {
+  // A completed tool result whose save failed is still pending in durable
+  // (retry scheduled). Flush it before reading: reading the older on-disk
+  // thread would repair its tool call as unavailable and a later save would
+  // supersede the pending receipt, losing the original result. If the flush
+  // still fails, fail closed here (input stays queued) rather than cementing
+  // that stale repair.
+  await flushDurableName(stateName(sessionId));
   const existing = await readDurable<unknown>(stateName(sessionId), { strict: true });
   if (existing === null) return { version: 1, sessionId, conversationId, messages: [] };
   if (!threadValid(existing, sessionId, conversationId)) throw new ApiError("THREAD_STORAGE_INVALID");
@@ -450,10 +457,18 @@ async function perform(entry: InputEntry): Promise<void> {
       let retried = false;
       retryCount = 0;
       let contextRecoveries = 0;
+      // The provider refreshes its free-request cache after every dispatched
+      // attempt (provider wrapper); project it on the live activity so the
+      // remaining budget is visible as soon as it changes.
+      const noteFreeRequests = () => {
+        const free = provider.freeRequests?.();
+        if (free) { active.activity = { ...active.activity, freeRequests: free }; notifyChanged(turn.sessionId); }
+      };
       for (let attempt = 0; ; attempt++) {
         controller.signal.throwIfAborted();
-        try { response = await complete(); break; }
+        try { response = await complete(); noteFreeRequests(); break; }
         catch (error) {
+          noteFreeRequests();
           controller.signal.throwIfAborted();
           // Storage/receipt failures and tool execution never enter an inference retry.
           if (accepted && await yieldToDirection()) return;

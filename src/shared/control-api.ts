@@ -218,6 +218,8 @@ export interface ControlApiLive {
   /** Deadlines the app is holding for this chat: the reasons it has not acted yet. */
   recovery: ControlApiRecovery[];
   job: ControlApiJob | null;
+  /** OpenRouter free-model budget as of the last dispatched request; counts only, never the key. */
+  freeRequests?: { used: number; limit: number; remaining: number } | null;
 }
 
 export interface ControlApiSessionDetail {
@@ -255,6 +257,8 @@ export type ControlApiEvent = {
   inputDelivery?: string;
   attachments?: number;
   images?: number;
+  /** Saved user-message image assets, in canonical order. */
+  assets?: Array<{ id: string; mimeType: string }>;
   /** `assistant_message`. */
   final?: boolean;
   nativeMarkup?: { messageId: string; capture: ControlApiText };

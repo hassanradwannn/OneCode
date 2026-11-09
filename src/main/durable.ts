@@ -16,10 +16,12 @@
 import { constants, promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
 import { logWarn } from './logger.js';
 
 const WRITE_DELAY_MS = 300;
 const RETRY_MAX_MS = 5_000;
+const WINDOWS_RENAME_BACKOFF_MS = [25, 50, 100, 200, 400, 800] as const;
 
 let root = '';
 let revision = 0;
@@ -89,6 +91,23 @@ function enqueue(name: string, write: () => Promise<void>): Promise<void> {
   return queued;
 }
 
+/** Windows may briefly deny replacement while another handle is open. Keep the
+ * same temp file and serialization slot until the atomic replacement settles. */
+async function replaceStateFile(tmp: string, target: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(tmp, target);
+      return;
+    } catch (error) {
+      const delay = WINDOWS_RENAME_BACKOFF_MS[attempt];
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || delay === undefined ||
+          (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw error;
+      await wait(delay);
+    }
+  }
+}
+
 /** Explicit recovery only: preserve the original before atomically replacing it.
  * The ledger owner must serialize validation and recovery with its other operations.
  * Unlike an ordinary write, failed recovery never schedules a replacement on retry.
@@ -104,7 +123,7 @@ export async function recoverDurable(name: string, value: unknown): Promise<void
     if (!(await fs.lstat(target)).isFile()) throw new Error('State file is unavailable');
     await fs.copyFile(target, path.join(root, `${name}.recovery-${randomUUID()}.json`), constants.COPYFILE_EXCL);
     await fs.writeFile(`${target}.tmp`, JSON.stringify(value), 'utf8');
-    await fs.rename(`${target}.tmp`, target);
+    await replaceStateFile(`${target}.tmp`, target);
   });
   revisions.set(name, ++revision);
 }
@@ -154,7 +173,7 @@ async function flushOne(name: string, slot: PendingWrite): Promise<void> {
       await fs.rm(target, { force: true });
     } else {
       await fs.writeFile(tmp, JSON.stringify(slot.value), 'utf8');
-      await fs.rename(tmp, target);
+      await replaceStateFile(tmp, target);
     }
   } catch (err) {
     logWarn(`could not save ${name} state: ${(err as Error).message}`);
@@ -232,6 +251,35 @@ export async function flushDurable(): Promise<void> {
     // Every independent file gets its shutdown attempt, even when another fails.
     const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failed) throw failed.reason;
+  }
+}
+
+/**
+ * Flush one named state's pending generation (including a retry-pending
+ * commit from a failed writeDurableNow) before a read-modify-write caller
+ * reads it. Without this, a completed tool result queued for retry can be
+ * read as the older on-disk thread, repaired as an unknown outcome, and
+ * then superseded by the repaired save, losing the original receipt.
+ * Throws on failure (and keeps the retry scheduled) so callers fail closed
+ * instead of cementing a stale read.
+ */
+export async function flushDurableName(name: string): Promise<void> {
+  const slot = pending.get(name);
+  if (!slot && !inFlight.has(name)) return;
+  const timer = timers.get(name);
+  if (timer) {
+    clearTimeout(timer);
+    timers.delete(name);
+  }
+  if (!slot) {
+    await inFlight.get(name);
+    return;
+  }
+  try {
+    await enqueueSlot(name, slot);
+  } catch (err) {
+    scheduleRetry(name);
+    throw err;
   }
 }
 

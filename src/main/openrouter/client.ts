@@ -8,10 +8,16 @@ export type { ApiModel as OpenRouterModel, ApiTool as OpenRouterTool, ApiToolCal
 export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
 import { apiTransportError } from '../api/recovery.js';
 import { API_INPUT_MODALITIES } from '../../shared/chat-models.js';
+/** Free-model daily request budget reported by GET /key. Counts only, never the key. */
+export interface OpenRouterFreeRequests { used: number; limit: number; remaining: number }
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
 // A transport memory bound, separate from the selected model's token/context limits.
 export const MAX_API_REQUEST_BYTES = 16 * 1024 * 1024;
+// Bounded wait for response headers (provider acceptance). The caller's total
+// signal (10 min in providers.ts) still bounds the body; this only bounds the
+// pre-header wait so a silent connection advances the runner retry loop.
+export const DEFAULT_HEADER_TIMEOUT_MS = 120_000;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_TOOL_ARGUMENTS = 64 * 1024;
 
@@ -29,6 +35,8 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const positive = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 const str = (value: unknown): string => typeof value === "string" ? value : "";
+const count = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 10_000_000 ? value : null;
 
 function authHeaders(apiKey: string): HeadersInit {
   if (!apiKey || apiKey.length > 512 || /[\r\n]/.test(apiKey)) throw new OpenRouterApiError("INVALID_KEY");
@@ -174,7 +182,11 @@ async function streamCompletion(response: Response, onText?: (increment: string)
 }
 
 export class OpenRouterClient {
-  constructor(private readonly transport: typeof fetch = fetch, private readonly baseUrl = OPENROUTER_API) {}
+  constructor(private readonly transport: typeof fetch = fetch, private readonly baseUrl = OPENROUTER_API,
+    private readonly headerTimeoutMs: number = DEFAULT_HEADER_TIMEOUT_MS) {
+    if (!Number.isFinite(headerTimeoutMs) || headerTimeoutMs <= 0)
+      throw new Error('Invalid header timeout');
+  }
 
   async models(apiKey: string, signal?: AbortSignal): Promise<OpenRouterModel[]> {
     const response = await this.transport(this.baseUrl + "/models", { headers: authHeaders(apiKey), signal }).catch(error => {
@@ -217,6 +229,29 @@ export class OpenRouterClient {
     });
   }
 
+  /** GET /key free-model budget. free_model_daily_requests is reported by
+   * the endpoint for free-tier keys but is not part of the published schema,
+   * so absence/invalid values return null and no counter is shown. Never logs the key. */
+  async keyInfo(apiKey: string, signal?: AbortSignal): Promise<OpenRouterFreeRequests | null> {
+    const response = await this.transport(this.baseUrl + "/key", { headers: authHeaders(apiKey), signal }).catch(error => {
+      if (signal?.aborted && signal.reason?.name !== 'TimeoutError') throw error;
+      throw apiTransportError(error);
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw apiFailure(response.status, retryAfter(response));
+    }
+    let value: unknown;
+    const raw = await boundedText(response);
+    try { value = JSON.parse(raw); } catch { return null; }
+    if (!isObject(value) || !isObject(value.data) || !isObject(value.data.free_model_daily_requests)) return null;
+    const budget = value.data.free_model_daily_requests;
+    const used = count(budget.used), limit = count(budget.limit);
+    if (used === null || limit === null) return null;
+    const remaining = count(budget.remaining) ?? Math.max(0, limit - used);
+    return { used, limit, remaining };
+  }
+
   async complete(input: CompleteOptions): Promise<OpenRouterCompletion> {
     if (!input.model || input.model.length > 200 || !/^[A-Za-z0-9._:\/-]+$/.test(input.model))
       throw new OpenRouterApiError("INVALID_MODEL");
@@ -244,22 +279,47 @@ export class OpenRouterClient {
     input.onDispatch?.(requestBytes);
     // One transport attempt only. The harness can retry inference from a saved checkpoint;
     // no local tool is executed until a complete validated response has been returned.
-    const response = await this.transport(this.baseUrl + "/chat/completions", { method: "POST",
-      headers, body, signal: input.signal }).catch(error => {
-        if (input.signal?.aborted && input.signal.reason?.name !== 'TimeoutError') throw error;
-        throw apiTransportError(error);
-      });
+    // Bounded header wait: linked to the caller signal so user cancellation
+    // still aborts the body after headers, but a silent connection times out
+    // as REQUEST_TIMEOUT (via apiTransportError) instead of waiting for the
+    // caller's total timeout. The timer is cleared once headers arrive.
+    const headerController = new AbortController();
+    const callerSignal = input.signal;
+    const onCallerAbort = () => headerController.abort(callerSignal?.reason ?? new Error('Request aborted'));
+    if (callerSignal) {
+      if (callerSignal.aborted) headerController.abort(callerSignal.reason);
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    const headerTimer = setTimeout(() => headerController.abort(
+      new DOMException('Provider did not send response headers in time', 'TimeoutError')), this.headerTimeoutMs);
+    headerTimer.unref?.();
+    let response: Response;
+    try {
+      response = await this.transport(this.baseUrl + "/chat/completions", { method: "POST",
+        headers, body, signal: headerController.signal }).catch(error => {
+          if (callerSignal?.aborted && callerSignal.reason?.name !== 'TimeoutError') throw error;
+          throw apiTransportError(error);
+        });
+    } finally {
+      clearTimeout(headerTimer);
+    }
+    try {
     if (!response.ok) {
       let error:unknown;
       try { const value:unknown=JSON.parse(await boundedText(response));if(isObject(value))error=value.error; } catch { /* Body is only typed classification evidence. */ }
       throw apiFailure(response.status, retryAfter(response),error);
     }
     await input.onAccepted?.();
-    if (streaming) return streamCompletion(response, input.onText, input.onToolCall);
+    // Await (not return) the stream so the caller-abort link above stays
+    // registered for the whole body; a bare return would run finally first.
+    if (streaming) return await streamCompletion(response, input.onText, input.onToolCall);
     let value: unknown;
     const raw = await boundedText(response);
     try { value = JSON.parse(raw); } catch { throw new OpenRouterApiError("INVALID_RESPONSE"); }
     if(isObject(value)){const failure=streamFailure(value);if(failure)throw failure;}
     return parseCompletion(value);
+    } finally {
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+    }
   }
 }

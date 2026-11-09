@@ -2033,7 +2033,12 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
       observation.attachments = item['attachments'].slice(0, 4).filter(file => file && typeof file === 'object' &&
         typeof file.id === 'string' && file.id.length > 0 && file.id.length <= 100 && typeof file.name === 'string' && file.name.length > 0 && file.name.length <= 200 &&
         /^image\/[a-z0-9.+-]{1,80}$/i.test(file.mimeType) && Number.isSafeInteger(file.size) && file.size >= 0 && file.size <= 512 * 1024 * 1024)
-        .map(file => ({ id: file.id, name: file.name, size: file.size, mimeType: file.mimeType }));
+        .map(file => ({ id: file.id, name: file.name, size: file.size, mimeType: file.mimeType,
+          // Native captured user images ride as bounded webp preview bytes;
+          // the recorder retains them as session assets. Anything else is
+          // metadata only and never crosses as pixels.
+          ...(typeof file.preview === 'string' && /^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(file.preview) &&
+            file.preview.length <= 512_100 ? { preview: file.preview } : {}) }));
     }
     if (typeof item['messageId'] === 'string') {
       // Fiber's exact logical assistant tuple can span 190 characters. A prefix

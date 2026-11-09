@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
 import type { AgentPlan } from '../shared/agent-plan.js';
@@ -13,11 +13,45 @@ import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '.
 import { renderAgentPlan } from '../renderer/agent-plan.js';
 import { RichPresentation } from './presentation.js';
 import { Icon } from './composer-controls.js';
-import { safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
+import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
+import { MAX_INPUT_IMAGES } from '../shared/input.js';
 import { request } from './api.js';
 
 async function copyText(value: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(value); return true; } catch { return false; }
+}
+export function AuthoredText({ text }: { text: string }) {
+  return <>{authoredUrlSegments(text).map((segment, index) => segment.href
+    ? <a key={index} href={segment.href} target="_blank" rel="noopener noreferrer">{segment.text}</a>
+    : segment.text)}</>;
+}
+function UserImage({ sessionId, assetId, index, onOpen }: { sessionId: string; assetId: string; index: number; onOpen: (src: string) => void }) {
+  const [src, setSrc] = useState<string | null>(null), [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setSrc(null); setFailed(false);
+    void request<string | null>(`sessions/${sessionId}/images/${encodeURIComponent(assetId)}`)
+      .then(value => { if (alive) { if (value) setSrc(value); else setFailed(true); } })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [sessionId, assetId]);
+  if (failed) return <span className="user-image-unavailable" role="status">Image unavailable</span>;
+  if (!src) return <span className="user-image-loading" role="status">Image preview is loading</span>;
+  return <button type="button" className="user-image-thumb" aria-label={`Preview image ${index + 1}`} onClick={() => onOpen(src)}><img src={src} alt="User attachment" /></button>;
+}
+function UserImages({ sessionId, event }: { sessionId: string; event: ControlApiEvent }) {
+  const [preview, setPreview] = useState<{ src: string; index: number } | null>(null);
+  const assets = (event.assets ?? []).slice(0, MAX_INPUT_IMAGES);
+  useEffect(() => { setPreview(null); }, [sessionId]);
+  useEffect(() => {
+    if (!preview) return;
+    const close = (keyEvent: KeyboardEvent) => { if (keyEvent.key === 'Escape') setPreview(null); };
+    document.addEventListener('keydown', close);
+    return () => document.removeEventListener('keydown', close);
+  }, [preview]);
+  if (!assets.length && !(event.images && event.images > 0)) return null;
+  if (!assets.length) return <div className="user-images"><span className="user-image-unavailable" role="status">Image unavailable</span></div>;
+  return <div className="user-images">{assets.map((asset, index) => <UserImage key={asset.id} sessionId={sessionId} assetId={asset.id} index={index} onOpen={src => setPreview({ src, index })} />)}{preview && <div className="attachment-preview-backdrop" role="presentation" onClick={() => setPreview(null)}><section className="attachment-preview" role="dialog" aria-modal="true" aria-label={`Preview image ${preview.index + 1}`} onClick={event => event.stopPropagation()}><header><strong>{`Image ${preview.index + 1}`}</strong><button type="button" aria-label="Close image preview" onClick={() => setPreview(null)} autoFocus>×</button></header><img src={preview.src} alt="User attachment" /></section></div>}</div>;
 }
 export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl }: { text: string; sessionId?: string | null;
   messageId?: string; nativeMarkup?: ControlApiEvent['nativeMarkup']; originalUrl?: string }) {
@@ -134,7 +168,7 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
       {row.presentation || row.kind === 'native_image' || row.kind === 'native_video'
         ? <RichPresentation event={row} sessionId={sessionId} openRequestId={openRequestId} ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)} />
-        : row.kind === 'user_message' ? <div className="msg" dir="auto">{text}</div> : <>
+        : row.kind === 'user_message' ? <><UserImages sessionId={sessionId} event={row} /><div className="msg" dir="auto"><AuthoredText text={text} /></div></> : <>
           {row.kind === 'chat_error' && row.usageLimit && <><strong>{usageLimitTitle(row.usageLimit)}</strong><p>{usageLimitResetText(row.usageLimit) ? `Reset reported: ${usageLimitResetText(row.usageLimit)}. Retry manually when access is available.` : 'The provider did not report a reset time. Retry manually when access is available.'}</p></>}
           <Markdown text={text} sessionId={sessionId} messageId={row.kind === 'assistant_message' ? row.messageId : undefined}
             nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}

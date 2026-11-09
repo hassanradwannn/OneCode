@@ -191,6 +191,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (!await getSession(sessionId)) throw new RequestError(404, 'not_found');
       // A file's existence is insufficient: only a recorded image reference may be served.
       const refs = (await readEvents(sessionId)).flatMap(event => event.kind === 'native_image' || event.kind === 'native_video' ? event.asset ? [event.asset] : []
+        : event.kind === 'user_message' ? event.assets ?? []
         : event.kind === 'progress' ? event.presentation?.asset ? [event.presentation.asset] : []
         : event.kind === 'tool_call' ? event.call.assets ?? [] : []);
       const ref = refs.find(asset => asset.id === id && ['image/png', 'image/jpeg', 'image/webp'].includes(asset.mimeType));

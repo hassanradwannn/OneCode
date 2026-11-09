@@ -89,6 +89,20 @@ export async function spawnAgentWorkers(
   admission?: { validate(): Promise<void>; assertCurrent(): void; workspace?: WorkerWorkspace | null }
 ) {
   admission?.assertCurrent();
+  // Effort inheritance: a worker spawned without an explicit reasoning effort
+  // inherits the prime chat's currently observed effort, not the saved
+  // multi-agent default. An explicit effort (including "" provider default)
+  // always wins; without prime evidence the saved default still applies.
+  const primeConversation = input.caller.conversationId;
+  if (primeConversation) {
+    const prime = await findSessionByConversation(primeConversation, { requireUnique: true }).catch(() => null);
+    const inherited = prime?.selectedModel?.conversationId === primeConversation
+      ? prime.selectedModel.reasoningEffort ?? null : null;
+    if (inherited) {
+      input = { ...input, workers: input.workers.map(worker =>
+        worker.reasoning_effort === undefined ? { ...worker, reasoning_effort: inherited } : worker) };
+    }
+  }
   const staged = stageSpawn(input);
   // Newly staged admissions alone may own Git branches. A repeated spawn may show
   // existing workers in `created`, but must never reallocate their checkouts.

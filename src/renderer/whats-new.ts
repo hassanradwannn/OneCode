@@ -45,11 +45,11 @@ const RELEASES: Readonly<Record<string, Release>> = {
     ]
   },
   '0.9.8': {
-    lead: () => t('Keep Claude attachment questions intact and present running websites in OneCode.'),
+    lead: () => t('Keep OpenRouter tasks running through brief Windows file locks.'),
     highlights: [
-      { icon: 'i-chat', title: () => t('Claude attachment delivery'), text: () => t('Read the exact question beside native media, preserve upload drafts through an editor remount and avoid displaying damaged transport instructions as your message.') },
-      { icon: 'i-browser', title: () => t('Open the running website'), text: () => t('Agents can discover the sidebar browser before you open it manually and request presentation of the actual running website.') },
-      { icon: 'i-chat', title: () => t('Earlier topic names'), text: () => t('Name API chats during the task and replace older folder-style generated names while keeping your manual titles.') }
+      { icon: 'i-retry', title: () => t('Recover a blocked checkpoint'), text: () => t('Retry an atomic Windows save while keeping completed tool results and the current turn.') },
+      { icon: 'i-image', title: () => t('Open sent images'), text: () => t('Open a sent image from the transcript and follow links in your own messages.') },
+      { icon: 'i-agents', title: () => t('Worker reasoning effort'), text: () => t('Workers inherit the main chat’s effort when their assignment leaves it unspecified.') }
     ]
   },
   '0.9.7': {

@@ -733,6 +733,60 @@ var CLF_DOM = (() => {
       return out;
     }, []);
   }
+  // Rendered images in a native user bubble, captured once per mounted row
+  // (same bounded webp path as the Claude/Gemini adapters). Fiber supplies
+  // attachment metadata without pixels; the DOM <img> that already loaded
+  // is the exact byte source, fetched same-origin through canvas.
+  const userImageCaptures = new WeakMap();
+  const MAX_USER_IMAGES = 4, MAX_CAPTURED_BYTES = 12 * 1024 * 1024, MAX_CAPTURED_DIM = 1600;
+  async function captureUserImage(src) {
+    let url;
+    try { url = new URL(src, location.href); } catch { return null; }
+    if (!['blob:', 'data:', 'https:'].includes(url.protocol)) return null;
+    if (url.protocol === 'https:' && url.origin !== location.origin) return null;
+    let bytes;
+    try {
+      const response = await fetch(src);
+      if (!response.ok) return null;
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch { return null; }
+    if (!bytes.length || bytes.length > MAX_CAPTURED_BYTES) return null;
+    const bitmap = await safe(() => createImageBitmap(new Blob([bytes])), null);
+    if (!bitmap || !bitmap.width || !bitmap.height) return null;
+    const scale = Math.min(1, MAX_CAPTURED_DIM / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    return safe(() => canvas.toDataURL('image/webp', 0.82), null);
+  }
+  function userImages(root) {
+    if (!root?.querySelectorAll) return [];
+    const shownImg = node => Boolean(node?.isConnected && !node.closest('[hidden],[aria-hidden="true"],[inert]') && node.getClientRects().length);
+    const imgs = [...root.querySelectorAll('img')].filter(node => shownImg(node) && (node.currentSrc || node.src) &&
+      !node.closest('button'));
+    if (!imgs.length || imgs.length > 10) return [];
+    let captured = userImageCaptures.get(root);
+    if (!captured) { captured = new Map(); userImageCaptures.set(root, captured); }
+    const result = [];
+    for (const img of imgs.slice(0, MAX_USER_IMAGES)) {
+      const src = img.currentSrc || img.src;
+      let entry = captured.get(src);
+      if (!entry) {
+        entry = { dataUrl: null, done: false };
+        captured.set(src, entry);
+        captureUserImage(src).then(dataUrl => {
+          entry.dataUrl = dataUrl; entry.done = true;
+          document.dispatchEvent(new Event('onecode-chatgpt-user-image'));
+        }, () => { entry.done = true; document.dispatchEvent(new Event('onecode-chatgpt-user-image')); });
+      }
+      if (entry.dataUrl) result.push({ dataUrl: entry.dataUrl, alt: (img.alt || '').slice(0, 120) });
+    }
+    return result;
+  }
 
   /**
    * The messages of exactly one turn.
@@ -775,7 +829,8 @@ var CLF_DOM = (() => {
             text: row.text !== null ? row.text : messageText(row.node, role),
             turnId: turn.id,
             node: section,
-            interrupted: interrupted(turn)
+            interrupted: interrupted(turn),
+            ...(role === 'user' ? (() => { const images = userImages(row.node); return images.length ? { images } : {}; })() : {})
           });
         }
       }

@@ -25,7 +25,7 @@ import type { SessionControlsView } from './bridge.js';
 import { getLog, logWarn } from './logger.js';
 import { redactSecretText } from './redaction.js';
 import { deliveryProof, listInputs } from './session/input.js';
-import { automaticInput, inputNoticeVisible } from '../shared/input.js';
+import { automaticInput, inputNoticeVisible, MAX_INPUT_IMAGES } from '../shared/input.js';
 import type { InputEntry } from './session/input.js';
 import { readSession, readSessionEvents, readSessionList, sessionListCursorSchema } from './session/read-model.js';
 
@@ -248,7 +248,8 @@ export function projectLive(controls: SessionControlsView): ControlApiLive {
           destinationSend: job.destinationSend.state,
           error: job.error ? line(job.error, SUMMARY_CAP) : null
         }
-      : null
+      : null,
+    freeRequests: controls.apiActivity?.freeRequests ? { ...controls.apiActivity.freeRequests } : null
   };
 }
 
@@ -308,6 +309,8 @@ export function projectEvent(event: SessionEvent, includeNativeMarkup = false): 
       // What the user wrote, not the text the app delivered: an app-sent message is framed with
       // instructions and skills that can be far longer than the request itself.
       const authored = event.authoredText ?? userPromptText(event.message.text);
+      const assets = (event.assets ?? []).filter(asset => asset.mimeType === 'image/webp').slice(0, MAX_INPUT_IMAGES)
+        .map(asset => ({ id: asset.id, mimeType: asset.mimeType }));
       return {
         ...base,
         message: authored === null || authored === undefined ? stored(event.message) : plain(authored),
@@ -315,7 +318,8 @@ export function projectEvent(event: SessionEvent, includeNativeMarkup = false): 
         inputId: event.inputId,
         inputDelivery: event.inputDelivery,
         attachments: event.attachments?.length ?? 0,
-        images: event.assets?.length ?? 0
+        images: event.assets?.length ?? 0,
+        ...(assets.length ? { assets } : {})
       };
     }
     case 'assistant_message': {

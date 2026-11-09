@@ -1,4 +1,5 @@
 /** The API runner's live turn owner, shared with presentation without browser observations. */
+import type { OpenRouterFreeRequests } from '../openrouter/client.js';
 export interface ApiActivity {
   phase: 'catalog' | 'preparing' | 'requesting' | 'responding' | 'preparing-tool' | 'recovering' | 'compacting';
   inputId?: string;
@@ -10,6 +11,8 @@ export interface ApiActivity {
   reason?: string;
   manual?: boolean;
   compactionPending?: boolean;
+  /** OpenRouter free-model budget as of the last dispatched request; counts only. */
+  freeRequests?: OpenRouterFreeRequests;
 }
 export interface ActiveApiTurn {
   sessionId: string;

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 129;
+  const RECORDER_VERSION = 130;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -890,9 +890,19 @@
     // A current exact-id provider object supersedes display text. If absent, an unchanged
     // plain-text bubble retains the existing exact-text receipt contract; no Markdown stripping.
     const actual = authored.length === 1 ? authored[0].rawText : message.text;
+    // Native rendered user images (Claude): the adapter caches bounded webp
+    // bytes per mounted row. They ride as attachments so the recorder can
+    // retain them as session assets; without bytes there is no attachment.
+    // ChatGPT Fiber attachments stay alongside: they carry upload metadata
+    // while nativeImages carry the pixels Fiber never exposes.
+    const nativeImages = (Array.isArray(message.images) ? message.images : [])
+      .filter(image => image && typeof image.dataUrl === 'string' && image.dataUrl.startsWith('data:image/webp;base64,'))
+      .slice(0, 4);
     return typeof actual === 'string' && actual.length <= 256000 ? { text: actual, canonical: authored.length === 1,
       markdown: authored.length === 1 && authored[0].markdown === true,
-      ...(authored[0]?.attachments?.length ? { attachments: authored[0].attachments } : {}) } : null;
+      ...(authored[0]?.attachments?.length || nativeImages.length ? { attachments: [...(authored[0]?.attachments ?? []),
+        ...nativeImages.map(image => ({ id: crypto.randomUUID(),
+        name: image.alt || 'image.webp', size: Math.floor(image.dataUrl.length * 3 / 4), mimeType: 'image/webp', preview: image.dataUrl }))] } : {}) } : null;
   }
   function userMessagePresent(message) {
     if (message.role !== 'user' || !message.id) return false;
@@ -2885,7 +2895,11 @@
         }
         const sentModel = sendModels.get(message.id);
         // As in the Fiber path: the model is part of the occurrence, so a late report re-emits.
-        const key = occurrenceKey(message.id, text + (sentModel ? `\u0000${sentModel}` : ''));
+        // Native user image bytes arrive after the row is first seen; their
+        // arrival is a new occurrence or the captured image would never journal.
+        const imageSignature = Array.isArray(message.images) && message.images.length
+          ? `\u0000img:${message.images.map(image => image.dataUrl ? image.dataUrl.length : 0).join(',')}` : '';
+        const key = occurrenceKey(message.id, text + (sentModel ? `\u0000${sentModel}` : '') + imageSignature);
         const reaction = CLF_DOM.userMessageReaction(message);
         // Dedupe answers "have we journalled this row?"; authoredNow answers "did this row
         // cross the send boundary?" The boundary is intentionally evaluated first. Fiber can
@@ -3845,6 +3859,15 @@
     };
     listen(document, 'load', refreshLoadedMedia, true);
     if (CLF_DOM.provider === 'claude') listen(document, 'onecode-claude-user-ready', () => {
+      if (recorderHandle.healthy() && sameChat()) { observe(); void flush(); }
+    });
+    if (CLF_DOM.provider === 'claude') listen(document, 'onecode-claude-user-image', () => {
+      if (recorderHandle.healthy() && sameChat()) { observe(); void flush(); }
+    });
+    if (CLF_DOM.provider === 'gemini') listen(document, 'onecode-gemini-user-image', () => {
+      if (recorderHandle.healthy() && sameChat()) { observe(); void flush(); }
+    });
+    if (CLF_DOM.provider === 'chatgpt') listen(document, 'onecode-chatgpt-user-image', () => {
       if (recorderHandle.healthy() && sameChat()) { observe(); void flush(); }
     });
     let timer = null;
@@ -16693,6 +16716,7 @@
    */
   if (typeof globalThis.CLF_TEST_HOOK === 'function') {
     globalThis.CLF_TEST_HOOK({
+      portableMessageMarkup,
       controlState,
       stageView,
       goalStageView,
