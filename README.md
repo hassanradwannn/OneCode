@@ -2,15 +2,31 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.9.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.8)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release [OneCode 0.9.10](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.10)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 0.9.8 retries brief Windows checkpoint locks, bounds OpenRouter’s wait for response headers, and improves authored links, image previews and native prompt copying. [Release notes](docs/release-notes/v0.9.8.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
+Stable 0.9.10 fixes attachment delivery in Claude and Gemini and restores previews for images sent directly in Claude. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v0.9.10.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.9.10
+
+- Confirm Claude image uploads from the loaded preview when upload metadata is unavailable. Send waits for the matching file names and any reported upload activity to clear.
+- Use Gemini’s current Files menu and retrieve attachments after binding a recovered chat.
+- Show images sent directly in Claude beside the matching message in OneCode.
+
+See [0.9.10 notes](docs/release-notes/v0.9.10.md) and [Windows and Linux build checks](https://github.com/hassanradwannn/OneCode/actions/runs/42676993116).
+
+## What's new in 0.9.9
+
+- Copy imported ChatGPT prompts and expand gallery images with their captions.
+- Preserve teal and purple nodes in imported Claude diagrams.
+- Check OpenRouter’s reported daily free-request balance in **Usage → Messages and limits**.
+
+See [0.9.9 notes](docs/release-notes/v0.9.9.md).
 
 ## What's new in 0.9.8
 
