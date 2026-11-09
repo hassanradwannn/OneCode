@@ -67,59 +67,20 @@ var CLF_DOM = (() => {
   const enabled = node => shown(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
   const unique = nodes => { const list = [...nodes].filter(shown); return list.length === 1 ? list[0] : null; };
   const all = (selector, root = document) => [...root.querySelectorAll(selector)];
-  // Rendered images in a native user query, captured once per mounted node
-  // (same bounded webp path as the Claude adapter): fetch exactly the URL
-  // the mounted <img> already loaded, downscale through canvas. Tainted or
-  // cross-origin pixels fail closed and simply record no image.
-  const userImageCaptures = new WeakMap();
-  const MAX_USER_IMAGES = 4, MAX_CAPTURED_BYTES = 12 * 1024 * 1024, MAX_CAPTURED_DIM = 1600;
-  async function captureUserImage(src) {
-    let url;
-    try { url = new URL(src, location.href); } catch { return null; }
-    if (!['blob:', 'data:', 'https:'].includes(url.protocol)) return null;
-    if (url.protocol === 'https:' && url.origin !== location.origin) return null;
-    let bytes;
-    try {
-      const response = await fetch(src);
-      if (!response.ok) return null;
-      bytes = new Uint8Array(await response.arrayBuffer());
-    } catch { return null; }
-    if (!bytes.length || bytes.length > MAX_CAPTURED_BYTES) return null;
-    const bitmap = await safe(() => createImageBitmap(new Blob([bytes])), null);
-    if (!bitmap || !bitmap.width || !bitmap.height) return null;
-    const scale = Math.min(1, MAX_CAPTURED_DIM / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext('2d');
-    if (!context) return null;
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close?.();
-    return safe(() => canvas.toDataURL('image/webp', 0.82), null);
+  const uploadPreview = 'user-query-file-preview button.preview-image-button img[data-test-id="uploaded-img"]';
+  async function readUpload(image, src) {
+    if (!image.matches(uploadPreview) || !src.startsWith('https://lh3.googleusercontent.com/gg/') ||
+        typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return null;
+    try { return (await chrome.runtime.sendMessage({ type: 'native_gemini_upload', sourceUrl: src }))?.data ?? null; }
+    catch { return null; }
   }
+  const captureUserImages = typeof CLF_USER_IMAGE_CAPTURE === 'undefined' ? () => [] :
+    CLF_USER_IMAGE_CAPTURE.create('onecode-gemini-user-image', ['lh3.googleusercontent.com', 'contribution.usercontent.google.com'], readUpload);
   function userImages(root) {
-    if (!root) return [];
-    const imgs = all('img', root).filter(node => shown(node) && (node.currentSrc || node.src) &&
-      !node.closest('button,[data-cds="TurnStatus"]'));
-    if (!imgs.length || imgs.length > 10) return [];
-    let captured = userImageCaptures.get(root);
-    if (!captured) { captured = new Map(); userImageCaptures.set(root, captured); }
-    const result = [];
-    for (const img of imgs.slice(0, MAX_USER_IMAGES)) {
-      const src = img.currentSrc || img.src;
-      let entry = captured.get(src);
-      if (!entry) {
-        entry = { dataUrl: null, done: false };
-        captured.set(src, entry);
-        captureUserImage(src).then(dataUrl => {
-          entry.dataUrl = dataUrl; entry.done = true;
-          document.dispatchEvent(new Event('onecode-gemini-user-image'));
-        }, () => { entry.done = true; document.dispatchEvent(new Event('onecode-gemini-user-image')); });
-      }
-      if (entry.dataUrl) result.push({ dataUrl: entry.dataUrl, alt: (img.alt || '').slice(0, 120) });
-    }
-    return result;
+    return captureUserImages(all('img', root).filter(image => shown(image) && (image.currentSrc || image.src) &&
+      !image.closest('[role="toolbar"]') && (!image.closest('button') || image.matches(uploadPreview))));
   }
+
   const isAppHomePath = path => /^(?:\/u\/\d+)?\/app\/?$/.test(path);
   const conversationFromPath = path => /^(?:\/u\/\d+)?\/app\/([0-9a-f]{16})\/?$/i.exec(path)?.[1]?.toLowerCase() || null;
   const conversationId = () => conversationFromPath(location.pathname);

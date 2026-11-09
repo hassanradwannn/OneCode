@@ -13,7 +13,7 @@ import type { TaskProgress } from '../shared/task-progress.js';
 import type { BrowserPreferences } from '../shared/browser-preferences.js';
 import type { SessionControlsView } from '../main/bridge.js';
 import type { InputAttachment } from '../shared/input.js';
-import type { UsageOverview } from '../shared/usage.js';
+import type { OpenRouterUsage, UsageOverview } from '../shared/usage.js';
 import type { ProviderUsage } from '../shared/provider-usage.js';
 import type { InputArgs, InputEntry } from '../main/session/input.js';
 import type { LocalProject, ProjectColor } from '../shared/projects.js';
@@ -228,6 +228,7 @@ const api = {
   attachText: (text: string) => call<InputAttachment>('sessions:attachText', { text }),
   previewInputAttachment: (id: string) => call<string | null>('sessions:attachmentPreview', { id }),
   getUsage: () => call<UsageOverview>('usage:get'),
+  getOpenRouterUsage: () => call<OpenRouterUsage>('usage:openrouter'),
   /** Codex's and Claude Code's usage from their logs here; `fresh` skips the 30-second cache. */
   getProviderUsage: (fresh = false) => call<ProviderUsage>('usage:providers', { fresh }),
   getState: () => call<AppState>('state:get'),

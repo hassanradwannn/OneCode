@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.9] — 2026-11-09
+
+Restore browser-sent images, copyable prompts, image gallery captions and Claude diagram colors. Show the OpenRouter daily free-request count in Usage when available. See [0.9.9 notes](docs/release-notes/v0.9.9.md).
+
 ## [0.9.8] — 2026-11-09
 
 Keep active API turns running through brief Windows checkpoint locks, bound OpenRouter’s wait for response headers, and improve authored links, image previews and copied prompts. See [0.9.8 notes](docs/release-notes/v0.9.8.md).

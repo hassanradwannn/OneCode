@@ -383,7 +383,7 @@
             <div class="usage-sections">
               <section class="settings-section usage-section usage-messages" aria-labelledby="usageMessagesTitle">
                 <header class="settings-section-head">
-                  <div><h2 id="usageMessagesTitle">Messages and limits</h2><p>Gemini account quotas are not exposed to this integration. Local activity is shown below.</p></div>
+                  <div><h2 id="usageMessagesTitle">Messages and limits</h2><p>Provider limits and local activity.</p></div>
                   <button class="btn" id="refreshUsage" type="button"><i class="ico ph ph-arrow-clockwise" aria-hidden="true"></i>Refresh</button>
                 </header>
                 <div class="settings-surface usage-message-surface">
@@ -394,7 +394,12 @@
                   </dl>
                   <select class="usage-week-start" id="usageWeekStart" title="Change start day" aria-label="Change start day" aria-describedby="usageMessagePeriod"></select>
                   <span class="sr-only" id="usageMessagePeriod"></span>
-                  <div id="modelUsage"><div class="usage-limits" id="usageLimits"></div></div>
+                  <div id="modelUsage"><div class="usage-limits" id="usageLimits">
+                    <div class="usage-limit" id="openRouterUsage">
+                      <div><strong translate="no">OpenRouter</strong><small class="muted">Daily free-model requests</small></div>
+                      <div id="openRouterUsageStatus" role="status"></div>
+                    </div>
+                  </div></div>
                 </div>
               </section>
               <section class="settings-section usage-section usage-other-apps" aria-labelledby="usageOtherAppsTitle">

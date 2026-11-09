@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 130;
+  const RECORDER_VERSION = 131;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -890,24 +890,25 @@
     // A current exact-id provider object supersedes display text. If absent, an unchanged
     // plain-text bubble retains the existing exact-text receipt contract; no Markdown stripping.
     const actual = authored.length === 1 ? authored[0].rawText : message.text;
-    // Native rendered user images (Claude): the adapter caches bounded webp
-    // bytes per mounted row. They ride as attachments so the recorder can
-    // retain them as session assets; without bytes there is no attachment.
-    // ChatGPT Fiber attachments stay alongside: they carry upload metadata
-    // while nativeImages carry the pixels Fiber never exposes.
-    const nativeImages = (Array.isArray(message.images) ? message.images : [])
-      .filter(image => image && typeof image.dataUrl === 'string' && image.dataUrl.startsWith('data:image/webp;base64,'))
-      .slice(0, 4);
     return typeof actual === 'string' && actual.length <= 256000 ? { text: actual, canonical: authored.length === 1,
       markdown: authored.length === 1 && authored[0].markdown === true,
-      ...(authored[0]?.attachments?.length || nativeImages.length ? { attachments: [...(authored[0]?.attachments ?? []),
-        ...nativeImages.map(image => ({ id: crypto.randomUUID(),
-        name: image.alt || 'image.webp', size: Math.floor(image.dataUrl.length * 3 / 4), mimeType: 'image/webp', preview: image.dataUrl }))] } : {}) } : null;
+      ...(authored[0]?.attachments?.length ? { attachments: authored[0].attachments } : {}) } : null;
+  }
+  function recordedUserAttachments(message, source) {
+    const images = (Array.isArray(message.images) ? message.images : []).filter(image =>
+      typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:image/webp;base64,')).slice(0, 4);
+    // A visible preview and provider metadata for the same row must not
+    // compete for the bridge's four attachment slots. Receipt proof above
+    // continues to use the original provider descriptors.
+    return images.length ? images.map((image, index) => ({
+      id: `native-image-${message.id.slice(-60)}-${index}`, name: image.alt || 'image.webp',
+      size: Math.floor(image.dataUrl.length * 3 / 4), mimeType: 'image/webp', preview: image.dataUrl
+    })) : source.attachments;
   }
   function userMessagePresent(message) {
     if (message.role !== 'user' || !message.id) return false;
     const source = userMessageSource(message);
-    return Boolean(source && (source.text || source.attachments?.length));
+    return Boolean(source && (source.text || source.attachments?.length || message.images?.length));
   }
   function matchesSubmittedUser(message, expected) {
     if (typeof expected !== 'string' || expected.length > 240000) return false;
@@ -2930,11 +2931,12 @@
         markSeen(key, reaction);
         if (justAuthored) newUserMessage = justAuthored;
         const shown = shownUserText(text, source.markdown, message.text);
+        const attachments = recordedUserAttachments(message, source);
         emit({
           kind: 'user_message',
           text: shown,
           ...(reaction !== undefined ? { reaction } : {}),
-          ...(source.attachments?.length ? { attachments: source.attachments } : {}),
+          ...(attachments?.length ? { attachments } : {}),
           messageId: message.id,
           ...(!justAuthored && newestUserId && message.id !== newestUserId ? { historyBeforeQuestionId: newestUserId } : {}),
           turnId: message.turnId || undefined,

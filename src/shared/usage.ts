@@ -7,6 +7,12 @@ export interface ModelUsage {
   windowSeconds: number | null;
   observedAt: number;
 }
+
+export interface OpenRouterFreeRequests { used: number; limit: number; remaining: number }
+
+export type OpenRouterUsage =
+  | { status: 'available'; quota: OpenRouterFreeRequests }
+  | { status: 'unconfigured' | 'not-reported' | 'unavailable' };
 export interface UsageModelTokens {
   model: string;
   reasoningEffort: string | null;

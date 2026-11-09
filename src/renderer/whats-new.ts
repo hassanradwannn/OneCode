@@ -7,7 +7,7 @@ import { providerText } from './provider-text.js';
  * language ships them like the rest of the interface. A version without an entry shows nothing.
  */
 import { releaseNotesUrl, whatsNewAction } from '../shared/whats-new.js';
-import { channelVersion } from '../shared/build-channel.js';
+import { BUILD_CHANNEL, channelVersion } from '../shared/build-channel.js';
 import { $, el, icon, run } from './dom.js';
 import { t, ui } from './i18n.js';
 import { primaryShortcut } from './shortcuts.js';
@@ -37,7 +37,14 @@ const RELEASES: Readonly<Record<string, Release>> = {
       { icon: 'i-pulse', title: () => t('Effective context estimate'), text: () => t('See the reduced API working context separately from the full retained transcript.') }
     ]
   },
-  '0.9.9': {
+  '0.9.9': BUILD_CHANNEL === 'stable' ? {
+    lead: () => t('See more of your browser chats directly in OneCode.'),
+    highlights: [
+      { icon: 'i-image', title: () => t('Browse imported images'), text: () => t('Read gallery captions, expand images, and revisit images sent in provider chats.') },
+      { icon: 'i-file', title: () => t('Copy imported prompts'), text: () => t('Copy prompts from their cards and see the colors in imported Claude diagrams.') },
+      { icon: 'i-pulse', title: () => t('OpenRouter limits in Usage'), text: () => t('Check your reported daily free-request balance without sending a message.') }
+    ]
+  } : {
     lead: () => t('Switch providers and leave Setup without getting stuck.'),
     highlights: [
       { icon: 'i-plug', title: () => t('Reach provider setup'), text: () => t('Keep provider selection and the OpenRouter key form reachable. Back and Next follow the steps for your selected provider.') },

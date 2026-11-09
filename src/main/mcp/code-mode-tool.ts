@@ -48,6 +48,8 @@ export function unknownToolNote(surface: SurfaceId, unknown: readonly string[]):
     const declared = unknown.filter(name => SURFACES.core.tools.includes(name));
     return `UNKNOWN_TOOL_NAMES: this script used unavailable tools: ${unknown.join(', ')}. ` +
       (declared.length ? `${declared.join(', ')} belong to this OneCode Core connector. Their platform or live permissions may make them unavailable. ` : '') +
+      (unknown.some(name => /^mcp__.+__plugins$/.test(name))
+        ? 'Inside exec, use await tools.plugins({action:"list"}) if plugins appears in ALL_TOOLS. The mcp__ prefix is supplied by the outer host. ' : '') +
       'Inspect ALL_TOOLS and Core plugins {action:"list"} for currently available methods and schemas. ' +
       'Screen and desktop reads require Screen permission; input requires Control permission. ' +
       'Use the existing OneCode Core connector; do not create a separate Desktop or Plugins connector. No unavailable tool was dispatched.';

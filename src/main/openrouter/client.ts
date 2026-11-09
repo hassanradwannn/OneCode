@@ -8,8 +8,8 @@ export type { ApiModel as OpenRouterModel, ApiTool as OpenRouterTool, ApiToolCal
 export type CompleteOptions = ApiCompleteOptions & { apiKey: string };
 import { apiTransportError } from '../api/recovery.js';
 import { API_INPUT_MODALITIES } from '../../shared/chat-models.js';
-/** Free-model daily request budget reported by GET /key. Counts only, never the key. */
-export interface OpenRouterFreeRequests { used: number; limit: number; remaining: number }
+import type { OpenRouterFreeRequests } from '../../shared/usage.js';
+export type { OpenRouterFreeRequests };
 /** OpenRouter transport only. All local tool execution remains owned by OneCode. */
 export const OPENROUTER_API = "https://openrouter.ai/api/v1";
 // A transport memory bound, separate from the selected model's token/context limits.
@@ -229,9 +229,7 @@ export class OpenRouterClient {
     });
   }
 
-  /** GET /key free-model budget. free_model_daily_requests is reported by
-   * the endpoint for free-tier keys but is not part of the published schema,
-   * so absence/invalid values return null and no counter is shown. Never logs the key. */
+  /** GET /key free-model budget. Absent or invalid counts return null. Never logs the key. */
   async keyInfo(apiKey: string, signal?: AbortSignal): Promise<OpenRouterFreeRequests | null> {
     const response = await this.transport(this.baseUrl + "/key", { headers: authHeaders(apiKey), signal }).catch(error => {
       if (signal?.aborted && signal.reason?.name !== 'TimeoutError') throw error;

@@ -1,5 +1,6 @@
-import { MAX_MESSAGE_MARKUP } from './message-format.js';
-import { safeRecordedReplyImage } from '../shared/external-link.js';
+import { MAX_MESSAGE_MARKUP, MESSAGE_DROP_TAGS, MESSAGE_TAGS } from './message-format.js';
+import { safeExternalLink, safeProviderFileLink, safeRecordedReplyImage } from '../shared/external-link.js';
+import { sanitizeHtmlTree } from './sanitize-html.js';
 
 type Capture = { text: string; truncated: boolean };
 export type NativeMessageActions = { key: string; copy(value: string): Promise<boolean>; openOriginal?(): void;
@@ -90,6 +91,44 @@ function copyButton(title: string, value: () => string, copy: NativeMessageActio
       () => { button.textContent = 'Could not copy'; });
   });
   return button;
+}
+
+export function openImagePreview(src: string, title: string, closeLabel = 'Close preview'): void {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'composer-image-preview-dialog';
+  dialog.setAttribute('aria-label', title);
+  const close = action('×', () => dialog.close());
+  close.className = 'composer-image-preview-close';
+  close.setAttribute('aria-label', closeLabel);
+  const image = document.createElement('img');
+  image.src = src; image.alt = title;
+  const caption = document.createElement('div');
+  caption.className = 'composer-image-preview-name'; caption.textContent = title;
+  dialog.append(close, image, caption);
+  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+  close.focus();
+}
+
+/** Text for a visible, self-contained native prompt card whose handler is unavailable. */
+function visiblePromptText(body: Element): string {
+  const walk = (node: Node): string => {
+    if (node.nodeType === 3) return node.textContent ?? '';
+    if (node.nodeType !== 1) return '';
+    const element = node as Element;
+    if (element.matches('[hidden], [aria-hidden="true"], [data-markdown-copy="exclude"], button, script, style, template, svg')) return '';
+    if (element.tagName === 'BR') return '\n';
+    const text = [...element.childNodes].map(walk).join('');
+    if (element.tagName === 'LI') {
+      const list = element.parentElement;
+      const prefix = list?.tagName === 'OL' ? `${[...list.children].indexOf(element) + 1}. ` : '- ';
+      return prefix + text.trim() + '\n';
+    }
+    return element.matches('p, div, pre, ul, ol, h1, h2, h3, h4, blockquote') ? text + '\n\n' : text;
+  };
+  return walk(body).trim().replace(/\n{3,}/g, '\n\n');
 }
 
 function scorecardView(card: Scorecard, options: NativeMessageActions, index: number): HTMLElement {
@@ -216,8 +255,13 @@ function imageGrid(items: NonNullable<ReturnType<typeof replyImage>>[], options:
     const status = document.createElement('span');
     status.textContent = 'Loading image…';
     image.alt = item.alt;
-    image.hidden = true;
-    figure.append(image, status);
+    const title = item.caption.join(' · ') || item.alt || 'Image';
+    const button = action('', () => openImagePreview(image.src, title));
+    button.className = 'native-reply-image-open';
+    button.setAttribute('aria-label', `Expand ${title}`);
+    button.hidden = true;
+    button.append(image);
+    figure.append(button, status);
     if (item.caption.length) {
       const caption = document.createElement('figcaption'), heading = document.createElement('strong');
       heading.textContent = item.caption[0]!;
@@ -231,7 +275,7 @@ function imageGrid(items: NonNullable<ReturnType<typeof replyImage>>[], options:
     }
     gallery.append(figure);
     const unavailable = () => {
-      image.hidden = true;
+      button.hidden = true;
       status.hidden = false;
       status.textContent = item.alt || 'Image unavailable';
       if (fallback) fallback.hidden = false;
@@ -240,7 +284,7 @@ function imageGrid(items: NonNullable<ReturnType<typeof replyImage>>[], options:
       if (!data || !/^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(data)) return unavailable();
       image.addEventListener('error', unavailable, { once: true });
       image.src = data;
-      image.hidden = false;
+      button.hidden = false;
       status.hidden = true;
     }).catch(unavailable);
   });
@@ -265,7 +309,7 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
           if (!column.matches('[data-d-component="grid-item"]')) return null;
           const sources = column.querySelectorAll('[data-d-component="image"] > img');
           if (sources.length !== 1) return null;
-          const caption = [...column.children].slice(1).filter(node => node.tagName === 'P' && visible(node))
+          const caption = [...column.children].slice(1).filter(node => node.matches('p, figcaption, [data-d-component="caption"]') && visible(node))
             .map(node => node.textContent?.trim().slice(0, 3000) ?? '').filter(Boolean);
           return replyImage(sources[0]!, caption);
         });
@@ -318,13 +362,17 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
     const title = label(button) || 'Copy';
     const payload = button.getAttribute('data-copy-text');
     const row = button.parentElement, card = row?.parentElement;
-    const promptCard = /^copy prompt$/i.test(title) && row?.matches('[data-d-component="row"]') &&
-      row.children.length === 2 && row.lastElementChild === button &&
-      card?.matches('[data-d-component="box"]') && card.children.length === 2 &&
-      card.lastElementChild?.tagName === 'P';
+    const promptCard = /^copy prompt$/i.test(title) && button.closest('[data-dil-response]') &&
+      row?.matches('[data-d-component="row"]') && row.children.length === 2 && row.lastElementChild === button &&
+      card?.matches('[data-d-component="box"]') && card.firstElementChild === row && card.children[1]?.tagName === 'P';
+    const promptBody = promptCard && card?.children.length === 3 && card.children[2]?.matches('[data-d-component="box"][data-d-scrollable]') &&
+      visible(card.children[2]) ? card.children[2] : null;
+    const bodyText = promptBody ? visiblePromptText(promptBody) : '';
+    const copyText = payload?.trim() && payload.length <= 64_000 ? payload
+      : bodyText && bodyText.length <= 64_000 ? bodyText : null;
     let view: HTMLElement;
-    if (payload?.trim() && payload.length <= 64_000) {
-      view = copyButton(title, () => payload, options.copy);
+    if (copyText) {
+      view = copyButton(title, () => copyText, options.copy);
     } else if (button.closest('[data-dil-response]') && label(button) &&
         (button.matches('[data-d-component="button"]') && /^copy\s/i.test(title) || /^copy prompt$/i.test(title))) {
       const openLabel = /^copy prompt$/i.test(title) ? 'Open original prompt in provider' : 'Open original in provider';
@@ -333,11 +381,25 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
       view.title = title;
       view.className = 'native-content-original';
     } else continue;
-    if (promptCard && row && card) {
+    if (promptCard && row && card && (card.children.length === 2 || promptBody && copyText)) {
       const box = panel(), heading = document.createElement('strong'), detail = document.createElement('p');
+      box.classList.add('native-copy-prompt');
       heading.textContent = label(row.firstElementChild);
-      detail.textContent = label(card.lastElementChild);
-      box.append(heading, detail, view);
+      detail.textContent = label(card.children[1]);
+      const header = document.createElement('header'); header.append(heading, view);
+      box.append(header, detail);
+      if (promptBody) {
+        const content = document.createElement('div');
+        const body = promptBody.ownerDocument.createDocumentFragment();
+        content.className = 'native-copy-prompt-body';
+        body.append(...[...promptBody.childNodes].map(node => node.cloneNode(true)));
+        for (const hidden of body.querySelectorAll('[hidden], [aria-hidden="true"], [data-markdown-copy="exclude"]')) hidden.remove();
+        sanitizeHtmlTree(body, { allowedTags: MESSAGE_TAGS, dropTags: MESSAGE_DROP_TAGS, preserveDirection: true,
+          safeHref: value => safeExternalLink(value) || safeProviderFileLink(value) ? value : null });
+        content.append(body);
+        content.tabIndex = 0;
+        box.append(content);
+      }
       stage(card, box);
     } else {
       stage(button, view);

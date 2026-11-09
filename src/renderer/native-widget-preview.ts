@@ -16,6 +16,8 @@ export function nativeWidgetStyle(dark: boolean, diagram = false): string {
     gray: ['#f1efe8', '#444441', '#5f5e5a', '#b4b2a9', '#444441', '#d3d1c7'],
     blue: ['#e6f1fb', '#0c447c', '#185fa5', '#85b7eb', '#0c447c', '#b5d4f4'],
     green: ['#eaf3de', '#27500a', '#3b6d11', '#97c459', '#27500a', '#c0dd97'],
+    teal: ['#e1f5ee', '#0b4d41', '#0f6e56', '#2c806d', '#0b4d41', '#9fe1cf'],
+    purple: ['#eeedfe', '#3c3489', '#534ab7', '#6d60b9', '#3c3489', '#cecbf6'],
     amber: ['#faeeda', '#633806', '#854f0b', '#ef9f27', '#633806', '#fac775'],
     red: ['#fcebeb', '#791f1f', '#a32d2d', '#f09595', '#791f1f', '#f7c1c1'],
     coral: ['#faece7', '#712b13', '#993c1d', '#f0997b', '#712b13', '#f5c4b3']

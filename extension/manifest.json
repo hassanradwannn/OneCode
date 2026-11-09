@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extension_name__",
-  "version": "0.9.8",
-  "version_name": "0.9.8",
+  "version": "0.9.9",
+  "version_name": "0.9.9",
   "description": "__MSG_extension_description__",
   "default_locale": "en",
   "minimum_chrome_version": "125",
@@ -20,6 +20,8 @@
   ],
   "host_permissions": [
     "https://gemini.google.com/*",
+    "https://lh3.google.com/*",
+    "https://lh3.googleusercontent.com/*",
     "https://contribution.usercontent.google.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
@@ -53,7 +55,7 @@
     },
     {
       "matches": ["https://claude.ai/*"],
-      "js": ["i18n.js", "gemini-markdown.js", "claude-models.js", "claude-dom.js", "content.js"],
+      "js": ["i18n.js", "gemini-markdown.js", "user-image-capture.js", "claude-models.js", "claude-dom.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     },
@@ -64,6 +66,7 @@
       "js": [
         "i18n.js",
         "gemini-markdown.js",
+        "user-image-capture.js",
         "gemini-dom.js",
         "content.js"
       ],
@@ -80,6 +83,7 @@
       "js": [
         "i18n.js",
         "gemini-markdown.js",
+        "user-image-capture.js",
         "chatgpt-dom.js",
         "content.js"
       ],

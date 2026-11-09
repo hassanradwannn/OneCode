@@ -1807,7 +1807,7 @@ export interface ChatObservation {
   /** True only when the current page generation owns this assistant revision now. */
   activeNow?: boolean;
   text?: string;
-  /** Exact native user-message attachment metadata; no remote URL or image bytes. */
+  /** Exact native attachment metadata and bounded image previews, without remote URLs. */
   attachments?: import('../../shared/input.js').InputAttachment[];
   reaction?: string | null;
   /** ChatGPT's already-rendered authored markup for this same logical message. */
@@ -2165,6 +2165,25 @@ async function supersededLineage(conversationId: string): Promise<string | null>
   return lineage && lineage.conversationId !== conversationId ? lineage.id : null;
 }
 
+async function recordedUserMedia(sessionId: string, files: ChatObservation['attachments']): Promise<{
+  attachments?: ChatObservation['attachments']; assets?: AssetRef[];
+}> {
+  if (!files?.length) return {};
+  const attachments: NonNullable<ChatObservation['attachments']> = [];
+  const assets: AssetRef[] = [];
+  for (const { preview, ...file } of files) {
+    if (file.mimeType === 'image/webp' && preview && assets.length < 4) {
+      try {
+        await validateInputImages([{ name: file.name, dataUrl: preview }]);
+        assets.push(await writeAsset(sessionId, Buffer.from(preview.slice(preview.indexOf(',') + 1), 'base64'), 'image/webp'));
+        continue;
+      } catch { logWarn('native user image asset retention failed; transcript row retained'); }
+    }
+    attachments.push(file);
+  }
+  return { attachments, ...(assets.length ? { assets } : {}) };
+}
+
 /**
  * What a replaced chat may still add to its session: its content, and nothing else.
  *
@@ -2195,7 +2214,7 @@ async function recordSupersededMessages(
           ...base,
           kind: 'user_message',
           message: await storeText(sessionId, item.text ?? '', MAX_USER_MESSAGE_CHARS),
-          ...(item.attachments?.length ? { attachments: item.attachments } : {}),
+          ...await recordedUserMedia(sessionId, item.attachments),
           ...(item.reaction !== undefined ? { reaction: item.reaction } : {}),
           ...(item.model ? { model: item.model } : {}),
           messageId: item.messageId,
@@ -2355,7 +2374,7 @@ async function recordChatObservationsNow(
           ...base,
           kind: 'user_message' as const,
           message: await storeText(sessionId, item.text ?? '', MAX_USER_MESSAGE_CHARS),
-          ...(item.attachments?.length ? { attachments: item.attachments } : {}),
+          ...await recordedUserMedia(sessionId, item.attachments),
           ...(item.reaction !== undefined ? { reaction: item.reaction } : {}),
           ...(item.model ? { model: item.model } : {}),
           messageId: item.messageId,
@@ -2363,21 +2382,6 @@ async function recordChatObservationsNow(
         };
         const written = await upsertMessageEvent(sessionId, row, { preferTime: item.authoredTime === true, work: item.authoredNow === true });
         if (!written.changed) continue;
-        // Native user images captured from the provider DOM ride as webp
-        // preview attachments. Retain them as session assets so Desktop and
-        // Remote render the same saved bytes; a quota or validation failure
-        // only skips the enrichment, never the message row.
-        const previews = (item.attachments ?? []).filter(file => file.mimeType === 'image/webp' &&
-          file.preview?.startsWith('data:image/webp;base64,')).slice(0, 4);
-        if (previews.length) {
-          try {
-            await validateInputImages(previews.map(file => ({ name: file.name, dataUrl: file.preview! })));
-            const assets = [];
-            for (const file of previews)
-              assets.push(await writeAsset(sessionId, Buffer.from(file.preview!.split(',')[1]!, 'base64'), 'image/webp'));
-            await upsertMessageEvent(sessionId, { ...row, assets });
-          } catch { logWarn('native user image asset retention failed; transcript row retained'); }
-        }
         if (item.authoredNow === true) {
           activity.meaningful = true; activity.at = Math.max(activity.at ?? 0, item.time);
           activity.working = true;

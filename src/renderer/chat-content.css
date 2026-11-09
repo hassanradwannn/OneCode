@@ -324,6 +324,8 @@
 }
 
 .msg.rich .native-reply-images figure { margin: 0; }
+.msg.rich .native-reply-image-open { display: block; width: 100%; padding: 0; border: 0; border-radius: 12px; background: transparent; cursor: zoom-in; }
+.msg.rich .native-reply-image-open[hidden] { display: none; }
 .msg.rich .native-reply-images img {
   display: block;
   width: 100%;
@@ -331,6 +333,15 @@
   object-fit: cover;
   border-radius: 12px;
 }
-.msg.rich .native-reply-images img[hidden] { display: none; }
 .msg.rich .native-reply-images figcaption { padding-top: 5px; }
 .msg.rich .native-reply-images figcaption p { margin: 0.2em 0 0; }
+
+.msg.rich .native-copy-prompt > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.msg.rich .native-copy-prompt > p { margin: 0; }
+.msg.rich .native-copy-prompt > .native-copy-prompt-body { max-height: 360px; overflow: auto; overflow-wrap: anywhere; }
+
+.composer-image-preview-dialog { width: min(92vw, 1100px); max-width: 1100px; max-height: 92vh; margin: auto; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--page, Canvas); color: var(--ink, CanvasText); box-shadow: 0 24px 80px #0008; }
+.composer-image-preview-dialog::backdrop { background: #000b; }
+.composer-image-preview-dialog > img { display: block; width: 100%; max-height: calc(92vh - 82px); object-fit: contain; border-radius: 12px; }
+.composer-image-preview-close { position: absolute; top: 8px; right: 8px; z-index: 1; width: 34px; height: 34px; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--page, Canvas) 86%, transparent); color: var(--ink, CanvasText); font-size: 24px; cursor: pointer; }
+.composer-image-preview-name { margin-top: 10px; text-align: center; font-size: calc(12px * var(--text-scale, 1)); color: var(--muted, currentColor); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -23,7 +23,7 @@
 import { createBrowserControl } from './browser-control.js';
 import { createActiveTabs } from './active-tabs.js';
 import { createGeminiRouting } from './gemini-routing.js';
-import { readGeminiCanvasSnapshot } from './gemini-native.js';
+import { geminiUploadVisible, readGeminiCanvasSnapshot, readGeminiUpload } from './gemini-native.js';
 import { streamNativeVideoDownload } from './native-video-transfer.js';
 // Side-effect import: CLF_I18N serves catalogs to content scripts, which cannot read them.
 import './i18n.js';
@@ -4928,6 +4928,19 @@ const HANDLERS = {
       return {ok:true,snapshot:result[0].result};
     } catch { return {ok:false}; }
   },
+  async native_gemini_upload(message, sender) {
+    const tabId = sender.tab?.id, documentId = senderDocument(sender);
+    const conversationId = conversationFromUrl(sender.url);
+    if (!Number.isInteger(tabId) || !documentId || providerForUrl(sender.url) !== 'gemini' || !conversationId) return { data: null };
+    const current = async () => {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.pendingUrl || tab.url !== sender.url) return false;
+      const results = await chrome.scripting.executeScript({ target: { tabId, documentIds: [documentId] },
+        func: geminiUploadVisible, args: [conversationId, message.sourceUrl] });
+      return results.length === 1 && results[0].result === true;
+    };
+    return { data: await readGeminiUpload(message.sourceUrl, { current, fetch: (...args) => fetch(...args) }) };
+  },
   async video_export_chunk(message, sender, source) {
     if (!ownsDocument(source)) return { ok: false, error: 'document_mismatch' };
     const conversationId = cleanConversationId(message.conversationId);
@@ -6351,7 +6364,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 130;
+const PAGE_RECORDER_VERSION = 131;
 
 let deferredRecoveryWork = null;
 
@@ -6671,15 +6684,15 @@ async function restoreChatgptTabNow(id, current, documentId) {
     await chrome.scripting.executeScript({ target, files: ['i18n.js'] });
     if (!current()) return false;
     if (provider === 'gemini') {
-      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js'] });
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'user-image-capture.js'] });
       if (!current()) return false;
       await chrome.scripting.executeScript({ target, files: ['gemini-dom.js'] });
     } else if (provider === 'claude') {
       await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['claude-native.js'] });
       if (!current()) return false;
-      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'claude-models.js', 'claude-dom.js'] });
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'user-image-capture.js', 'claude-models.js', 'claude-dom.js'] });
     } else {
-      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'chatgpt-dom.js'] });
+      await chrome.scripting.executeScript({ target, files: ['gemini-markdown.js', 'user-image-capture.js', 'chatgpt-dom.js'] });
     }
     if (!current()) return false;
     // Keep the React/Fiber reader in ChatGPT's own world, exactly like the static manifest

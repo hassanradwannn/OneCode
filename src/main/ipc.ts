@@ -50,6 +50,7 @@ import { recordDeliveredInput, recordedInputImage } from './session/input-histor
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
 import { readProviderUsage } from './provider-usage.js';
+import { invalidateOpenRouterFreeRequests, readOpenRouterUsage } from './api/providers.js';
 import { inputArgs, listInputs, editQueuedInput, reorderQueuedInputs, setInputAutomation, configureInputDelivery, pausedBrowserHelpers, cancelFinishInputs } from './session/input.js';
 import { draftOpeningMessage, onGoalChange, nativeGoalFailure } from './goal.js';
 import { cancelTaskRequest, runTaskRequest } from './task-request.js';
@@ -797,6 +798,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return buildState();
   });
   handle('usage:get', () => usageOverview());
+  handle('usage:openrouter', readOpenRouterUsage, getWindow);
   handle('usage:providers', (payload) => readProviderUsage({ fresh: z.object({ fresh: z.boolean() }).parse(payload).fresh }));
   handle('plugin-refresh:reset', async () => {
     await resetPluginRefreshLedger();
@@ -805,6 +807,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // The renderer asks the person first. Nothing is set aside when the file can be read after all.
   handle('credentials:start-fresh', async () => {
     const setAside = (await setAsideUnreadableSecrets()) !== null;
+    if (setAside) invalidateOpenRouterFreeRequests();
     return { state: await buildState(), setAside };
   });
   handle('state:get', async () => {
@@ -1431,6 +1434,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
         !config.setupProfiles?.some(profile => profile.id === owner)) throw new Error('Setup profile not found');
     await setSecret(key === 'openaiApiKey' ? setupApiKeySlot(owner) : key, value);
     if (key === 'openRouterApiKey') {
+      invalidateOpenRouterFreeRequests();
       const { invalidateOpenRouterModels, startOpenRouterModelDiscovery } = await import('./openrouter/catalog.js');
       invalidateOpenRouterModels();
       if (value.trim() && config.ui.chatProvider === 'openrouter')

@@ -1,6 +1,6 @@
 import { currentLanguage, ui, t } from './i18n.js';
 import { $, el, run } from './dom.js';
-import { DEFAULT_USAGE_FORMULA, usageDateKey as dateKey, usageEstimate, usageMessageTotals, usageModelGroups, usageRate, usageWeekStart, type UsageFormula, type UsageOverview } from '../shared/usage.js';
+import { DEFAULT_USAGE_FORMULA, usageDateKey as dateKey, usageEstimate, usageMessageTotals, usageModelGroups, usageRate, usageWeekStart, type OpenRouterUsage, type UsageFormula, type UsageOverview } from '../shared/usage.js';
 import type { ProviderUsage } from '../shared/provider-usage.js';
 let snapshot: UsageOverview | null = null;
 let otherAppsGeneration = 0;
@@ -56,10 +56,34 @@ function paintMessages(): void {
   ui($('usageMessagePeriod'), 'textContent', period);
   ui(select, 'title', () => `${t('Change start day')}\n${period()}`);
 }
+async function refreshOpenRouterUsage(generation: number): Promise<void> {
+  const status = $('openRouterUsageStatus');
+  status.replaceChildren(el('small', 'muted', () => t('Checking OpenRouter limits…')));
+  let result: OpenRouterUsage = { status: 'unavailable' };
+  try {
+    const reply = await window.api.getOpenRouterUsage();
+    if (reply.ok) result = reply.data;
+  } catch { /* This row can report an error while local usage continues loading. */ }
+  if (generation !== loadGeneration) return;
+  if (result.status === 'available') {
+    const { remaining, used, limit } = result.quota;
+    status.replaceChildren(
+      el('b', '', () => t('{0} remaining', [remaining.toLocaleString(currentLanguage())])),
+      el('small', 'muted', () => t('{0} of {1} used today', [used.toLocaleString(currentLanguage()), limit.toLocaleString(currentLanguage())]))
+    );
+    return;
+  }
+  const label = result.status === 'unconfigured' ? () => t('Set an OpenRouter API key in Setup.')
+    : result.status === 'not-reported' ? () => t('OpenRouter did not report a daily free-request count.')
+      : () => t('OpenRouter limits could not be loaded. Try Refresh.');
+  status.replaceChildren(el('small', 'muted', label));
+}
+
 export async function refreshUsage(fresh = false): Promise<void> {
   document.getElementById('usageTooltip')?.remove();
   const generation = ++loadGeneration;
   void refreshOtherApps(fresh);
+  const openRouter = refreshOpenRouterUsage(generation);
   $('refreshUsage').setAttribute('disabled', '');
   const status = $('usageStatus');
   ui(status, 'textContent', () => t("Updating usage in the background. After an update, this can take a few minutes. You can keep using the app."));
@@ -74,7 +98,7 @@ export async function refreshUsage(fresh = false): Promise<void> {
     for (const [label, number] of [['Processed tokens · est.', value.tokens], ['Peak daily tokens', Math.max(0, ...value.days.map((day) => day.tokens))], ['Conversations', value.sessions], ['Active days', value.days.filter((day) => day.tokens > 0).length]] as const) {
       const item = el('div'); item.dataset.usageMetric = label; usageHint(item, () => `${Math.round(number).toLocaleString(currentLanguage())} ${t(label).toLowerCase()}`); item.append(el('strong', '', () => count.format(number)), el('span', '', () => t(label))); summary.append(item);
     }
-    const limits = $('usageLimits'); limits.replaceChildren();
+    const limits = $('usageLimits'); limits.replaceChildren($('openRouterUsage'));
     const modelRows = value.limits.filter((row) => row.scope === 'model');
     for (const entry of [...modelRows, ...value.limits.filter((row) => row.scope !== 'model')]) {
       const stale = Date.now() - entry.observedAt > 10 * 60000 || (entry.resetAt !== null && entry.resetAt <= Date.now());
@@ -98,7 +122,10 @@ export async function refreshUsage(fresh = false): Promise<void> {
     ui(status, 'textContent', () => '');
   } catch {
     if (generation === loadGeneration) ui(status, 'textContent', () => t("Usage could not be loaded. Try Refresh."));
-  } finally { if (generation === loadGeneration) $('refreshUsage').removeAttribute('disabled'); }
+  } finally {
+    await openRouter;
+    if (generation === loadGeneration) $('refreshUsage').removeAttribute('disabled');
+  }
 }
 function paintRates(): void {
   if (!snapshot) return;

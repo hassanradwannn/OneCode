@@ -40,7 +40,7 @@ import type { TurnTrace } from '../shared/turn-trace.js';
 import { initContextMeter, paintContextMeter } from './context-meter.js';
 import { installComposerDockMotion, installComposerHeightMotion } from './composer-motion.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
-import { nativeMessageMarkup, stageNativeMessageContent, type NativeMessageActions } from './native-message-content.js';
+import { nativeMessageMarkup, openImagePreview, stageNativeMessageContent, type NativeMessageActions } from './native-message-content.js';
 import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
@@ -692,16 +692,7 @@ async function openComposerImagePreview(image: InputImage | InputAttachment): Pr
     : await run(api.previewInputAttachment(image.id)) ??
     (typeof image.preview === 'string' && image.preview.startsWith('data:image/') ? image.preview : null);
   if (!source) { toast(t('Image preview unavailable')); return; }
-  const dialog = document.createElement('dialog'); dialog.className = 'composer-image-preview-dialog';
-  const close = el('button', 'composer-image-preview-close', '×') as HTMLButtonElement; close.type = 'button';
-  ui(close, 'aria-label', () => t('Close preview'));
-  const full = document.createElement('img'); full.src = source; full.alt = image.name;
-  const caption = el('div', 'composer-image-preview-name', image.name);
-  dialog.append(close, full, caption);
-  close.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
-  dialog.addEventListener('close', () => dialog.remove(), { once: true });
-  document.body.append(dialog); dialog.showModal(); close.focus();
+  openImagePreview(source, image.name, t('Close preview'));
 }
 /** Transcript thumbnails reuse the compose-time dialog on click and on Enter/Space. */
 function makePreviewable(node: HTMLElement, image: InputImage | InputAttachment, label: string): void {
