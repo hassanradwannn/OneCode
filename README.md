@@ -2,15 +2,23 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release: [OneCode 0.9.5](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.5)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.5/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release: [OneCode 0.9.8](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.8)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.8/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 0.9.5 automatically presents supported OpenRouter web builds and live previews, improves the managed Brave window, and renders captured reply images and code in OneCode. [Release notes](docs/release-notes/v0.9.5.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
+Stable 0.9.8 retries brief Windows checkpoint locks, bounds OpenRouter’s wait for response headers, and improves authored links, image previews and native prompt copying. [Release notes](docs/release-notes/v0.9.8.md) describe the supported scope. Stable and Beta retain separate installations, profiles and updater channels.
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 0.9.8
+
+- Keep an OpenRouter turn running when a brief Windows file lock clears during an atomic save.
+- Open links and images from your messages in Desktop and Remote.
+- Inherit the main chat’s reasoning effort when assigning workers without an explicit effort.
+
+See [0.9.8 notes](docs/release-notes/v0.9.8.md) and [verification scope](docs/release-acceptance/v0.9.8.md).
 
 ## What's new in 0.9.5
 
