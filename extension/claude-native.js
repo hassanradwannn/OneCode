@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 11;
+  const VERSION = 12;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -171,51 +171,6 @@
     diagnostic('ready', { props: props.length, candidates: sources.length });
     return { conversation: chat, message, token, text: source.text };
   }
-  function projectComposer() {
-    if (location.origin !== 'https://claude.ai') return null;
-    const boxes = [...document.querySelectorAll('[data-testid="chat-input"][data-cds="Editor"][contenteditable="true"][role="textbox"][aria-label="Write your prompt to Claude"]')].filter(shown);
-    if (boxes.length !== 1) return null;
-    const box = boxes[0], rows = [...document.querySelectorAll('[data-cds-composer-attachments] [data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])')].filter(shown);
-    if (!rows.length || rows.length > 20) return null;
-    const files = [];
-    let uploadingFile = null, uploadingSync = null, placeholderCount = null;
-    for (const row of rows) {
-      const remove = [...row.querySelectorAll('button[data-cds-attachment-remove][aria-label^="Remove "]')];
-      const name = remove.length === 1 ? remove[0].getAttribute('aria-label')?.slice('Remove '.length) : null;
-      if (!name || name.length > 512) return null;
-      const props = propsAt(row);
-      const metadata = uniqueValue(props.flatMap(value => {
-        const attachment = own(value, 'attachment'), nativeName = own(attachment, 'file_name'), type = own(attachment, 'file_type'), size = own(attachment, 'file_size');
-        if (row.getAttribute('data-cds') === 'MessageAttachmentsFile') return nativeName === name && typeof type === 'string' && type.length <= 128 && Number.isSafeInteger(size) && size >= 0
-          ? [{ name, type, size, kind: 'file', ready: true }] : [];
-        if (row.getAttribute('data-cds') !== 'MessageAttachmentsImage') return [];
-        const file = own(value, 'file'), fileName = own(file, 'file_name'), fileSize = own(file, 'size_bytes'), pending = own(value, 'pending'), success = own(file, 'success');
-        // The image variant supplies primitive upload proof on file, not a text
-        // attachment. Never inspect its nativeFile, URL, user IDs or bytes.
-        return fileName === name && own(file, 'file_kind') === 'image' && Number.isSafeInteger(fileSize) && fileSize >= 0 &&
-          typeof success === 'boolean' && (pending === undefined || typeof pending === 'boolean')
-          ? [{ name, size: fileSize, kind: 'image', ready: success && pending !== true }] : [];
-      }));
-      for (const value of props) {
-        if (own(value, 'inComposer') !== true && own(value, 'inCdsComposer') !== true) continue;
-        const file = own(value, 'isUploadingFile'), sync = own(value, 'isUploadingSync'), count = own(value, 'attachmentPlaceholderCount');
-        // Any observed busy flag vetoes completion. Missing fields remain
-        // unknown so the isolated adapter can check positive per-file proof.
-        if (typeof file === 'boolean') uploadingFile = uploadingFile === true || file;
-        if (typeof sync === 'boolean') uploadingSync = uploadingSync === true || sync;
-        if (Number.isSafeInteger(count) && count >= 0) placeholderCount = Math.max(placeholderCount ?? 0, count);
-      }
-      // Retain an explicit busy veto even when this tile has no readable file
-      // metadata. The isolated adapter may otherwise use its rendered preview.
-      if (!metadata) continue;
-      let token = row.getAttribute('data-clf-claude-attachment-token');
-      if (!uuid.test(token || '')) { token = crypto.randomUUID(); row.setAttribute('data-clf-claude-attachment-token', token); }
-      files.push({ ...metadata, token });
-    }
-    let token = box.getAttribute('data-clf-claude-composer-token');
-    if (!uuid.test(token || '')) { token = crypto.randomUUID(); box.setAttribute('data-clf-claude-composer-token', token); }
-    return { token, files, uploadingFile, uploadingSync, placeholderCount };
-  }
   /** Only a mounted public visualize frame can expose its authored widget source.
    * Never walk message.content, tool-result payloads, stores or the frame's URL. */
   function projectWidgets(conversation) {
@@ -291,16 +246,11 @@
     return { cards, widgets, viewer: { ...sources, ...owner, token: selected[0].token } };
   }
   const receive = event => {
-    if (event.source !== window || event.origin !== location.origin || !['onecode-claude-file-read', 'onecode-claude-composer-read', 'onecode-claude-user-read'].includes(event.data?.type) ||
+    if (event.source !== window || event.origin !== location.origin || !['onecode-claude-file-read', 'onecode-claude-user-read'].includes(event.data?.type) ||
         !/^[0-9a-f-]{36}$/.test(event.data.nonce || '')) return;
     if (event.data.type === 'onecode-claude-user-read') {
       let user; try { user = projectUser(event.data.message); } catch { user = null; }
       window.postMessage({ type: 'onecode-claude-user-read-result', nonce: event.data.nonce, path: location.pathname, user }, location.origin);
-      return;
-    }
-    if (event.data.type === 'onecode-claude-composer-read') {
-      let composer; try { composer = projectComposer(); } catch { composer = null; }
-      window.postMessage({ type: 'onecode-claude-composer-read-result', nonce: event.data.nonce, path: location.pathname, composer }, location.origin);
       return;
     }
     let result; try { result = project(); } catch { result = { cards: [], viewer: null }; }

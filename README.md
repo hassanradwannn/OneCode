@@ -2,15 +2,22 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release [OneCode 0.9.10](https://github.com/hassanradwannn/OneCode/releases/tag/v0.9.10)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.9.10/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release [OneCode 1.0.0](https://github.com/hassanradwannn/OneCode/releases/tag/v1.0.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 0.9.10 fixes attachment delivery in Claude and Gemini and restores previews for images sent directly in Claude. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v0.9.10.md)
+Stable 1.0.0 pastes attachments into Gemini and uses native Send as soon as the staged draft is ready in Claude and Gemini. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v1.0.0.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 
 **Already installed?** Open **Settings → General → Check for updates → Install when done**. Compatible Windows, Linux AppImage and positively identified DEB installations can activate a verified application capsule without replacing the immutable native base. Full DEB/native changes remain package-manager-owned. Your profile and saved chats are preserved.
+
+## What's new in 1.0.0
+
+- Paste files into Gemini’s composer without opening the Files menu.
+- Send the authorized draft as soon as Claude or Gemini enables native Send. The provider handles any remaining upload processing.
+
+See [1.0.0 notes](docs/release-notes/v1.0.0.md).
 
 ## What's new in 0.9.10
 

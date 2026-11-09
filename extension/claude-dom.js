@@ -308,10 +308,10 @@ var CLF_DOM = (() => {
       // and command drafts; ordinary and human-authored drafts stay node-bound.
       if (next !== box && selectedSkill && skillSelection(next) === selectedSkill && composerAuthoredText() === clean(expected)) box = next;
       return next === box && box?.isConnected && composerAuthoredText() === clean(expected) &&
-        (!attached || attachmentRows().length === attached.length && attached.every(row => row.node.isConnected && attachmentRows().includes(row.node) && attachmentName(row.node) === row.name));
+        (!attached || ownsAttachments(attached));
     };
     return { current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: nodes => { attached = nodes.map(node => ({ node, name: attachmentName(node) })); },
+      dispose: () => { retired = true; }, attachments: (nodes, names) => { attached = { nodes, names }; },
       rebind: () => { if (retired || !current() || composerAuthoredText() !== clean(expected)) return false; box = composer(); return Boolean(box); } };
   }
   async function prepareNativeSkill(name, current = () => true) {
@@ -396,13 +396,21 @@ var CLF_DOM = (() => {
     const label = attachmentRemove(row)?.getAttribute('aria-label');
     return label && label.startsWith('Remove ') && label.length > 7 && label.length <= 519 ? label.slice(7) : null;
   };
-  function loadedComposerImage(row) {
-    const image = row.querySelector('img[data-cds-tile-picture][data-loaded]');
-    const remove = attachmentRemove(row);
-    return row.matches('[data-cds="MessageAttachmentsImage"]') && image?.complete && image.naturalWidth > 0 && shown(image) &&
-      remove && !remove.disabled && remove.getAttribute('aria-disabled') !== 'true' &&
-      (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) &&
-      !row.closest('[aria-busy="true"]') && !all('[role="progressbar"], [aria-busy="true"]', row).some(shown);
+  function attachmentsMatch(rows, names) {
+    if (rows.length !== names.length) return false;
+    const unmatched = names.slice();
+    return rows.every(row => {
+      const name = attachmentName(row);
+      if (!name) return true; // A staged tile can acquire its native label while uploading.
+      const index = unmatched.indexOf(name);
+      if (index < 0) return false;
+      unmatched.splice(index, 1);
+      return true;
+    });
+  }
+  function ownsAttachments({ nodes, names }) {
+    const rows = attachmentRows();
+    return nodes.every(node => rows.includes(node)) && attachmentsMatch(rows, names);
   }
   const hasComposerAttachments = () => attachmentRows().length > 0;
   const composerAttachmentNames = () => attachmentRows().map(attachmentName).filter(Boolean).sort();
@@ -416,28 +424,6 @@ var CLF_DOM = (() => {
       return '';
     };
     return read(node, 0);
-  }
-  function readComposerFiles(current) {
-    if (!current()) return Promise.resolve(null);
-    const route = location.pathname, nonce = crypto.randomUUID(), box = composer();
-    return new Promise(resolve => {
-      let done = false;
-      const finish = value => { if (done) return; done = true; clearTimeout(timer); window.removeEventListener('message', receive); resolve(value); };
-      const receive = event => {
-        if (event.source !== window || event.origin !== location.origin || event.data?.type !== 'onecode-claude-composer-read-result' || event.data.nonce !== nonce) return;
-        const proof = event.data.composer;
-        if (!current() || composer() !== box || location.pathname !== route || event.data.path !== route || !proof ||
-            !uuid.test(proof.token || '') || box?.getAttribute('data-clf-claude-composer-token') !== proof.token ||
-            !Array.isArray(proof.files) || proof.files.length > 20 ||
-            (proof.uploadingFile !== null && typeof proof.uploadingFile !== 'boolean') ||
-            (proof.uploadingSync !== null && typeof proof.uploadingSync !== 'boolean') ||
-            (proof.placeholderCount !== null && (!Number.isSafeInteger(proof.placeholderCount) || proof.placeholderCount < 0))) return finish(null);
-        finish(proof);
-      };
-      window.addEventListener('message', receive);
-      const timer = setTimeout(() => finish(undefined), 2000);
-      window.postMessage({ type: 'onecode-claude-composer-read', nonce }, location.origin);
-    });
   }
   async function uploadImages(images = [], current = () => true, draft = null, extraFiles = [], { explain } = {}) {
     const refuse = reason => { explain?.(reason); return false; };
@@ -488,7 +474,7 @@ var CLF_DOM = (() => {
       return Boolean(box?.isConnected && draft.current());
     };
     const priorAlerts = new Set(errors().map(error => error.node));
-    const editEvents = ['beforeinput', 'input', 'change', 'pointerdown', 'keydown', 'click'];
+    const editEvents = ['beforeinput', 'input', 'change', 'paste', 'drop', 'pointerdown', 'keydown', 'click'];
     for (const type of editEvents) document.addEventListener(type, note, true);
     try {
       if (!owns()) return refuse('upload-draft-changed');
@@ -496,59 +482,19 @@ var CLF_DOM = (() => {
       // One native input change only. A lost/ambiguous upload is left in the
       // unsent composer and is never retried or replaced automatically.
       input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
-      const bytes = files.reduce((total, file) => total + file.size, 0);
-      const smallPhotos = bytes <= 2 * 1024 * 1024 && files.every(file => /^image\//i.test(file.type));
-      const deadline = Date.now() + (extraFiles.length && !smallPhotos ? 600000 : 60000);
-      let lostAt = null, waiting = 'upload-state-unavailable', loadedRows = null;
-      while (survives() && Date.now() < deadline) {
-        if (!owns()) {
-          const visible = composerAuthoredText();
-          lostAt ??= Date.now();
-          if ((visible && visible !== expected) || Date.now() - lostAt >= 2500) return refuse('upload-draft-changed');
-          await new Promise(resolve => setTimeout(resolve, 150));
-          continue;
-        }
-        lostAt = null;
-        if (errors().some(error => !priorAlerts.has(error.node))) return refuse('native-upload-error');
-        if (attachmentRows().length > files.length) return refuse('upload-attachment-mismatch');
-        const proof = await readComposerFiles(owns);
-        if (!owns()) continue;
-        // A delayed read-only bridge reply does not mean the native upload
-        // failed. Re-read under the same deadline without another input change.
-        const currentRows = attachmentRows();
-        const busy = proof?.uploadingFile === true || proof?.uploadingSync === true || (proof?.placeholderCount ?? 0) > 0;
-        waiting = busy ? 'upload-still-pending' : proof ? 'upload-readiness-unconfirmed' : 'upload-state-unavailable';
-        if (proof && box.getAttribute('data-clf-claude-composer-token') === proof.token && !busy &&
-            proof.files.length === files.length && currentRows.length === files.length && enabled(sendButton())) {
-          const settled = proof.uploadingFile === false && proof.uploadingSync === false && proof.placeholderCount === 0;
-          const unmatched = proof.files.slice();
-          const matches = files.every(file => {
-            const at = unmatched.findIndex(item => item?.name === file.name && item.ready === true &&
-              (item.kind === 'file' && typeof item.type === 'string' || item.kind === 'image' && /^image\//i.test(file.type)) && Number.isSafeInteger(item.size) && item.size >= 0 &&
-              uuid.test(item.token || '') && currentRows.some(row => row.getAttribute('data-clf-claude-attachment-token') === item.token && attachmentName(row) === file.name &&
-                attachmentRemove(row)?.disabled !== true && attachmentRemove(row)?.getAttribute('aria-disabled') !== 'true' &&
-                (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) &&
-                row.getAttribute('aria-busy') !== 'true' && (settled || item.kind === 'image' || row.hasAttribute('data-state'))));
-            if (at < 0) return false; unmatched.splice(at, 1); return true;
-          });
-          if (matches) { draft.attachments(currentRows); return draft.current(); }
-        }
-        // Some image tiles expose the completed preview and enabled Send even
-        // when the React reader cannot project the private upload metadata.
-        // Require the exact native tile names and a stable, loaded preview for
-        // each file. An explicit pending upload or missing preview still waits.
-        if ((!proof || proof.files.length < currentRows.length && proof.files.every(file => file.ready)) && !busy &&
-            files.every(file => /^image\//i.test(file.type)) && enabled(sendButton()) &&
-            currentRows.length === files.length && currentRows.every(loadedComposerImage) &&
-            JSON.stringify(currentRows.map(attachmentName).sort()) === JSON.stringify(files.map(file => file.name).sort())) {
-          if (loadedRows?.every((row, index) => row === currentRows[index])) {
-            draft.attachments(currentRows); return draft.current();
-          }
-          loadedRows = currentRows;
-        } else loadedRows = null;
-        await new Promise(resolve => setTimeout(resolve, 150));
-      }
-      return refuse(survives() ? waiting : 'upload-draft-changed');
+      const names = files.map(file => file.name);
+      const staged = await waitFor(() => {
+        if (!owns()) return composer() === box && composerAuthoredText() !== expected ? { error: 'upload-draft-changed' } : null;
+        if (errors().some(error => !priorAlerts.has(error.node))) return { error: 'native-upload-error' };
+        const rows = attachmentRows();
+        if (rows.length > files.length) return { error: 'upload-attachment-mismatch' };
+        return attachmentsMatch(rows, names) ? { rows } : null;
+      }, survives);
+      if (!staged?.rows || !owns()) return refuse(staged?.error || (survives() ? 'upload-not-staged' : 'upload-draft-changed'));
+      // Native Send owns the timing of upload completion. Lease the staged
+      // tiles now and let send() use the first enabled provider Send button.
+      draft.attachments(staged.rows, names);
+      return draft.current();
     } catch { return refuse('native-upload-unavailable'); }
     finally { for (const type of editEvents) document.removeEventListener(type, note, true); }
   }
@@ -751,7 +697,7 @@ var CLF_DOM = (() => {
       if (!ready || !current()) return refuse('send-not-ready');
       if (beforeSend && await beforeSend(current) !== true) return refuse('not-authorized');
       const button = sendButton();
-      if (!current() || !enabled(button) || button !== ready) return refuse('draft-changed');
+      if (!current() || !enabled(button)) return refuse('draft-changed');
       if (whileGenerating && queuedSendButtons().length) return refuse('queued-message-present');
       if (skillSelection(box)) outgoingSkill = { expected: submitted, prior, conversation: start, current: stillCurrent };
       rawRead = { prior, submitted, current: () => !edited && stillCurrent(), until: Date.now() + (receiptTimeoutMs || 180000) };

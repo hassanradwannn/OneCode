@@ -666,10 +666,9 @@ var CLF_DOM = (() => {
     let box = composer(), retired = false, leasedAttachments = null;
     const owns = () => !retired && current() && box === composer() && box?.isConnected &&
       (compact(authored(box)) === compact(stripControl(expected)) || transitionOwns(box, expected)) &&
-      (!leasedAttachments || attachmentRows().length === leasedAttachments.length &&
-        leasedAttachments.every(file => file.node.isConnected && attachmentRows().includes(file.node) && attachmentName(file.node) === file.name));
+      (!leasedAttachments || ownsAttachments(leasedAttachments));
     return { current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: nodes => { leasedAttachments = nodes.map(node => ({ node, name: attachmentName(node) })); }, rebind: () => {
+      dispose: () => { retired = true; }, attachments: (nodes, names) => { leasedAttachments = { nodes, names }; }, rebind: () => {
         if (retired || !current() || compact(composerAuthoredText()) !== compact(stripControl(expected))) return false;
         box = composer(); return true;
       } };
@@ -1574,98 +1573,74 @@ var CLF_DOM = (() => {
   }
   const composerAttachmentNames = () => attachmentRows().map(attachmentName).filter(name => name !== null).sort();
   const hasComposerAttachments = () => attachmentRows().length > 0;
-  const attachmentComplete = row => {
-    const close = all('.gem-attachment-close-button button[aria-label]', row);
-    // Native completed close controls are CSS-hidden until hover.
-    return close.length === 1 && close[0].isConnected && !close[0].disabled && close[0].getAttribute('aria-disabled') !== 'true' &&
-      !close[0].closest('[inert],[hidden],[aria-hidden="true"]') && /^close /i.test(close[0].getAttribute('aria-label') || '');
-  };
-  // The native Files component owns its direct hidden input. Descendant
-  // selector-service inputs and the surrounding uploader are separate owners.
-  const nativeFileInputs = owner => all(':scope > input.hidden-file-input[type="file"]', owner).filter(node => !node.disabled && node.multiple);
-  const fileUploadOwners = () => all('images-files-uploader[data-test-id="uploader-images-files-button-advanced"]').filter(node => {
-    const menu = node.closest('mat-action-list[role="menu"][aria-label="Menu options"],gem-menu[role="menu"][aria-label="Menu options"]');
-    return shown(node) && shown(menu);
-  });
+  function attachmentsMatch(rows, names) {
+    if (rows.length !== names.length) return false;
+    const unmatched = names.slice();
+    return rows.every(row => {
+      const name = attachmentName(row);
+      if (!name) return true; // The file chip may be visible before its label.
+      const index = unmatched.indexOf(name);
+      if (index < 0) return false;
+      unmatched.splice(index, 1);
+      return true;
+    });
+  }
+  function ownsAttachments({ nodes, names }) {
+    const rows = attachmentRows();
+    return nodes.every(node => rows.includes(node)) && attachmentsMatch(rows, names);
+  }
   async function uploadImages(images = [], current = () => true, draft = null, extraFiles = [], { explain } = {}) {
-    // Gemini's CSV document loader rejects ordinary text/csv on this account.
-    // A text view keeps every original byte; only the native upload name/type
-    // changes. Desktop attachment metadata and history retain the original.
+    const refuse = stage => { explain?.(stage); return false; };
+    // Gemini's CSV loader requires a text filename. The bytes and the
+    // attachment name stored in OneCode stay unchanged.
     const reservedNames = new Set(extraFiles.map(file => file.name.toLowerCase()));
     const files = extraFiles.map(file => {
       if (!/\.csv$/i.test(file.name)) return file;
       let name = file.name + '.txt', suffix = 2;
-      while (reservedNames.has(name.toLowerCase())) name = `${file.name} (${suffix++}).txt`;
+      while (reservedNames.has(name.toLowerCase())) name = file.name + ' (' + suffix++ + ').txt';
       reservedNames.add(name.toLowerCase());
       return new File([file], name, { type: 'text/plain', lastModified: file.lastModified });
     });
-    const box = composer(), host = composerBox(), route = location.href;
-    let revoked = false, performing = false, dispatchAttempted = false;
-    const refuse = stage => {
-      const owners = fileUploadOwners();
-      const inputs = owners.flatMap(owner => all('input[type="file"]', owner)).filter(node => !node.disabled && node.multiple);
-      const rows = attachmentRows(), unmatched = rows.map(attachmentName);
-      const namesMatched = files.reduce((count, file) => { const index = unmatched.indexOf(file.name); if (index < 0) return count; unmatched.splice(index, 1); return count + 1; }, 0);
-      console.info('[OneCode upload] ' + JSON.stringify({ stage, requested: files.length, ownerCount: owners.length, inputCount: inputs.length,
-        primaryInputCount: owners.flatMap(nativeFileInputs).length,
-        previewCount: rows.length, namesMatched, completedPreviews: rows.filter(attachmentComplete).length,
-        dispatchAttempted, callerCurrent: current(), draftCurrent: Boolean(draft?.current()),
-        editorSame: composer() === box, hostSame: composerBox() === host, routeMatches: location.href === route, trustedEditRevoked: revoked,
-        progressCount: host ? all('[aria-busy="true"],[role="progressbar"]', host).filter(shown).length : 0,
-        alertCount: all('[role="alert"]').filter(shown).length, sendPresent: Boolean(sendButton()), sendEnabled: enabled(sendButton()) }));
-      explain?.(stage);
-      return false;
-    };
-    for (const image of images || []) {
-      const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-zA-Z0-9+/=]+)$/.exec(image.dataUrl || '');
-      if (!match) return refuse('image-format-invalid');
-      files.push(new File([Uint8Array.from(atob(match[2]), value => value.charCodeAt(0))], image.name || 'image.png', { type: match[1] }));
-    }
+    try {
+      for (const image of images || []) {
+        const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-zA-Z0-9+/=]+)$/.exec(image.dataUrl || '');
+        if (!match) return refuse('image-format-invalid');
+        files.push(new File([Uint8Array.from(atob(match[2]), value => value.charCodeAt(0))], image.name || 'image.png', { type: match[1] }));
+      }
+    } catch { return refuse('image-format-invalid'); }
     if (!files.length) return true;
+    const box = composer(), host = composerBox(), route = location.href;
     if (!host || !box || files.length > 20 || !current() || !draft?.current() || hasComposerAttachments()) return refuse('entry-not-owned');
-    if (files.some(file => file.name.length > 512)) return refuse('filename-unconfirmed');
-    const trigger = unique(all('button[aria-label="Upload and tools"]', host));
-    if (!enabled(trigger)) return refuse('trigger-unavailable');
-    const own = action => { performing = true; try { return action(); } finally { performing = false; } };
+    if (files.some(file => !file.name || file.name.length > 512)) return refuse('filename-unconfirmed');
+    const names = files.map(file => file.name);
+    const priorAlerts = new Set(all('[role="alert"]').filter(shown));
+    let revoked = false;
     const interrupt = event => {
-      if (!performing && event.isTrusted && (host.contains(event.target) || event.target?.matches?.('input[type="file"]'))) revoked = true;
+      if (event.isTrusted && host.contains(event.target)) revoked = true;
     };
     const onTarget = () => !revoked && current() && draft.current() && location.href === route && composer() === box && composerBox() === host;
-    const wasOpen = trigger.getAttribute('aria-expanded') === 'true';
-    const priorAlerts = new Set(all('[role="alert"]').filter(shown));
-    for (const type of ['beforeinput', 'input', 'change']) document.addEventListener(type, interrupt, true);
+    const editEvents = ['beforeinput', 'input', 'change', 'paste', 'drop', 'pointerdown', 'keydown'];
+    for (const type of editEvents) document.addEventListener(type, interrupt, true);
     try {
-      if (!wasOpen) own(() => trigger.click());
-      const input = await waitFor(() => {
-        const owners = fileUploadOwners();
-        if (owners.length !== 1 || trigger.getAttribute('aria-expanded') !== 'true') return null;
-        const choices = nativeFileInputs(owners[0]);
-        return choices.length === 1 ? choices[0] : null;
-      }, onTarget);
-      if (!input || !onTarget() || hasComposerAttachments()) return refuse('input-unconfirmed');
-      try {
-        const transfer = new DataTransfer(); for (const file of files) transfer.items.add(file);
-        own(() => { dispatchAttempted = true; input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true })); });
-      } catch { return refuse('assignment-failed'); }
-      const result = await waitFor(() => {
-        if (all('[role="alert"]').some(node => shown(node) && !priorAlerts.has(node))) return { ok: false, reason: 'new-alert' };
+      if (!onTarget()) return refuse('entry-not-owned');
+      const transfer = new DataTransfer();
+      for (const file of files) transfer.items.add(file);
+      // Give the existing native composer the files in one clipboard event.
+      // No menu action or second upload is needed.
+      box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true, composed: true }));
+      const staged = await waitFor(() => {
+        if (all('[role="alert"]').some(node => shown(node) && !priorAlerts.has(node))) return { error: 'new-alert' };
         const rows = attachmentRows();
-        if (rows.length > files.length) return { ok: false, reason: 'extra-preview' };
-        if (rows.length !== files.length) return null;
-        const names = rows.map(attachmentName), unmatched = [...names];
-        if (!files.every(file => { const index = unmatched.indexOf(file.name); if (index < 0) return false; unmatched.splice(index, 1); return true; })) return null;
-        if (all('[aria-busy="true"],[role="progressbar"]', host).some(shown) || !enabled(sendButton())) return null;
-        if (!rows.every(attachmentComplete)) return null;
-        return { ok: true, rows };
-      }, onTarget, extraFiles.length ? 600000 : 60000);
-      if (!result?.ok || !onTarget()) return refuse(result?.reason || (onTarget() ? 'completion-unconfirmed' : 'lease-withdrawn'));
-      draft.attachments(result.rows);
-      return draft.current() || refuse('completed-draft-changed');
-    } finally {
-      if (!wasOpen && onTarget() && trigger.isConnected && trigger.getAttribute('aria-expanded') === 'true') own(() => trigger.click());
-      for (const type of ['beforeinput', 'input', 'change']) document.removeEventListener(type, interrupt, true);
-    }
+        if (rows.length > files.length) return { error: 'extra-preview' };
+        return attachmentsMatch(rows, names) ? { rows } : null;
+      }, onTarget, 15000);
+      if (!staged?.rows || !onTarget()) return refuse(staged?.error || (onTarget() ? 'paste-not-staged' : 'lease-withdrawn'));
+      draft.attachments(staged.rows, names);
+      return draft.current();
+    } catch { return refuse('paste-unavailable'); }
+    finally { for (const type of editEvents) document.removeEventListener(type, interrupt, true); }
   }
+
   const pickerButton = () => unique(all('button[aria-label^="Open mode picker"]'));
   const modelPickerCaption = picker => {
     if (!picker) return '';

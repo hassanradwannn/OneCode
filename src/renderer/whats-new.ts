@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.0': {
+    lead: () => t('Send attached files through the native provider composer.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Paste files into Gemini'), text: () => t('OneCode pastes attachments into the prepared Gemini composer without opening Files.') },
+      { icon: 'i-chat', title: () => t('Send as soon as the provider is ready'), text: () => t('Claude and Gemini can finish processing staged files after OneCode presses the enabled Send button.') }
+    ]
+  },
   '0.9.1': {
     lead: () => t('Keep API chats out of provider browsers.'),
     highlights: [

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.0] — 2026-11-09
+
+Paste attachments directly into Gemini and use native Send as soon as the staged draft is ready in Gemini and Claude. See [1.0.0 notes](docs/release-notes/v1.0.0.md).
+
 ## [0.9.10] — 2026-11-09
 
 Fix attachment delivery in Claude and Gemini and restore previews for images sent directly in Claude. See [0.9.10 notes](docs/release-notes/v0.9.10.md).
