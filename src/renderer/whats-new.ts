@@ -16,7 +16,7 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
-  '1.0.2': {
+  '1.0.3': {
     lead: () => t('Send photos through Claude’s native composer.'),
     highlights: [
       { icon: 'i-file', title: () => t('Paste photos into Claude'), text: () => t('OneCode keeps the prepared photo and prompt through a composer redraw and clicks Send once the button is enabled.') },

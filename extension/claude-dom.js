@@ -312,7 +312,7 @@ var CLF_DOM = (() => {
         (!attached || ownsAttachments(attached));
     };
     return { text, current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: (nodes, names) => { attached = { nodes, names, previews: nodes.map(blobPreview) }; },
+      dispose: () => { retired = true; }, attachments: (nodes, names, pastedAt) => { attached = { nodes, names, pastedAt, previews: nodes.map(blobPreview) }; },
       rebind: () => {
         if (retired || !current() || composerAuthoredText() !== text || (attached && !ownsAttachments(attached))) return false;
         box = composer();
@@ -414,13 +414,19 @@ var CLF_DOM = (() => {
     const label = attachmentRemove(row)?.getAttribute('aria-label');
     return label && label.startsWith('Remove ') && label.length > 7 && label.length <= 519 ? label.slice(7) : null;
   };
-  function attachmentsMatch(rows, names) {
+  function attachmentsMatch(rows, names, pastedAt) {
     if (rows.length !== names.length) return false;
     const unmatched = names.slice();
     return rows.every(row => {
       const name = attachmentName(row);
       if (!name) return true; // A staged tile can acquire its native label while uploading.
-      const index = unmatched.indexOf(name);
+      let index = unmatched.indexOf(name);
+      if (index < 0 && pastedAt !== undefined) {
+        // Claude adds its paste timestamp to a clipboard File's name.
+        const renamed = /^(\d{13})_(.+)$/s.exec(name);
+        const timestamp = Number(renamed?.[1]);
+        if (renamed && timestamp >= pastedAt && timestamp <= pastedAt + 15000) index = unmatched.indexOf(renamed[2]);
+      }
       if (index < 0) return false;
       unmatched.splice(index, 1);
       return true;
@@ -431,9 +437,9 @@ var CLF_DOM = (() => {
     const url = image?.src || image?.currentSrc;
     return url?.startsWith('blob:') ? url : null;
   }
-  function ownsAttachments({ nodes, names, previews }) {
+  function ownsAttachments({ nodes, names, pastedAt, previews }) {
     const rows = attachmentRows();
-    if (!attachmentsMatch(rows, names)) return false;
+    if (!attachmentsMatch(rows, names, pastedAt)) return false;
     const remaining = new Set(rows);
     return nodes.every((node, index) => {
       const preview = previews[index], observed = blobPreview(node);
@@ -516,6 +522,7 @@ var CLF_DOM = (() => {
       if (!owns()) return refuse('upload-draft-changed');
       const transfer = new DataTransfer(); for (const file of files) transfer.items.add(file);
       // Dispatch exactly one native paste or file change for the owned draft.
+      const pastedAt = paste ? Date.now() : undefined;
       if (paste) box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true, composed: true }));
       else { input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true })); }
       const names = files.map(file => file.name);
@@ -524,12 +531,12 @@ var CLF_DOM = (() => {
         if (errors().some(error => !priorAlerts.has(error.node))) return { error: 'native-upload-error' };
         const rows = attachmentRows();
         if (rows.length > files.length) return { error: 'upload-attachment-mismatch' };
-        return attachmentsMatch(rows, names) ? { rows } : null;
+        return attachmentsMatch(rows, names, pastedAt) ? { rows } : null;
       }, survives);
       if (!staged?.rows || !owns()) return refuse(staged?.error || (!survives() ? 'upload-draft-changed' : paste ? 'paste-not-staged' : 'upload-not-staged'));
       // Native Send owns the timing of upload completion. Lease the staged
       // tiles now and let send() use the first enabled provider Send button.
-      draft.attachments(staged.rows, names);
+      draft.attachments(staged.rows, names, pastedAt);
       return draft.current();
     } catch { return refuse(paste ? 'native-paste-unavailable' : 'native-upload-unavailable'); }
     finally { for (const type of editEvents) document.removeEventListener(type, note, true); }

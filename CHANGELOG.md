@@ -1,8 +1,8 @@
 # OneCode changelog
 
-## [1.0.2] — 2026-11-10
+## [1.0.3] — 2026-11-10
 
-Paste photos into Claude’s composer, keep the prepared message through a redraw, and reconcile late native delivery receipts. See [1.0.2 notes](docs/release-notes/v1.0.2.md).
+Paste photos into Claude’s composer, recognize Claude’s timestamp-prefixed filenames, and reconcile late native delivery receipts. See [1.0.3 notes](docs/release-notes/v1.0.3.md).
 
 ## [1.0.1] — 2026-11-09
 
