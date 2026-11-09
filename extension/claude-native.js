@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 10;
+  const VERSION = 11;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -175,7 +175,7 @@
     if (location.origin !== 'https://claude.ai') return null;
     const boxes = [...document.querySelectorAll('[data-testid="chat-input"][data-cds="Editor"][contenteditable="true"][role="textbox"][aria-label="Write your prompt to Claude"]')].filter(shown);
     if (boxes.length !== 1) return null;
-    const box = boxes[0], rows = [...document.querySelectorAll('[data-cds-composer-attachments] [data-testid="file-thumbnail"][data-cds-attachment]')].filter(shown);
+    const box = boxes[0], rows = [...document.querySelectorAll('[data-cds-composer-attachments] [data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])')].filter(shown);
     if (!rows.length || rows.length > 20) return null;
     const files = [];
     let uploadingFile = null, uploadingSync = null, placeholderCount = null;
@@ -196,7 +196,6 @@
           typeof success === 'boolean' && (pending === undefined || typeof pending === 'boolean')
           ? [{ name, size: fileSize, kind: 'image', ready: success && pending !== true }] : [];
       }));
-      if (!metadata) return null;
       for (const value of props) {
         if (own(value, 'inComposer') !== true && own(value, 'inCdsComposer') !== true) continue;
         const file = own(value, 'isUploadingFile'), sync = own(value, 'isUploadingSync'), count = own(value, 'attachmentPlaceholderCount');
@@ -206,6 +205,9 @@
         if (typeof sync === 'boolean') uploadingSync = uploadingSync === true || sync;
         if (Number.isSafeInteger(count) && count >= 0) placeholderCount = Math.max(placeholderCount ?? 0, count);
       }
+      // Retain an explicit busy veto even when this tile has no readable file
+      // metadata. The isolated adapter may otherwise use its rendered preview.
+      if (!metadata) continue;
       let token = row.getAttribute('data-clf-claude-attachment-token');
       if (!uuid.test(token || '')) { token = crypto.randomUUID(); row.setAttribute('data-clf-claude-attachment-token', token); }
       files.push({ ...metadata, token });

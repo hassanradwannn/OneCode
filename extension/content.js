@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 131;
+  const RECORDER_VERSION = 132;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -15229,28 +15229,33 @@
       let authorizing = false;
       const draftCurrent = () => draft.current() ||
         (!authorizing && !sendAttempted && draft.rebind() && draft.current());
-      const files = [];
-      for (const attachment of input.attachments || []) {
-        const parts = [];
-        for (let offset = 0; offset < attachment.size; offset += 524288) {
-          if (!onTarget()) { noteWithdraw(offTarget()); return false; }
-          const response = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, attachmentId: attachment.id, offset });
-          const chunk = response?.data?.chunk;
-          if (typeof chunk !== 'string' || chunk.length > 699052) return fail(t(
-            'content_delivery_attachment_transfer_failed',
-            'Attachment transfer failed. The message was not sent.'
-          ));
-          const bytes = Uint8Array.from(atob(chunk), char => char.charCodeAt(0));
-          if (bytes.length !== Math.min(524288, attachment.size - offset)) return fail(t(
-            'content_delivery_attachment_transfer_incomplete',
-            'Attachment transfer was incomplete.'
-          ));
-          parts.push(bytes);
+      let attachmentFailure = '', transferFailure = '';
+      const readAttachmentFiles = async (conversationId, current) => {
+        const files = [];
+        for (const attachment of input.attachments || []) {
+          const parts = [];
+          for (let offset = 0; offset < attachment.size; offset += 524288) {
+            if (!current()) { noteWithdraw(offTarget()); return null; }
+            const response = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId, attachmentId: attachment.id, offset }, current);
+            if (!current()) { noteWithdraw(offTarget()); return null; }
+            const chunk = response?.data?.chunk;
+            if (typeof chunk !== 'string' || chunk.length > 699052) {
+              transferFailure = t('content_delivery_attachment_transfer_failed', 'Attachment transfer failed. The message was not sent.');
+              return null;
+            }
+            const bytes = Uint8Array.from(atob(chunk), char => char.charCodeAt(0));
+            if (bytes.length !== Math.min(524288, attachment.size - offset)) {
+              transferFailure = t('content_delivery_attachment_transfer_incomplete', 'Attachment transfer was incomplete.');
+              return null;
+            }
+            parts.push(bytes);
+          }
+          files.push(new File(parts, attachment.name, { type: attachment.mimeType }));
         }
-        files.push(new File(parts, attachment.name, { type: attachment.mimeType }));
-      }
-      let attachmentFailure = '';
+        return files;
+      };
       const uploadUnconfirmed = () => {
+        if (transferFailure) return fail(transferFailure);
         // Upload refusal is not Send or cancellation of the authored task.
         // Keep Claude's exact staged text beside any native file/error so the
         // user can inspect it; never leave an attachment with a cleared prompt.
@@ -15260,23 +15265,31 @@
           "Attachment upload was not confirmed. Check the unsent draft and any file error in the provider before trying again."
         ), attachmentFailure || undefined);
       };
-      // Gemini's first tool-free Send creates the native conversation. Files
-      // must stay local until that warm-up has settled, or Gemini consumes them
-      // with READY and the actual task loses its attachment lease.
-      const deferNativeAttachments = CLF_DOM.provider === 'gemini' && Boolean(input.images?.length || files.length);
+      // Read Gemini's attachment bytes after binding. A recovered warm-up
+      // already has a native route while the opening's durable claim is still
+      // unbound. The attachment endpoint requires those identities to agree.
+      const deferNativeAttachments = CLF_DOM.provider === 'gemini' && Boolean(input.images?.length || input.attachments?.length);
       let nativeAttachmentAttempted = false;
       const prepareAttachments = deferNativeAttachments ? async sendCurrent => {
         if (nativeAttachmentAttempted || !sendCurrent() || !onTarget() || !draftCurrent()) {
           console.info('[OneCode upload preparation] ' + JSON.stringify({ stage: 'entry-not-owned', attempted: nativeAttachmentAttempted,
-            callerCurrent: sendCurrent(), routeCurrent: onTarget(), draftCurrent: draftCurrent(), images: input.images?.length || 0, files: files.length }));
+            callerCurrent: sendCurrent(), routeCurrent: onTarget(), draftCurrent: draftCurrent(), images: input.images?.length || 0, files: input.attachments?.length || 0 }));
           return false;
         }
         nativeAttachmentAttempted = true;
-        return await CLF_DOM.uploadImages(input.images, () => sendCurrent() && onTarget() && draftCurrent(), draft, files);
+        const current = () => sendCurrent() && onTarget() && draftCurrent();
+        const files = await readAttachmentFiles(target || preparedTarget(), current);
+        return files !== null && current() && await CLF_DOM.uploadImages(input.images, current, draft, files, {
+          explain: reason => { attachmentFailure = reason; }
+        });
       } : null;
-      if (!deferNativeAttachments && !(await CLF_DOM.uploadImages(input.images, onTarget, draft, files, {
-        whileGenerating: Boolean(message.directTurn), explain: reason => { attachmentFailure = reason; }
-      }))) return uploadUnconfirmed();
+      if (!deferNativeAttachments) {
+        const files = await readAttachmentFiles(target, onTarget);
+        if (!files) return transferFailure ? fail(transferFailure) : false;
+        if (!await CLF_DOM.uploadImages(input.images, onTarget, draft, files, {
+          whileGenerating: Boolean(message.directTurn), explain: reason => { attachmentFailure = reason; }
+        })) return uploadUnconfirmed();
+      }
       // Stop/picker closure can remount the native editor on its next render.
       // Wait for this same untouched draft; never insert it twice or recapture a
       // human-edited replacement as our own. Authorization follows this barrier.

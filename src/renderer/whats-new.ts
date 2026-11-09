@@ -29,7 +29,13 @@ const RELEASES: Readonly<Record<string, Release>> = {
       { icon: 'i-retry', title: () => t('Recover unusable summaries'), text: () => t('Retry empty, truncated or oversized handoffs within bounds. Progress no longer appears as a red message-delivery failure.') }
     ]
   },
-  '0.9.10': {
+  '0.9.10': BUILD_CHANNEL === 'stable' ? {
+    lead: () => t('Send attachments and revisit images from browser chats.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Claude and Gemini attachment delivery'), text: () => t('Confirm Claude image uploads and use Gemini’s current Files menu after chat preparation.') },
+      { icon: 'i-image', title: () => t('Claude browser images'), text: () => t('See images sent directly in Claude beside the matching message in OneCode.') }
+    ]
+  } : {
     lead: () => t('Keep API tasks moving when their context fills up.'),
     highlights: [
       { icon: 'i-retry', title: () => t('Automatic context recovery'), text: () => t('Save a handoff before the model window fills, preserve the original history and continue the same task with running processes intact.') },

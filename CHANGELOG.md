@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [0.9.10] — 2026-11-09
+
+Fix attachment delivery in Claude and Gemini and restore previews for images sent directly in Claude. See [0.9.10 notes](docs/release-notes/v0.9.10.md).
+
 ## [0.9.9] — 2026-11-09
 
 Restore browser-sent images, copyable prompts, image gallery captions and Claude diagram colors. Show the OpenRouter daily free-request count in Usage when available. See [0.9.9 notes](docs/release-notes/v0.9.9.md).

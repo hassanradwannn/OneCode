@@ -1583,7 +1583,11 @@ var CLF_DOM = (() => {
   // The native Files component owns its direct hidden input. Descendant
   // selector-service inputs and the surrounding uploader are separate owners.
   const nativeFileInputs = owner => all(':scope > input.hidden-file-input[type="file"]', owner).filter(node => !node.disabled && node.multiple);
-  async function uploadImages(images = [], current = () => true, draft = null, extraFiles = []) {
+  const fileUploadOwners = () => all('images-files-uploader[data-test-id="uploader-images-files-button-advanced"]').filter(node => {
+    const menu = node.closest('mat-action-list[role="menu"][aria-label="Menu options"],gem-menu[role="menu"][aria-label="Menu options"]');
+    return shown(node) && shown(menu);
+  });
+  async function uploadImages(images = [], current = () => true, draft = null, extraFiles = [], { explain } = {}) {
     // Gemini's CSV document loader rejects ordinary text/csv on this account.
     // A text view keeps every original byte; only the native upload name/type
     // changes. Desktop attachment metadata and history retain the original.
@@ -1598,8 +1602,7 @@ var CLF_DOM = (() => {
     const box = composer(), host = composerBox(), route = location.href;
     let revoked = false, performing = false, dispatchAttempted = false;
     const refuse = stage => {
-      const owners = all('images-files-uploader[data-test-id="uploader-images-files-button-advanced"]').filter(node => shown(node) &&
-        node.closest('mat-action-list[role="menu"][aria-label="Menu options"]'));
+      const owners = fileUploadOwners();
       const inputs = owners.flatMap(owner => all('input[type="file"]', owner)).filter(node => !node.disabled && node.multiple);
       const rows = attachmentRows(), unmatched = rows.map(attachmentName);
       const namesMatched = files.reduce((count, file) => { const index = unmatched.indexOf(file.name); if (index < 0) return count; unmatched.splice(index, 1); return count + 1; }, 0);
@@ -1610,6 +1613,7 @@ var CLF_DOM = (() => {
         editorSame: composer() === box, hostSame: composerBox() === host, routeMatches: location.href === route, trustedEditRevoked: revoked,
         progressCount: host ? all('[aria-busy="true"],[role="progressbar"]', host).filter(shown).length : 0,
         alertCount: all('[role="alert"]').filter(shown).length, sendPresent: Boolean(sendButton()), sendEnabled: enabled(sendButton()) }));
+      explain?.(stage);
       return false;
     };
     for (const image of images || []) {
@@ -1633,8 +1637,7 @@ var CLF_DOM = (() => {
     try {
       if (!wasOpen) own(() => trigger.click());
       const input = await waitFor(() => {
-        const owners = all('images-files-uploader[data-test-id="uploader-images-files-button-advanced"]').filter(node => shown(node) &&
-          node.closest('mat-action-list[role="menu"][aria-label="Menu options"]'));
+        const owners = fileUploadOwners();
         if (owners.length !== 1 || trigger.getAttribute('aria-expanded') !== 'true') return null;
         const choices = nativeFileInputs(owners[0]);
         return choices.length === 1 ? choices[0] : null;

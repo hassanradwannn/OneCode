@@ -20,7 +20,13 @@ var CLF_DOM = (() => {
   const captureUserImages = typeof CLF_USER_IMAGE_CAPTURE === 'undefined' ? () => [] :
     CLF_USER_IMAGE_CAPTURE.create('onecode-claude-user-image');
   function userImages(root) {
-    return captureUserImages([...(root?.querySelectorAll('img') ?? [])].filter(image =>
+    const owner = root.closest('[data-cds="UserMessage"][data-turn-key]');
+    // Claude renders sent image tiles beside the bubble. Join that strip only
+    // when its native turn key is the exact UUID already proved by the bubble.
+    const ownStrip = owner?.getAttribute('data-turn-key')?.toLowerCase() === nativeSuffix.exec(root.id)?.[1]?.toLowerCase() &&
+      owner?.querySelectorAll('[data-testid="user-message"]').length === 1
+      ? all(':scope > [data-cds="MessageAttachments"] [data-cds="MessageAttachmentsImage"] img[data-cds-tile-picture]', owner) : [];
+    return captureUserImages([...new Set([...all('img', root), ...ownStrip])].filter(image =>
       shown(image) && (image.currentSrc || image.src) && !image.closest('[role="toolbar"], [data-cds="TurnStatus"]')
     ));
   }
@@ -132,10 +138,11 @@ var CLF_DOM = (() => {
     turnIdOf(message.node) === message.id ? proseNodes(message.node) : [];
   function messagesIn(turn, _index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id || turn.id !== turnIdOf(turn.node) || seen.has(turn.id)) return [];
+    const images = turn.role === 'user' ? userImages(turn.node) : [];
     let value;
     if (turn.role === 'user') {
       const authored = all(':scope > div.contents', turn.node);
-      if (!authored.length) return [];
+      if (!authored.length && !images.length) return [];
       value = userAuthoredText(authored.length === 1 ? authored[0] : null, turn.node, turn.id);
     }
     else {
@@ -148,11 +155,10 @@ var CLF_DOM = (() => {
     }
     // Image-only user sends have no text worth returning, but the row is
     // still a real authored message once its pixels are captured.
-    if (!value && !(turn.role === 'user' && userImages(turn.node).length)) return [];
+    if (!value && !images.length) return [];
     seen.add(turn.id);
     // Full user readback stays private evidence for the durable exact task receipt.
     // Only userPromptText removes its app frame in presentation.
-    const images = turn.role === 'user' ? userImages(turn.node) : [];
     return [{ id: turn.id, role: turn.role, text: value, turnId: turn.id, node: turn.node, interrupted: false,
       ...(images.length ? { images } : {}) }];
   }
@@ -381,7 +387,7 @@ var CLF_DOM = (() => {
   const approvalWaiting = () => Boolean(approvalCard());
   const generating = () => Boolean(stopButton()) || approvalWaiting() || turns().filter(row => row.role === 'assistant').at(-1)?.node.getAttribute('data-is-streaming') === 'true';
   const stopGeneration = current => { const button = stopButton(); if (!current() || !enabled(button)) return false; button.click(); return true; };
-  const attachmentRows = () => all('[data-cds-composer-attachments] [data-testid="file-thumbnail"][data-cds-attachment]').filter(shown);
+  const attachmentRows = () => all('[data-cds-composer-attachments] [data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])').filter(shown);
   const attachmentRemove = row => {
     const controls = all('button[data-cds-attachment-remove][aria-label^="Remove "]', row);
     return controls.length === 1 ? controls[0] : null;
@@ -390,6 +396,14 @@ var CLF_DOM = (() => {
     const label = attachmentRemove(row)?.getAttribute('aria-label');
     return label && label.startsWith('Remove ') && label.length > 7 && label.length <= 519 ? label.slice(7) : null;
   };
+  function loadedComposerImage(row) {
+    const image = row.querySelector('img[data-cds-tile-picture][data-loaded]');
+    const remove = attachmentRemove(row);
+    return row.matches('[data-cds="MessageAttachmentsImage"]') && image?.complete && image.naturalWidth > 0 && shown(image) &&
+      remove && !remove.disabled && remove.getAttribute('aria-disabled') !== 'true' &&
+      (!row.hasAttribute('data-state') || ['ready', 'complete', 'uploaded', 'success'].includes(row.getAttribute('data-state'))) &&
+      !row.closest('[aria-busy="true"]') && !all('[role="progressbar"], [aria-busy="true"]', row).some(shown);
+  }
   const hasComposerAttachments = () => attachmentRows().length > 0;
   const composerAttachmentNames = () => attachmentRows().map(attachmentName).filter(Boolean).sort();
   function leadingName(node) {
@@ -485,7 +499,7 @@ var CLF_DOM = (() => {
       const bytes = files.reduce((total, file) => total + file.size, 0);
       const smallPhotos = bytes <= 2 * 1024 * 1024 && files.every(file => /^image\//i.test(file.type));
       const deadline = Date.now() + (extraFiles.length && !smallPhotos ? 600000 : 60000);
-      let lostAt = null, waiting = 'upload-state-unavailable';
+      let lostAt = null, waiting = 'upload-state-unavailable', loadedRows = null;
       while (survives() && Date.now() < deadline) {
         if (!owns()) {
           const visible = composerAuthoredText();
@@ -519,6 +533,19 @@ var CLF_DOM = (() => {
           });
           if (matches) { draft.attachments(currentRows); return draft.current(); }
         }
+        // Some image tiles expose the completed preview and enabled Send even
+        // when the React reader cannot project the private upload metadata.
+        // Require the exact native tile names and a stable, loaded preview for
+        // each file. An explicit pending upload or missing preview still waits.
+        if ((!proof || proof.files.length < currentRows.length && proof.files.every(file => file.ready)) && !busy &&
+            files.every(file => /^image\//i.test(file.type)) && enabled(sendButton()) &&
+            currentRows.length === files.length && currentRows.every(loadedComposerImage) &&
+            JSON.stringify(currentRows.map(attachmentName).sort()) === JSON.stringify(files.map(file => file.name).sort())) {
+          if (loadedRows?.every((row, index) => row === currentRows[index])) {
+            draft.attachments(currentRows); return draft.current();
+          }
+          loadedRows = currentRows;
+        } else loadedRows = null;
         await new Promise(resolve => setTimeout(resolve, 150));
       }
       return refuse(survives() ? waiting : 'upload-draft-changed');
