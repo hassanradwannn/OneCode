@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.5': {
+    lead: () => t('Send PDFs in both Claude composer layouts.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Keep staged PDFs through preview changes'), text: () => t('OneCode keeps the attachment when Claude replaces its loading preview and uses the Send button in the active composer.') }
+    ]
+  },
   '1.0.4': {
     lead: () => t('Send PDFs and other documents to Claude.'),
     highlights: [

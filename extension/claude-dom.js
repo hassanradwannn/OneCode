@@ -42,7 +42,21 @@ var CLF_DOM = (() => {
   const nativeUserIdValid = (id, conversation = conversationId()) => nativeMessageIdValid(id, 'user', conversation);
   const composer = () => unique(all(BOX));
   const composerWritable = () => enabled(composer()) && composer().getAttribute('contenteditable') === 'true';
-  const sendButton = () => unique(all('button[data-testid="chat-input-send"][aria-label="Send message"]'));
+  const sendSelector = 'button[data-testid="chat-input-send"],button[data-cds="Button"][aria-label="Send message"]';
+  function sendButton() {
+    const box = composer();
+    if (!box) return null;
+    const form = box.closest('form');
+    for (const owner of composerScopes(box)) {
+      const buttons = all(sendSelector, owner).filter(button => {
+        const label = button.getAttribute('aria-label'), dock = button.closest('[data-cds-dock-group]');
+        return shown(button) && (!label || label === 'Send message') && (!button.form || button.form === form) &&
+          (!dock || dock.contains(box)) && !button.closest(`${TURN},[role="menu"],[role="dialog"]`);
+      });
+      if (buttons.length) return buttons.length === 1 ? buttons[0] : null;
+    }
+    return null;
+  }
   const queuedSendButtons = () => all('button,[role="button"]').filter(node => shown(node) &&
     compact(node.getAttribute('aria-label') || text(node)).toLowerCase() === 'send now');
   const attachButton = () => unique(all('button[data-testid="chat-input-attach"][aria-label="Add files, connectors, and more"]'));
@@ -301,6 +315,17 @@ var CLF_DOM = (() => {
     let box = composer(), retired = false, attached = null;
     const text = clean(expected);
     const selectedSkill = skillSelection(box);
+    const editEvents = ['beforeinput', 'change', 'paste', 'drop', 'click'];
+    const noteAttachmentEdit = event => {
+      if (!event.isTrusted) return;
+      const target = event.target, button = target?.closest?.('button');
+      if (target?.closest?.('[data-cds-composer-attachments],[data-cds-composer-attachments-row],input[type="file"],[role="menu"]') ||
+          button && button === attachButton() || event.type !== 'click' && target?.closest?.(BOX)) retire();
+    };
+    const retire = () => {
+      retired = true;
+      for (const type of editEvents) document.removeEventListener(type, noteAttachmentEdit, true);
+    };
     const owns = () => {
       if (retired || !current()) return false;
       const next = composer();
@@ -311,8 +336,11 @@ var CLF_DOM = (() => {
       return next === box && box?.isConnected && composerAuthoredText() === text &&
         (!attached || ownsAttachments(attached));
     };
-    return { text, current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: (nodes, names, pastedAt) => { attached = { nodes, names, pastedAt, previews: nodes.map(blobPreview) }; },
+    return { text, current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retire(); return true; },
+      dispose: retire, attachments: (nodes, names, pastedAt) => {
+        attached = { nodes, names, pastedAt, previews: nodes.map(blobPreview) };
+        for (const type of editEvents) document.addEventListener(type, noteAttachmentEdit, true);
+      },
       rebind: () => {
         if (retired || !current() || composerAuthoredText() !== text || (attached && !ownsAttachments(attached))) return false;
         box = composer();
@@ -449,8 +477,18 @@ var CLF_DOM = (() => {
     const remaining = new Set(rows);
     return nodes.every((node, index) => {
       const preview = previews[index], observed = blobPreview(node);
-      const match = remaining.has(node) && (!preview || !observed || observed === preview) ? node :
+      let match = remaining.has(node) && (!preview || !observed || observed === preview) ? node :
         preview && [...remaining].find(row => blobPreview(row) === preview);
+      // Claude can replace a staged document tile with its rendered file tile.
+      // The upload's exact unique name can follow that transition in the owned
+      // composer. Trusted edits revoke the lease, and images still need blob proof.
+      if (!match && !node.isConnected && !preview && pastedAt === undefined) {
+        const name = attachmentName(node) || (names.length === 1 ? names[0] : null);
+        if (name && names.indexOf(name) === names.lastIndexOf(name) && names.includes(name)) {
+          const replacements = [...remaining].filter(row => row.getAttribute('data-cds') === 'MessageAttachmentsFile' && attachmentName(row) === name);
+          if (replacements.length === 1) match = replacements[0];
+        }
+      }
       if (!match) return false;
       remaining.delete(match);
       previews[index] ??= blobPreview(match);
@@ -753,11 +791,13 @@ var CLF_DOM = (() => {
       if (prepareAttachments && !await prepareAttachments(current)) return refuse('attachment-upload-unconfirmed');
       const ready = await waitFor(() => {
         if (!current()) return null;
-        if (enabled(sendButton()) && (!generating() || whileGenerating)) return sendButton();
+        const button = sendButton();
+        if (enabled(button) && (!generating() || whileGenerating)) return button;
         if (whileGenerating && !stopped && enabled(stopButton())) { stopped = true; stopButton().click(); }
         return null;
       }, initialDraft ? lease : current, acceptanceTimeoutMs);
-      if (!ready || !current()) return refuse('send-not-ready');
+      if (!current()) return refuse('draft-changed');
+      if (!ready) return refuse('send-not-ready');
       if (beforeSend && await beforeSend(current) !== true) return refuse('not-authorized');
       const button = sendButton();
       if (!current() || !enabled(button)) return refuse('draft-changed');

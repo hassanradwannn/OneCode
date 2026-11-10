@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.5] — 2026-11-10
+
+Support both Claude Send button layouts and keep the staged document when Claude replaces its loading preview. See [1.0.5 notes](docs/release-notes/v1.0.5.md).
+
 ## [1.0.4] — 2026-11-10
 
 Restore PDF and document delivery in Claude’s nested composer layout. OneCode finds the active composer’s upload input and transfers the files directly. See [1.0.4 notes](docs/release-notes/v1.0.4.md).
