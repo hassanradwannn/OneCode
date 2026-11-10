@@ -392,18 +392,24 @@ var CLF_DOM = (() => {
   const approvalWaiting = () => Boolean(approvalCard());
   const generating = () => Boolean(stopButton()) || approvalWaiting() || turns().filter(row => row.role === 'assistant').at(-1)?.node.getAttribute('data-is-streaming') === 'true';
   const stopGeneration = current => { const button = stopButton(); if (!current() || !enabled(button)) return false; button.click(); return true; };
+  function composerScopes(box) {
+    const scopes = [];
+    for (let node = box?.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (node.matches('form,[data-cds-dock-group]')) scopes.push(node);
+    }
+    return scopes;
+  }
   function attachmentRows() {
-    const tile = '[data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"])';
-    const box = composer(), dock = box?.closest('[data-cds-dock-group]');
-    const form = box?.closest('form'), owner = dock || form;
+    const tile = '[data-testid="file-thumbnail"]:is([data-cds-attachment], [data-cds="MessageAttachmentsImage"], [data-cds="MessageAttachmentsFile"])';
+    const box = composer(), form = box?.closest('form'), owner = composerScopes(box).at(-1);
     if (!owner) return [];
     // Current Claude renders the strip beside the editor's form, inside the
     // same dock. Only count tiles in the dock that owns the active composer.
     return all(`[data-cds-composer-attachments] ${tile}, [data-cds="MessageAttachments"][data-cds-composer-attachments-row] > ${tile}`, owner)
       .filter(row => {
-        const rowForm = row.closest('form');
+        const rowForm = row.closest('form'), rowDock = row.closest('[data-cds-dock-group]');
         return shown(row) && !row.closest('[data-cds="UserMessage"],[data-testid="user-message"]') &&
-          (!rowForm || rowForm === form) && (!dock || row.closest('[data-cds-dock-group]') === dock);
+          (!rowForm || rowForm === form) && (!rowDock || rowDock.contains(box));
       });
   }
   const attachmentRemove = row => {
@@ -484,12 +490,15 @@ var CLF_DOM = (() => {
     if (!dock) return refuse('upload-draft-unavailable');
     let input = null;
     if (!paste) {
-      // Non-image files keep the existing native file input route.
-      for (const owner of new Set([form, dock])) {
-        if (!owner) continue;
+      // The compact composer can nest its editor dock inside the dock that
+      // owns the document input. Walk the active editor's native owners.
+      for (const owner of composerScopes(box)) {
         const inputs = all('input[type="file"][data-testid="file-upload"][aria-label="Upload files"][multiple]', owner)
-          .filter(node => node.isConnected && !node.disabled && !node.closest(OWN) &&
-            (!node.closest('form') || node.closest('form') === form));
+          .filter(node => {
+            const inputForm = node.form, inputDock = node.closest('[data-cds-dock-group]');
+            return node.isConnected && !node.disabled && !node.closest(OWN) &&
+              (!inputForm || inputForm === form) && (!inputDock || inputDock.contains(box));
+          });
         if (inputs.length > 1) return refuse('upload-input-ambiguous');
         if (inputs.length === 1) { input = inputs[0]; break; }
       }
