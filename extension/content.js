@@ -4450,12 +4450,17 @@
         ? entry.providerArtifactId : null;
       const providerRevisionId = typeof entry.providerRevisionId === 'string' && /^\d{1,16}$/.test(entry.providerRevisionId)
         ? entry.providerRevisionId : null;
+      const nativeSurface = typeof entry.nativeSurface === 'string' && /^dil:(?:0|[1-9]\d{0,2})$/.test(entry.nativeSurface)
+        ? entry.nativeSurface : null;
       const providerParentRevisionId = entry.providerParentRevisionId === undefined ? null
         : typeof entry.providerParentRevisionId === 'string' && /^\d{1,16}$/.test(entry.providerParentRevisionId)
           ? entry.providerParentRevisionId : undefined;
       const kind = typeof entry.kind === 'string' && artifactKinds.has(entry.kind) ? entry.kind : null;
       const entrypoint = artifactPath(entry.entrypoint);
-      if (!messageId || !providerArtifactId || !providerRevisionId || providerParentRevisionId === undefined || !kind || !entrypoint) continue;
+      const snapshot = nativeSurface && entry.providerArtifactId === undefined && entry.providerRevisionId === undefined &&
+        entry.providerParentRevisionId === undefined;
+      const revision = !nativeSurface && providerArtifactId && providerRevisionId && providerParentRevisionId !== undefined;
+      if (!messageId || (!snapshot && !revision) || !kind || !entrypoint) continue;
       const files = [], paths = new Set(); let textRoom = FIBER_MAX_ARTIFACT_TEXT;
       for (const file of (Array.isArray(entry.files) ? entry.files : []).slice(0, 8)) {
         const path = artifactPath(file?.path);
@@ -4467,18 +4472,21 @@
           ...(typeof file.language === 'string' && /^[a-z0-9_+.-]{1,64}$/i.test(file.language) ? { language: file.language } : {}) });
       }
       if (textRoom < 0 || !files.length || !files.some(file => file.path === entrypoint)) continue;
-      const artifact = { messageId, providerArtifactId, providerRevisionId,
-        ...(providerParentRevisionId ? { providerParentRevisionId } : {}),
+      const artifact = { messageId,
+        ...(nativeSurface ? { nativeSurface } : { providerArtifactId, providerRevisionId,
+          ...(providerParentRevisionId ? { providerParentRevisionId } : {}) }),
         ...(typeof entry.title === 'string' && entry.title.trim() ? { title: entry.title.trim().slice(0, 200) } : {}),
         kind, entrypoint, files,
         order: Number.isInteger(entry.order) && entry.order >= 0 && entry.order < FIBER_MAX_MESSAGES * 4 ? entry.order : null,
         createTime: typeof entry.createTime === 'number' && Number.isFinite(entry.createTime) && entry.createTime > 0 ? entry.createTime : null };
-      const key = providerArtifactId + '\u0000' + providerRevisionId;
+      const key = nativeSurface ? messageId + '\u0000' + nativeSurface : providerArtifactId + '\u0000' + providerRevisionId;
       const signature = JSON.stringify(artifact), priorAt = artifactIndex.get(key);
       if (priorAt === undefined) { artifactIndex.set(key, artifacts.length); artifacts.push(artifact); continue; }
       if (JSON.stringify(artifacts[priorAt]) !== signature) conflictingArtifacts.add(key);
     }
-    const keptArtifacts = artifacts.filter(artifact => !conflictingArtifacts.has(artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId));
+    const keptArtifacts = artifacts.filter(artifact => !conflictingArtifacts.has(artifact.nativeSurface
+      ? artifact.messageId + '\u0000' + artifact.nativeSurface
+      : artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId));
 
     const activities = [];
     const activityIndex = new Map();
@@ -6036,6 +6044,8 @@
         });
       }
       items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) || left.serial - right.serial);
+      const nativeVisualMessages = new Set((turn.artifacts || []).filter(artifact => artifact.nativeSurface)
+        .map(artifact => artifact.messageId));
 
       for (const item of items) {
         // The shared native wrapper also contains old A/B history. Retaining C's
@@ -6046,12 +6056,14 @@
         const localOwner = ownsCurrentQuestion && (!acceptedQuestion || item.type === 'message' && currentMessages.has(item.value.messageId) &&
           (!priorOwner || priorOwner === frameLocalOwner)) ? frameLocalOwner : null;
         if (item.type === 'artifact') {
-          // ChatGPT only: current Gemini adapters expose no stable provider artifact/revision id.
-          // Do not synthesize one from a Gemini DOM card, filename, code block, or visible label.
+          // ChatGPT Canvas carries provider revision identity. DIL visual surfaces instead carry
+          // an exact response-scoped native surface and immutable local source snapshot; never
+          // fabricate a provider artifact/version for either path.
           const artifact = item.value;
           const pageConversation = concreteConversation(turn.conversationId);
           if (!pageConversation || pageConversation !== askedConversation) continue;
-          const key = pageConversation + '\u0000' + artifact.messageId + '\u0000' + artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId;
+          const key = pageConversation + '\u0000' + artifact.messageId + '\u0000' +
+            (artifact.nativeSurface ? artifact.nativeSurface : artifact.providerArtifactId + '\u0000' + artifact.providerRevisionId);
           const signature = JSON.stringify(artifact);
           if (providerArtifactsReported.get(key) === signature) continue;
           providerArtifactsReported.delete(key); providerArtifactsReported.set(key, signature);
@@ -6060,9 +6072,11 @@
             provider: 'chatgpt',
             providerConversationId: pageConversation,
             messageId: artifact.messageId,
-            providerArtifactId: artifact.providerArtifactId,
-            providerRevisionId: artifact.providerRevisionId,
-            ...(artifact.providerParentRevisionId ? { providerParentRevisionId: artifact.providerParentRevisionId } : {}),
+            ...(artifact.nativeSurface ? { artifactNativeSurface: artifact.nativeSurface } : {
+              providerArtifactId: artifact.providerArtifactId,
+              providerRevisionId: artifact.providerRevisionId,
+              ...(artifact.providerParentRevisionId ? { providerParentRevisionId: artifact.providerParentRevisionId } : {})
+            }),
             ...(artifact.title ? { artifactTitle: artifact.title } : {}),
             artifactKind: artifact.kind,
             artifactEntrypoint: artifact.entrypoint,
@@ -6210,8 +6224,11 @@
         // was bound. It may never weaken merely because a concurrent later scan has no local
         // claim: that was the 2026-08-31 final-without-turnId race. A contradictory positive
         // claim is different and fails closed instead of choosing either generation.
+        // A native DIL visual is retained as its own sandboxed artifact. Render the canonical
+        // Markdown answer here instead of also flattening the provider DOM into transcript text.
+        const renderedHtml = nativeVisualMessages.has(message.rawMessageId || message.messageId) ? '' : message.renderedHtml;
         const signature =
-          `${state}\u0000${message.rawText}\u0000${message.renderedHtml}\u0000${owner}` +
+          `${state}\u0000${message.rawText}\u0000${renderedHtml}\u0000${owner}` +
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}\u0000${message.responseToQuestionId || ''}` +
           `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
         if (refusedSettledOwner === turnId && index === answer.turns.length - 1 &&
@@ -6289,7 +6306,7 @@
           ...(message.createTime ? { authoredAt: message.createTime } : {}),
           turnId: localOwner || (acceptedQuestion || historicalAggregate ? priorMessage?.owner || streamMessageTurnOwners.get(message.messageId) || undefined : undefined),
           text: message.rawText,
-          renderedHtml: message.renderedHtml,
+          renderedHtml,
           // create_time is stamped by ChatGPT's server clock while turn/tool events use the
           // machine clock. They are not guaranteed to agree: the live 2026-08-25 turn recorded
           // this response 14 seconds before the user message that caused it. For a current or

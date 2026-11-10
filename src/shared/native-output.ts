@@ -27,7 +27,10 @@ export const NATIVE_OUTPUT_ADAPTERS = {
     message: uuid, mediaAsset: (id: string, kind: 'image' | 'video') => /^file_[A-Za-z0-9_-]{8,100}$/.test(id) ||
       kind === 'image' && id.length <= 512 && /\.(?:png|jpe?g|webp)$/i.test(id) && safeProviderFileLink(id),
     artifact: (id: string) => /^[A-Za-z0-9_-]{8,160}$/.test(id), revision: (id: string) => /^\d{1,16}$/.test(id),
-    roles: ['tool', 'assistant'], exports: { image: 'original', video: 'original' }, snapshotSurfaces: []
+    roles: ['tool', 'assistant'], exports: { image: 'original', video: 'original' }, snapshotSurfaces: [],
+    // A DIL surface is a local immutable snapshot of an exact public response/message pair.
+    // It is not a fabricated Canvas id or provider revision.
+    snapshotSurface: (surface: string) => /^dil:(?:0|[1-9]\d{0,2})$/.test(surface)
   },
   gemini: {
     // The existing adapter's rendered exchange/response identity. Its document-N fallback

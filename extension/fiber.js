@@ -82,6 +82,8 @@
   const MAX_PROVIDER_ARTIFACTS = 32;
   /** One exact Canvas revision must fit in one browser observation without bridge truncation. */
   const MAX_PROVIDER_ARTIFACT_TEXT = 240_000;
+  /** Response-scoped DIL visual surfaces retained beside one exact public answer. */
+  const MAX_PROVIDER_DIL_SURFACES = 16;
   /** ChatGPT's own turn anchors, which is where a turn's message model hangs. */
   // Shell anchors and typed items adapted from @ehkogh's #318. Keep one wire format.
   const LEGACY_TURN_SECTION = 'section[data-testid^="conversation-turn"]';
@@ -1099,6 +1101,127 @@
       out.push(descriptor);
     }
     return conflicts.size ? out.filter(item => !conflicts.has(item.providerArtifactId + '\u0000' + item.providerRevisionId)) : out;
+  }
+
+  /**
+   * Converts ChatGPT's declarative response visuals into self-contained offline documents.
+   *
+   * The canonical answer remains the typed message text. This captures only visual islands whose
+   * layout is present in the exact rendered response owned by that message. It does not recognize
+   * a particular chart, grid, scorecard or set of labels. Provider classes, event handlers,
+   * external resources and page scripts never cross the boundary; the existing artifact sandbox
+   * supplies the execution/network boundary for the resulting generic HTML.
+   */
+  function dilArtifactsOf(renderedMessages) {
+    const out = [];
+    const styleProperties = new Set([
+      'display', 'position', 'inset', 'top', 'right', 'bottom', 'left',
+      'grid-template-columns', 'grid-template-rows', 'grid-auto-columns', 'grid-auto-rows', 'grid-auto-flow',
+      'grid-column', 'grid-row', 'grid-column-start', 'grid-column-end', 'grid-row-start', 'grid-row-end',
+      'flex', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis',
+      'align-items', 'align-content', 'align-self', 'justify-content', 'justify-items', 'justify-self',
+      'place-items', 'place-content', 'gap', 'row-gap', 'column-gap',
+      'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'aspect-ratio',
+      'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+      'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+      'border', 'border-width', 'border-style', 'border-color', 'border-radius',
+      'background', 'background-color', 'color', 'opacity', 'box-shadow',
+      'font', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
+      'letter-spacing', 'text-align', 'text-decoration', 'text-transform',
+      'white-space', 'overflow', 'overflow-x', 'overflow-y', 'object-fit', 'transform', 'transform-origin'
+    ]);
+    const drop = 'script,style,iframe,object,embed,link,meta,base,video,audio,canvas,[hidden],[aria-hidden="true"],[data-code-block-controls],[data-markdown-copy="exclude"]';
+    const controls = 'input,select,textarea,button,[role="slider"],details,summary';
+    const visual = node => {
+      if (!node || node.closest('[data-client-defined-widget="code_block"]')) return false;
+      const style = node.style;
+      if (style.gridTemplateColumns || style.gridTemplateRows || style.aspectRatio ||
+          style.display === 'grid' || style.display === 'inline-grid') return true;
+      if (node.querySelector(controls + ',svg')) return true;
+      const painted = node.querySelectorAll('[style*="background-color"],[style*="flex-grow"],[style*="aspect-ratio"]');
+      return painted.length >= 2;
+    };
+    const safeStyle = node => {
+      const kept = [];
+      for (let at = 0; at < node.style.length; at++) {
+        const name = node.style.item(at).toLowerCase();
+        const value = node.style.getPropertyValue(name).trim();
+        if (!styleProperties.has(name) || !value || value.length > 300 || /url\s*\(|expression\s*\(|javascript:|@import|-moz-binding|behavior\s*:/i.test(value)) continue;
+        if (name === 'position' && !/^(?:static|relative|absolute|sticky)$/.test(value)) continue;
+        kept.push(`${name}:${value}`);
+      }
+      return kept.join(';');
+    };
+    const clean = source => {
+      const copy = source.cloneNode(true);
+      for (const node of [...copy.querySelectorAll(drop)]) node.remove();
+      const elements = [copy, ...copy.querySelectorAll('*')];
+      for (const node of elements) {
+        const tag = node.tagName.toLowerCase();
+        const style = safeStyle(node);
+        const component = node.getAttribute('data-d-component');
+        const direction = node.getAttribute('data-d-direction');
+        const align = node.getAttribute('data-d-align');
+        const justify = node.getAttribute('data-d-justify');
+        const keep = new Map();
+        for (const attr of [...node.attributes]) {
+          const name = attr.name.toLowerCase(), value = attr.value;
+          if (name === 'dir' && /^(?:ltr|rtl|auto)$/.test(value) || name === 'title' && value.length <= 500 ||
+              name === 'id' && /^[A-Za-z][A-Za-z0-9_.:-]{0,100}$/.test(value) || name === 'for' && value.length <= 100 ||
+              name === 'role' && /^[a-z-]{1,40}$/.test(value) || name.startsWith('aria-') && value.length <= 500 ||
+              ['type','value','min','max','step','name','placeholder','rows','cols'].includes(name) && value.length <= 500 ||
+              ['checked','selected','disabled','readonly','multiple','open'].includes(name) ||
+              tag === 'svg' && ['viewbox','width','height','preserveaspectratio','fill','stroke'].includes(name) ||
+              ['path','line','polyline','polygon','circle','ellipse','rect','text','g'].includes(tag) &&
+                ['d','x','y','x1','y1','x2','y2','cx','cy','r','rx','ry','points','fill','stroke','stroke-width','transform'].includes(name)) {
+            keep.set(name, value);
+          }
+        }
+        for (const attr of [...node.attributes]) node.removeAttribute(attr.name);
+        for (const [name, value] of keep) node.setAttribute(name, value);
+        if (style) node.setAttribute('style', style);
+        if (component) node.setAttribute('data-d-component', component.slice(0, 60));
+        if (direction === 'row' || direction === 'col') {
+          node.setAttribute('data-d-direction', direction);
+          if (!node.style.display) node.style.display = 'flex';
+          if (!node.style.flexDirection) node.style.flexDirection = direction === 'col' ? 'column' : 'row';
+        }
+        if (component === 'grid' && !node.style.display) node.style.display = 'grid';
+        if (align && /^(?:start|center|end|stretch|baseline)$/.test(align) && !node.style.alignItems) node.style.alignItems = align;
+        if (justify && /^(?:start|center|end|stretch|space-between|space-around|space-evenly)$/.test(justify) && !node.style.justifyContent) node.style.justifyContent = justify;
+        if (tag === 'a') node.removeAttribute('href');
+        if (tag === 'img' && !/^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(node.getAttribute('src') || '')) node.removeAttribute('src');
+        if (tag === 'form') node.removeAttribute('action');
+      }
+      const body = copy.outerHTML;
+      const script = `<script>(function(){document.addEventListener('submit',e=>e.preventDefault());document.addEventListener('input',e=>{const n=e.target;if(!(n instanceof HTMLInputElement))return;n.setAttribute('aria-valuenow',n.value);if(n.id)for(const o of document.querySelectorAll('output[for="'+CSS.escape(n.id)+'"]'))o.value=n.value})})()<\/script>`;
+      return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{color-scheme:dark;font:14px/1.4 system-ui,sans-serif;background:#171717;color:#ededed}body{margin:0;padding:12px;overflow:auto}*,*:before,*:after{box-sizing:border-box}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea,details{max-width:100%}</style></head><body>${body}${script}</body></html>`;
+    };
+    for (const message of renderedMessages || []) {
+      if (out.length >= MAX_PROVIDER_DIL_SURFACES || message?.role !== 'assistant' || !message.rawMessageId || !message.renderedHtml) continue;
+      let template;
+      try { template = document.createElement('template'); template.innerHTML = message.renderedHtml; } catch { continue; }
+      const responses = [...template.content.querySelectorAll('[data-dil-response]')];
+      let surface = 0;
+      for (const response of responses) {
+        const candidates = [...response.querySelectorAll('[data-d-component]')].filter(visual);
+        const selected = candidates.filter(node => !candidates.some(parent => parent !== node && parent.contains(node)));
+        for (const node of selected) {
+          if (out.length >= MAX_PROVIDER_DIL_SURFACES || surface >= 100) break;
+          const text = clean(node);
+          if (!text || text.length > MAX_PROVIDER_ARTIFACT_TEXT) continue;
+          out.push({
+            messageId: message.rawMessageId,
+            nativeSurface: `dil:${surface++}`,
+            title: 'Interactive content',
+            kind: 'web', entrypoint: 'index.html',
+            files: [{ path: 'index.html', text, mimeType: 'text/html', language: 'html' }],
+            order: message.order, createTime: message.createTime
+          });
+        }
+      }
+    }
+    return out;
   }
 
   /**
@@ -2789,6 +2912,7 @@
         generatedImages.push(...nativeFileImagesOf(group.sections, messages, exactImageNodes, exactFileButtons, Boolean(shell)));
         const generatedVideos = generatedVideosOf(group.sections, messages, exactVideoNodes);
         const providerArtifacts = providerArtifactsOf(messages);
+        providerArtifacts.push(...dilArtifactsOf(renderedMessages));
         const activities = nativeActivities.events;
         const nativeEndMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
         const endMessageId = currentBranch ? currentBranch.assistantIds.includes(nativeEndMessageId) ? nativeEndMessageId : null : nativeEndMessageId;

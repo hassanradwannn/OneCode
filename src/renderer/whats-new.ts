@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.8': {
+    lead: () => t('Keep ChatGPT-generated diagrams intact.'),
+    highlights: [
+      { icon: 'i-layout', title: () => t('Open interactive diagrams'), text: () => t('OneCode now preserves ChatGPT-generated grids, diagrams and standard HTML controls in a safe offline preview.') },
+      { icon: 'i-shield', title: () => t('Preserve visuals without page access'), text: () => t('Generated layout and styling are retained while provider scripts, external resources and network access stay blocked.') }
+    ]
+  },
   '1.0.7': {
     lead: () => t('Keep Gemini attachment sends moving.'),
     highlights: [

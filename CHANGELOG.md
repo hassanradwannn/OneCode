@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.8] — 2026-11-11
+
+Preserve ChatGPT-generated grids, diagrams and standard HTML controls as safe offline previews instead of flattening their visual layout into transcript text. See [1.0.8 notes](docs/release-notes/v1.0.8.md).
+
 ## [1.0.7] — 2026-11-10
 
 Keep Gemini attachment sends moving through preview redraws and report a stopped send while preserving the draft. See [1.0.7 notes](docs/release-notes/v1.0.7.md).
