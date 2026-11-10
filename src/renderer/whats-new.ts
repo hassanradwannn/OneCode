@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.6': {
+    lead: () => t('Keep sent images, Claude activity and diagrams accurate.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Show each sent attachment once'), text: () => t('OneCode keeps the original attachments for its own sends and imports images sent directly in the browser.') },
+      { icon: 'i-chat', title: () => t('Keep working status in sync'), text: () => t('Claude’s native working status keeps the current question out of interruption recovery while the response is active.') },
+      { icon: 'i-file', title: () => t('Restore missing diagram strokes'), text: () => t('Imported Claude diagrams retain bus marks and wires that use the native widget theme.') }
+    ]
+  },
   '1.0.5': {
     lead: () => t('Send PDFs in both Claude composer layouts.'),
     highlights: [

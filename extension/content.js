@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 137;
+  const RECORDER_VERSION = 138;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -8259,6 +8259,9 @@
     const approvalCard = currentApprovalCard();
     const sentResult = approvalResult;
     try {
+      const pageGenerating = CLF_DOM.provider === 'claude' ? CLF_DOM.generating() : generating;
+      const nativeQuestionId = CLF_DOM.provider === 'claude' && pageGenerating
+        ? CLF_DOM.turns().findLast(row => row.role === 'user')?.id : null;
       const reply = await ask({
         type: 'activity',
         conversationId,
@@ -8267,7 +8270,8 @@
         fiber: fiberPresent === null ? undefined : !fiberPresent ? 'absent' : fiberTurns.size === 0 ? 'empty' : 'ok',
         // This document's own open turn, which it closes itself on end_turn or after ten
         // minutes without progress. Keeps a long-thinking worker from being slept as silent.
-        generating,
+        generating: pageGenerating,
+        ...(nativeQuestionId ? { nativeQuestionId } : {}),
         // ChatGPT's own approval card: the turn waits for a person, so the app tells them and
         // shows its words, and an answer given in the app comes back on this same feed.
         approval: Boolean(approvalCard),

@@ -12,7 +12,7 @@
  * extension does nothing" into a diagnosable mismatch.
  */
 
-export const APP_VERSION = '1.0.5';
+export const APP_VERSION = '1.0.6';
 
 /**
  * Standalone extension recovery must stay on the app's own release. Using GitHub's moving

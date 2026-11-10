@@ -4327,7 +4327,7 @@ export function endedWorkerNotice(conversationId: string | null | undefined): st
 /** Sleep an inactive bound worker in its existing chat, independent of attachment.
  * Running tools protect only their exact worker. Invites/wakes retain their delivery deadline. */
 /** When each chat's own page last said its turn is still running. Not work, and never persisted. */
-const pageGenerating = new Map<string, number>();
+const pageGenerating = new Map<string, { at: number; questionId?: string }>();
 
 /**
  * The page's own word on whether this chat's turn is still running, from its activity poll.
@@ -4336,13 +4336,18 @@ const pageGenerating = new Map<string, number>();
  * does is keep the silence sweep from calling a worker asleep while Gemini is visibly still
  * thinking, which it can do for many minutes without a call or a word of output.
  */
-export function notePageGenerating(conversationId: string, generating: boolean, at = Date.now()): void {
-  if (generating) pageGenerating.set(conversationId, at);
+export function notePageGenerating(conversationId: string, generating: boolean, at = Date.now(), questionId?: string): void {
+  if (generating) pageGenerating.set(conversationId, { at, questionId });
   else pageGenerating.delete(conversationId);
 }
 
+export function pageGenerationExpiresAt(conversationId: string, questionId: string): number | undefined {
+  const report = pageGenerating.get(conversationId);
+  return report?.questionId === questionId ? report.at + PAGE_GENERATING_FRESH_MS : undefined;
+}
+
 function pageStillGenerating(conversationId: string, since: number, now: number): boolean {
-  const at = pageGenerating.get(conversationId);
+  const at = pageGenerating.get(conversationId)?.at;
   return at !== undefined && now - at < PAGE_GENERATING_FRESH_MS && now - since < WORKER_THINKING_MAX_MS;
 }
 

@@ -4302,7 +4302,7 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
         }
       }
       if (target && (reason === 'unattributed' || reason === 'blind' || reason === 'assistant-error' ||
-          (reason === 'silence' && !suspended && providerForConversation(conversationId) === 'chatgpt'))) {
+          (reason === 'silence' && !suspended && ['chatgpt', 'claude'].includes(providerForConversation(conversationId))))) {
         // An attribution refresh exists to make a live page report again, not to rescue a
         // broken one, and a reload in the middle of a stream ends that stream: ChatGPT answers
         // it with "Resume stream unavailable" or "could not be loaded", and the turn is lost.
@@ -5599,6 +5599,10 @@ const HANDLERS = {
   async activity(message, _sender, source) {
     await load();
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    const nativeQuestionId = message.generating === true && typeof message.nativeQuestionId === 'string' && message.nativeQuestionId.length <= 128 &&
+      providerForConversation(message.conversationId) === 'claude'
+      ? message.nativeQuestionId : null;
+    if (nativeQuestionId && !await currentConversationDocument(source, message.conversationId)) return { ok: false, error: 'stale_document' };
     await noteTabConversation(source, message.conversationId);
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     // Goal drafts are conversation-scoped in the app but browser writes are tab-scoped. Tell
@@ -5611,6 +5615,7 @@ const HANDLERS = {
       // Forward only the helper states this document may report; these are diagnostics.
       (['absent', 'empty', 'ok'].includes(message.fiber) ? `&fiber=${message.fiber}` : '') +
       (typeof message.generating === 'boolean' ? `&generating=${message.generating ? 1 : 0}` : '') +
+      (nativeQuestionId ? `&nativeQuestionId=${encodeURIComponent(nativeQuestionId)}` : '') +
       (typeof message.approval === 'boolean' ? `&approval=${message.approval ? 1 : 0}` : '') +
       approvalQuery(message);
     const result = await call(`/activity${query}`);
@@ -6364,7 +6369,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 137;
+const PAGE_RECORDER_VERSION = 138;
 
 let deferredRecoveryWork = null;
 

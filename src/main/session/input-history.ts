@@ -57,6 +57,10 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
     ...(messageId.startsWith('input:') && entry.toolTurnId ? { turnId: entry.toolTurnId }
       : rotationTurnId ? { turnId: rotationTurnId } : {}),
     ...(entry.attachments?.length && entry.transportIntent !== 'tool' ? { attachments: entry.attachments } : {}),
+    // An empty list is authoritative when the receipt owns no inline images.
+    // With inline images, the first publication leaves room for asset storage
+    // to finish or retry without discarding the receipt's already saved bytes.
+    assets: images.length ? undefined : [],
     // Injection does not change the running model. Only the native send path verifies
     // picker selection before delivery; a later sparse browser echo keeps this evidence.
     ...(!messageId.startsWith('input:') && selection.model

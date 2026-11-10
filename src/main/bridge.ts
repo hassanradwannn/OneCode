@@ -205,6 +205,7 @@ import { ownCoreHint,
   waitingForSubAgents,
   sleepSilentWorkers,
   notePageGenerating,
+  pageGenerationExpiresAt,
   occupiesSlot,
   sleepWorker,
   stageQueuedWorkerRevivals,
@@ -4037,7 +4038,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     noteFiberHealth(id, url.searchParams.get('fiber'));
     // Older extensions omit it; they keep the plain three-minute silence rule.
     const pageGenerating = url.searchParams.get('generating');
-    if (pageGenerating === '1' || pageGenerating === '0') notePageGenerating(id, pageGenerating === '1');
+    if (pageGenerating === '1' || pageGenerating === '0') {
+      const questionId = url.searchParams.get('nativeQuestionId');
+      notePageGenerating(id, pageGenerating === '1', Date.now(),
+        isProviderNativeQuestionId('claude', id, questionId) ? questionId : undefined);
+    }
     const retiredWorker = retiredWorkerForConversation(id);
     const superseded = await conversationWasSuperseded(id);
     /**
@@ -8125,6 +8130,15 @@ function activityDeadline(grant: Pick<ActivityGrant, 'model' | 'evidenceAt'>): n
   return grant.evidenceAt + (grant.model === 'pro' ? PRO_ACTIVITY_MS : CHAT_ACTIVE_MS);
 }
 
+/** Native working status belongs to the currently open Claude question. */
+function claudeGenerationExpiry(summary: SessionSummary): number | undefined {
+  const { conversationId, activeTurnId, timelineTurns } = summary;
+  if (!conversationId || !activeTurnId || chatProviderForConversation(conversationId) !== 'claude' ||
+      stopRequestedFor(conversationId, activeTurnId)) return undefined;
+  const questionId = timelineTurns?.[activeTurnId]?.questionId;
+  return questionId ? pageGenerationExpiresAt(conversationId, questionId) : undefined;
+}
+
 /** Runtime presentation of the same exact Pro work grant that owns silence recovery. */
 export function sessionInputActivity(summary: SessionSummary): InputActivity {
   const id = summary.conversationId;
@@ -8146,6 +8160,8 @@ export function sessionActivityExpiresAt(summary: SessionSummary): number | null
   const id = summary.conversationId;
   if (id && isChatBlocked(id)) return null;
   if (apiTurnStatus(summary.id, summary.activeTurnId ?? null)) return Date.now() + CHAT_ACTIVE_MS;
+  const nativeExpiry = claudeGenerationExpiry(summary);
+  if (nativeExpiry !== undefined && nativeExpiry > Date.now()) return nativeExpiry;
   const grant = id ? activeUntil.get(id) : undefined;
   // Admission is already live work, even before a long call has a recorded result.
   // Use exact running ownership, never the conservative anonymous safety counter.
@@ -10017,6 +10033,17 @@ async function inspectSilentChats(now: number): Promise<{ queued: boolean; spent
       grant.until = now + GOAL_QUIET_MS;
       deferred = true;
       continue;
+    }
+    if (grant.turnId && chatProviderForConversation(conversationId) === 'claude') {
+      const session = await getSession(grant.sessionId);
+      if (activeUntil.get(conversationId) !== grant) continue;
+      const expires = session?.conversationId === conversationId && session.activeTurnId === grant.turnId
+        ? claudeGenerationExpiry(session) : undefined;
+      if (expires !== undefined && expires > now) {
+        grant.until = Math.min(expires, now + GOAL_QUIET_MS);
+        deferred = true;
+        continue;
+      }
     }
     // Observation owns liveness, never permission to interrupt the native page.
     // Only an exactly recorded local call in this source turn earns silence repair.

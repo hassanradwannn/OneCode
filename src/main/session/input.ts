@@ -601,10 +601,11 @@ async function load(): Promise<InputEntry[]> {
   // Durable decision receipts recover helper provenance even when recording/ACK raced
   // or this version first opens a helper recorded before origins were stamped.
   for (const row of entries) {
-    // Re-project wrapped receipts once when loading the outbox, so recordings made
-    // before authoredText existed recover their original visible text too. This
-    // is canonical history only; it never reopens transport or resends an input.
-    if (row.historyRecorded && row.deliveryText && row.deliveryText !== row.text) row.historyRecorded = false;
+    // Re-project the exact receipt on load to restore authored text or the
+    // original images in history written by older recorders. This never resends.
+    if (row.historyRecorded && (row.deliveryText && row.deliveryText !== row.text ||
+        row.messageId && !row.messageId.startsWith('input:') && chatProviderForConversation(row.conversationId) !== 'openrouter' &&
+        (row.images?.length || row.attachments?.some(file => file.mimeType.startsWith('image/'))))) row.historyRecorded = false;
     if (!row.sessionId && row.purpose !== 'decision' && row.conversationId && row.deliveredAt !== undefined && !stamped.has(row.conversationId)) {
       await noteChatOrigin(row.conversationId, { kind: 'desktop', fromSessionId: null, agentId: null, task: '' });
     }

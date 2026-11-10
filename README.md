@@ -2,9 +2,9 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release [OneCode 1.0.5](https://github.com/hassanradwannn/OneCode/releases/tag/v1.0.5)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.5/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.5/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.5/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release [OneCode 1.0.6](https://github.com/hassanradwannn/OneCode/releases/tag/v1.0.6)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.6/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.6/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.6/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 1.0.5 supports both Claude Send button layouts and keeps staged PDFs through preview changes. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v1.0.5.md)
+Stable 1.0.6 fixes duplicate sent images, Claude working status, and missing wires and bus marks in imported diagrams. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v1.0.6.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
 

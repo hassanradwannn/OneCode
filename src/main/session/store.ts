@@ -1436,6 +1436,16 @@ export function upsertMessageEvent(
       const sameMessage =
         previous?.kind === event.kind && storedTextEqual(previous.message, event.message);
 
+      // The exact delivery receipt owns the entire user attachment set. A
+      // browser echo may revise the transcript, but its previews describe the
+      // same upload. A receipt that arrives after the echo replaces that set.
+      let userMedia: Pick<Extract<NewMessageEvent, { kind: 'user_message' }>, 'attachments' | 'assets'> = {};
+      if (previous?.kind === 'user_message' && event.kind === 'user_message') {
+        if (event.inputId) userMedia = { attachments: event.attachments,
+          assets: event.assets ?? (previous.inputId === event.inputId ? previous.assets : undefined) };
+        else if (previous.inputId) userMedia = previous;
+        else userMedia = { attachments: event.attachments ?? previous.attachments, assets: event.assets ?? previous.assets };
+      }
       const nextEvent: NewMessageEvent =
         previous?.kind === 'assistant_message' && event.kind === 'assistant_message'
           ? {
@@ -1470,16 +1480,14 @@ export function upsertMessageEvent(
                 authoredText: event.authoredText ?? previous.authoredText,
                 wireTokenEstimate: event.wireTokenEstimate ?? previous.wireTokenEstimate,
                 reaction: event.reaction === undefined ? previous.reaction : event.reaction,
-                // App-owned originals/previews retain their outbox identity when the
-                // provider later observes different native attachment ids for that send.
-                attachments: previous.inputId ? previous.attachments ?? event.attachments : event.attachments ?? previous.attachments,
+                attachments: userMedia.attachments,
                 inputDelivery: previous.inputDelivery === 'confirmed' ? 'confirmed' : event.inputDelivery ?? previous.inputDelivery,
                 model: event.model ?? previous.model,
                 reasoningEffort: event.reasoningEffort ?? previous.reasoningEffort,
                 retiredImageAssetIds: mergedRetiredAssetIds(previous.retiredImageAssetIds,
-                  deniedAssetIds(sessionId, event.assets ?? previous.assets)),
+                  deniedAssetIds(sessionId, userMedia.assets)),
                 assets: admittedAssets(sessionId,
-                  retainedAssets(event.assets ?? previous.assets, previous.retiredImageAssetIds)) }
+                  retainedAssets(userMedia.assets, previous.retiredImageAssetIds)) }
             : event.kind === 'user_message'
               ? {
                   ...event,

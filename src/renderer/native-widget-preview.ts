@@ -26,6 +26,12 @@ export function nativeWidgetStyle(dark: boolean, diagram = false): string {
     const fill = c[dark ? 1 : 0], stroke = c[dark ? 3 : 2], text = c[dark ? 5 : 4];
     return `.c-${name}>:is(rect,ellipse,circle,polygon),:is(rect,ellipse,circle,polygon).c-${name}{fill:${fill};stroke:${stroke}}.c-${name}>:is(.th,.t){fill:${text}}.c-${name}>.ts{fill:${stroke}}`;
   }).join('');
+  // Native SVGs use these inherited theme tokens for authored strokes and
+  // fills as well as the classes above. Define the tokens in the local widget
+  // frame so a var() in a presentation attribute keeps its authored geometry.
+  const tokens = dark
+    ? '--s:#b4b2a9;--b:#5f5e5a;--border-strong:#444441;--surface-1:#151515'
+    : '--s:#5f5e5a;--b:#b4b2a9;--border-strong:#8a887f;--surface-1:#f8f7f4';
   const fit = diagram ? 'html,body{box-sizing:border-box;width:100%;height:100%;overflow:hidden}body{display:grid;place-items:center}body>svg{display:block;width:100%;height:100%;min-width:0;min-height:0;max-width:100%;max-height:100%}' : '';
-  return `<style>html{color-scheme:${dark ? 'dark' : 'light'};background:${dark ? '#191919' : '#fff'};color:${dark ? '#eee' : '#222'};font:14px/1.5 system-ui,sans-serif}body{margin:0;padding:12px}svg{max-width:100%;height:auto}svg text{font-family:system-ui,sans-serif;fill:${dark ? '#eee' : '#222'}}.t,.th{font-size:14px;font-weight:400}.th{font-weight:500}.ts{font-size:12px;font-weight:400;fill:${dark ? '#c3c2b7' : '#666'}}.arr{fill:none;stroke:${dark ? '#898781' : '#777'};stroke-width:1.5}${palette}${fit}</style>`;
+  return `<style>html{${tokens};color-scheme:${dark ? 'dark' : 'light'};background:${dark ? '#191919' : '#fff'};color:${dark ? '#eee' : '#222'};font:14px/1.5 system-ui,sans-serif}body{margin:0;padding:12px}svg{max-width:100%;height:auto}svg text{font-family:system-ui,sans-serif;fill:${dark ? '#eee' : '#222'}}.t,.th{font-size:14px;font-weight:400}.th{font-weight:500}.ts{font-size:12px;font-weight:400;fill:${dark ? '#c3c2b7' : '#666'}}.arr{fill:none;stroke:${dark ? '#898781' : '#777'};stroke-width:1.5}${palette}${fit}</style>`;
 }
