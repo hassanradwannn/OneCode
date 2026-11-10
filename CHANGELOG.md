@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.7] — 2026-11-10
+
+Keep Gemini attachment sends moving through preview redraws and report a stopped send while preserving the draft. See [1.0.7 notes](docs/release-notes/v1.0.7.md).
+
 ## [1.0.6] — 2026-11-10
 
 Keep OneCode-sent attachments from appearing twice, use Claude’s native working status for the current question, and restore missing strokes in Claude diagrams. See [1.0.6 notes](docs/release-notes/v1.0.6.md).

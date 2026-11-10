@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.0.7': {
+    lead: () => t('Keep Gemini attachment sends moving.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Send through Gemini preview redraws'), text: () => t('OneCode sends the prepared message once when Gemini redraws the same attachment preview.') },
+      { icon: 'i-chat', title: () => t('See when Send was skipped'), text: () => t('If the prepared draft changes before Send, OneCode keeps it and reports that it never clicked Send.') }
+    ]
+  },
   '1.0.6': {
     lead: () => t('Keep sent images, Claude activity and diagrams accurate.'),
     highlights: [

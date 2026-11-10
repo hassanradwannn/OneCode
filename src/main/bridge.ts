@@ -3600,7 +3600,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     if (route === '/input/fail') {
       const ok = await failBrowserInput(body.id, body.owner, typeof body.error === 'string' ? body.error : 'Unable to prepare the provider',
-        typeof body.detail === 'string' && /^[a-z-]{1,40}$/.test(body.detail) ? body.detail : undefined);
+        typeof body.detail === 'string' && /^[a-z-]{1,40}$/.test(body.detail) ? body.detail : undefined,
+        { browser: browserOf(req), conversationId: conversationId(body.conversationId) });
       // A rejected picker choice invalidates cached availability. Reobserve existing
       // browser documents through the catalog owner; failure grants no new-tab authority.
       if (ok && typeof body.error === 'string' && /^Requested model or reasoning could not be confirmed(?: \([a-z-]{1,40}\))?$/.test(body.error)) requestChatModels(false);

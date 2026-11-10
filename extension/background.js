@@ -1645,7 +1645,9 @@ async function drainCommandAcks(targetId = null) {
         continue;
       }
       const inputReceipt = entry.kind === 'input';
-      const payload = inputReceipt ? { id: entry.id, owner: entry.owner, conversationId: entry.conversationId, messageId: entry.messageId } : commandAckPayload(
+      const withdrawn = inputReceipt && entry.withdrawnBeforeClick === true;
+      const payload = inputReceipt ? { id: entry.id, owner: entry.owner, conversationId: entry.conversationId,
+        ...(withdrawn ? { detail: 'send-withdrawn-before-click' } : { messageId: entry.messageId }) } : commandAckPayload(
         entry.id,
         entry.status === 'failed' ? 'failed' : 'sent',
         entry.error,
@@ -1656,7 +1658,7 @@ async function drainCommandAcks(targetId = null) {
         entry.detail,
         entry.messageId
       );
-      const result = await call(inputReceipt ? '/input/ack' : '/commands/ack', { method: 'POST', body: JSON.stringify(payload) });
+      const result = await call(withdrawn ? '/input/fail' : inputReceipt ? '/input/ack' : '/commands/ack', { method: 'POST', body: JSON.stringify(payload) });
       if (entry.id === targetId) targetResult = result;
 
       if (result.ok || result.status === 404 || result.status === 409) {
@@ -1738,17 +1740,22 @@ async function retireFailedCommandTab(entry) {
   } catch { /* A busy, edited, replaced or unreadable page stays open. */ }
 }
 
-/** A proven browser send hands only its receipt to the existing durable ACK journal.
+/** A definite browser delivery outcome goes through the existing durable ACK journal.
  * Replays never read the current tab or send text: the captured owner and conversation
  * remain authoritative after navigation, MV3 suspension and browser/app restart. */
-async function ackDesktopInput(id, owner, conversationId, messageId) {
+async function ackDesktopInput(id, owner, conversationId, messageId, withdrawnBeforeClick = false) {
   await load();
-  if (!conversationId || typeof messageId !== 'string' || !messageId || messageId.length > 256) return { ok: false, error: 'missing_send_receipt' };
+  if (!conversationId || !withdrawnBeforeClick && (typeof messageId !== 'string' || !messageId || messageId.length > 256)) return { ok: false, error: 'missing_send_receipt' };
+  // An older Companion can only offer this as an ACK. An empty native ID is
+  // explicitly rejected by the existing app receipt validator on rollback.
+  const receiptMessageId = withdrawnBeforeClick ? '' : messageId;
   const previous = commandAckOutbox.find(entry => entry.kind === 'input' && entry.id === id);
-  if (previous && (previous.owner !== owner || previous.conversationId !== conversationId || previous.messageId !== messageId)) return { ok: false, error: 'conflicting_send_receipt' };
+  if (previous && (previous.owner !== owner || previous.conversationId !== conversationId || previous.messageId !== receiptMessageId ||
+      Boolean(previous.withdrawnBeforeClick) !== withdrawnBeforeClick)) return { ok: false, error: 'conflicting_send_receipt' };
   if (!previous) {
     if (commandAckOutbox.length >= 200) return { ok: false, error: 'receipt_journal_full' };
-    commandAckOutbox.push({ kind: 'input', id, owner, conversationId, messageId, queuedAt: Date.now() });
+    commandAckOutbox.push({ kind: 'input', id, owner, conversationId, messageId: receiptMessageId, queuedAt: Date.now(),
+      ...(withdrawnBeforeClick ? { withdrawnBeforeClick: true } : {}) });
   }
   await persistLive();
   scheduleRetry();
@@ -5156,6 +5163,11 @@ const HANDLERS = {
       if (message.conversationId !== conversationId || !ownsDocument(source)) return { ok: false, error: 'stale_send_receipt' };
       return ackDesktopInput(id, owner, conversationId, message.messageId);
     }
+    if (message.fail === true && message.detail === 'send-withdrawn-before-click') {
+      if (!conversationId || providerForUrl(tab.url) !== 'gemini' || tab.pendingUrl || !ownsDocument(source))
+        return { ok: false, error: 'stale_send_receipt' };
+      return ackDesktopInput(id, owner, conversationId, undefined, true);
+    }
     if (typeof message.attachmentId === 'string') {
       if (message.owner !== owner || !ownsDocument(source)) return { ok: false };
       const result = await call('/input/attachment', { method: 'POST', body: JSON.stringify({ id, owner, conversationId, attachmentId: message.attachmentId, offset: message.offset }) });
@@ -6369,7 +6381,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 138;
+const PAGE_RECORDER_VERSION = 139;
 
 let deferredRecoveryWork = null;
 

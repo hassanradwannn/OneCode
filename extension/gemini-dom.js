@@ -668,7 +668,9 @@ var CLF_DOM = (() => {
       (compact(authored(box)) === compact(stripControl(expected)) || transitionOwns(box, expected)) &&
       (!leasedAttachments || ownsAttachments(leasedAttachments));
     return { current: owns, clear: async () => owns() && clearPromptExact(expected), withdraw: () => { if (!owns()) return false; retired = true; return true; },
-      dispose: () => { retired = true; }, attachments: (nodes, names) => { leasedAttachments = { nodes, names }; }, rebind: () => {
+      dispose: () => { retired = true; }, attachments: (nodes, names) => {
+        leasedAttachments = { nodes, names, host: composerBox(), previews: nodes.map(attachmentPreview) };
+      }, rebind: () => {
         if (retired || !current() || compact(composerAuthoredText()) !== compact(stripControl(expected))) return false;
         box = composer(); return true;
       } };
@@ -1371,36 +1373,64 @@ var CLF_DOM = (() => {
     if (prepareAttachments && (!current() || await prepareAttachments(current) !== true || !current() ||
         compact(composerAuthoredText()) !== compact(submitted))) return refused('attachment-upload-unconfirmed');
     if (connector && !confirmedMention(connector, box)) return refused('connector-token-unconfirmed');
+    const mentionProof = connector ? provenMention(box) : null;
+    const mentionMarkup = mentionProof?.node.outerHTML;
     if (binding && !nativeMedia && !appendSessionFrame(box, binding)) return refused('session-context-not-inserted');
+    const wireText = compact(blockText(box));
+    const composerHost = composerBox();
+    let sendDraftEdited = false;
+    const noteSendEdit = event => {
+      if (!event.isTrusted) return;
+      const target = event.target;
+      const editorEdit = event.type !== 'click' && target?.closest?.(BOX) === box;
+      const composerControl = composerHost?.contains(target) && target?.closest?.('uploader-file-preview,button');
+      if (editorEdit || composerControl || target?.matches?.('input[type="file"]')) sendDraftEdited = true;
+    };
+    const ownsSendDraft = () => {
+      if (sendDraftEdited || !current() || composerBox() !== composerHost || compact(blockText(box)) !== wireText) return false;
+      // Quill can redraw the already selected native token while the full
+      // prompt stays identical. Transfer its existing proof on this editor only.
+      if (mentionProof && !provenMention(box)) {
+        const replacement = leadingStrong(box, mentionProof.name);
+        if (mentionProof.node.isConnected || !replacement || replacement.outerHTML !== mentionMarkup || mentionProof.route !== location.href) return false;
+        mentionProof.node = replacement;
+      }
+      return (!connector || confirmedMention(connector, box)) && compact(composerAuthoredText()) === compact(submitted) &&
+        (!prepareAttachments || !initialDraft || initialDraft.current());
+    };
     const draftReady = stage => {
-      const callerCurrent = current(), editor = composer(), authoredText = composerAuthoredText(), raw = blockText(editor);
+      const owned = ownsSendDraft(), callerCurrent = current(), editor = composer(), authoredText = composerAuthoredText(), raw = blockText(editor);
       const authoredMatches = compact(authoredText) === compact(submitted), sendEnabled = enabled(sendButton());
       const attachmentsCurrent = !prepareAttachments || !initialDraft || initialDraft.current();
-      if (callerCurrent && authoredMatches && sendEnabled && attachmentsCurrent) return true;
+      if (owned && sendEnabled) return true;
       console.info('[OneCode draft] ' + JSON.stringify({ stage, callerCurrent, editorSame: editor === box, editorConnected: box.isConnected,
         routeMatches: conversationId() === id, expectedLength: submitted.length, authoredLength: authoredText.length, authoredMatches,
         visibleLength: raw.length, sendPresent: Boolean(sendButton()), sendEnabled, mentionRequired: Boolean(connector),
         mentionConfirmed: Boolean(connector && confirmedMention(connector, editor)), nativeMentionProof: Boolean(connector && provenMention(editor)?.name === connector),
         controlFramePresent: raw.includes('[[GEMINI_LOCAL_SESSION]]'), controlFrameComplete: CONTROL.test(raw),
-        bindingPresent: Boolean(binding), bindingConversationMatches: binding?.conversation_id === id, attachmentsCurrent }));
+        bindingPresent: Boolean(binding), bindingConversationMatches: binding?.conversation_id === id, attachmentsCurrent, sendDraftEdited }));
       return false;
     };
     const waitDraftReady = async stage => {
       // Core/catalog changes can temporarily remove Send after the exact task
       // and control frame are already stable. Readiness may settle; authored
       // text, editor, route and caller ownership may not change while waiting.
-      const exactCurrent = () => current() && compact(composerAuthoredText()) === compact(submitted) &&
-        (!prepareAttachments || !initialDraft || initialDraft.current());
-      await waitFor(() => enabled(sendButton()) && sendButton(), exactCurrent, 30000);
+      await waitFor(() => enabled(sendButton()) && sendButton(), ownsSendDraft, 30000);
       return draftReady(stage);
     };
-    if (!await waitDraftReady('before-authorization')) return refused('draft-changed');
-    if (beforeSend && await beforeSend(current) !== true) return refused('not-authorized');
-    if (!await waitDraftReady('after-authorization')) return refused('draft-changed');
-    const button = sendButton();
-    if (!current() || !enabled(button) || button !== sendButton() || !draftReady('before-click')) return refused('send-not-ready');
-    if (connector && provenMention(box)) outgoingMention = { name: provenMention(box).name, expected: submitted, conversationId: id, priorIds: prior };
-    cancelApprovalReplyProofs('new-send'); onSendAttempt?.(); button.click();
+    const sendEdits = ['beforeinput', 'input', 'paste', 'drop', 'change', 'click'];
+    for (const type of sendEdits) document.addEventListener(type, noteSendEdit, true);
+    try {
+      if (!await waitDraftReady('before-authorization')) return refused('draft-changed');
+      if (beforeSend && await beforeSend(ownsSendDraft) !== true) return refused('not-authorized');
+      if (!await waitDraftReady('after-authorization')) return refused('draft-changed');
+      const button = sendButton();
+      if (!enabled(button) || button !== sendButton() || !draftReady('before-click')) return refused('send-not-ready');
+      if (connector && provenMention(box)) outgoingMention = { name: provenMention(box).name, expected: submitted, conversationId: id, priorIds: prior };
+      cancelApprovalReplyProofs('new-send'); onSendAttempt?.(); button.click();
+    } finally {
+      for (const type of sendEdits) document.removeEventListener(type, noteSendEdit, true);
+    }
     const accepted = await waitFor(() => {
       const now = conversationId();
       if (id && now !== id) return null;
@@ -1585,9 +1615,25 @@ var CLF_DOM = (() => {
       return true;
     });
   }
-  function ownsAttachments({ nodes, names }) {
+  function attachmentPreview(row) {
+    const src = row.querySelector('.file-preview-container img')?.getAttribute('src');
+    return src?.startsWith('blob:') ? src : null;
+  }
+  function ownsAttachments({ nodes, names, host, previews }) {
+    if (composerBox() !== host) return false;
     const rows = attachmentRows();
-    return nodes.every(node => rows.includes(node)) && attachmentsMatch(rows, names);
+    if (!attachmentsMatch(rows, names)) return false;
+    const remaining = new Set(rows);
+    return nodes.every((node, index) => {
+      if (remaining.delete(node)) {
+        previews[index] ??= attachmentPreview(node);
+        return true;
+      }
+      // A regenerated tile must still show this upload's original blob.
+      if (node.isConnected || !previews[index]) return false;
+      const matches = [...remaining].filter(row => attachmentPreview(row) === previews[index]);
+      return matches.length === 1 && remaining.delete(matches[0]);
+    });
   }
   async function uploadImages(images = [], current = () => true, draft = null, extraFiles = [], { explain } = {}) {
     const refuse = stage => { explain?.(stage); return false; };

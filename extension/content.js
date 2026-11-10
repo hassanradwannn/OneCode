@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 138;
+  const RECORDER_VERSION = 139;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -15601,9 +15601,16 @@
         } : null);
       // #744: one retry when the editor was replaced before anything asked to send it.
       intakeStage('sending');
-      if (!(await nativeSend()) &&
+      if (!(await nativeSend().catch(error => {
+        if (CLF_DOM.provider === 'gemini' && !input.recovery && authorizing && !sendAttempted) return false;
+        throw error;
+      })) &&
           !(!CLF_DOM.warmupRecoveryPending?.() && !authorizing && !sendAttempted && !receipt && !draft.current() && draftCurrent() && await nativeSend())) {
         if (CLF_DOM.provider === 'gemini' && CLF_DOM.warmupRecoveryPending?.()) return false;
+        if (CLF_DOM.provider === 'gemini' && !input.recovery && authorizing && !sendAttempted && !receipt) {
+          preserveAttachmentDraft = true;
+          return fail('Gemini stopped before OneCode clicked Send. Review the draft in Gemini.', 'send-withdrawn-before-click');
+        }
         if (!authorizing && !sendAttempted && !receipt && nativeSendRefusal === 'attachment-upload-unconfirmed') return uploadUnconfirmed();
         if (CLF_DOM.provider === 'claude' && !authorizing && !sendAttempted && !receipt && nativeSendRefusal && onTarget()) {
           preserveAttachmentDraft = Boolean(input.images?.length || input.attachments?.length);

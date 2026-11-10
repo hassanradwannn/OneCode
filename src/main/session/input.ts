@@ -242,6 +242,7 @@ const UNCONFIRMED_SEND = 'Stopped waiting for delivery confirmation. The message
  * opening read back with `&#x20;` for spaces). The same code in extension/content.js.
  */
 const RECEIPT_UNCONFIRMED = 'Native Send receipt was not confirmed.';
+const GEMINI_SEND_WITHDRAWN = 'OneCode did not click Send. Review the draft in Gemini.';
 /** The page clicked Send, yet its exact text stayed in the composer and no new user row appeared. */
 const SEND_NOT_TAKEN = 'Native Send did not take the message.';
 const NOT_TAKEN_FAILED = 'Not sent: the provider did not accept the message.';
@@ -470,7 +471,7 @@ export type DeliveryProof = 'sent' | 'not_sent' | 'unconfirmed' | 'pending';
 /**
  * What the row itself proves about delivery, and nothing more. `sent` needs the receipt
  * (`deliveredAt`, which a late ACK can add to a row already cancelled). `not_sent` needs a
- * terminal row whose Send was never authorized. Any other terminal row, and any claim whose
+ * terminal row whose Send was never authorized or whose click was explicitly withdrawn. Any other terminal row, and any claim whose
  * Send was authorized or whose tool result was handed out, may have reached Gemini, so it is
  * `unconfirmed` and is never resent. Turn ids on the row (`completedTurnId`, `queuedTurn`,
  * `silenceBoundary`, `directTurn`) name the source turn, not the message, and prove nothing.
@@ -480,7 +481,7 @@ export function deliveryProof(row: Readonly<InputEntry>): DeliveryProof {
   // `sent` says the page or the exact request confirmed it, so a row with that state and no
   // receipt is a gap in the record, not proof that nothing was sent.
   if (row.state === 'sent') return 'unconfirmed';
-  if (terminal(row)) return neverAuthorized(row) ? 'not_sent' : 'unconfirmed';
+  if (terminal(row)) return neverAuthorized(row) || row.error === GEMINI_SEND_WITHDRAWN ? 'not_sent' : 'unconfirmed';
   return row.state === 'queued' || (row.state === 'browser' && neverAuthorized(row)) ? 'pending' : 'unconfirmed';
 }
 const preparable = (row: InputEntry): boolean => row.state === 'queued' ||
@@ -2773,12 +2774,25 @@ export function endRecoveryInput(id: string, conversationId: string): Promise<bo
   });
 }
 
-export function failBrowserInput(id: string, owner: string, error: string, detail?: string): Promise<boolean> {
+export function failBrowserInput(id: string, owner: string, error: string, detail?: string,
+  source?: { browser: string | null; conversationId: string | null }): Promise<boolean> {
   return serial(async () => {
     const current = await load();
-    const entry = current.find((row) => row.id === id && row.owner === owner && row.state === 'browser');
+    const entry = current.find((row) => row.id === id && row.owner === owner);
     if (!entry || companionOf(current, entry)) return false;
     if (entry.nativeRecovery?.phase === 'refresh-dispatched') return false;
+    // Only the owning Gemini document can report a definite veto before its
+    // native click. Retire the spent claim without refunding or replaying it.
+    if (detail === 'send-withdrawn-before-click') {
+      if (entry.recovery || !entry.requiresAuthorization || !entry.claimedBrowser || entry.claimedBrowser !== source?.browser ||
+          !entry.conversationId || entry.conversationId !== source?.conversationId || chatProviderForConversation(entry.conversationId) !== 'gemini') return false;
+      if (entry.state !== 'browser') return entry.state === 'failed' && entry.error === GEMINI_SEND_WITHDRAWN;
+      await commit(current.map(row => sameDelivery(entry, row) ? { ...row, state: 'failed', error: GEMINI_SEND_WITHDRAWN } : row));
+      decisionWaiters.get(id)?.reject(new Error('goal_browser_send_failed: ' + GEMINI_SEND_WITHDRAWN));
+      decisionWaiters.delete(id);
+      return true;
+    }
+    if (entry.state !== 'browser') return false;
     // These codes are emitted only by the pre-Send owner. A spent authorization
     // can never use this path to refund its Send authority.
     const waitingReason = detail === 'turn-progressed' || detail?.startsWith('turn-progressed-') ? 'answer-resumed'
