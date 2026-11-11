@@ -9,6 +9,7 @@ export default defineConfig({
   // Remote has an English interface today. Shared transcript formatters must not
   // pull the desktop's complete language catalogs into its first mobile load.
   resolve: { alias: [{ find: /^\.\/i18n\.js$/, replacement: resolve(__dirname, 'src/remote/i18n.ts') }] },
-  build: { outDir: resolve(__dirname, 'out/remote'), emptyOutDir: true, target: 'es2022' },
+  // Keep bundled fonts on this origin; Remote's font policy excludes data URLs.
+  build: { outDir: resolve(__dirname, 'out/remote'), emptyOutDir: true, target: 'es2022', assetsInlineLimit: 0 },
   esbuild: { jsx: 'automatic' }
 });

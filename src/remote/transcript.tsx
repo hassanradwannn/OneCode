@@ -86,7 +86,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
       safeHref: value => { const href = value.trim(); return href.startsWith('#') || safeExternalLink(href) || safeProviderFileLink(href) ? href : null; } });
     mountNative();
     box.replaceChildren(template.content);
-    if (!box.textContent?.trim() && source) box.textContent = source;
+    if (!box.textContent?.trim() && source && native === null) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
     let disposed = false;
     for (const link of box.querySelectorAll<HTMLAnchorElement>('a[href]')) {
