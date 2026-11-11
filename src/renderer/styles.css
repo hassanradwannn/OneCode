@@ -4757,6 +4757,8 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 .inline-presentation-preview { position:relative; width:100%; box-sizing:border-box; min-height:0; aspect-ratio:16/9; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; overflow: hidden; }
 .inline-presentation-preview[data-preview-viewport=portrait] { aspect-ratio:9/16; max-height:70dvh; }
 .inline-presentation-preview[data-preview-layout=diagram] { aspect-ratio:var(--artifact-ratio); max-height:none; }
+.inline-presentation-preview[data-preview-layout=native][data-preview-viewport=responsive] { aspect-ratio:auto; height:var(--artifact-native-height, 380px); max-height:80dvh; }
+.artifact-fullscreen .inline-presentation-preview[data-preview-layout=native][data-preview-viewport=responsive] { height:100%; max-height:none; }
 .artifact-fullscreen .inline-presentation-preview[data-preview-layout=diagram] { aspect-ratio:auto; }
 .artifact-fullscreen .inline-presentation-preview[data-preview-viewport=portrait] { aspect-ratio:auto; max-height:none; }
 .inline-presentation-preview .artifact-preview-shell { position:absolute; inset:0; height:100%; width:100%; min-height:0; }

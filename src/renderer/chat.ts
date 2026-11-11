@@ -3002,7 +3002,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   };
   box.addEventListener('click', openLink);
   box.addEventListener('auxclick', openLink);
-  if (!box.textContent?.trim() && safeFallback) {
+  if (!box.textContent?.trim() && safeFallback && !nativeCapture) {
     box.classList.remove('rich'); box.textContent = safeFallback;
   } else formatMessageContent(box, {
     languages: codeLanguages, copy: async value => !!await run(api.writeClipboard(value)), label: t,

@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 39;
+  const VERSION = 40;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -1112,8 +1112,9 @@
    * external resources and page scripts never cross the boundary; the existing artifact sandbox
    * supplies the execution/network boundary for the resulting generic HTML.
    */
-  function dilArtifactsOf(renderedMessages) {
+  function dilArtifactsOf(renderedMessages, exactAnchors) {
     const out = [];
+    const optional = read => { try { return read() || ''; } catch { return ''; } };
     const styleProperties = new Set([
       'display', 'position', 'inset', 'top', 'right', 'bottom', 'left',
       'grid-template-columns', 'grid-template-rows', 'grid-auto-columns', 'grid-auto-rows', 'grid-auto-flow',
@@ -1128,24 +1129,40 @@
       'background', 'background-color', 'color', 'opacity', 'box-shadow',
       'font', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height',
       'letter-spacing', 'text-align', 'text-decoration', 'text-transform',
-      'white-space', 'overflow', 'overflow-x', 'overflow-y', 'object-fit', 'transform', 'transform-origin'
+      'white-space', 'overflow', 'overflow-x', 'overflow-y', 'object-fit', 'transform', 'transform-origin',
+      'box-sizing', 'vertical-align', 'border-collapse', 'border-spacing', 'table-layout',
+      'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray',
+      'fill-opacity', 'stroke-opacity', 'text-anchor', 'dominant-baseline', 'paint-order'
     ]);
     const drop = 'script,style,iframe,object,embed,link,meta,base,video,audio,canvas,[hidden],[aria-hidden="true"],[data-code-block-controls],[data-markdown-copy="exclude"]';
-    const controls = 'input,select,textarea,button,[role="slider"],details,summary';
+    const controls = 'details,summary';
     const visual = node => {
       if (!node || node.closest('[data-client-defined-widget="code_block"]')) return false;
+      // Media relays and portable reply controls have their own import owners.
+      // Exporting an ancestor would replace those working surfaces with inert
+      // images/buttons after provider URLs and event handlers are removed.
+      if (node.matches('button,input,select,textarea,img,iframe,canvas,video,audio') ||
+          node.querySelector('button,input,select,textarea,img,iframe,canvas,video,audio')) return false;
       const style = node.style;
       if (style.gridTemplateColumns || style.gridTemplateRows || style.aspectRatio ||
           style.display === 'grid' || style.display === 'inline-grid') return true;
+      if (node.isConnected && /^(?:inline-)?grid$/.test(getComputedStyle(node).display)) return true;
       if (node.querySelector(controls + ',svg')) return true;
       const painted = node.querySelectorAll('[style*="background-color"],[style*="flex-grow"],[style*="aspect-ratio"]');
       return painted.length >= 2;
     };
     const safeStyle = node => {
       const kept = [];
-      for (let at = 0; at < node.style.length; at++) {
-        const name = node.style.item(at).toLowerCase();
-        const value = node.style.getPropertyValue(name).trim();
+      // Read the mounted, exactly owned surface. A detached HTML copy has lost the
+      // provider's class rules and inherited typography before it reaches here.
+      const styles = node.isConnected ? getComputedStyle(node) : node.style;
+      const typed = optional(() => node.computedStyleMap());
+      for (const name of styleProperties) {
+        // Computed used widths turn fractional grids into fixed pixel columns.
+        // Keep authored sizing for responsive layout while retaining class styling.
+        const sizing = /^(?:width|height|grid-template-columns|grid-template-rows|flex-basis)$/.test(name);
+        const authored = sizing ? node.style.getPropertyValue(name) || optional(() => typed?.get(name)?.toString()) : '';
+        const value = (authored || (sizing && /^(?:width|height|flex-basis)$/.test(name) ? '' : styles.getPropertyValue(name))).trim();
         if (!styleProperties.has(name) || !value || value.length > 300 || /url\s*\(|expression\s*\(|javascript:|@import|-moz-binding|behavior\s*:/i.test(value)) continue;
         if (name === 'position' && !/^(?:static|relative|absolute|sticky)$/.test(value)) continue;
         kept.push(`${name}:${value}`);
@@ -1153,12 +1170,17 @@
       return kept.join(';');
     };
     const clean = source => {
+      if (source.querySelectorAll('*').length > 2000) return '';
       const copy = source.cloneNode(true);
+      const originals = [source, ...source.querySelectorAll('*')];
+      const copies = [copy, ...copy.querySelectorAll('*')];
+      const styles = new WeakMap();
+      for (let at = 0; at < copies.length; at++) styles.set(copies[at], safeStyle(originals[at]));
       for (const node of [...copy.querySelectorAll(drop)]) node.remove();
       const elements = [copy, ...copy.querySelectorAll('*')];
       for (const node of elements) {
         const tag = node.tagName.toLowerCase();
-        const style = safeStyle(node);
+        const style = styles.get(node) || '';
         const component = node.getAttribute('data-d-component');
         const direction = node.getAttribute('data-d-direction');
         const align = node.getAttribute('data-d-align');
@@ -1199,9 +1221,16 @@
     };
     for (const message of renderedMessages || []) {
       if (out.length >= MAX_PROVIDER_DIL_SURFACES || message?.role !== 'assistant' || !message.rawMessageId || !message.renderedHtml) continue;
-      let template;
-      try { template = document.createElement('template'); template.innerHTML = message.renderedHtml; } catch { continue; }
-      const responses = [...template.content.querySelectorAll('[data-dil-response]')];
+      // Positional/text decoration is insufficient for importing or suppressing a
+      // visual. Only the exact mounted native message may supply its styles.
+      const blocks = [...exactAnchors].filter(([, id]) => id === message.rawMessageId).map(([block]) => block);
+      if (blocks.length !== 1) continue;
+      const block = blocks[0];
+      const responses = [...block.querySelectorAll('[data-dil-response]')];
+      const transcript = block.cloneNode(true);
+      const sourceNodes = [...block.querySelectorAll('*')];
+      const transcriptNodes = [...transcript.querySelectorAll('*')];
+      const removed = [];
       let surface = 0;
       for (const response of responses) {
         const candidates = [...response.querySelectorAll('[data-d-component]')].filter(visual);
@@ -1218,7 +1247,16 @@
             files: [{ path: 'index.html', text, mimeType: 'text/html', language: 'html' }],
             order: message.order, createTime: message.createTime
           });
+          const at = sourceNodes.indexOf(node);
+          if (at >= 0) removed.push(transcriptNodes[at]);
         }
+      }
+      // Canonical rawText stays intact for export/copy and exact completion proof.
+      // The display capture omits only islands successfully exported above.
+      if (removed.length) {
+        for (const node of removed) node.remove();
+        const markup = transcript.innerHTML;
+        if (markup.length <= MAX_RENDERED_HTML) message.renderedHtml = markup;
       }
     }
     return out;
@@ -2912,7 +2950,7 @@
         generatedImages.push(...nativeFileImagesOf(group.sections, messages, exactImageNodes, exactFileButtons, Boolean(shell)));
         const generatedVideos = generatedVideosOf(group.sections, messages, exactVideoNodes);
         const providerArtifacts = providerArtifactsOf(messages);
-        providerArtifacts.push(...dilArtifactsOf(renderedMessages));
+        providerArtifacts.push(...dilArtifactsOf(renderedMessages, exactAnchors));
         const activities = nativeActivities.events;
         const nativeEndMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
         const endMessageId = currentBranch ? currentBranch.assistantIds.includes(nativeEndMessageId) ? nativeEndMessageId : null : nativeEndMessageId;

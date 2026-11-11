@@ -58,7 +58,7 @@ function svgDocument(file: ArtifactFile, channel: string): string {
     '<style>html,body{margin:0;min-height:100%;background:#fff}body{display:grid;place-items:center}</style>', channel);
 }
 
-function webDocument(files: ArtifactFile[], entrypoint: string, channel: string, widget = false, dark = false): string {
+function webDocument(files: ArtifactFile[], entrypoint: string, channel: string, widget = false, dark = false, nativeVisual = false): string {
   const byPath = new Map(files.map(file => [file.path, file]));
   const entry = byPath.get(entrypoint) ?? files.find(file => /\.html?$/i.test(file.path)) ?? files[0]!;
   if (!/\.html?$/i.test(entry.path) && !/html/i.test(entry.mimeType ?? '')) {
@@ -102,6 +102,13 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string,
   `;
   const bridge = parsed.createElement('script'); bridge.textContent = (previewStorageScript() + consoleBridgeScript(channel)).replace(/<\/script/gi, '<\\/script');
   parsed.head.prepend(charset, csp, viewport, bridge); parsed.head.append(scrolling);
+  if (nativeVisual) {
+    // Only the opaque frame can report its own layout; the host never reads its
+    // document. The receiver scopes and bounds this presentation-only message.
+    const size = parsed.createElement('script');
+    size.textContent = `(function(){let pending=false;const report=()=>{pending=false;const body=document.body;const nodes=[...body.children].filter(n=>!['SCRIPT','STYLE'].includes(n.tagName));if(!nodes.length)return;const bottom=Math.max(...nodes.map(n=>n.getBoundingClientRect().bottom));const height=Math.ceil(bottom-body.getBoundingClientRect().top+parseFloat(getComputedStyle(body).paddingBottom||'0'));parent.postMessage({__onecodeArtifactPreview:${JSON.stringify(channel)},height},'*')};const schedule=()=>{if(!pending){pending=true;requestAnimationFrame(report)}};addEventListener('load',()=>{schedule();new ResizeObserver(schedule).observe(document.body)});addEventListener('resize',schedule)})();`;
+    parsed.body.append(size);
+  }
   if (widget) {
     const diagram = widgetDiagramSize(entry.text);
     if (diagram) parsed.body.querySelector('svg')?.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -130,7 +137,8 @@ export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint:
     return result;
   }
   if (kind === 'web') return webDocument(files, entry.path, channel,
-    origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(origin.nativeSurface ?? ''), dark);
+    origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(origin.nativeSurface ?? ''), dark,
+    origin?.provider === 'chatgpt' && /^dil:(?:0|[1-9]\d{0,2})$/.test(origin.nativeSurface ?? ''));
   return previewShell(`<pre>${htmlEscape(entry.text)}</pre>`, '<style>pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace}</style>', channel);
 }
 
@@ -165,6 +173,8 @@ export function createArtifactPreview(options: {
   const entry = options.files.find(file => file.path === options.entrypoint) ?? options.files[0];
   const nativeWidget = options.origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(options.origin.nativeSurface ?? '');
   const diagram = entry && (nativeWidget || /\.svg$/i.test(entry.path)) ? widgetDiagramSize(entry.text) : null;
+  const nativeVisual = options.origin?.provider === 'chatgpt' && /^dil:(?:0|[1-9]\d{0,2})$/.test(options.origin.nativeSurface ?? '');
+  if (nativeVisual) options.parent.dataset.previewLayout = 'native';
   if (diagram) {
     options.parent.dataset.previewLayout = 'diagram';
     options.parent.style.setProperty('--artifact-ratio', `${diagram.width} / ${diagram.height}`);
@@ -194,13 +204,18 @@ export function createArtifactPreview(options: {
     selector.onchange = () => setViewport(selector.value === 'portrait' ? 'portrait' : selector.value === 'landscape' ? 'landscape' : 'responsive');
     (options.controls ?? shell).append(selector);
   }
-  let messages = 0;
+  let messages = 0, sizeMessages = 0;
   const receive = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow || messages >= 100) return;
-    const data = event.data as { __onecodeArtifactPreview?: unknown; level?: unknown; text?: unknown } | null;
+    const data = event.data as { __onecodeArtifactPreview?: unknown; level?: unknown; text?: unknown; height?: unknown } | null;
+    if (nativeVisual && data?.__onecodeArtifactPreview === channel && typeof data.height === 'number' &&
+        Number.isFinite(data.height) && data.height > 0 && sizeMessages++ < 100) {
+      options.parent.style.setProperty('--artifact-native-height', `${Math.max(80, Math.min(1600, Math.ceil(data.height)))}px`);
+      return;
+    }
     if (!data || data.__onecodeArtifactPreview !== channel || !['log', 'info', 'warn', 'error'].includes(String(data.level)) || typeof data.text !== 'string') return;
     messages++; options.onMessage?.({ level: data.level as ArtifactPreviewMessage['level'], text: data.text.slice(0, 4000) });
   };
   window.addEventListener('message', receive);
-  return { setViewport, destroy(): void { retired = true; observer?.disconnect(); selector.remove(); delete options.parent.dataset.previewViewport; if (diagram) { delete options.parent.dataset.previewLayout; options.parent.style.removeProperty('--artifact-ratio'); } window.removeEventListener('message', receive); if (documentId) options.releaseDocument?.(documentId); frame.remove(); shell.remove(); } };
+  return { setViewport, destroy(): void { retired = true; observer?.disconnect(); selector.remove(); delete options.parent.dataset.previewViewport; if (diagram || nativeVisual) { delete options.parent.dataset.previewLayout; options.parent.style.removeProperty('--artifact-ratio'); options.parent.style.removeProperty('--artifact-native-height'); } window.removeEventListener('message', receive); if (documentId) options.releaseDocument?.(documentId); frame.remove(); shell.remove(); } };
 }

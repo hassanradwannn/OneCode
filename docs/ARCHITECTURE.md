@@ -14,6 +14,8 @@ External startup opens an unfocused window at a temporary loopback page. The pai
 
 ChatGPT's MAIN-world Fiber projection is intentionally bounded per scan, but that bound is not a history cutoff. The latest user/assistant boundary remains present on every scan for live ownership while a conversation-scoped cursor rotates the remaining slots through older mounted turn groups. The isolated recorder advances that cursor only after the reply still belongs to the same route and navigation epoch. A Companion/recorder revision change fences the helper pair so an already-open page cannot keep an older non-progressive importer after update.
 
+Native DIL snapshots read allowlisted computed styling from the mounted, exactly identified message. Authored and typed computed dimensions retain responsive layout where available. Only successfully exported islands leave the display capture; canonical text and message/turn identity remain intact. The opaque preview may report its content height through a source-window/channel-checked, bounded presentation message. It gains no host document or network access.
+
 ## Data and control flow
 
 Ordered native user history retains `historyBeforeQuestionId` when the same capture proves a later question. The recorder stores the older row normally, while current-question and recovery readers exclude that backfill from task boundaries. Revisions and reconstruction retain this metadata. Exact app-owned Steer receipts remain with delivery until acknowledgement before the transcript observer advances their turn; another human message keeps its independent interruption path.

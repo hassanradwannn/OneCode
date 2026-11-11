@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.0': {
+    lead: () => t('Keep native visuals styled and the transcript readable.'),
+    highlights: [
+      { icon: 'i-layout', title: () => t('Preserve native visual styling'), text: () => t('Imported ChatGPT visuals retain their captured spacing, corners, colors and typography. Inline previews follow the content height.') },
+      { icon: 'i-chat', title: () => t('Avoid duplicated visual text'), text: () => t('Successfully imported visuals appear once, while surrounding prose and the full text for copy and export remain available.') }
+    ]
+  },
   '1.0.81': {
     lead: () => t('Keep ChatGPT-generated diagrams intact with a smaller update.'),
     highlights: [

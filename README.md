@@ -2,11 +2,13 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Stable release [OneCode 1.0.81](https://github.com/hassanradwannn/OneCode/releases/tag/v1.0.81)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.7/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.7/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.0.7/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Stable release [OneCode 1.1.0](https://github.com/hassanradwannn/OneCode/releases/tag/v1.1.0)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.0/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.0/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.0/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-Stable 1.0.81 preserves ChatGPT-generated grids, diagrams and standard HTML controls in safe offline previews. It restores a direct application update for Windows installations using the compatible 0.5.9 complete base; Linux uses its compatible 1.0.7 base. Stable and Beta retain separate installations, profiles and updater channels. [Release notes](docs/release-notes/v1.0.81.md)
+Stable 1.1.0 captures native ChatGPT visual styling, fits inline previews to content, and removes duplicated visual labels from the displayed transcript. Canonical text remains available for copy and export. Windows application capsules retain the compatible 0.5.9 complete base; Linux capsules retain 1.0.7. Stable and Beta keep separate installations, profiles and updater channels. [Release notes](docs/release-notes/v1.1.0.md)
 
 Fresh installs use the complete Windows/Linux artifacts linked above. Compatible existing Stable installations use verified application capsules while retaining their matching native base. Capsule manifests and published base descriptors determine compatibility; a newer app version alone does not require a new full installer.
+
+Native imports preserve supported Markdown, media, generated files and offline artifacts through each provider's adapter. Standard HTML controls and bundled React/diagram runtimes run locally. Controls backed only by a provider's private runtime or services require the original chat; universal visual and behavior parity is not claimed.
 
 The current release supports **Windows x64 and Linux x64**, with **ChatGPT web, Gemini web and Claude web** through one Companion extension, plus opt-in **OpenRouter API** chats using the same local execution owners.
 

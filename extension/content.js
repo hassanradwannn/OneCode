@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 139;
+  const RECORDER_VERSION = 140;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4132,7 +4132,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 39;
+  const FIBER_VERSION = 40;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -6044,8 +6044,6 @@
         });
       }
       items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) || left.serial - right.serial);
-      const nativeVisualMessages = new Set((turn.artifacts || []).filter(artifact => artifact.nativeSurface)
-        .map(artifact => artifact.messageId));
 
       for (const item of items) {
         // The shared native wrapper also contains old A/B history. Retaining C's
@@ -6224,9 +6222,9 @@
         // was bound. It may never weaken merely because a concurrent later scan has no local
         // claim: that was the 2026-08-31 final-without-turnId race. A contradictory positive
         // claim is different and fails closed instead of choosing either generation.
-        // A native DIL visual is retained as its own sandboxed artifact. Render the canonical
-        // Markdown answer here instead of also flattening the provider DOM into transcript text.
-        const renderedHtml = nativeVisualMessages.has(message.rawMessageId || message.messageId) ? '' : message.renderedHtml;
+        // Fiber removes only successfully captured native islands from this display
+        // fragment. Keep the surrounding prose; rawText still owns the transcript.
+        const renderedHtml = message.renderedHtml;
         const signature =
           `${state}\u0000${message.rawText}\u0000${renderedHtml}\u0000${owner}` +
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}\u0000${message.responseToQuestionId || ''}` +
