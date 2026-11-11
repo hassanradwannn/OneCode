@@ -109,6 +109,27 @@ jobs:
           . /etc/os-release
           test "$VERSION_CODENAME" = jammy
           test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          # Bootstrap only these archive names through HTTPS DNS when runner DNS is unavailable.
+          # TLS hostname verification and Ubuntu archive signatures remain required.
+          hosts_backup="$RUNNER_TEMP/onecode-ci-hosts.before"
+          sudo cp /etc/hosts "$hosts_backup"
+          trap 'sudo cp "$hosts_backup" /etc/hosts' EXIT
+          python3 - <<'PY' > "$RUNNER_TEMP/onecode-ubuntu.hosts"
+          import ipaddress, json, urllib.request
+          for host in ("archive.ubuntu.com", "security.ubuntu.com"):
+              request = urllib.request.Request("https://1.1.1.1/dns-query?name=" + host + "&type=A", headers={"Accept": "application/dns-json"})
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  reply = json.load(response)
+              addresses = sorted({record["data"] for record in reply.get("Answer", []) if record.get("type") == 1})
+              if reply.get("Status") != 0 or not addresses:
+                  raise RuntimeError("Could not resolve official Ubuntu archive")
+              for address in addresses:
+                  value = ipaddress.ip_address(address)
+                  if value.version != 4 or not value.is_global:
+                      raise RuntimeError("Unexpected Ubuntu archive address")
+                  print(address, host)
+          PY
+          sudo tee -a /etc/hosts < "$RUNNER_TEMP/onecode-ubuntu.hosts" > /dev/null
           # Use Ubuntu's signed archives directly when the runner's Azure mirror is unavailable.
           # These options affect this prerequisite step only; the runner's source files stay intact.
           apt_sources="$RUNNER_TEMP/onecode-ubuntu.list"
@@ -117,7 +138,7 @@ jobs:
           deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu jammy-updates main universe
           deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu jammy-security main universe
           EOF
-          apt_options=(-o "Dir::Etc::sourcelist=$apt_sources" -o "Dir::Etc::sourceparts=-" -o "Acquire::Retries=3" -o "Acquire::https::Timeout=30")
+          apt_options=(-o "Dir::Etc::sourcelist=$apt_sources" -o "Dir::Etc::sourceparts=-" -o "Acquire::Retries=3" -o "Acquire::https::Timeout=30" -o "Acquire::ForceIPv4=true")
           sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
           sudo apt-get "${apt_options[@]}" install --no-install-recommends -y libblas3 liblapack3 pulseaudio-utils
           /usr/bin/python3 --version
