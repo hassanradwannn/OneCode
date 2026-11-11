@@ -2,7 +2,7 @@
 
 ## [1.0.81] — 2026-11-11
 
-Ship the ChatGPT-generated diagram support as a direct application update for installations using the compatible 0.5.9 complete base. See [1.0.81 notes](docs/release-notes/v1.0.81.md).
+Ship the ChatGPT-generated diagram support as a direct application update for Windows installations using the compatible 0.5.9 complete base and Linux installations using the compatible 1.0.7 base. See [1.0.81 notes](docs/release-notes/v1.0.81.md).
 
 ## [1.0.8] — 2026-11-11
 
