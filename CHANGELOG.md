@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.0.81] — 2026-11-11
+
+Ship the ChatGPT-generated diagram support as a direct application update for installations using the compatible 0.5.9 complete base. See [1.0.81 notes](docs/release-notes/v1.0.81.md).
+
 ## [1.0.8] — 2026-11-11
 
 Preserve ChatGPT-generated grids, diagrams and standard HTML controls as safe offline previews instead of flattening their visual layout into transcript text. See [1.0.8 notes](docs/release-notes/v1.0.8.md).
