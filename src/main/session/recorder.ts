@@ -85,7 +85,7 @@ import {
 import { RESUME_CLAIM_WINDOW_MS, resumeOpeningChat } from './resume-gate.js';
 import { summarizeToolCall, toolResultHeadline } from './summarize.js';
 import type { GeminiInputTurn } from '../gemini/bindings.js';
-import { beginNativeArtifactSnapshot, failNativeArtifactSnapshot, importProviderArtifactRevision, importProviderArtifactSnapshot } from '../artifacts/service.js';
+import { beginNativeArtifactSnapshot, failNativeArtifactSnapshot, importProviderArtifactRevision, importProviderArtifactSnapshot, nativeVisualProjectionReady } from '../artifacts/service.js';
 
 interface LiveConversation {
   conversationId: string;
@@ -1812,6 +1812,8 @@ export interface ChatObservation {
   reaction?: string | null;
   /** ChatGPT's already-rendered authored markup for this same logical message. */
   renderedHtml?: string;
+  /** Display-only projection over already retained, exact response-scoped visuals. */
+  nativeVisualSurfaces?: string[];
   messageId?: string;
   /** Raw public provider message UUID, retained as evidence, never used to guess ownership. */
   providerMessageId?: string;
@@ -2241,7 +2243,9 @@ async function recordSupersededMessages(
           ...(item.references ? { references: item.references } : {}),
           final: state === 'final'
         },
-        { preferTime: item.authoredTime === true, activeContent: item.activeNow === true }
+        { preferTime: item.authoredTime === true, activeContent: item.activeNow === true,
+          renderedProjection: item.nativeVisualSurfaces?.length && item.providerMessageId && item.renderedHtml
+            ? await nativeVisualProjectionReady(sessionId, conversationId, item.providerMessageId, item.nativeVisualSurfaces) : false }
       );
     } else if (item.kind === 'native_image') {
       stored += await recordNativeImage(sessionId, item, base);
@@ -2436,7 +2440,9 @@ async function recordChatObservationsNow(
           ...(item.resolvedModel ? { resolvedModel: item.resolvedModel } : {}),
           ...(item.references ? { references: item.references } : {}),
           ...(goalEligible && state === 'final' ? { goalEligible: true } : {})
-        }, { preferTime: item.authoredTime === true, work: item.activeNow === true, activeContent: item.activeNow === true });
+        }, { preferTime: item.authoredTime === true, work: item.activeNow === true, activeContent: item.activeNow === true,
+          renderedProjection: item.nativeVisualSurfaces?.length && item.providerMessageId && item.renderedHtml
+            ? await nativeVisualProjectionReady(sessionId, conversationId, item.providerMessageId, item.nativeVisualSurfaces) : false });
         const canonicalTurn = written.event.turnId;
         // A stopped partial answer stays streaming in history. Re-observing its
         // DOM after restart cannot renew work, nor can an old message borrow a

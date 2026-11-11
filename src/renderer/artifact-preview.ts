@@ -12,6 +12,9 @@ const MARKDOWN_DROPS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 
 export interface ArtifactPreviewMessage { level: 'log' | 'info' | 'warn' | 'error'; text: string }
 export interface ArtifactPreviewHandle { setViewport(mode: ArtifactViewport): void; destroy(): void }
 
+const isNativeVisual = (origin?: ArtifactOrigin): boolean => origin?.provider === 'chatgpt' && /^dil:(?:0|[1-9]\d{0,2})$/.test(origin.nativeSurface ?? '') ||
+  origin?.provider === 'claude' && /^mermaid:(?:0|[1-9]|[12]\d|3[01])$/.test(origin.nativeSurface ?? '');
+
 function htmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -58,7 +61,7 @@ function svgDocument(file: ArtifactFile, channel: string): string {
     '<style>html,body{margin:0;min-height:100%;background:#fff}body{display:grid;place-items:center}</style>', channel);
 }
 
-function webDocument(files: ArtifactFile[], entrypoint: string, channel: string, widget = false, dark = false, nativeVisual = false): string {
+async function webDocument(files: ArtifactFile[], entrypoint: string, channel: string, widget = false, dark = false, nativeVisual = false): Promise<string> {
   const byPath = new Map(files.map(file => [file.path, file]));
   const entry = byPath.get(entrypoint) ?? files.find(file => /\.html?$/i.test(file.path)) ?? files[0]!;
   if (!/\.html?$/i.test(entry.path) && !/html/i.test(entry.mimeType ?? '')) {
@@ -71,6 +74,16 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string,
     const source = resolved ? byPath.get(resolved) : null;
     if (!source) { link.remove(); continue; }
     const style = parsed.createElement('style'); style.textContent = source.text; link.replaceWith(style);
+  }
+  const externalScripts = [...parsed.querySelectorAll<HTMLScriptElement>('script[src]')];
+  if (externalScripts.length) {
+    const { isTailwindBrowserScript, htmlTailwindRuntime } = await import('./artifact-html-runtime.js');
+    const tailwind = externalScripts.filter(script => isTailwindBrowserScript(script.getAttribute('src') ?? ''));
+    if (tailwind.length) {
+      const local = parsed.createElement('script'); local.textContent = (await htmlTailwindRuntime()).replace(/<\/script/gi, '<\\/script');
+      tailwind[0]!.replaceWith(local);
+      for (const duplicate of tailwind.slice(1)) duplicate.remove();
+    }
   }
   for (const script of [...parsed.querySelectorAll<HTMLScriptElement>('script[src]')]) {
     const resolved = resolveArtifactReference(entry.path, script.getAttribute('src') ?? '');
@@ -106,7 +119,7 @@ function webDocument(files: ArtifactFile[], entrypoint: string, channel: string,
     // Only the opaque frame can report its own layout; the host never reads its
     // document. The receiver scopes and bounds this presentation-only message.
     const size = parsed.createElement('script');
-    size.textContent = `(function(){let pending=false;const report=()=>{pending=false;const body=document.body;const nodes=[...body.children].filter(n=>!['SCRIPT','STYLE'].includes(n.tagName));if(!nodes.length)return;const bottom=Math.max(...nodes.map(n=>n.getBoundingClientRect().bottom));const height=Math.ceil(bottom-body.getBoundingClientRect().top+parseFloat(getComputedStyle(body).paddingBottom||'0'));parent.postMessage({__onecodeArtifactPreview:${JSON.stringify(channel)},height},'*')};const schedule=()=>{if(!pending){pending=true;requestAnimationFrame(report)}};addEventListener('load',()=>{schedule();new ResizeObserver(schedule).observe(document.body)});addEventListener('resize',schedule)})();`;
+    size.textContent = `(function(){let pending=false,last='';const report=()=>{pending=false;const body=document.body;const nodes=[...body.children].filter(n=>!['SCRIPT','STYLE'].includes(n.tagName));if(!nodes.length)return;const boxes=nodes.map(n=>n.getBoundingClientRect()),bounds=body.getBoundingClientRect(),style=getComputedStyle(body);const height=Math.ceil(Math.max(...boxes.map(n=>n.bottom))-bounds.top+parseFloat(style.paddingBottom||'0')),width=Math.ceil(Math.max(...boxes.map(n=>n.right))-bounds.left+parseFloat(style.paddingRight||'0'));const key=width+':'+height;if(key===last)return;last=key;parent.postMessage({__onecodeArtifactPreview:${JSON.stringify(channel)},height,width},'*')};const schedule=()=>{if(!pending){pending=true;requestAnimationFrame(report)}};addEventListener('load',()=>{schedule();new ResizeObserver(schedule).observe(document.body)});addEventListener('resize',schedule)})();`;
     parsed.body.append(size);
   }
   if (widget) {
@@ -138,13 +151,14 @@ export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint:
   }
   if (kind === 'web') return webDocument(files, entry.path, channel,
     origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(origin.nativeSurface ?? ''), dark,
-    origin?.provider === 'chatgpt' && /^dil:(?:0|[1-9]\d{0,2})$/.test(origin.nativeSurface ?? ''));
+    isNativeVisual(origin));
   return previewShell(`<pre>${htmlEscape(entry.text)}</pre>`, '<style>pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,monospace}</style>', channel);
 }
 
 export function createArtifactPreview(options: {
   parent: HTMLElement; files: ArtifactFile[]; entrypoint?: string; kind: ArtifactKind; origin?: ArtifactOrigin; onMessage?: (message: ArtifactPreviewMessage) => void;
   controls?: HTMLElement;
+  onSize?: (size: { width: number; height: number }) => void;
   createDocument?: (document: string) => Promise<{ id: string; url: string } | null>;
   releaseDocument?: (id: string) => void;
 }): ArtifactPreviewHandle {
@@ -173,7 +187,7 @@ export function createArtifactPreview(options: {
   const entry = options.files.find(file => file.path === options.entrypoint) ?? options.files[0];
   const nativeWidget = options.origin?.provider === 'claude' && /^widget:toolu_[A-Za-z0-9]{20,100}$/.test(options.origin.nativeSurface ?? '');
   const diagram = entry && (nativeWidget || /\.svg$/i.test(entry.path)) ? widgetDiagramSize(entry.text) : null;
-  const nativeVisual = options.origin?.provider === 'chatgpt' && /^dil:(?:0|[1-9]\d{0,2})$/.test(options.origin.nativeSurface ?? '');
+  const nativeVisual = isNativeVisual(options.origin);
   if (nativeVisual) options.parent.dataset.previewLayout = 'native';
   if (diagram) {
     options.parent.dataset.previewLayout = 'diagram';
@@ -207,10 +221,13 @@ export function createArtifactPreview(options: {
   let messages = 0, sizeMessages = 0;
   const receive = (event: MessageEvent): void => {
     if (event.source !== frame.contentWindow || messages >= 100) return;
-    const data = event.data as { __onecodeArtifactPreview?: unknown; level?: unknown; text?: unknown; height?: unknown } | null;
+    const data = event.data as { __onecodeArtifactPreview?: unknown; level?: unknown; text?: unknown; height?: unknown; width?: unknown } | null;
     if (nativeVisual && data?.__onecodeArtifactPreview === channel && typeof data.height === 'number' &&
         Number.isFinite(data.height) && data.height > 0 && sizeMessages++ < 100) {
-      options.parent.style.setProperty('--artifact-native-height', `${Math.max(80, Math.min(1600, Math.ceil(data.height)))}px`);
+      const height = Math.max(80, Math.min(1600, Math.ceil(data.height)));
+      options.parent.style.setProperty('--artifact-native-height', `${height}px`);
+      if (typeof data.width === 'number' && Number.isFinite(data.width) && data.width > 0)
+        options.onSize?.({ height, width: Math.max(160, Math.min(1600, Math.ceil(data.width))) });
       return;
     }
     if (!data || data.__onecodeArtifactPreview !== channel || !['log', 'info', 'warn', 'error'].includes(String(data.level)) || typeof data.text !== 'string') return;

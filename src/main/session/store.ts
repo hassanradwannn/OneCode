@@ -1355,7 +1355,7 @@ export function appendEvent(sessionId: string, event: NewSessionEvent): Promise<
 export function upsertMessageEvent(
   sessionId: string,
   event: NewMessageEvent,
-  options: { preferTime?: boolean; work?: boolean; activeContent?: boolean } = {}
+  options: { preferTime?: boolean; work?: boolean; activeContent?: boolean; renderedProjection?: boolean } = {}
 ): Promise<{ event: MessageEvent; changed: boolean; contentChanged: boolean }> {
   const directKey = messageKey(event as MessageEvent);
   if (!directKey) throw new Error('Canonical message update requires provider messageId');
@@ -1421,7 +1421,9 @@ export function upsertMessageEvent(
         (previous.final === true || previous.state === 'final') ===
           (event.final === true || event.state === 'final');
       if (activeBodyIsNewer && previous?.kind === 'assistant_message' && event.kind === 'assistant_message') {
-        event = { ...event, message: previous.message, renderedHtml: previous.renderedHtml,
+        const renderedHtml = options.renderedProjection === true && storedTextEqual(previous.message, event.message)
+          ? event.renderedHtml : previous.renderedHtml;
+        event = { ...event, message: previous.message, renderedHtml,
           state: previous.state, final: previous.final };
         // The historical timestamp belongs to the stale snapshot too; it cannot rewrite
         // chronology when its body was refused for lack of newer content evidence.

@@ -2054,6 +2054,11 @@ function parseObservations(input: unknown, expectedConversationId?: string): Cha
     if (kind === 'assistant_message') {
       const references = messageReferences(item['references']);
       if (references) observation.references = references;
+      const surfaces = item['nativeVisualSurfaces'];
+      if (chatProviderForConversation(expectedConversationId) === 'chatgpt' && observation.providerMessageId &&
+          Array.isArray(surfaces) && surfaces.length > 0 && surfaces.length <= 16 &&
+          surfaces.every(surface => typeof surface === 'string' && /^dil:(?:0|[1-9]\d{0,2})$/.test(surface)))
+        observation.nativeVisualSurfaces = [...new Set(surfaces)];
     }
     if (kind === 'assistant_message' && typeof item['resolvedModel'] === 'string' &&
         /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(item['resolvedModel'])) {

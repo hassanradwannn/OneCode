@@ -60,6 +60,14 @@ export interface ImportProviderArtifactRevisionResult {
 }
 
 type NativeSnapshotInput = Omit<ImportProviderArtifactRevisionInput, 'providerArtifactId' | 'providerRevisionId' | 'providerParentRevisionId'> & {nativeSurface: string};
+/** A display projection may omit only visuals already retained under this exact public reply. */
+export async function nativeVisualProjectionReady(sessionId: string, conversationId: string, messageId: string, surfaces: readonly string[]): Promise<boolean> {
+  if (!surfaces.length || surfaces.length > 16 || surfaces.some(surface => !/^dil:(?:0|[1-9]\d{0,2})$/.test(surface))) return false;
+  const records = await listArtifactRecords(sessionId);
+  return surfaces.every(surface => records.filter(record => record.artifact.origin.provider === 'chatgpt' &&
+    record.artifact.origin.conversationId === conversationId && record.artifact.origin.messageId === messageId &&
+    record.artifact.origin.nativeSurface === surface && record.revisions.some(revision => revision.source === 'provider')).length === 1);
+}
 function nativeSnapshotId(input: Pick<NativeSnapshotInput,'sessionId'|'provider'|'conversationId'|'messageId'|'nativeSurface'>): string {
   const hex=createHash('sha256').update(JSON.stringify([input.sessionId,input.provider,input.conversationId,input.messageId,input.nativeSurface])).digest('hex');
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-8${hex.slice(17,20)}-${hex.slice(20,32)}`;

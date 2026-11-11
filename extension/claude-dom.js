@@ -622,13 +622,24 @@ var CLF_DOM = (() => {
     if (!card || !uuid.test(card.token || '') || !uuid.test(card.message || '') || !safeOutputPath(card.path) ||
         typeof card.name !== 'string' || !card.name || card.name.length > 256 || /[\\/\u0000-\u001f\u007f]/.test(card.name) ||
         `claude:${card.conversation}` !== conversationId()) return null;
-    const node = unique(all('[data-testid="file-card-open"][data-cds="CardLink"][role="button"]').filter(row => row.getAttribute('data-clf-claude-file-token') === card.token));
+    if (card.frameId !== undefined && !uuid.test(card.frameId)) return null;
+    const selector = card.frameId ? '[data-testid="frame-card-open"]' : '[data-testid="file-card-open"]';
+    const node = unique(all(`${selector}[data-cds="CardLink"][role="button"]`).filter(row => row.getAttribute('data-clf-claude-file-token') === card.token));
     const message = node?.closest('[data-testid="assistant-message"]');
     const id = `${conversationId()}:assistant:${card.message}`, owner = turns().filter(turn => turn.id === id);
     return message && owner.length === 1 && owner[0].node === message && turnIdOf(message) === id &&
-      node.closest('[data-testid="file-card-block"][data-file-row-card]') ? node : null;
+      node.closest(card.frameId ? '[data-file-row-card]' : '[data-testid="file-card-block"][data-file-row-card]') ? node : null;
   };
   let nativeFiles = null;
+  const diagramNode = diagram => {
+    if (!diagram || !uuid.test(diagram.token || '') || !uuid.test(diagram.message || '') || `claude:${diagram.conversation}` !== conversationId() ||
+        !Number.isInteger(diagram.index) || diagram.index < 0 || diagram.index > 31 || typeof diagram.content !== 'string' || !diagram.content || diagram.content.length > 240000) return null;
+    const nodes = all('[data-mermaid="true"][role="img"][aria-label="Mermaid diagram"]').filter(node => node.getAttribute('data-clf-claude-diagram-token') === diagram.token);
+    if (nodes.length !== 1) return null;
+    const node = nodes[0], row = node.closest('[data-testid="assistant-message"]'), id = `${conversationId()}:assistant:${diagram.message}`;
+    const owners = turns().filter(turn => turn.id === id), roots = node.shadowRoot ? all('svg', node.shadowRoot) : [];
+    return owners.length === 1 && owners[0].node === row && row.getAttribute('data-is-streaming') === 'false' && roots.length === 1 && roots[0].id === diagram.svgId ? node : null;
+  };
   const widgetNode = widget => {
     if (!widget || !uuid.test(widget.token || '') || !uuid.test(widget.message || '') ||
         !/^toolu_[A-Za-z0-9]{20,100}$/.test(widget.toolUseId || '') || `claude:${widget.conversation}` !== conversationId() ||
@@ -653,7 +664,8 @@ var CLF_DOM = (() => {
         if (!current() || location.pathname !== route || event.data.path !== route || !Array.isArray(event.data.cards) || event.data.cards.length > 32) return finish(null);
         const cards = event.data.cards.filter(card => fileCardNode(card));
         const widgets = Array.isArray(event.data.widgets) && event.data.widgets.length <= 32 ? event.data.widgets.filter(widget => widgetNode(widget)) : [];
-        const snapshot = { route, cards, widgets, viewer: event.data.viewer };
+        const diagrams = Array.isArray(event.data.diagrams) && event.data.diagrams.length <= 32 ? event.data.diagrams.filter(diagram => diagramNode(diagram)) : [];
+        const snapshot = { route, cards, widgets, diagrams, viewer: event.data.viewer };
         nativeFiles = snapshot; finish(snapshot);
       };
       window.addEventListener('message', receive);
@@ -689,7 +701,10 @@ var CLF_DOM = (() => {
       title: widget.title, kind: 'web', entrypoint: 'widget.html',
       files: [{ path: 'widget.html', text: widget.content, language: 'html', mimeType: 'text/html' }] }));
     const files = await readNativeFileArtifacts(current, first);
-    return current() && nativeFiles?.route === location.pathname ? [...widgets, ...files] : [];
+    const diagrams = first.diagrams.filter(diagram => diagramNode(diagram)).map(diagram => ({
+      messageId: `${conversationId()}:assistant:${diagram.message}`, nativeSurface: `mermaid:${diagram.index}`, title: 'Mermaid diagram', kind: 'web', entrypoint: 'diagram.html',
+      files: [{ path: 'diagram.html', text: diagram.content, language: 'html', mimeType: 'text/html' }] }));
+    return current() && nativeFiles?.route === location.pathname ? [...widgets, ...files, ...diagrams] : [];
   }
   async function readNativeFileArtifacts(current, first) {
     const cards = first.cards.filter(card => card.selected === true && fileCardNode(card)?.getAttribute('aria-current') === 'true');

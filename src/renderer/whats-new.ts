@@ -17,23 +17,24 @@ interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
   '1.1.0': {
-    lead: () => t('Keep native visuals styled and the transcript readable.'),
+    lead: () => t('Styled previews, complete code blocks, and native artifact imports.'),
     highlights: [
-      { icon: 'i-layout', title: () => t('Preserve native visual styling'), text: () => t('Imported ChatGPT visuals retain their captured spacing, corners, colors and typography. Inline previews follow the content height.') },
-      { icon: 'i-chat', title: () => t('Avoid duplicated visual text'), text: () => t('Successfully imported visuals appear once, while surrounding prose and the full text for copy and export remain available.') }
+      { icon: 'i-chart', title: () => t('Preserve native visual styling'), text: () => t('ChatGPT visuals and Claude Mermaid diagrams retain their captured layout, colors and typography. Inline previews fit their content.') },
+      { icon: 'i-chat', title: () => t('Keep complete code and surrounding prose'), text: () => t('Native ChatGPT code blocks retain all lines and indentation. Imported visuals appear once, with full canonical text available for copy and export.') },
+      { icon: 'i-chart', title: () => t('Preview native HTML artifacts'), text: () => t('Claude published HTML and Gemini Canvas use their exposed native sources. Standard controls and supported Tailwind layouts run offline.') }
     ]
   },
   '1.0.81': {
     lead: () => t('Keep ChatGPT-generated diagrams intact with a smaller update.'),
     highlights: [
-      { icon: 'i-layout', title: () => t('Open interactive diagrams'), text: () => t('OneCode preserves ChatGPT-generated grids, diagrams and standard HTML controls in a safe offline preview.') },
+      { icon: 'i-chart', title: () => t('Open interactive diagrams'), text: () => t('OneCode preserves ChatGPT-generated grids, diagrams and standard HTML controls in a safe offline preview.') },
       { icon: 'i-download', title: () => t('Use the existing compatible base'), text: () => t('This release restores direct application updates for installations on the compatible 0.5.9 runtime base.') }
     ]
   },
   '1.0.8': {
     lead: () => t('Keep ChatGPT-generated diagrams intact.'),
     highlights: [
-      { icon: 'i-layout', title: () => t('Open interactive diagrams'), text: () => t('OneCode now preserves ChatGPT-generated grids, diagrams and standard HTML controls in a safe offline preview.') },
+      { icon: 'i-chart', title: () => t('Open interactive diagrams'), text: () => t('OneCode now preserves ChatGPT-generated grids, diagrams and standard HTML controls in a safe offline preview.') },
       { icon: 'i-shield', title: () => t('Preserve visuals without page access'), text: () => t('Generated layout and styling are retained while provider scripts, external resources and network access stay blocked.') }
     ]
   },

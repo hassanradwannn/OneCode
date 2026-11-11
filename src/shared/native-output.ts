@@ -54,6 +54,8 @@ export const NATIVE_OUTPUT_ADAPTERS = {
     artifact: () => false, revision: () => false,
     roles: ['assistant'], exports: { image: false, video: false }, snapshotSurfaces: [],
     snapshotSurface: (surface: string) => {
+      // Local public Mermaid part within one completed exact assistant reply.
+      if (/^mermaid:(?:0|[1-9]|[12]\d|3[01])$/.test(surface)) return true;
       // Native public visualize tool-use identity, scoped by the exact assistant UUID.
       if (/^widget:toolu_[A-Za-z0-9]{20,100}$/.test(surface)) return true;
       const prefix = 'artifact:/mnt/user-data/outputs/';

@@ -4744,7 +4744,7 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 .generation-placeholder.is-interrupted::after { animation: none; opacity: .3; }
 @keyframes generation-dots { from { opacity: .18; transform: translateY(5px); } to { opacity: .7; transform: translateY(-5px); } }
 @media (prefers-reduced-motion: reduce) { .generation-placeholder::after { animation: none; } }
-.inline-presentation { width: min(100%, 740px); margin: 14px 0; }
+.inline-presentation { width: min(100%, var(--artifact-native-width, 740px)); margin: 14px 0; }
 .inline-presentation-toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 12px 12px 0 0; padding: 8px 12px; background: var(--card); font-size: calc(13px * var(--text-scale, 1)); }
 .inline-presentation-toolbar strong { font-weight: 500; }
 .inline-presentation-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }

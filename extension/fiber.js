@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 40;
+  const VERSION = 41;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -1163,6 +1163,7 @@
         const sizing = /^(?:width|height|grid-template-columns|grid-template-rows|flex-basis)$/.test(name);
         const authored = sizing ? node.style.getPropertyValue(name) || optional(() => typed?.get(name)?.toString()) : '';
         const value = (authored || (sizing && /^(?:width|height|flex-basis)$/.test(name) ? '' : styles.getPropertyValue(name))).trim();
+        if (name === 'transform-origin' && styles.getPropertyValue('transform') === 'none') continue;
         if (!styleProperties.has(name) || !value || value.length > 300 || /url\s*\(|expression\s*\(|javascript:|@import|-moz-binding|behavior\s*:/i.test(value)) continue;
         if (name === 'position' && !/^(?:static|relative|absolute|sticky)$/.test(value)) continue;
         kept.push(`${name}:${value}`);
@@ -1174,7 +1175,7 @@
       const copy = source.cloneNode(true);
       const originals = [source, ...source.querySelectorAll('*')];
       const copies = [copy, ...copy.querySelectorAll('*')];
-      const styles = new WeakMap();
+      const styles = new WeakMap(), classes = new Map();
       for (let at = 0; at < copies.length; at++) styles.set(copies[at], safeStyle(originals[at]));
       for (const node of [...copy.querySelectorAll(drop)]) node.remove();
       const elements = [copy, ...copy.querySelectorAll('*')];
@@ -1201,7 +1202,10 @@
         }
         for (const attr of [...node.attributes]) node.removeAttribute(attr.name);
         for (const [name, value] of keep) node.setAttribute(name, value);
-        if (style) node.setAttribute('style', style);
+        if (style) {
+          if (!classes.has(style)) classes.set(style, `oc-native-${classes.size}`);
+          node.setAttribute('class', classes.get(style));
+        }
         if (component) node.setAttribute('data-d-component', component.slice(0, 60));
         if (direction === 'row' || direction === 'col') {
           node.setAttribute('data-d-direction', direction);
@@ -1217,7 +1221,8 @@
       }
       const body = copy.outerHTML;
       const script = `<script>(function(){document.addEventListener('submit',e=>e.preventDefault());document.addEventListener('input',e=>{const n=e.target;if(!(n instanceof HTMLInputElement))return;n.setAttribute('aria-valuenow',n.value);if(n.id)for(const o of document.querySelectorAll('output[for="'+CSS.escape(n.id)+'"]'))o.value=n.value})})()<\/script>`;
-      return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{color-scheme:dark;font:14px/1.4 system-ui,sans-serif;background:#171717;color:#ededed}body{margin:0;padding:12px;overflow:auto}*,*:before,*:after{box-sizing:border-box}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea,details{max-width:100%}</style></head><body>${body}${script}</body></html>`;
+      const rules = [...classes].map(([style, name]) => `.${name}{${style.replace(/</g, '\\3c ')}}`).join('');
+      return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{color-scheme:dark;font:14px/1.4 system-ui,sans-serif;background:#171717;color:#ededed}body{margin:0;padding:12px;overflow:auto}*,*:before,*:after{box-sizing:border-box}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea,details{max-width:100%}${rules}</style></head><body>${body}${script}</body></html>`;
     };
     for (const message of renderedMessages || []) {
       if (out.length >= MAX_PROVIDER_DIL_SURFACES || message?.role !== 'assistant' || !message.rawMessageId || !message.renderedHtml) continue;
@@ -1256,7 +1261,10 @@
       if (removed.length) {
         for (const node of removed) node.remove();
         const markup = transcript.innerHTML;
-        if (markup.length <= MAX_RENDERED_HTML) message.renderedHtml = markup;
+        if (markup.length <= MAX_RENDERED_HTML) {
+          message.renderedHtml = markup;
+          message.nativeVisualSurfaces = out.filter(artifact => artifact.messageId === message.rawMessageId).map(artifact => artifact.nativeSurface);
+        }
       }
     }
     return out;

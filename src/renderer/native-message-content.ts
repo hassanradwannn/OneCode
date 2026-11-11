@@ -330,13 +330,22 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
       if (!visible(widget)) continue;
       const sources = widget.querySelectorAll('[data-code-block-source] > code');
       const source = sources.length === 1 ? sources[0] : undefined;
-      if (!source?.textContent || source.closest('[hidden], [aria-hidden="true"]')) continue;
+      // Current ChatGPT uses a virtualized CodeMirror view. Its native Copy
+      // payload retains all lines; the mounted editor text can be only a viewport.
+      const copies = [...widget.querySelectorAll('[data-chatgpt-copy-code]')].filter(node =>
+        node.closest('[data-client-defined-widget="code_block"]') === widget && visible(node));
+      const copied = copies.length === 1 ? copies[0]!.getAttribute('data-chatgpt-copy-code') : null;
+      if (source && copied && source.textContent !== copied) continue;
+      const text = source?.textContent || copied;
+      if (!text || text.length > MAX_MESSAGE_MARKUP || source?.closest('[hidden], [aria-hidden="true"]')) continue;
       const pre = document.createElement('pre'), code = document.createElement('code');
       const nativeLabel = label(widget.querySelector('[data-markdown-copy="exclude"]')).toLowerCase();
-      const language = source.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1] ??
+      const editors = widget.querySelectorAll('.cm-content[data-language]');
+      const language = source?.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1] ??
+        (editors.length === 1 ? editors[0]!.getAttribute('data-language') : null) ??
         (nativeLabel === 'plain text' ? 'text' : nativeLabel);
       if (/^[a-z0-9_+#.-]{1,24}$/i.test(language)) code.className = `language-${language.toLowerCase()}`;
-      code.textContent = source.textContent;
+      code.textContent = text;
       pre.append(code);
       widget.replaceWith(pre);
     }

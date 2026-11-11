@@ -97,6 +97,7 @@ export function inlinePresentation(value: ArtifactPresentation, sessionId: strin
       if (!valid()) return;
       if (!snapshot || snapshot.artifact.id !== artifactId) { stage.replaceChildren(el('p', 'meta', () => t('Artifact preview unavailable'))); return; }
       const handle = createArtifactPreview({ parent: stage, controls: actions, files: snapshot.revision.files, entrypoint: snapshot.artifact.entrypoint, kind: snapshot.artifact.kind, origin: snapshot.artifact.origin,
+        onSize: size => row.style.setProperty('--artifact-native-width', `${size.width + 2}px`),
         createDocument: document => run(window.api.createArtifactPreviewDocument(sessionId, artifactId, snapshot.revision.revision, document)),
         releaseDocument: id => { void window.api.releaseArtifactPreviewDocument(sessionId, id); } });
       live.set(row, () => { retired = true; closeFullscreen(); handle.destroy(); });

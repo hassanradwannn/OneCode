@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 140;
+  const RECORDER_VERSION = 143;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4132,7 +4132,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 40;
+  const FIBER_VERSION = 41;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -4392,6 +4392,9 @@
           /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(entry.resolvedModel) ? { resolvedModel: entry.resolvedModel } : {}),
         ...(references ? { references } : {}),
         rawText,
+        ...(entry.role === 'assistant' && Array.isArray(entry.nativeVisualSurfaces) && entry.nativeVisualSurfaces.length <= 16 &&
+          entry.nativeVisualSurfaces.every(surface => typeof surface === 'string' && /^dil:(?:0|[1-9]\d{0,2})$/.test(surface))
+          ? { nativeVisualSurfaces: [...new Set(entry.nativeVisualSurfaces)] } : {}),
         // A boolean from MAIN; only `true` exactly means ChatGPT stored this as escaped Markdown.
         ...(entry.role === 'user' && entry.markdown === true ? { markdown: true } : {}),
         ...(attachments.length ? { attachments } : {}),
@@ -6043,7 +6046,8 @@
           serial: serial++
         });
       }
-      items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) || left.serial - right.serial);
+      items.sort((left, right) => left.order - right.order || (left.partOrder || 0) - (right.partOrder || 0) ||
+        Number(right.type === 'artifact' && Boolean(right.value.nativeSurface)) - Number(left.type === 'artifact' && Boolean(left.value.nativeSurface)) || left.serial - right.serial);
 
       for (const item of items) {
         // The shared native wrapper also contains old A/B history. Retaining C's
@@ -6225,10 +6229,12 @@
         // Fiber removes only successfully captured native islands from this display
         // fragment. Keep the surrounding prose; rawText still owns the transcript.
         const renderedHtml = message.renderedHtml;
+        const nativeVisualSurfaces = message.nativeVisualSurfaces?.filter(surface => (turn.artifacts || []).some(artifact =>
+          artifact.messageId === message.rawMessageId && artifact.nativeSurface === surface));
         const signature =
           `${state}\u0000${message.rawText}\u0000${renderedHtml}\u0000${owner}` +
           `\u0000${message.createTime || ''}\u0000${message.rawMessageId || ''}\u0000${message.resolvedModel || ''}\u0000${message.responseToQuestionId || ''}` +
-          `\u0000${message.references ? JSON.stringify(message.references) : ''}`;
+          `\u0000${message.references ? JSON.stringify(message.references) : ''}\u0000${JSON.stringify(nativeVisualSurfaces || [])}`;
         if (refusedSettledOwner === turnId && index === answer.turns.length - 1 &&
             state === 'final' && exactTerminal && message.stable === true && turn.terminalState === 'complete' &&
             concreteConversation(turn.conversationId) === askedConversation && turn.conversationConflict !== true &&
@@ -6305,6 +6311,7 @@
           turnId: localOwner || (acceptedQuestion || historicalAggregate ? priorMessage?.owner || streamMessageTurnOwners.get(message.messageId) || undefined : undefined),
           text: message.rawText,
           renderedHtml,
+          ...(nativeVisualSurfaces?.length ? { nativeVisualSurfaces } : {}),
           // create_time is stamped by ChatGPT's server clock while turn/tool events use the
           // machine clock. They are not guaranteed to agree: the live 2026-08-25 turn recorded
           // this response 14 seconds before the user message that caused it. For a current or
