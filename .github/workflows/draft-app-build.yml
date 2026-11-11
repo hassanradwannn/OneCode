@@ -106,8 +106,20 @@ jobs:
         if: matrix.platform == 'linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libblas3 liblapack3 pulseaudio-utils
+          . /etc/os-release
+          test "$VERSION_CODENAME" = jammy
+          test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          # Use Ubuntu's signed archives directly when the runner's Azure mirror is unavailable.
+          # These options affect this prerequisite step only; the runner's source files stay intact.
+          apt_sources="$RUNNER_TEMP/onecode-ubuntu.list"
+          cat > "$apt_sources" <<'EOF'
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu jammy main universe
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu jammy-updates main universe
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu jammy-security main universe
+          EOF
+          apt_options=(-o "Dir::Etc::sourcelist=$apt_sources" -o "Dir::Etc::sourceparts=-" -o "Acquire::Retries=3" -o "Acquire::https::Timeout=30")
+          sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          sudo apt-get "${apt_options[@]}" install --no-install-recommends -y libblas3 liblapack3 pulseaudio-utils
           /usr/bin/python3 --version
 
       - name: Verify public source, types, notices and production bundles
