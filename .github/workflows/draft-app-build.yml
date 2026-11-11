@@ -113,7 +113,6 @@ jobs:
           # TLS hostname verification and Ubuntu archive signatures remain required.
           hosts_backup="$RUNNER_TEMP/onecode-ci-hosts.before"
           sudo cp /etc/hosts "$hosts_backup"
-          trap 'sudo cp "$hosts_backup" /etc/hosts' EXIT
           python3 - <<'PY' > "$RUNNER_TEMP/onecode-ubuntu.hosts"
           import ipaddress, json, urllib.request
           for host in ("archive.ubuntu.com", "security.ubuntu.com"):
@@ -307,6 +306,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APP_SOURCE_DIR: app-source
         run: node workflow-source/scripts/draft-app-release.mjs upload
+
+      - name: Restore Linux runner archive DNS mapping
+        if: always() && matrix.platform == 'linux'
+        shell: bash
+        run: |
+          hosts_backup="$RUNNER_TEMP/onecode-ci-hosts.before"
+          if [[ -f "$hosts_backup" ]]; then
+            sudo cp "$hosts_backup" /etc/hosts
+          fi
 
   finalize-release-checksums:
     name: finalize canonical release checksum register
