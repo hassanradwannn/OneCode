@@ -158,6 +158,7 @@ export async function artifactPreviewDocument(files: ArtifactFile[], entrypoint:
 export function createArtifactPreview(options: {
   parent: HTMLElement; files: ArtifactFile[]; entrypoint?: string; kind: ArtifactKind; origin?: ArtifactOrigin; onMessage?: (message: ArtifactPreviewMessage) => void;
   controls?: HTMLElement;
+  viewportControls?: boolean;
   onSize?: (size: { width: number; height: number }) => void;
   createDocument?: (document: string) => Promise<{ id: string; url: string } | null>;
   releaseDocument?: (id: string) => void;
@@ -216,7 +217,7 @@ export function createArtifactPreview(options: {
     shell.classList.add('is-browser-viewport');
     setViewport(viewport); observer!.observe(shell);
     selector.onchange = () => setViewport(selector.value === 'portrait' ? 'portrait' : selector.value === 'landscape' ? 'landscape' : 'responsive');
-    (options.controls ?? shell).append(selector);
+    if (options.viewportControls !== false) (options.controls ?? shell).append(selector);
   }
   let messages = 0, sizeMessages = 0;
   const receive = (event: MessageEvent): void => {

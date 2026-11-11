@@ -2,7 +2,7 @@
  * Does not read requests, cookies, hidden analysis, React callbacks or provider APIs. */
 (() => {
   'use strict';
-  const VERSION = 16;
+  const VERSION = 18;
   if (globalThis.__ONECODE_CLAUDE_NATIVE__?.version >= VERSION) return;
   globalThis.__ONECODE_CLAUDE_NATIVE__?.stop?.();
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -252,31 +252,48 @@
     return diagrams;
   }
   const frameExports = new WeakMap();
+  const frameCardLayout = node => node.matches('[data-cds="CardLink"][role="button"]') && node.closest('[data-file-row-card]') ? 'link'
+    : node.matches('button[type="button"][aria-label^="View "]') && node.parentElement?.classList.contains('group/artifact-block') ? 'block' : null;
   function projectFrames(conversation) {
     const cards = [];
-    for (const node of [...document.querySelectorAll('[data-testid="frame-card-open"][data-cds="CardLink"][role="button"]')].slice(-32)) {
-      if (!shown(node) || !node.closest('[data-file-row-card]')) continue;
+    for (const node of [...document.querySelectorAll('[data-testid="frame-card-open"]')].slice(-32)) {
+      const layout = frameCardLayout(node);
+      if (!shown(node) || !layout) continue;
       const message = node.closest('[data-testid="assistant-message"]'), native = suffix.exec(message?.id || '')?.[1]?.toLowerCase();
       if (!native || message.getAttribute('data-turn-key')?.toLowerCase() !== native) continue;
       const metadata = uniqueValue(propsAt(node).flatMap(props => {
         const input = own(props, 'input'), result = own(props, 'toolResult'), owner = own(props, 'message');
         const structured = own(result, 'structured_content'), display = own(result, 'display_content');
         const path = safePath(own(input, 'file_path')), frameId = own(structured, 'artifact_id'), tool = own(props, 'toolUseId');
+        const action = own(input, 'action'), publishedUrl = own(structured, 'url');
+        const edited = action === 'edit' && own(structured, 'updated') === true && own(display, 'published_action') === 'updated' &&
+          typeof publishedUrl === 'string' && /^https:\/\/claude\.ai\/artifact\/[A-Za-z0-9_-]{8,160}$/.test(publishedUrl) && own(input, 'url') === publishedUrl;
         if (!path || !/\.html?$/i.test(path) || !uuid.test(frameId || '') || !/^toolu_[A-Za-z0-9]{20,100}$/.test(tool || '') ||
             own(props, 'conversationUuid') !== conversation || own(owner, 'uuid') !== native || own(owner, 'sender') !== 'assistant' ||
-            own(props, 'toolName') !== 'Artifact' || own(input, 'action') !== 'publish' || own(result, 'name') !== 'Artifact' ||
+            own(props, 'toolName') !== 'Artifact' || !(action === 'publish' || edited) || own(result, 'name') !== 'Artifact' ||
             own(result, 'type') !== 'tool_result' || own(result, 'tool_use_id') !== tool || own(result, 'is_error') !== false ||
             own(result, 'tool_origin') !== 'first_party' || own(structured, 'path') !== path || own(display, 'type') !== 'file' ||
             own(display, 'published_artifact_id') !== frameId || own(display, 'published_url') !== `https://claude.ai/code/artifact/${frameId}`) return [];
-        return [{ path, name: path.split('/').at(-1), frameId, conversation, message: native }];
+        return [{ path, name: path.split('/').at(-1), frameId, conversation, message: native, toolUseId: tool, action }];
       }));
-      if (!metadata) continue;
+      if (!metadata) { if (node.getAttribute('aria-current') === 'true') return []; continue; }
       let token = node.getAttribute('data-clf-claude-file-token');
       if (!uuid.test(token || '')) { token = crypto.randomUUID(); node.setAttribute('data-clf-claude-file-token', token); }
       const label = node.getAttribute('aria-label') || '';
-      cards.push({ ...metadata, token, selected: node.getAttribute('aria-current') === 'true',
+      const active = node.getAttribute('aria-current');
+      cards.push({ ...metadata, token, selected: active === 'true' || active === null && layout === 'block' &&
+          new URL(location.href).searchParams.get('artifact') === metadata.frameId,
         title: label.startsWith('View ') ? label.slice(5, 205) : metadata.name,
         streaming: message.getAttribute('data-is-streaming') !== 'false' });
+    }
+    // Claude marks all cards for the shared published frame as current. Only
+    // the last committed publication/edit in native message order owns its
+    // current export. Conflicting selected artifacts remain ambiguous.
+    for (const id of new Set(cards.map(card => card.frameId))) {
+      const group = cards.filter(card => card.frameId === id);
+      if (group.length < 2) continue;
+      const last = group.at(-1), consistent = group.every(card => card.path === last.path);
+      for (const card of group) card.selected = consistent && card === last && last.selected;
     }
     return cards;
   }
@@ -298,8 +315,12 @@
     if (selected.length !== 1) return;
     const card = selected[0], node = frameCardNode(card), frame = frameViewer(card);
     if (!node || !frame) return;
-    const previous = frameExports.get(node);
+    const key = JSON.stringify([card.frameId, card.path, card.message, card.toolUseId]);
+    let exports = frameExports.get(node);
+    if (!exports) { exports = new Map(); frameExports.set(node, exports); }
+    const previous = exports.get(key);
     if (previous) { await previous.promise; return; }
+    if (exports.size >= 64) return;
     const route = location.href, doc = frame.contentDocument;
     const toolbars = [...document.querySelectorAll('[role="toolbar"]')].filter(toolbar =>
       toolbar.getAttribute('aria-label') === `${card.title} controls` && toolbar.querySelector('[data-testid="frame-drawer-title-menu"]'));
@@ -309,12 +330,12 @@
     const touched = event => { if (event.isTrusted) interrupted = true; };
     const owns = () => !interrupted && location.href === route && frame.isConnected && frame.contentDocument === doc &&
       frameCardNode(card) === node && frameViewer(card) === frame && projectFrames(conversation).filter(next =>
-        next.selected && next.token === card.token && next.frameId === card.frameId && next.message === card.message && next.path === card.path).length === 1;
+        next.selected && next.token === card.token && next.frameId === card.frameId && next.message === card.message && next.path === card.path && next.toolUseId === card.toolUseId).length === 1;
     let settle;
     const state = { source: null, promise: new Promise(resolve => { settle = resolve; }) };
     // One bounded export attempt per mounted native card. An uncertain UI action
     // is never replayed by the transcript's periodic reader.
-    frameExports.set(node, state);
+    exports.set(key, state);
     const finish = source => {
       if (done) return; done = true; clearTimeout(timer); observer.disconnect();
       for (const root of [document, doc]) {
@@ -392,7 +413,7 @@
     }
     const frames = cards.filter(card => card.frameId && card.selected && frameViewer(card));
     if (frames.length === 1) {
-      const card = frames[0], source = frameExports.get(frameCardNode(card))?.source;
+      const card = frames[0], source = frameExports.get(frameCardNode(card))?.get(JSON.stringify([card.frameId, card.path, card.message, card.toolUseId]))?.source;
       if (source) return { cards, widgets, diagrams, viewer: { ...card, content: source, mimeType: 'text/html', language: 'html' } };
     }
     const content = [...document.querySelectorAll('[data-skill-file-viewer="true"] #wiggle-file-content')].filter(shown);

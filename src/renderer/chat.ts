@@ -32,6 +32,7 @@ import { createSidebarCompletionState } from './sidebar-completion.js';
 import { toolResultText } from './tool-result.js';
 import { renderEditCards } from './tool-artifacts.js';
 import { chatErrorPresentation, duplicateChatErrors } from './chat-error.js';
+import { hasChatErrorEvidence } from '../shared/chat-error.js';
 import { renderRecoveryCountdowns } from './recovery.js';
 import type { RecoveryCountdown } from '../shared/recovery.js';
 import { communicationTitle, foldAgentCommunication, participatingWorkers, workerAvatar } from './agent-communication.js';
@@ -41,7 +42,7 @@ import { initContextMeter, paintContextMeter } from './context-meter.js';
 import { installComposerDockMotion, installComposerHeightMotion } from './composer-motion.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
 import { nativeMessageMarkup, openImagePreview, stageNativeMessageContent, type NativeMessageActions } from './native-message-content.js';
-import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
+import { captureRenderedMath, drawMath, mathExtensions, separateDisplayMath, type MathSlots } from './math.js';
 import { DEFAULT_HELPER_CHAT_MODEL, isAstraModel } from '../shared/chat-models.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
 import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
@@ -2967,6 +2968,8 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   // Parsing untrusted captured HTML constructs a second tree before sanitisation. Bound it
   // before innerHTML so a valid but huge recorded turn cannot freeze/OOM the renderer.
   template.innerHTML = html.text.slice(0, MAX_RENDERED_HTML_CHARS);
+  const math: MathSlots = { formulas: [] };
+  if (nativeCapture) captureRenderedMath(template.content, math);
   const mountNative = actions && stageNativeMessageContent(template.content, actions, nativeCapture);
   const codeLanguages = new WeakMap<Element, string>();
   for (const code of template.content.querySelectorAll('pre > code')) {
@@ -3009,6 +3012,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
     bindLabel: (node, property, value) => { ui(node, property, () => t(value)); },
     copyFailed: () => toast(t('Could not copy text.'))
   });
+  drawMath(box, math);
   return box;
 }
 
@@ -4149,9 +4153,10 @@ function paintAgentFilter(): void {
 }
 
 function visibleEvents(): SessionEvent[] {
-  if (agentFilter === null) return events;
-  if (agentFilter === UNATTRIBUTED) return events.filter((event) => !event.agent);
-  return events.filter((event) => event.agent === agentFilter);
+  const visible = events.filter(event => event.kind !== 'chat_error' || hasChatErrorEvidence(event));
+  if (agentFilter === null) return visible;
+  if (agentFilter === UNATTRIBUTED) return visible.filter((event) => !event.agent);
+  return visible.filter((event) => event.agent === agentFilter);
 }
 
 /** Eviction follows the measured reader viewport, not an arbitrary half-page.

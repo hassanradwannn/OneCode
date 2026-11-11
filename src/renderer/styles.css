@@ -4745,6 +4745,9 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 @keyframes generation-dots { from { opacity: .18; transform: translateY(5px); } to { opacity: .7; transform: translateY(-5px); } }
 @media (prefers-reduced-motion: reduce) { .generation-placeholder::after { animation: none; } }
 .inline-presentation { width: min(100%, var(--artifact-native-width, 740px)); margin: 14px 0; }
+.inline-presentation.is-imported { position:relative; box-sizing:border-box; width:min(100%, calc(var(--artifact-native-width, 740px) + 16px)); margin-inline:auto; padding:40px 8px 8px; }
+.inline-presentation.is-imported > .inline-presentation-preview { border:0; border-radius:0; }
+.inline-import-expand { position:absolute; z-index:2; top:6px; right:6px; background:var(--card); border-radius:6px; }
 .inline-presentation-toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 12px 12px 0 0; padding: 8px 12px; background: var(--card); font-size: calc(13px * var(--text-scale, 1)); }
 .inline-presentation-toolbar strong { font-weight: 500; }
 .inline-presentation-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
@@ -4761,6 +4764,9 @@ select option::checkmark { order: 1; margin-inline-start: auto; color: var(--ink
 .artifact-fullscreen .inline-presentation-preview[data-preview-layout=native][data-preview-viewport=responsive] { height:100%; max-height:none; }
 .artifact-fullscreen .inline-presentation-preview[data-preview-layout=diagram] { aspect-ratio:auto; }
 .artifact-fullscreen .inline-presentation-preview[data-preview-viewport=portrait] { aspect-ratio:auto; max-height:none; }
+.artifact-fullscreen .inline-presentation.is-imported { width:100%; align-items:center; justify-content:center; padding:40px 8px; }
+.artifact-fullscreen .inline-presentation.is-imported > .inline-presentation-preview { flex:1; }
+.artifact-fullscreen .inline-presentation.is-imported > .inline-presentation-preview[data-preview-layout=native][data-preview-viewport=responsive] { flex:0 1 auto; width:min(100%, var(--artifact-native-width, 100%)); height:var(--artifact-native-height, 380px); max-height:100%; }
 .inline-presentation-preview .artifact-preview-shell { position:absolute; inset:0; height:100%; width:100%; min-height:0; }
 .inline-presentation-preview .artifact-preview-frame { width: 100%; height: 100%; min-height:0; border: 0; background: var(--card); }
 .inline-presentation-toolbar strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

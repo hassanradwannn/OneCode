@@ -24,8 +24,13 @@ export interface ArtifactOrigin {
   turnId?: string;
   messageId?: string;
   providerArtifactId?: string;
-  /** Response-scoped rendered surface, without an invented provider artifact/revision id. */
+  /** Observed native surface; published frames retain a real stable UUID, other captures are response-scoped. */
   nativeSurface?: string;
+}
+
+/** Native provider captures use a quiet inline presentation; Core tool artifacts keep their workbench controls. */
+export function isProviderImportedArtifact(origin: ArtifactOrigin): boolean {
+  return Boolean(origin.nativeSurface?.trim() || origin.providerArtifactId?.trim());
 }
 
 export interface ArtifactCapabilities {
@@ -57,6 +62,7 @@ export interface ArtifactRevision {
   createdAt: number;
   files: ArtifactFile[];
   messageId?: string;
+  turnId?: string;
 }
 
 export interface Artifact {

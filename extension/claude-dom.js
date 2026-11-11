@@ -618,17 +618,23 @@ var CLF_DOM = (() => {
   const recoveryTerminalReceipt = questionId => { const receipt = completedResponseReceipt(); return receipt?.questionId === questionId ? { ...receipt, outcome: 'complete' } : null; };
   const safeOutputPath = value => typeof value === 'string' && value.length <= 600 && value.startsWith('/mnt/user-data/outputs/') &&
     !/[\\\u0000-\u001f\u007f?#]/.test(value) && value.slice('/mnt/user-data/outputs/'.length).split('/').every(part => part && part !== '.' && part !== '..');
+  const frameCardLayout = node => node.matches('[data-cds="CardLink"][role="button"]') && node.closest('[data-file-row-card]') ? 'link'
+    : node.matches('button[type="button"][aria-label^="View "]') && node.parentElement?.classList.contains('group/artifact-block') ? 'block' : null;
+  const selectedFileCard = (card, node) => Boolean(node && (node.getAttribute('aria-current') === 'true' ||
+    node.getAttribute('aria-current') === null && card.frameId && frameCardLayout(node) === 'block' &&
+    new URL(location.href).searchParams.get('artifact') === card.frameId));
   const fileCardNode = card => {
     if (!card || !uuid.test(card.token || '') || !uuid.test(card.message || '') || !safeOutputPath(card.path) ||
         typeof card.name !== 'string' || !card.name || card.name.length > 256 || /[\\/\u0000-\u001f\u007f]/.test(card.name) ||
         `claude:${card.conversation}` !== conversationId()) return null;
     if (card.frameId !== undefined && !uuid.test(card.frameId)) return null;
     const selector = card.frameId ? '[data-testid="frame-card-open"]' : '[data-testid="file-card-open"]';
-    const node = unique(all(`${selector}[data-cds="CardLink"][role="button"]`).filter(row => row.getAttribute('data-clf-claude-file-token') === card.token));
+    const node = unique(all(selector).filter(row => row.getAttribute('data-clf-claude-file-token') === card.token &&
+      (card.frameId ? frameCardLayout(row) : row.matches('[data-cds="CardLink"][role="button"]'))));
     const message = node?.closest('[data-testid="assistant-message"]');
     const id = `${conversationId()}:assistant:${card.message}`, owner = turns().filter(turn => turn.id === id);
     return message && owner.length === 1 && owner[0].node === message && turnIdOf(message) === id &&
-      node.closest(card.frameId ? '[data-file-row-card]' : '[data-testid="file-card-block"][data-file-row-card]') ? node : null;
+      (card.frameId ? frameCardLayout(node) : node.closest('[data-testid="file-card-block"][data-file-row-card]')) ? node : null;
   };
   let nativeFiles = null;
   const diagramNode = diagram => {
@@ -688,7 +694,7 @@ var CLF_DOM = (() => {
     // kind before this exact viewer exposes its native source type.
     .filter(card => card.streaming === true && /\.(?:jsx|tsx|html?|svg|mermaid|mmd|md|markdown)$/i.test(card.name) && fileCardNode(card))
     .map(card => ({ messageId: `${conversationId()}:assistant:${card.message}`,
-      nativeSurface: `artifact:${card.path}`, title: card.title || card.name, kind: fileKind(card.name), entrypoint: card.name })),
+      nativeSurface: card.frameId ? `published:${card.frameId.toLowerCase()}` : `artifact:${card.path}`, title: card.title || card.name, kind: fileKind(card.name), entrypoint: card.name })),
       ...(nativeFiles.widgets || []).filter(widget => widget.streaming && widgetNode(widget)).map(widget => ({
         messageId: `${conversationId()}:assistant:${widget.message}`, nativeSurface: `widget:${widget.toolUseId}`,
         title: widget.title, kind: 'web', entrypoint: 'widget.html' }))] : [] });
@@ -707,13 +713,13 @@ var CLF_DOM = (() => {
     return current() && nativeFiles?.route === location.pathname ? [...widgets, ...files, ...diagrams] : [];
   }
   async function readNativeFileArtifacts(current, first) {
-    const cards = first.cards.filter(card => card.selected === true && fileCardNode(card)?.getAttribute('aria-current') === 'true');
+    const cards = first.cards.filter(card => card.selected === true && selectedFileCard(card, fileCardNode(card)));
     if (cards.length !== 1) return [];
     const card = cards[0], node = fileCardNode(card), route = location.href;
     if (card.streaming) { capturedFiles.delete(node); return []; }
     let interrupted = false, changedMode = false;
     const note = event => { if (event.isTrusted) interrupted = true; };
-    const owns = () => !interrupted && current() && location.href === route && fileCardNode(card) === node && node?.getAttribute('aria-current') === 'true';
+    const owns = () => !interrupted && current() && location.href === route && fileCardNode(card) === node && selectedFileCard(card, node);
     const exactViewer = snapshot => {
       const viewer = snapshot?.viewer;
       return viewer && viewer.token === card.token && viewer.conversation === card.conversation && viewer.message === card.message &&
@@ -739,7 +745,7 @@ var CLF_DOM = (() => {
       if (!viewer || !owns() || card.streaming || node.closest('[data-testid="assistant-message"]').getAttribute('data-is-streaming') !== 'false') return [];
       const language = viewer.language.toLowerCase(), kind = fileKind(card.name, language, viewer.mimeType);
       capturedFiles.set(node, { message: card.message, path: card.path });
-      return [{ messageId: `${conversationId()}:assistant:${card.message}`, nativeSurface: `artifact:${card.path}`, title: card.title || card.name,
+      return [{ messageId: `${conversationId()}:assistant:${card.message}`, nativeSurface: card.frameId ? `published:${card.frameId.toLowerCase()}` : `artifact:${card.path}`, title: card.title || card.name,
         kind, entrypoint: card.name, ...(viewer.content.length > 240000 || !viewer.content ? { status: 'failed' }
           : { files: [{ path: card.name, text: viewer.content, language, mimeType: viewer.mimeType }] }) }];
     } finally {

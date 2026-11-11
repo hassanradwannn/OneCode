@@ -35,7 +35,7 @@ import type {
 import { estimateTokens, originTitle, normalizeProviderUsageLimit } from '../../shared/session.js';
 import type { ArtifactKind } from '../../shared/artifact.js';
 import type { ChatProvider } from '../../shared/chat-provider.js';
-import { chatErrorMessageKey } from '../../shared/chat-error.js';
+import { chatErrorMessageKey, hasChatErrorEvidence } from '../../shared/chat-error.js';
 import { continuedRequestTurn, overlappingRequestTurns, recordedRequestTurn, responseTurnId, turnOpenAt } from '../../shared/chronology.js';
 import { getConfig } from '../config.js';
 import { logInfo, logWarn } from '../logger.js';
@@ -1832,7 +1832,7 @@ export interface ChatObservation {
   providerConversationId?: string;
   providerArtifactId?: string;
   providerRevisionId?: string;
-  /** Exact response-scoped native surface captured as local revisions, without provider revision ids. */
+  /** Exact native surface captured as local revisions, without invented provider revision ids. */
   artifactNativeSurface?: string;
   artifactSnapshotStatus?: 'generating' | 'failed';
   providerParentRevisionId?: string;
@@ -2555,6 +2555,7 @@ async function recordChatObservationsNow(
         // canonical question, not that document. Keep the original notice throughout
         // recovery; a genuinely new question gives the same error a new owner.
         const usageLimit = item.blocking === true ? normalizeProviderUsageLimit(item.usageLimit, item.time) : undefined;
+        if (!hasChatErrorEvidence({ message: { text: item.text ?? '' }, usageLimit, reason: item.reason, retryAt: item.retryAt })) continue;
         const text = chatErrorMessageKey(item.text ?? '', item.recoverable === true);
         const question = item.recoverable === true ? await readLatestUserMessage(sessionId) : undefined;
         const recent = await readRecentEvents(sessionId, 32, { kinds: ['chat_error'], maxBytes: 256 * 1024 });

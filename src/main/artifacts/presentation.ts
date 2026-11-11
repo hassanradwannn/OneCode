@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ArtifactOrigin, ArtifactPresentation, ArtifactSnapshot } from '../../shared/artifact.js';
 import { chatProviderForStoredConversation } from '../../shared/chat-provider.js';
 import { appendEvent, getSession, readEvents } from '../session/store.js';
@@ -48,7 +48,16 @@ export async function requirePendingPresentation(sessionId: string, id: string, 
 }
 export async function presentArtifact(snapshot: ArtifactSnapshot, presentationId = snapshot.artifact.id): Promise<void> {
   const artifact = snapshot.artifact;
+  const nativeOrigin = snapshot.revision.source === 'provider' ? { ...artifact.origin,
+    ...(snapshot.revision.messageId ? { messageId: snapshot.revision.messageId } : {}) } : undefined;
+  if (nativeOrigin && snapshot.revision.messageId !== artifact.origin.messageId) delete nativeOrigin.turnId;
+  if (nativeOrigin && snapshot.revision.turnId) nativeOrigin.turnId = snapshot.revision.turnId;
+  if (artifact.origin.provider === 'claude' && artifact.origin.nativeSurface?.startsWith('published:') &&
+      snapshot.revision.messageId && snapshot.revision.messageId !== artifact.origin.messageId && presentationId === artifact.id) {
+    const hash = createHash('sha256').update(JSON.stringify([artifact.id, snapshot.revision.messageId])).digest('hex');
+    presentationId = `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`;
+  }
   await writePresentation(artifact.sessionId, { id: presentationId, title: artifact.title, kind: artifact.kind, provider: artifact.origin.provider,
     status: 'ready', artifactId: artifact.id, revision: snapshot.revision.revision },
-    snapshot.revision.source === 'provider' ? artifact.origin : undefined);
+    nativeOrigin);
 }

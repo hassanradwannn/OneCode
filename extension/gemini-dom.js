@@ -2013,7 +2013,7 @@ var CLF_DOM = (() => {
     // alerts stay blocking. Ordinary assistant/user prose never enters this path.
     const transport = /^(?:something went wrong(?:\. please try again(?: later)?)?|a network error occurred(?:\. please check your connection and try again)?|network error|connection (?:lost|interrupted)|unable to connect|there was a problem generating (?:a|the) response)(?:[.!])?(?: (?:try again|retry))?$/i.test(notice);
     return { node, text: notice, recoverable: transport, blocking: !transport };
-  }), ...composerUsageLimits()];
+  }).filter(notice => notice.text.length > 0), ...composerUsageLimits()];
   const conversationTitle = () => document.title.replace(/\s*[-–]\s*(?:Google )?Gemini\s*$/, '').trim();
   const composerActions = () => {
     const button = sendButton() || stopButton() || unique(all('button[aria-label^="Dictate"]'));

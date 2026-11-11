@@ -1,4 +1,4 @@
-import type { ArtifactPresentation } from '../shared/artifact.js';
+import { isProviderImportedArtifact, type ArtifactPresentation } from '../shared/artifact.js';
 import { createArtifactPreview } from './artifact-preview.js';
 import { el, icon, run } from './dom.js';
 import { t } from './i18n.js';
@@ -92,12 +92,15 @@ export function inlinePresentation(value: ArtifactPresentation, sessionId: strin
       }, { once: true });
       expand.title = t('Restore preview'); expand.setAttribute('aria-label', expand.title); expand.setAttribute('aria-expanded', 'true'); expand.replaceChildren(icon('i-dock-restore'));
       dialog.showModal();
-    }; actions.append(workbench, expand); toolbar.append(actions); row.prepend(toolbar);
+    }; actions.append(workbench, expand); toolbar.append(actions);
     void run(window.api.readArtifact(sessionId, artifactId, value.revision)).then(snapshot => {
       if (!valid()) return;
       if (!snapshot || snapshot.artifact.id !== artifactId) { stage.replaceChildren(el('p', 'meta', () => t('Artifact preview unavailable'))); return; }
-      const handle = createArtifactPreview({ parent: stage, controls: actions, files: snapshot.revision.files, entrypoint: snapshot.artifact.entrypoint, kind: snapshot.artifact.kind, origin: snapshot.artifact.origin,
-        onSize: size => row.style.setProperty('--artifact-native-width', `${size.width + 2}px`),
+      const imported = isProviderImportedArtifact(snapshot.artifact.origin);
+      if (imported) { row.classList.add('is-imported'); expand.classList.add('inline-import-expand'); row.prepend(expand); }
+      else row.prepend(toolbar);
+      const handle = createArtifactPreview({ parent: stage, controls: actions, viewportControls: !imported, files: snapshot.revision.files, entrypoint: snapshot.artifact.entrypoint, kind: snapshot.artifact.kind, origin: snapshot.artifact.origin,
+        onSize: size => { if (valid()) row.style.setProperty('--artifact-native-width', `${size.width + (imported ? 0 : 2)}px`); },
         createDocument: document => run(window.api.createArtifactPreviewDocument(sessionId, artifactId, snapshot.revision.revision, document)),
         releaseDocument: id => { void window.api.releaseArtifactPreviewDocument(sessionId, id); } });
       live.set(row, () => { retired = true; closeFullscreen(); handle.destroy(); });

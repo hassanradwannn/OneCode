@@ -1,3 +1,11 @@
+import type { ProviderUsageLimit } from './session.js';
+
+/** Empty accessibility live regions do not prove a provider failure or limit. */
+export function hasChatErrorEvidence(error: { message?: { text: string }; usageLimit?: ProviderUsageLimit; reason?: unknown; retryAt?: unknown }): boolean {
+  return Boolean(error.message?.text.trim() || error.usageLimit || error.reason === 'thinking_failed' || error.reason === 'stream_gone' ||
+    typeof error.retryAt === 'number' && Number.isFinite(error.retryAt) && error.retryAt > 0);
+}
+
 /** Equality only: retain the original provider text in the recording. */
 export function chatErrorMessageKey(text: string, recoverable = false): string {
   const normalized = text.replace(/\s+/g, ' ').trim();

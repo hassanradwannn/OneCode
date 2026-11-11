@@ -36,6 +36,7 @@ export interface PatchArtifactInput {
   entrypoint?: string;
   source: ArtifactRevisionSource;
   messageId?: string;
+  turnId?: string;
 }
 
 export interface ImportProviderArtifactRevisionInput {
@@ -69,7 +70,8 @@ export async function nativeVisualProjectionReady(sessionId: string, conversatio
     record.artifact.origin.nativeSurface === surface && record.revisions.some(revision => revision.source === 'provider')).length === 1);
 }
 function nativeSnapshotId(input: Pick<NativeSnapshotInput,'sessionId'|'provider'|'conversationId'|'messageId'|'nativeSurface'>): string {
-  const hex=createHash('sha256').update(JSON.stringify([input.sessionId,input.provider,input.conversationId,input.messageId,input.nativeSurface])).digest('hex');
+  const stable = input.provider === 'claude' && input.nativeSurface.startsWith('published:');
+  const hex=createHash('sha256').update(JSON.stringify([input.sessionId,input.provider,input.conversationId,stable ? null : input.messageId,input.nativeSurface])).digest('hex');
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-8${hex.slice(17,20)}-${hex.slice(20,32)}`;
 }
 export async function beginNativeArtifactSnapshot(input: Omit<NativeSnapshotInput,'files'|'entrypoint'>): Promise<boolean> {
@@ -96,8 +98,9 @@ export async function importProviderArtifactSnapshot(input: NativeSnapshotInput)
   if (!session || ![session.conversationId,...session.chatIds].includes(input.conversationId) || (session.conversationId && chatProviderForStoredConversation(session.conversationId) !== input.provider)) throw new Error('Native artifact snapshot session does not match its provider');
   const files = filesOf(input.files), entrypoint = normalizePath(input.entrypoint ?? files[0]!.path);
   if (!files.some(file=>file.path===entrypoint)) throw new Error('Artifact entrypoint must name one retained file');
+  const stable = input.provider === 'claude' && input.nativeSurface.startsWith('published:');
   const records = (await listArtifactRecords(input.sessionId)).filter(record=>record.artifact.origin.provider===input.provider &&
-    record.artifact.origin.conversationId===input.conversationId && record.artifact.origin.messageId===input.messageId && record.artifact.origin.nativeSurface===input.nativeSurface);
+    record.artifact.origin.conversationId===input.conversationId && (stable || record.artifact.origin.messageId===input.messageId) && record.artifact.origin.nativeSurface===input.nativeSurface);
   if(records.length>1)throw new Error('Native artifact snapshot identity is ambiguous');
   const current=records[0];
   if(!current){
@@ -110,10 +113,11 @@ export async function importProviderArtifactSnapshot(input: NativeSnapshotInput)
   const head=current.revisions.find(revision=>revision.revision===current.artifact.headRevision);
   if(!head)throw new Error('Native artifact snapshot head is unavailable');
   // An identical observed file set is a replay, even after reload. Revision numbers are local.
-  const replay=current.revisions.find(revision=>revision.source==='provider'&&revision.files.length===files.length&&files.every((file,index)=>{const prior=revision.files[index];return prior?.path===file.path&&prior.sha256===file.sha256&&prior.mimeType===file.mimeType&&prior.language===file.language}));
+  const replay=current.revisions.find(revision=>revision.source==='provider'&&(!stable||revision.messageId===input.messageId)&&revision.files.length===files.length&&files.every((file,index)=>{const prior=revision.files[index];return prior?.path===file.path&&prior.sha256===file.sha256&&prior.mimeType===file.mimeType&&prior.language===file.language}));
   if(replay)return{snapshot:{artifact:current.artifact,revision:replay},changed:false};
+  if(stable&&head.messageId!==input.messageId&&current.revisions.some(revision=>revision.messageId===input.messageId))throw new Error('An older published artifact message cannot replace a later source');
   if(head.source!=='provider')throw new Error('Native Canvas source cannot replace local edits');
-  const snapshot=await patchArtifact({sessionId:input.sessionId,artifactId:current.artifact.id,expectedRevision:current.artifact.headRevision,source:'provider',messageId:input.messageId,entrypoint,
+  const snapshot=await patchArtifact({sessionId:input.sessionId,artifactId:current.artifact.id,expectedRevision:current.artifact.headRevision,source:'provider',messageId:input.messageId,turnId:input.turnId,entrypoint,
     operations:[...head.files.filter(file=>!files.some(next=>next.path===file.path)).map(file=>({op:'delete' as const,path:file.path})),...input.files.map(file=>({op:'upsert' as const,...file}))]});
   return{snapshot,changed:true};
 }
@@ -177,7 +181,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
     title, kind: input.kind, origin: input.origin, headRevision: 1, retainedFromRevision: 1, entrypoint, createdAt: now, updatedAt: now,
     capabilities: capabilities(input.kind) };
   const revision: ArtifactRevision = { artifactId: id, revision: 1, source: input.source ?? 'model', createdAt: now, files,
-    ...(input.messageId ? { messageId: input.messageId } : {}) };
+    ...(input.messageId ? { messageId: input.messageId } : {}), ...(input.origin.turnId ? { turnId: input.origin.turnId } : {}) };
   await createArtifactRecord({ artifact, revisions: [revision] });
   await presentArtifact({ artifact, revision });
   return { artifact, revision };
@@ -314,7 +318,7 @@ export async function patchArtifact(input: PatchArtifactInput): Promise<Artifact
     if (!nextFiles.some(file => file.path === entrypoint)) throw new Error('Artifact entrypoint must name one retained file');
     const now = Date.now(), revisionNumber = current.artifact.headRevision + 1;
     const revision: ArtifactRevision = { artifactId: current.artifact.id, revision: revisionNumber, parentRevision: current.artifact.headRevision,
-      source: input.source, createdAt: now, files: nextFiles, ...(input.messageId ? { messageId: input.messageId } : {}) };
+      source: input.source, createdAt: now, files: nextFiles, ...(input.messageId ? { messageId: input.messageId } : {}), ...(input.turnId ? { turnId: input.turnId } : {}) };
     const revisions = [...current.revisions, revision].slice(-MAX_REVISIONS);
     return { artifact: { ...current.artifact, title, entrypoint, headRevision: revisionNumber, retainedFromRevision: revisions[0]!.revision, updatedAt: now }, revisions };
   });

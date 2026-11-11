@@ -4,12 +4,13 @@ import type { ControlApiEvent } from '../shared/control-api.js';
 import type { AgentPlan } from '../shared/agent-plan.js';
 import { chronological } from '../shared/chronology.js';
 import { usageLimitResetText, usageLimitTitle } from '../shared/provider-usage-limit.js';
+import { hasChatErrorEvidence } from '../shared/chat-error.js';
 import { hasProviderDirective, withoutProviderDirectives } from '../shared/content-reference.js';
 import { formatMessageContent, MESSAGE_TAGS, MESSAGE_DROP_TAGS, MAX_MESSAGE_MARKUP } from '../renderer/message-format.js';
 import { sanitizeHtmlTree } from '../renderer/sanitize-html.js';
 import { nativeMessageMarkup, stageNativeMessageContent } from '../renderer/native-message-content.js';
 import { chatProviderForStoredConversation, chatProviderConversationUrl, isBrowserChatProvider, isChatProviderConversationId } from '../shared/chat-provider.js';
-import { drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '../renderer/math.js';
+import { captureRenderedMath, drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '../renderer/math.js';
 import { renderAgentPlan } from '../renderer/agent-plan.js';
 import { RichPresentation } from './presentation.js';
 import { Icon } from './composer-controls.js';
@@ -70,6 +71,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     const template = document.createElement('template');
     const native = nativeMessageMarkup(nativeMarkup?.capture, nativeMarkup?.messageId);
     template.innerHTML = native ?? parser.parse(separateDisplayMath(source), { async: false });
+    if (native !== null) captureRenderedMath(template.content, math);
     const mountNative = stageNativeMessageContent(template.content, {
       key: JSON.stringify([sessionId, messageId]),
       copy: copyText,
@@ -153,6 +155,7 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
   const ordered = chronological(events.map(event => ({ ...event, origin: event.position })));
   const rows: Array<ControlApiEvent | ControlApiEvent[]> = [];
   for (const event of ordered) {
+    if (event.kind === 'chat_error' && !hasChatErrorEvidence(event)) continue;
     if (!event.presentation && !['user_message', 'assistant_message', 'tool_call', 'chat_error', 'native_image', 'native_video', 'progress', 'page_tool'].includes(event.kind)) continue;
     const previous = rows.at(-1);
     if (event.kind === 'tool_call' && !event.presentation) {

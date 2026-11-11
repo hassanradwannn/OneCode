@@ -22,6 +22,23 @@ const PLACEHOLDER = /(\d{1,5})/g;
 
 export interface MathSlots { formulas: Array<{ tex: string; display: boolean }> }
 
+/** Retain public KaTeX source before sanitization removes provider layout classes and MathML. */
+export function captureRenderedMath(root: ParentNode, slots: MathSlots): void {
+  for (const formula of [...root.querySelectorAll('.katex')].slice(0, 256)) {
+    if (formula.closest('pre, code, [hidden], [aria-hidden="true"]')) continue;
+    const annotations = formula.querySelectorAll('math annotation[encoding="application/x-tex"]');
+    if (annotations.length !== 1) continue;
+    const annotation = annotations[0]!;
+    if (annotation.closest('.katex') !== formula || annotation.children.length) continue;
+    const tex = annotation.textContent?.trim();
+    if (!tex || tex.length > MAX_TEX) continue;
+    const display = formula.parentElement?.classList.contains('katex-display') === true;
+    slots.formulas.push({ tex, display });
+    const target = display ? formula.parentElement! : formula;
+    target.replaceWith(root.ownerDocument!.createTextNode(`${OPEN}${slots.formulas.length - 1}${CLOSE}`));
+  }
+}
+
 const BLOCK = /^(?:\\\[([\s\S]+?)\\\]|\$\$([\s\S]+?)\$\$)[ \t]*(?:\n|$)/;
 const INLINE = /^(?:\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\]|\$\$([^\n]+?)\$\$)/;
 
