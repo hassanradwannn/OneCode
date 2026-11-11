@@ -30,8 +30,9 @@ export function hiddenNativePresentations(capture: { text: string; truncated: bo
   const template = document.createElement('template'); template.innerHTML = markup;
   const root = template.content.firstElementChild;
   if (root?.getAttribute('data-onecode-native-inventory') !== 'dil') return hidden;
-  const slots = [...root.querySelectorAll('[data-onecode-native-surface]')].map(node => node.getAttribute('data-onecode-native-surface'));
+  const excluded = root.getAttribute('data-onecode-native-excluded')?.split(',') ?? [];
+  if (excluded.length > 100 || excluded.some(surface => !/^dil:(?:0|[1-9]\d{0,2})$/.test(surface))) return hidden;
   for (const item of presentations) if (item.nativeSource?.messageId === messageId &&
-      item.nativeSource && /^dil:\d+$/.test(item.nativeSource.surface) && !slots.includes(item.nativeSource.surface)) hidden.add(item.id);
+      item.nativeSource && excluded.includes(item.nativeSource.surface)) hidden.add(item.id);
   return hidden;
 }

@@ -1252,11 +1252,13 @@
       const sourceNodes = [...block.querySelectorAll('*')];
       const transcriptNodes = [...transcript.querySelectorAll('*')];
       const slots = [];
+      const excluded = [];
       let surface = 0;
       let complete = true;
       for (const response of responses) {
         const priorCandidates = [...response.querySelectorAll('[data-d-component]')].filter(priorVisual);
         const priorSelected = priorCandidates.filter(node => !priorCandidates.some(parent => parent !== node && parent.contains(node)));
+        for (let at = 0; at < priorSelected.length; at++) if (surface + at < 100 && !visual(priorSelected[at])) excluded.push(`dil:${surface + at}`);
         const candidates = priorCandidates.filter(visual);
         const selected = candidates.filter(node => !candidates.some(parent => parent !== node && parent.contains(node)));
         for (const node of selected) {
@@ -1305,6 +1307,7 @@
         }
         const shell = document.createElement('div'); shell.setAttribute('data-onecode-rich-message', message.rawMessageId);
         if (complete) shell.setAttribute('data-onecode-native-inventory', 'dil');
+        if (excluded.length) shell.setAttribute('data-onecode-native-excluded', excluded.join(','));
         shell.append(...transcript.childNodes);
         const markup = shell.outerHTML;
         if (markup.length <= MAX_RENDERED_HTML) {
