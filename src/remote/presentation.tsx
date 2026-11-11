@@ -38,6 +38,7 @@ function InlineVideo({ sessionId, event, poster }: { sessionId: string; event: C
 export function RichPresentation({ event, sessionId, ended = false, openRequestId = null }: { event: ControlApiEvent; sessionId: string; ended?: boolean; openRequestId?: string | null }) {
   const presentation = event.presentation;
   const [image, setImage] = useState(''), [error, setError] = useState(''), [expanded, setExpanded] = useState(false);
+  const row = useRef<HTMLElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const previewControls = useRef<HTMLSpanElement>(null);
   const asset = presentation?.asset ?? event.asset;
@@ -55,12 +56,14 @@ export function RichPresentation({ event, sessionId, ended = false, openRequestI
   useEffect(() => {
     if (!presentation?.artifactId || generating || !stage.current) return;
     setError('');
+    row.current?.style.removeProperty('--artifact-native-width');
     let alive = true; let handle: ReturnType<typeof createArtifactPreview> | undefined;
     const artifactId = presentation.artifactId, parent = stage.current;
     void request<ArtifactSnapshot | null>(`sessions/${sessionId}/artifacts/${artifactId}?revision=${presentation.revision ?? 1}`).then(snapshot => {
       if (!alive) return;
       if (!snapshot) { setError('Artifact preview unavailable'); return; }
       handle = createArtifactPreview({ parent, controls: previewControls.current ?? undefined, files: snapshot.revision.files, kind: snapshot.artifact.kind, entrypoint: snapshot.artifact.entrypoint, origin: snapshot.artifact.origin,
+        onSize: size => { if (alive) row.current?.style.setProperty('--artifact-native-width', `${size.width + 2}px`); },
         createDocument: document => request<{ id: string; url: string }>('previews', { sessionId, artifactId, revision: snapshot.revision.revision, document }),
         releaseDocument: id => { void request('previews/release', { id }).catch(() => undefined); } });
     }).catch(error => alive && setError(error.message));
@@ -68,7 +71,7 @@ export function RichPresentation({ event, sessionId, ended = false, openRequestI
   }, [sessionId, presentation?.artifactId, presentation?.revision, generating]);
   if (generating) return <div className={`generation-placeholder ${ended ? 'is-interrupted' : ''}`} role="status" aria-busy={!ended} aria-label={ended ? 'Generation interrupted' : 'Generating'} title={ended ? 'Generation interrupted' : 'Generating'} />;
   if (presentation?.status === 'failed') return <p role="status">Generation failed</p>;
-  return <section className={`rich-presentation ${expanded ? 'is-expanded' : ''}`}>
+  return <section ref={row} className={`rich-presentation ${expanded ? 'is-expanded' : ''}`}>
     {presentation?.artifactId && <header><strong>{presentation.title}</strong><span className="rich-preview-actions"><span ref={previewControls} /><button type="button" aria-label={expanded ? 'Collapse preview' : 'Expand preview'} onClick={() => setExpanded(value => !value)}><Icon name={expanded ? 'collapse' : 'expand'} /></button></span></header>}
     {event.kind === 'native_video' || presentation?.kind === 'video' ? <InlineVideo sessionId={sessionId} event={event} poster={image} /> : image && <img src={image} alt={presentation?.title ?? 'Generated image'} />}
     {event.kind === 'native_image' && !asset && <p role="status">Image preview unavailable</p>}
