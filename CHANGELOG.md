@@ -1,5 +1,13 @@
 # OneCode changelog
 
+## [1.1.1] — 2026-11-12
+
+Place browser-imported visuals at their exact native reply positions, avoid duplicate plaintext in long replies, and exclude document-reference icons from visual capture. Preserve public document links, OpenRouter behavior and interactive Remote state across history refreshes. See [1.1.1 notes](docs/release-notes/v1.1.1.md).
+
+## [1.1.0] — 2026-11-11
+
+Preserve native visual styling, complete code, formulas and browser artifacts, with centered previews and revision-aware Claude imports. See [1.1.0 notes](docs/release-notes/v1.1.0.md).
+
 ## [1.0.81] — 2026-11-11
 
 Ship the ChatGPT-generated diagram support as a direct application update for Windows installations using the compatible 0.5.9 complete base and Linux installations using the compatible 1.0.7 base. See [1.0.81 notes](docs/release-notes/v1.0.81.md).

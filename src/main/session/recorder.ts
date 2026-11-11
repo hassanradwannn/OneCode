@@ -85,7 +85,7 @@ import {
 import { RESUME_CLAIM_WINDOW_MS, resumeOpeningChat } from './resume-gate.js';
 import { summarizeToolCall, toolResultHeadline } from './summarize.js';
 import type { GeminiInputTurn } from '../gemini/bindings.js';
-import { beginNativeArtifactSnapshot, failNativeArtifactSnapshot, importProviderArtifactRevision, importProviderArtifactSnapshot, nativeVisualProjectionReady } from '../artifacts/service.js';
+import { beginNativeArtifactSnapshot, failNativeArtifactSnapshot, importProviderArtifactRevision, importProviderArtifactSnapshot, nativeVisualProjectionReady, prepareNativeVisualProjection } from '../artifacts/service.js';
 
 interface LiveConversation {
   conversationId: string;
@@ -2244,8 +2244,7 @@ async function recordSupersededMessages(
           final: state === 'final'
         },
         { preferTime: item.authoredTime === true, activeContent: item.activeNow === true,
-          renderedProjection: item.nativeVisualSurfaces?.length && item.providerMessageId && item.renderedHtml
-            ? await nativeVisualProjectionReady(sessionId, conversationId, item.providerMessageId, item.nativeVisualSurfaces) : false }
+          renderedProjection: await nativeDisplayProjection(sessionId, conversationId, item) }
       );
     } else if (item.kind === 'native_image') {
       stored += await recordNativeImage(sessionId, item, base);
@@ -2291,6 +2290,13 @@ async function recordProviderArtifact(sessionId: string, conversationId: string,
     createdAt: item.time
   });
   return result.changed ? 1 : 0;
+}
+
+async function nativeDisplayProjection(sessionId: string, conversationId: string, item: ChatObservation): Promise<boolean> {
+  const id = item.providerMessageId ?? item.messageId;
+  if (!item.renderedHtml || !id) return false;
+  if (await prepareNativeVisualProjection(sessionId, conversationId, id, item.renderedHtml)) return true;
+  return !!item.nativeVisualSurfaces?.length && await nativeVisualProjectionReady(sessionId, conversationId, id, item.nativeVisualSurfaces);
 }
 
 async function recordChatObservationsNow(
@@ -2441,8 +2447,7 @@ async function recordChatObservationsNow(
           ...(item.references ? { references: item.references } : {}),
           ...(goalEligible && state === 'final' ? { goalEligible: true } : {})
         }, { preferTime: item.authoredTime === true, work: item.activeNow === true, activeContent: item.activeNow === true,
-          renderedProjection: item.nativeVisualSurfaces?.length && item.providerMessageId && item.renderedHtml
-            ? await nativeVisualProjectionReady(sessionId, conversationId, item.providerMessageId, item.nativeVisualSurfaces) : false });
+          renderedProjection: await nativeDisplayProjection(sessionId, conversationId, item) });
         const canonicalTurn = written.event.turnId;
         // A stopped partial answer stays streaming in history. Re-observing its
         // DOM after restart cannot renew work, nor can an old message borrow a

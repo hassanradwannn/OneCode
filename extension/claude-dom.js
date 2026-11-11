@@ -148,8 +148,12 @@ var CLF_DOM = (() => {
   const nativeQuestionKey = () => turns().filter(row => row.role === 'user').map(row => row.id).join('\u0000');
   const proseNodes = root => all('[data-cds="Prose"]', root).filter(node => !node.parentElement?.closest('[data-cds="Prose"]') &&
     !node.closest('[data-cds="TurnStatus"],[data-find-omitted],button') && shown(node));
-  const richMessageNodes = message => message.role === 'assistant' && message.node?.isConnected &&
-    turnIdOf(message.node) === message.id ? proseNodes(message.node) : [];
+  const richMessageNodes = message => {
+    if (message.role !== 'assistant' || !message.node?.isConnected || turnIdOf(message.node) !== message.id) return [];
+    const roots = [...new Set([...proseNodes(message.node), ...nativeArtifactNodes(message).map(item => item.node)])];
+    return roots.filter(node => !roots.some(parent => parent !== node && parent.contains(node)))
+      .sort((a,b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+  };
   function messagesIn(turn, _index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id || turn.id !== turnIdOf(turn.node) || seen.has(turn.id)) return [];
     const images = turn.role === 'user' ? userImages(turn.node) : [];
@@ -699,6 +703,19 @@ var CLF_DOM = (() => {
         messageId: `${conversationId()}:assistant:${widget.message}`, nativeSurface: `widget:${widget.toolUseId}`,
         title: widget.title, kind: 'web', entrypoint: 'widget.html' }))] : [] });
   const capturedFiles = new WeakMap();
+  const nativeArtifactNodes = message => {
+    if (!nativeFiles || nativeFiles.route !== location.pathname || message.role !== 'assistant' ||
+        !message.node?.isConnected || turnIdOf(message.node) !== message.id) return [];
+    const rows = [
+      ...nativeFiles.cards.map(card => ({ node: fileCardNode(card), message: card.message,
+        surface: card.frameId ? `published:${card.frameId.toLowerCase()}` : `artifact:${card.path}`, title: card.title || card.name })),
+      ...(nativeFiles.widgets || []).map(widget => ({ node: widgetNode(widget), message: widget.message,
+        surface: `widget:${widget.toolUseId}`, title: widget.title })),
+      ...(nativeFiles.diagrams || []).map(diagram => ({ node: diagramNode(diagram), message: diagram.message,
+        surface: `mermaid:${diagram.index}`, title: 'Mermaid diagram' }))
+    ];
+    return rows.filter(row => `${conversationId()}:assistant:${row.message}` === message.id && row.node && message.node.contains(row.node) && shown(row.node));
+  };
   async function readNativeArtifacts(current) {
     const first = await readNativeFiles(current); if (!first || !current()) return [];
     const widgets = first.widgets.filter(widget => !widget.streaming && widgetNode(widget) &&
@@ -914,7 +931,7 @@ var CLF_DOM = (() => {
     projectHomeId: () => null, projectCreateControl: () => null, projectCreateForm: () => null, projectIdsShown: () => [],
     revealSidebar: () => false, fillProjectName: () => false, enterProject: async () => false,
     pluginRefreshView: async () => null, pluginInstalledButtons: () => null, pluginManagementIdle: () => false,
-    nativeOutputs, readNativeArtifacts, richMessageNodes,
+    nativeOutputs, readNativeArtifacts, richMessageNodes, nativeArtifactNodes,
     pageTheme: () => document.documentElement.classList.contains('dark') || getComputedStyle(document.documentElement).colorScheme === 'dark' ? 'dark' : 'light',
     clearRevivalResidue: () => false, progressLine: () => null, progressItems: () => [], interrupted: () => false, markProgress: () => {},
     toolBlocks: () => [], activityItems: () => [], isConnectorBlock: () => false, markLocalBlock: () => {}, hasConnectorRow: () => false,

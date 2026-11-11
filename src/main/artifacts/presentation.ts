@@ -14,6 +14,8 @@ export async function findPresentation(sessionId: string, id: string) {
     Extract<Awaited<ReturnType<typeof readEvents>>[number], { kind: 'progress' }> | undefined;
 }
 export async function writePresentation(sessionId: string, value: ArtifactPresentation, nativeOrigin?: ArtifactOrigin): Promise<void> {
+  const surface = nativeOrigin?.nativeSurface ?? (nativeOrigin?.providerArtifactId ? `artifact:${nativeOrigin.providerArtifactId}` : undefined);
+  if (nativeOrigin?.messageId && surface) value = { ...value, nativeSource: { messageId: nativeOrigin.messageId, surface } };
   await serial(`${sessionId}:${value.id}`, async () => {
     const session = await getSession(sessionId);
     if (!session || session.conversationId && chatProviderForStoredConversation(session.conversationId) !== value.provider) throw new Error('Presentation does not match its session provider');

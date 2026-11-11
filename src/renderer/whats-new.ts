@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.1': {
+    lead: () => t('Keep imported visuals in their original place in the answer.'),
+    highlights: [
+      { icon: 'i-chart', title: () => t('Preserve the order of browser imports'), text: () => t('Native visuals, diagrams and artifact cards appear between their surrounding paragraphs on Desktop and Remote.') },
+      { icon: 'i-chat', title: () => t('Show imported content once'), text: () => t('A saved preview replaces its exact native visual instead of repeating its labels as plain text. Long replies retain their structured capture.') },
+      { icon: 'i-file', title: () => t('Keep document references separate'), text: () => t('Browser document-reference chips are not diagrams. Public document links and OpenRouter references remain available.') }
+    ]
+  },
   '1.1.0': {
     lead: () => t('Styled previews, complete code blocks, and native artifact imports.'),
     highlights: [

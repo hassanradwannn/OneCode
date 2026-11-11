@@ -61,6 +61,18 @@ export interface ImportProviderArtifactRevisionResult {
 }
 
 type NativeSnapshotInput = Omit<ImportProviderArtifactRevisionInput, 'providerArtifactId' | 'providerRevisionId' | 'providerParentRevisionId'> & {nativeSurface: string};
+/** Upgrade display provenance of already retained snapshots; source/history bytes are unchanged. */
+export async function prepareNativeVisualProjection(sessionId: string, conversationId: string, messageId: string, markup: string): Promise<boolean> {
+  if (!/data-onecode-native-(?:surface|inventory)=/.test(markup) || chatProviderForStoredConversation(conversationId) === 'openrouter') return false;
+  for (const record of await listArtifactRecords(sessionId)) {
+    const origin = record.artifact.origin;
+    if (origin.conversationId !== conversationId || !origin.nativeSurface && !origin.providerArtifactId) continue;
+    const revision = record.revisions.find(row => row.revision === record.artifact.headRevision);
+    if (!revision || revision.source !== 'provider' || (revision.messageId ?? origin.messageId) !== messageId) continue;
+    await presentArtifact({ artifact: record.artifact, revision });
+  }
+  return true;
+}
 /** A display projection may omit only visuals already retained under this exact public reply. */
 export async function nativeVisualProjectionReady(sessionId: string, conversationId: string, messageId: string, surfaces: readonly string[]): Promise<boolean> {
   if (!surfaces.length || surfaces.length > 16 || surfaces.some(surface => !/^dil:(?:0|[1-9]\d{0,2})$/.test(surface))) return false;
@@ -114,7 +126,12 @@ export async function importProviderArtifactSnapshot(input: NativeSnapshotInput)
   if(!head)throw new Error('Native artifact snapshot head is unavailable');
   // An identical observed file set is a replay, even after reload. Revision numbers are local.
   const replay=current.revisions.find(revision=>revision.source==='provider'&&(!stable||revision.messageId===input.messageId)&&revision.files.length===files.length&&files.every((file,index)=>{const prior=revision.files[index];return prior?.path===file.path&&prior.sha256===file.sha256&&prior.mimeType===file.mimeType&&prior.language===file.language}));
-  if(replay)return{snapshot:{artifact:current.artifact,revision:replay},changed:false};
+  if(replay){
+    const snapshot={artifact:current.artifact,revision:replay};
+    // A pre-placement snapshot can acquire exact display provenance without changing its source revision.
+    await presentArtifact(snapshot);
+    return{snapshot,changed:false};
+  }
   if(stable&&head.messageId!==input.messageId&&current.revisions.some(revision=>revision.messageId===input.messageId))throw new Error('An older published artifact message cannot replace a later source');
   if(head.source!=='provider')throw new Error('Native Canvas source cannot replace local edits');
   const snapshot=await patchArtifact({sessionId:input.sessionId,artifactId:current.artifact.id,expectedRevision:current.artifact.headRevision,source:'provider',messageId:input.messageId,turnId:input.turnId,entrypoint,

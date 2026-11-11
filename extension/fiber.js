@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 41;
+  const VERSION = 42;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -1136,8 +1136,12 @@
     ]);
     const drop = 'script,style,iframe,object,embed,link,meta,base,video,audio,canvas,[hidden],[aria-hidden="true"],[data-code-block-controls],[data-markdown-copy="exclude"]';
     const controls = 'details,summary';
+    const references = 'a,[role="link"],[data-testid="chatgpt-citation"],[data-citation-id],[data-citation-index],[data-client-defined-widget*="citation"],[data-client-defined-widget*="reference"],[data-d-component="popover-trigger"]';
     const visual = node => {
       if (!node || node.closest('[data-client-defined-widget="code_block"]')) return false;
+      // Link/citation chrome (including document icons) is not an authored visual.
+      // Keep its surrounding prose in the transcript; never snapshot it as a diagram.
+      if (node.matches(references) || node.closest(references)) return false;
       // Media relays and portable reply controls have their own import owners.
       // Exporting an ancestor would replace those working surfaces with inert
       // images/buttons after provider URLs and event handlers are removed.
@@ -1147,9 +1151,21 @@
       if (style.gridTemplateColumns || style.gridTemplateRows || style.aspectRatio ||
           style.display === 'grid' || style.display === 'inline-grid') return true;
       if (node.isConnected && /^(?:inline-)?grid$/.test(getComputedStyle(node).display)) return true;
-      if (node.querySelector(controls + ',svg')) return true;
-      const painted = node.querySelectorAll('[style*="background-color"],[style*="flex-grow"],[style*="aspect-ratio"]');
+      if (node.querySelector(controls) || [...node.querySelectorAll('svg')].some(svg =>
+        svg.getAttribute('data-d-component') !== 'icon' && !svg.closest(references))) return true;
+      const painted = [...node.querySelectorAll('[style*="background-color"],[style*="flex-grow"],[style*="aspect-ratio"]')].filter(child => !child.closest(references));
       return painted.length >= 2;
+    };
+    // Keep the established response-local ordinals when excluding old citation false positives.
+    // Existing retained diagrams must not inherit another surface's immutable identity.
+    const priorVisual = node => {
+      if (!node || node.closest('[data-client-defined-widget="code_block"]') ||
+          node.matches('button,input,select,textarea,img,iframe,canvas,video,audio') ||
+          node.querySelector('button,input,select,textarea,img,iframe,canvas,video,audio')) return false;
+      const style = node.style;
+      return Boolean(style.gridTemplateColumns || style.gridTemplateRows || style.aspectRatio ||
+        /^(?:inline-)?grid$/.test(style.display) || node.isConnected && /^(?:inline-)?grid$/.test(getComputedStyle(node).display) ||
+        node.querySelector(controls + ',svg') || node.querySelectorAll('[style*="background-color"],[style*="flex-grow"],[style*="aspect-ratio"]').length >= 2);
     };
     const safeStyle = node => {
       const kept = [];
@@ -1225,7 +1241,7 @@
       return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{color-scheme:dark;font:14px/1.4 system-ui,sans-serif;background:#171717;color:#ededed}body{margin:0;padding:12px;overflow:auto}*,*:before,*:after{box-sizing:border-box}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea,details{max-width:100%}${rules}</style></head><body>${body}${script}</body></html>`;
     };
     for (const message of renderedMessages || []) {
-      if (out.length >= MAX_PROVIDER_DIL_SURFACES || message?.role !== 'assistant' || !message.rawMessageId || !message.renderedHtml) continue;
+      if (out.length >= MAX_PROVIDER_DIL_SURFACES || message?.role !== 'assistant' || !message.rawMessageId) continue;
       // Positional/text decoration is insufficient for importing or suppressing a
       // visual. Only the exact mounted native message may supply its styles.
       const blocks = [...exactAnchors].filter(([, id]) => id === message.rawMessageId).map(([block]) => block);
@@ -1235,32 +1251,62 @@
       const transcript = block.cloneNode(true);
       const sourceNodes = [...block.querySelectorAll('*')];
       const transcriptNodes = [...transcript.querySelectorAll('*')];
-      const removed = [];
+      const slots = [];
       let surface = 0;
+      let complete = true;
       for (const response of responses) {
-        const candidates = [...response.querySelectorAll('[data-d-component]')].filter(visual);
+        const priorCandidates = [...response.querySelectorAll('[data-d-component]')].filter(priorVisual);
+        const priorSelected = priorCandidates.filter(node => !priorCandidates.some(parent => parent !== node && parent.contains(node)));
+        const candidates = priorCandidates.filter(visual);
         const selected = candidates.filter(node => !candidates.some(parent => parent !== node && parent.contains(node)));
         for (const node of selected) {
-          if (out.length >= MAX_PROVIDER_DIL_SURFACES || surface >= 100) break;
+          const ordinal = priorSelected.indexOf(node);
+          if (ordinal < 0 || out.length >= MAX_PROVIDER_DIL_SURFACES || surface + ordinal >= 100) { complete = false; continue; }
           const text = clean(node);
-          if (!text || text.length > MAX_PROVIDER_ARTIFACT_TEXT) continue;
+          if (!text || text.length > MAX_PROVIDER_ARTIFACT_TEXT) { complete = false; continue; }
           out.push({
             messageId: message.rawMessageId,
-            nativeSurface: `dil:${surface++}`,
+            nativeSurface: `dil:${surface + ordinal}`,
             title: 'Interactive content',
             kind: 'web', entrypoint: 'index.html',
             files: [{ path: 'index.html', text, mimeType: 'text/html', language: 'html' }],
             order: message.order, createTime: message.createTime
           });
           const at = sourceNodes.indexOf(node);
-          if (at >= 0) removed.push(transcriptNodes[at]);
+          if (at >= 0) slots.push({ node: transcriptNodes[at], surface: `dil:${surface + ordinal}` });
         }
+        surface += priorSelected.length;
       }
       // Canonical rawText stays intact for export/copy and exact completion proof.
-      // The display capture omits only islands successfully exported above.
-      if (removed.length) {
-        for (const node of removed) node.remove();
-        const markup = transcript.innerHTML;
+      // Retain an exact DOM slot and fallback until its immutable preview is ready.
+      // Compact provider chrome rather than flattening a long reply into innerText.
+      if (slots.length || surface && complete) {
+        for (const slot of slots) slot.node.setAttribute('data-onecode-native-surface', slot.surface);
+        // Native prose can express emphasis through classes rather than semantic tags.
+        // Carry only bold/italic meaning across the host's CSS-stripping sanitizer.
+        for (let at = 0; at < sourceNodes.length; at++) {
+          const original = sourceNodes[at], copy = transcriptNodes[at];
+          if (!original.matches('[data-d-component="text"]') || !copy || !transcript.contains(copy) ||
+              copy.closest('pre,code,[data-onecode-native-surface]')) continue;
+          const style = getComputedStyle(original), parent = original.parentElement && getComputedStyle(original.parentElement);
+          const weight = value => value === 'bold' ? 700 : Number(value) || 400;
+          const tags = [];
+          if (!original.matches('strong,b,h1,h2,h3,h4,h5,h6,th') && weight(style.fontWeight) >= 600 && weight(parent?.fontWeight) < 600) tags.push('strong');
+          if (!original.matches('em,i') && /italic|oblique/.test(style.fontStyle) && !/italic|oblique/.test(parent?.fontStyle || '')) tags.push('em');
+          for (const tag of tags) { const mark = document.createElement(tag); mark.append(...copy.childNodes); copy.append(mark); }
+        }
+        for (const node of [...transcript.querySelectorAll('script,style,iframe,object,embed,template,[hidden],[aria-hidden="true"],[data-code-block-controls],[data-markdown-copy="exclude"]')]) node.remove();
+        const attrs = new Set(['dir','href','src','alt','title','role','colspan','rowspan','type','value','min','max','id','for','style',
+          'data-onecode-native-surface','data-dil-response','data-dil-source-message-id','data-d-component','data-client-defined-widget',
+          'data-code-block-source','data-chatgpt-copy-code','data-copy-text','data-language','aria-labelledby','aria-valuemin','aria-valuemax','aria-valuenow']);
+        for (const node of transcript.querySelectorAll('*')) for (const attr of [...node.attributes]) {
+          if (attr.name === 'class' && node.tagName === 'CODE' && /^(?:language-[a-z0-9_+#.-]{1,24})$/i.test(attr.value)) continue;
+          if (!attrs.has(attr.name) || attr.name === 'style' && attr.value.length > 1000) node.removeAttribute(attr.name);
+        }
+        const shell = document.createElement('div'); shell.setAttribute('data-onecode-rich-message', message.rawMessageId);
+        if (complete) shell.setAttribute('data-onecode-native-inventory', 'dil');
+        shell.append(...transcript.childNodes);
+        const markup = shell.outerHTML;
         if (markup.length <= MAX_RENDERED_HTML) {
           message.renderedHtml = markup;
           message.nativeVisualSurfaces = out.filter(artifact => artifact.messageId === message.rawMessageId).map(artifact => artifact.nativeSurface);

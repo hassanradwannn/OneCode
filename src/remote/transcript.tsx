@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
 import type { AgentPlan } from '../shared/agent-plan.js';
@@ -9,6 +10,7 @@ import { hasProviderDirective, withoutProviderDirectives } from '../shared/conte
 import { formatMessageContent, MESSAGE_TAGS, MESSAGE_DROP_TAGS, MAX_MESSAGE_MARKUP } from '../renderer/message-format.js';
 import { sanitizeHtmlTree } from '../renderer/sanitize-html.js';
 import { nativeMessageMarkup, stageNativeMessageContent } from '../renderer/native-message-content.js';
+import { nativeArtifactBindings, hiddenNativePresentations } from '../renderer/native-artifact-slots.js';
 import { chatProviderForStoredConversation, chatProviderConversationUrl, isBrowserChatProvider, isChatProviderConversationId } from '../shared/chat-provider.js';
 import { captureRenderedMath, drawMath, mathExtensions, separateDisplayMath, type MathSlots } from '../renderer/math.js';
 import { renderAgentPlan } from '../renderer/agent-plan.js';
@@ -54,9 +56,12 @@ function UserImages({ sessionId, event }: { sessionId: string; event: ControlApi
   if (!assets.length) return <div className="user-images"><span className="user-image-unavailable" role="status">Image unavailable</span></div>;
   return <div className="user-images">{assets.map((asset, index) => <UserImage key={asset.id} sessionId={sessionId} assetId={asset.id} index={index} onOpen={src => setPreview({ src, index })} />)}{preview && <div className="attachment-preview-backdrop" role="presentation" onClick={() => setPreview(null)}><section className="attachment-preview" role="dialog" aria-modal="true" aria-label={`Preview image ${preview.index + 1}`} onClick={event => event.stopPropagation()}><header><strong>{`Image ${preview.index + 1}`}</strong><button type="button" aria-label="Close image preview" onClick={() => setPreview(null)} autoFocus>×</button></header><img src={preview.src} alt="User attachment" /></section></div>}</div>;
 }
-export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl }: { text: string; sessionId?: string | null;
-  messageId?: string; nativeMarkup?: ControlApiEvent['nativeMarkup']; originalUrl?: string }) {
+export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl, inlineEvents, openRequestId, ended }: { text: string; sessionId?: string | null;
+  messageId?: string; nativeMarkup?: ControlApiEvent['nativeMarkup']; originalUrl?: string;
+  inlineEvents?: ControlApiEvent[]; openRequestId?: string | null; ended?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
+  const [mounts, setMounts] = useState<Array<{ host: HTMLElement; event: ControlApiEvent }>>([]);
+  const inlineKey = JSON.stringify(inlineEvents?.map(row => [row.presentation, row.position]));
   useEffect(() => {
     const box = host.current; if (!box) return;
     const abort = new AbortController();
@@ -70,11 +75,20 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     }] });
     const template = document.createElement('template');
     const native = nativeMessageMarkup(nativeMarkup?.capture, nativeMarkup?.messageId);
+    const bindings = nativeArtifactBindings(nativeMarkup?.capture, nativeMarkup?.messageId,
+      (inlineEvents ?? []).flatMap(row => row.presentation ? [row.presentation] : []));
+    const nextMounts: Array<{ host: HTMLElement; event: ControlApiEvent }> = [];
     template.innerHTML = native ?? parser.parse(separateDisplayMath(source), { async: false });
     if (native !== null) captureRenderedMath(template.content, math);
     const mountNative = stageNativeMessageContent(template.content, {
       key: JSON.stringify([sessionId, messageId]),
       copy: copyText,
+      artifact: surface => {
+        const presentation = bindings.get(surface);
+        const event = presentation && inlineEvents?.find(row => row.presentation?.id === presentation.id);
+        if (!event) return null;
+        const mount = document.createElement('div'); nextMounts.push({ host: mount, event }); return mount;
+      },
       ...(sessionId && messageId ? { loadImage: async (url: string) =>
         (await request<{ image: string | null }>('reply-image', { sessionId, messageId, url }, abort.signal)).image } : {}),
       ...(originalUrl ? { openOriginal: () => { window.open(originalUrl, '_blank', 'noopener,noreferrer'); } } : {})
@@ -88,6 +102,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
       safeHref: value => { const href = value.trim(); return href.startsWith('#') || safeExternalLink(href) || safeProviderFileLink(href) ? href : null; } });
     mountNative();
     box.replaceChildren(template.content);
+    setMounts(nextMounts);
     if (!box.textContent?.trim() && source && native === null) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
     let disposed = false;
@@ -119,8 +134,11 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
       if (!sessionId || !messageId) { link.setAttribute('aria-disabled', 'true'); notice.textContent = 'This file’s recorded source is unavailable.'; }
     }
     return () => { disposed = true; abort.abort(); };
-  }, [text, sessionId, messageId, nativeMarkup, originalUrl]);
-  return <div ref={host} className="msg rich" dir="auto" />;
+  }, [text, sessionId, messageId, nativeMarkup?.messageId, nativeMarkup?.capture.text,
+    nativeMarkup?.capture.truncated, originalUrl, inlineKey]);
+  return <><div ref={host} className="msg rich" dir="auto" />{sessionId && mounts.map(item => createPortal(
+    <RichPresentation event={item.event} sessionId={sessionId} openRequestId={openRequestId ?? null} ended={ended} />,
+    item.host, item.event.presentation?.id))}</>;
 }
 export function CurrentPlan({ sessionId, plan }: { sessionId: string | null; plan?: AgentPlan | null }) {
   const host = useRef<HTMLDivElement>(null);
@@ -153,8 +171,12 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
   const originalUrl = provider && isBrowserChatProvider(provider) && isChatProviderConversationId(conversationId, provider)
     ? chatProviderConversationUrl(provider, conversationId) : undefined;
   const ordered = chronological(events.map(event => ({ ...event, origin: event.position })));
+  const presentations = ordered.flatMap(row => row.presentation ? [row.presentation] : []);
+  const inlineIds = new Set(ordered.flatMap(row => row.kind === 'assistant_message' && row.final
+    ? [...hiddenNativePresentations(row.nativeMarkup?.capture, row.nativeMarkup?.messageId, presentations)] : []));
   const rows: Array<ControlApiEvent | ControlApiEvent[]> = [];
   for (const event of ordered) {
+    if (event.presentation && inlineIds.has(event.presentation.id)) continue;
     if (event.kind === 'chat_error' && !hasChatErrorEvidence(event)) continue;
     if (!event.presentation && !['user_message', 'assistant_message', 'tool_call', 'chat_error', 'native_image', 'native_video', 'progress', 'page_tool'].includes(event.kind)) continue;
     const previous = rows.at(-1);
@@ -166,6 +188,10 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
     if (Array.isArray(row)) return <ToolGroup key={`tools:${row[0]!.position}`} events={row} />;
     const rawText = row.message?.text ?? row.detail ?? '';
     const text = row.kind === 'assistant_message' && hasProviderDirective(rawText) ? withoutProviderDirectives(rawText) : rawText;
+    const inline = row.kind === 'assistant_message'
+      ? nativeArtifactBindings(row.nativeMarkup?.capture, row.nativeMarkup?.messageId, presentations) : new Map();
+    const inlineEvents = row.kind === 'assistant_message' ? ordered.filter(event => event.presentation &&
+      [...inline.values()].some(item => item.id === event.presentation?.id)) : undefined;
     if (row.kind === 'assistant_message' && !text.trim() && !row.nativeMarkup) return null;
     if (!row.presentation && ['progress', 'page_tool'].includes(row.kind)) return <div className="activity-row" key={row.position}><Icon name="check-circle" /><span>{text || row.label || 'Working'}</span></div>;
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
@@ -174,7 +200,9 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
         : row.kind === 'user_message' ? <><UserImages sessionId={sessionId} event={row} /><div className="msg" dir="auto"><AuthoredText text={text} /></div></> : <>
           {row.kind === 'chat_error' && row.usageLimit && <><strong>{usageLimitTitle(row.usageLimit)}</strong><p>{usageLimitResetText(row.usageLimit) ? `Reset reported: ${usageLimitResetText(row.usageLimit)}. Retry manually when access is available.` : 'The provider did not report a reset time. Retry manually when access is available.'}</p></>}
           <Markdown text={text} sessionId={sessionId} messageId={row.kind === 'assistant_message' ? row.messageId : undefined}
-            nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
+            nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} openRequestId={openRequestId}
+            ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)}
+            inlineEvents={inlineEvents} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
     </article>;
   })}</>;
 }

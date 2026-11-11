@@ -4,7 +4,7 @@ import { sanitizeHtmlTree } from './sanitize-html.js';
 
 type Capture = { text: string; truncated: boolean };
 export type NativeMessageActions = { key: string; copy(value: string): Promise<boolean>; openOriginal?(): void;
-  loadImage?(url: string): Promise<string | null> };
+  loadImage?(url: string): Promise<string | null>; artifact?(surface: string): HTMLElement | null };
 type Criterion = { label: string; max: number; values: number[] };
 type Scorecard = { names: string[]; labels: string[]; criteria: Criterion[] };
 type ScoreState = { names: string[]; scores: number[][] };
@@ -302,6 +302,11 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
   const responses = nativeCapture ? [...fragment.querySelectorAll('[data-dil-response], [data-onecode-rich-message]')] : [];
   const visible = (node: Element) => !node.closest('[hidden], [aria-hidden="true"], script, style, pre, code, svg, template');
   for (const response of responses) {
+    for (const node of [...response.querySelectorAll('[data-onecode-native-surface]')]) {
+      if (!visible(node) || !fragment.contains(node) || node.parentElement?.closest('[data-onecode-native-surface]')) continue;
+      const view = options.artifact?.(node.getAttribute('data-onecode-native-surface') || '');
+      if (view) stage(node, view);
+    }
     if (options.loadImage) {
       for (const grid of response.querySelectorAll('[data-d-component="grid"]')) {
         if (grid.children.length < 2 || grid.children.length > 8 || !visible(grid) || !fragment.contains(grid)) continue;

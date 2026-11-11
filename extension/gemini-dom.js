@@ -449,8 +449,16 @@ var CLF_DOM = (() => {
   const richMessageNodes = message => {
     if (message.role !== 'assistant' || !message.node?.isConnected || nativeId(message.node, 'assistant') !== message.id) return [];
     const node = messageNode(message);
-    return node ? [node] : [];
+    const roots = [...new Set([...(node ? [node] : []), ...nativeArtifactNodes(message).map(item => item.node)])];
+    return roots.filter(node => !roots.some(parent => parent !== node && parent.contains(node)))
+      .sort((a,b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
   };
+  function nativeArtifactNodes(message) {
+    const entries = nativeCanvasEntries([message]);
+    if (entries.length !== 1) return [];
+    const cards = all('immersive-entry-chip inline-preview', message.node);
+    return cards.length === 1 ? [{ node: cards[0].closest('immersive-entry-chip'), surface: 'canvas', title: entries[0].title }] : [];
+  }
   function messagesIn(turn, index = 0, seen = new Set()) {
     if (!turn?.node?.isConnected || !turn.id) return [];
     const node = messageNode(turn), id = turn.id;
@@ -2023,7 +2031,7 @@ var CLF_DOM = (() => {
   return {
     provider: 'gemini', TURN_SELECTOR: TURN, AUTHORED_SELECTOR: 'message-content,.query-text',
     conversationFromPath, isAppHomePath, conversationId, conversationTitle, turnIdOf, messageIdOf, turns, presentationTurns: turns, messages, messagesIn, messageComplete, completedResponseReceipt, recoveryTerminalReceipt,
-    nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts, richMessageNodes,
+    nativeOutputs, nativeImageNode, exportNativeImage, nativeVideoNode, nativeVideoDescriptorCurrent, readNativeArtifacts, richMessageNodes, nativeArtifactNodes,
     sectionSignature: node => `${turnIdOf(node) || ''}:${text(node).length}`, composer, composerBox, composerWritable,
     composerVisible: () => shown(composer()), composerSubmitReady, composerAuthoredText, composerActions,
     composerStack: () => { const box = composerBox(); return box?.parentElement ? { host: box.parentElement, before: box } : null; },

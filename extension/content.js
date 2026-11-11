@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 145;
+  const RECORDER_VERSION = 146;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -2773,20 +2773,29 @@
    */
   function portableMessageMarkup(message) {
     const roots = CLF_DOM.richMessageNodes?.(message) ?? [];
+    const artifacts = (CLF_DOM.nativeArtifactNodes?.(message) ?? []).slice(0, 16);
     const controls = 'input[type="range"], [role="slider"], button[data-copy-text]';
-    if (!roots.some(root => root.querySelector(controls))) return '';
+    if (!artifacts.length && !roots.some(root => root.querySelector(controls))) return '';
     // Use only the adapter's exact visible answer body. Carry portable values
     // and structure, never provider handlers, widget frames or URLs from controls.
     const shell = document.createElement('div');
     shell.setAttribute('data-onecode-rich-message', message.id);
     for (const root of roots) {
-      const copy = root.cloneNode(true);
+      let copy = root.cloneNode(true);
+      const originals = [root, ...root.querySelectorAll('*')], copies = [copy, ...copy.querySelectorAll('*')];
+      for (const artifact of artifacts) {
+        const at = originals.indexOf(artifact.node), target = copies[at];
+        if (!target || target !== copy && !copy.contains(target)) continue;
+        const slot = document.createElement('div'); slot.setAttribute('data-onecode-native-surface', artifact.surface);
+        slot.textContent = target.textContent?.trim() || artifact.title || 'Artifact';
+        if (target === copy) copy = slot; else target.replaceWith(slot);
+      }
       for (const node of copy.querySelectorAll('script, style, iframe, object, embed, template, svg, img, video, audio, action-card, remy-confirmation-card, generated-image, generated-video, immersive-entry-chip, [hidden], [aria-hidden="true"], [role="toolbar"], input:not([type="text"]):not([type="range"])'))
         node.remove();
       for (const node of copy.querySelectorAll('*')) {
         const { flexGrow, backgroundColor } = node.style || {};
         for (const attr of [...node.attributes]) {
-          const keep = ['id', 'dir', 'colspan', 'rowspan', 'role', 'aria-labelledby', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow'].includes(attr.name) ||
+          const keep = ['id', 'dir', 'colspan', 'rowspan', 'role', 'aria-labelledby', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'data-onecode-native-surface'].includes(attr.name) ||
             (node.matches('label') && attr.name === 'for') ||
             (node.matches('input') && ['type', 'value', 'min', 'max'].includes(attr.name)) ||
             (node.matches('a') && attr.name === 'href' && /^https?:\/\//i.test(attr.value)) ||
@@ -2798,9 +2807,9 @@
           node.style.backgroundColor = backgroundColor;
         }
       }
-      shell.append(...copy.childNodes);
+      shell.append(copy);
     }
-    if (!shell.querySelector(controls)) return '';
+    if (!shell.querySelector(controls + ',[data-onecode-native-surface]')) return '';
     const markup = shell.outerHTML;
     return markup.length <= 120_000 ? markup : '';
   }
@@ -4132,7 +4141,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 41;
+  const FIBER_VERSION = 42;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */

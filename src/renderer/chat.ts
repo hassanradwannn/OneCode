@@ -10,6 +10,7 @@ import { createArtifactPanel } from './artifact-panel.js';
 import { createWorkbenchBrowserPanel } from './workbench-browser.js';
 import { createMediaPanel } from './media-panel.js';
 import { generationPlaceholder, inlinePresentation, loadInlineVideo, retireDetachedPresentations } from './inline-presentation.js';
+import { nativeArtifactBindings, hiddenNativePresentations } from './native-artifact-slots.js';
 import { currentLanguage, ui, t } from './i18n.js';
 import { initSkills } from './skills.js';
 import { imageStorageButton } from './image-storage.js';
@@ -3702,6 +3703,12 @@ function approvalRowText(text: string): string {
   return text;
 }
 
+function inlineArtifactsForMessage(event: SessionEvent, history: readonly SessionEvent[]) {
+  return nativeArtifactBindings(event.kind === 'assistant_message' && event.final ? event.renderedHtml : undefined,
+    event.kind === 'assistant_message' ? event.providerMessageId ?? event.messageId : undefined,
+    history.flatMap(row => row.kind === 'progress' && row.presentation ? [row.presentation] : []));
+}
+
 function eventBody(event: SessionEvent, context?: { id: string; current: () => boolean; history: readonly SessionEvent[] }): HTMLElement {
   switch (event.kind) {
     case 'session_start':
@@ -3774,6 +3781,8 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       const box = el('div', 'said');
       box.append(el('b', '', () => event.final ? t('Agent') : providerText("Gemini (partial)")));
       const owner = context?.id ?? selectedId;
+      const history = context?.history ?? events;
+      const inline = inlineArtifactsForMessage(event, history);
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references, href => {
         if (owner && event.messageId) void run(api.openSessionFileLink(owner, event.messageId, href));
       }, {
@@ -3781,6 +3790,11 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
         actions: {
           key: JSON.stringify([owner, event.messageId ?? event.origin ?? event.seq]),
           copy: async value => !!await run(api.writeClipboard(value)),
+          artifact: surface => {
+            const presentation = inline.get(surface);
+            const row = presentation && history.find(row => row.kind === 'progress' && row.presentation?.id === presentation.id);
+            return row ? eventBody(row, context) : null;
+          },
           ...(owner && event.messageId ? { loadImage: (url: string) => run(api.getReplyImage(owner, event.messageId!, url)) } : {}),
           ...(owner ? { openOriginal: () => void run(api.openSessionChat(owner)) } : {})
         }
@@ -4919,8 +4933,12 @@ function paintDetail(followBottom = historyBefore === null): void {
   const workedSeconds = exchangeDurations(events);
   const workers = sessions.filter(entry => entry.origin?.kind === 'worker' && entry.origin.fromSessionId === selectedId && selectedId !== null);
   const items = timelineItems(shown);
+  const presentations = shown.flatMap(row => row.kind === 'progress' && row.presentation ? [row.presentation] : []);
+  const inlineIds = new Set(shown.flatMap(row => row.kind === 'assistant_message' && row.final
+    ? [...hiddenNativePresentations(row.renderedHtml, row.providerMessageId ?? row.messageId, presentations)] : []));
   const latestCompaction = items.filter(item => item.kind === 'compaction').at(-1);
   for (const item of items) {
+    if (item.kind === 'event' && item.event.kind === 'progress' && item.event.presentation && inlineIds.has(item.event.presentation.id)) continue;
     if (item.kind === 'event' && duplicateErrors.has(item.event.seq)) continue;
     appendRetiredInputs(item.kind === 'event' ? item.event.time : item.block.time);
     if (!deps.state()?.config.ui.developerMode && item.kind === 'event' && item.event.source === 'app' && item.event.kind === 'progress' && item.event.progressId?.startsWith('browser-repair:')) continue;
@@ -4929,7 +4947,8 @@ function paintDetail(followBottom = historyBefore === null): void {
     const key = itemKey(item);
     const answerTurn = item.kind === 'event' && item.event.kind === 'assistant_message' && item.event.turnId &&
       anchors.get(item.event.turnId) === item.event.seq ? item.event.turnId : null;
-    const sig = itemSignature(item) + (item.kind === 'event' && item.event.kind === 'chat_error'
+    const sig = itemSignature(item) + (item.kind === 'event' && item.event.kind === 'assistant_message'
+      ? JSON.stringify([...inlineArtifactsForMessage(item.event, events).values()]) : '') + (item.kind === 'event' && item.event.kind === 'chat_error'
       ? JSON.stringify(chatErrorPresentation(item.event, events)) : '') + (answerTurn ? '\u0000answer' : '') +
       (item.kind === 'event' && stoppedTurnEnd(item.event, events) ? '\u0000stopped' : '') +
       (item.kind === 'compaction' && item !== latestCompaction ? '\u0000superseded' : '') +

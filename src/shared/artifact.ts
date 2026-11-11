@@ -12,6 +12,8 @@ export interface ArtifactPresentation {
   revision?: number;
   asset?: AssetRef;
   openId?: string;
+  /** Exact native reply and surface, for placement inside its captured public markup. */
+  nativeSource?: { messageId: string; surface: string };
 }
 
 export const ARTIFACT_KINDS = ['code', 'web', 'markdown', 'document', 'diagram', 'data'] as const;
