@@ -115,7 +115,9 @@ export type ChatModelCatalog = {
 /** Recheck an opened picker periodically; a saved catalog is not a permanent account inventory.
  * Recent failed attempts also cool down, while explicit Refresh always remains available. */
 export function chatModelsNeedRefresh(catalog: ChatModelCatalog | undefined, now = Date.now()): boolean {
-  if (catalog?.state === 'pending') return false;
+  // Opening an empty passive picker may promote its existing request so the
+  // browser can open a discovery page. The catalog owner coalesces the nonce.
+  if (catalog?.state === 'pending') return !catalog.models.length;
   const lastCheck = Math.max(catalog?.observedAt ?? 0, catalog?.requestedAt ?? 0);
   return !lastCheck || now - lastCheck >= 15 * 60_000;
 }

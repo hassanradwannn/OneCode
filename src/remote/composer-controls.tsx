@@ -50,7 +50,7 @@ export function ModelMenu({ models, catalog, model, effort, disabled, provider, 
   return <details ref={root} className="model-menu" onToggle={() => {
     if (root.current?.open) {
       setShowModels(unverified || !control && !effortUnavailable);
-      if (!disabled && (!models.length || chatModelsNeedRefresh(catalog))) refresh();
+      if (!disabled && chatModelsNeedRefresh(catalog)) refresh();
     }
   }}>
     <summary aria-label={control ? `Model and ${control.label}` : 'Model'} aria-disabled={disabled} onClick={event => { if (disabled) event.preventDefault(); }}>

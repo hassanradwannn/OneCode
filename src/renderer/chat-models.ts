@@ -884,7 +884,7 @@ export function initChatModels(onPaint?: () => void): void {
   });
   modelMenu?.addEventListener('toggle', () => {
     if (!modelMenu.open) closeModelChoices();
-    else if (!catalog.models.length || chatModelsNeedRefresh(catalog)) void discoverModels();
+    else if (chatModelsNeedRefresh(catalog)) void discoverModels();
   });
   for (const [modelId, effortId, allowEmpty] of pairs) {
     document.getElementById(modelId)?.addEventListener('change', () => {
