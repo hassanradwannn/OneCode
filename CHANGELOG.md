@@ -1,8 +1,8 @@
 # OneCode changelog
 
-## Unreleased
+## [1.1.2] — 2026-11-13
 
-Read Gemini's native radio model rows, opaque mode IDs and purpose/model captions without a model-name allowlist. Recheck stale model catalogs when the Desktop or Remote picker opens across providers, while preserving selected model intent and native availability checks.
+Read Gemini's native radio model rows, opaque mode IDs and purpose/model captions without a model-name allowlist. Recheck stale model catalogs when the Desktop or Remote picker opens across providers, while preserving selected model intent and native availability checks. See [1.1.2 notes](docs/release-notes/v1.1.2.md).
 
 ## [1.1.1] — 2026-11-12
 

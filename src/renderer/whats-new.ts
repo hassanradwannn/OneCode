@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.2': {
+    lead: () => t('Keep model choices current when providers rename their models.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Read the current native model picker'), text: () => t('Gemini model choices retain their native IDs and visible captions, including the newer radio picker layout.') },
+      { icon: 'i-retry', title: () => t('Refresh older model lists'), text: () => t('Opening the Desktop or Remote model picker refreshes lists older than fifteen minutes across providers.') },
+      { icon: 'i-lock', title: () => t('Keep your selected model'), text: () => t('Refresh preserves your model choice and still checks native availability before sending. Locked or ambiguous choices stay unavailable.') }
+    ]
+  },
   '1.1.1': {
     lead: () => t('Keep imported visuals in their original place in the answer.'),
     highlights: [
