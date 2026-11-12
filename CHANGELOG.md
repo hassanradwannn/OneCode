@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## Unreleased
+
+Read Gemini's native radio model rows, opaque mode IDs and purpose/model captions without a model-name allowlist. Recheck stale model catalogs when the Desktop or Remote picker opens across providers, while preserving selected model intent and native availability checks.
+
 ## [1.1.1] — 2026-11-12
 
 Place browser-imported visuals at their exact native reply positions, avoid duplicate plaintext in long replies, and exclude document-reference icons from visual capture. Preserve public document links, OpenRouter behavior and interactive Remote state across history refreshes. See [1.1.1 notes](docs/release-notes/v1.1.1.md).

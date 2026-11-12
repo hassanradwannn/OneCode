@@ -1,7 +1,7 @@
 import { EFFORT_NAMES, COMPOSER_EFFORTS } from '../shared/chat-models.js';
 import { ui, uiText, t } from './i18n.js';
 import type { ChatModelAffinity, ChatModelCatalog, NativeModelSurface } from '../shared/chat-models.js';
-import { chatModelDisplayLabel, currentModelChoiceLabel, currentEffortChoiceLabel, nativeReasoningControl, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel } from '../shared/chat-models.js';
+import { chatModelDisplayLabel, currentModelChoiceLabel, currentEffortChoiceLabel, nativeReasoningControl, DEFAULT_HELPER_CHAT_MODEL, resolveChatModel, chatModelsNeedRefresh } from '../shared/chat-models.js';
 import type { ChatModelOption, NativeReasoningControl } from '../shared/chat-models.js';
 import type { Config } from '../shared/types.js';
 import type { ReasoningEffort } from '../shared/session.js';
@@ -884,7 +884,7 @@ export function initChatModels(onPaint?: () => void): void {
   });
   modelMenu?.addEventListener('toggle', () => {
     if (!modelMenu.open) closeModelChoices();
-    else if (!catalog.models.length) $('refreshComposerModels').click();
+    else if (!catalog.models.length || chatModelsNeedRefresh(catalog)) void discoverModels();
   });
   for (const [modelId, effortId, allowEmpty] of pairs) {
     document.getElementById(modelId)?.addEventListener('change', () => {

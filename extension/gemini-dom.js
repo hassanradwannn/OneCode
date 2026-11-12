@@ -1702,13 +1702,14 @@ var CLF_DOM = (() => {
     const accessible = /^Open mode picker, currently ([^\r\n]{1,96})$/.exec(picker.getAttribute('aria-label') || '')?.[1];
     return caption || compact(accessible || '');
   };
-  const modelPickerLaneCurrent = (picker, label) => {
+  const modelPickerLaneCurrent = (picker, choice) => {
     const lane = value => compact(value).normalize('NFKC').replace(/^Gemini\s*/i, '').replace(/^\d+(?:\.\d+)*\s*/, '')
       .toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-    const actual = lane(modelPickerCaption(picker)), wanted = lane(label);
+    const actual = lane(modelPickerCaption(picker));
+    const names = typeof choice === 'string' ? [choice] : choice?.captions || [];
     // The caption cannot identify a versioned ID, but a positive lane mismatch
     // (for example Flash after selecting Argon) must not be reported as success.
-    return !actual || !wanted || actual === wanted;
+    return !actual || names.some(name => lane(name) === actual);
   };
   const visibleModelSelection = () => {
     const picker = pickerButton();
@@ -1725,18 +1726,28 @@ var CLF_DOM = (() => {
     const selectedEffort = nativeThinkingMenu(nativeThinkingTrigger())?.find(row => row.selected)?.id;
     return { model: selected?.id || 'gemini-current', reasoningEffort: selectedEffort || null };
   };
-  const nativeModelRows = () => all('gem-menu-item[role="menuitem"][data-mode-id]').filter(node => shown(node) && !node.closest(TURN));
+  // Native mode IDs are opaque account choices, not a model/version allowlist.
+  const nativeModeId = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(value)
+    ? /^[0-9a-f]{16}$/i.test(value) ? value.toLowerCase() : value : null;
+  const nativeModelRows = () => all('gem-menu-item[data-mode-id]').filter(node =>
+    node.matches('[role="menuitem"],[role="menuitemradio"]') && shown(node) && !node.closest(TURN));
   const nativeModelSelected = node => {
     const explicit = ['aria-checked', 'aria-selected'].map(name => node.getAttribute(name)).filter(value => value !== null);
     return explicit.length ? explicit.every(value => value === 'true') :
       node.classList.contains('selected') && Boolean(node.querySelector('[aria-label="Selected"]'));
   };
   function nativeModelMenu() {
-    const rows = nativeModelRows().filter(node => enabled(node) && /^[0-9a-f]{16}$/i.test(node.getAttribute('data-mode-id') || '') &&
+    const rows = nativeModelRows().filter(node => enabled(node) && nativeModeId(node.getAttribute('data-mode-id')) &&
       !node.querySelector('[data-mat-icon-name="lock"],[fonticon="lock"],[data-mat-icon-name="lock_outline"],[fonticon="lock_outline"]') &&
       !all('mat-icon,gem-icon', node).some(icon => /^(?:lock|lock_outline)$/.test(compact(text(icon))))).map(node => ({ node,
-        id: node.getAttribute('data-mode-id').toLowerCase(), label: compact(text(node.querySelector('.label'))),
+        id: nativeModeId(node.getAttribute('data-mode-id')),
+        // New radio rows show a purpose and model name on separate lines. Keep
+        // both verbatim: neither a name regex nor the current caption can decide
+        // which line is the model (the Auto row has a description instead).
+        captions: [compact(text(node.querySelector('.label'))),
+          ...(node.getAttribute('role') === 'menuitemradio' ? [compact(text(node.querySelector('.sublabel')))] : [])].filter(Boolean),
         selected: nativeModelSelected(node) }));
+    for (const row of rows) row.label = row.captions.join(' · ');
     if (!rows.length || rows.some(row => !row.label || row.label.length > 80) || new Set(rows.map(row => row.id)).size !== rows.length ||
         rows.filter(row => row.selected).length !== 1) return null;
     return rows;
@@ -1752,7 +1763,7 @@ var CLF_DOM = (() => {
     if (!trigger?.isConnected || trigger.getAttribute('aria-expanded') !== 'true') return null;
     const menu = document.getElementById(trigger.getAttribute('aria-controls'));
     if (!menu?.matches('gem-menu[role="menu"]') || !shown(menu) || menu.getAttribute('data-visible') === 'false') return null;
-    const rows = all('gem-menu-item[role="menuitem"]', menu).filter(node => shown(node) && enabled(node) &&
+    const rows = all('gem-menu-item[role="menuitem"],gem-menu-item[role="menuitemradio"]', menu).filter(node => shown(node) && enabled(node) &&
       node.closest('gem-menu[role="menu"]') === menu && !node.hasAttribute('data-mode-id')).map(node => ({
         node, id: compact(text(node.querySelector('.label'))).toLowerCase(), selected: nativeModelSelected(node)
       }));
@@ -1862,11 +1873,11 @@ var CLF_DOM = (() => {
       failure?.(stage);
       const picker = pickerButton(), rows = nativeModelMenu();
       console.info('[OneCode model] ' + JSON.stringify({ stage,
-        requestedModel: model === 'gemini-current' ? model : /^[0-9a-f]{16}$/i.test(String(model)) ? String(model).toLowerCase() : 'other',
+        requestedModel: nativeModeId(model) || 'other',
         callerCurrent: current(), draftCurrent: initial.ownsDraft(), surfaceCurrent: surface.current(),
         pickerPresent: Boolean(picker), pickerEnabled: enabled(picker), pickerReadable: Boolean(visibleModelSelection()?.model),
         nativeGenerating: generating(), menuRows: nativeModelRows().length, confirmedChoices: rows?.length || 0,
-        requestedChoiceSelected: Boolean(rows?.some(row => row.id === String(model).toLowerCase() && row.selected))
+        requestedChoiceSelected: Boolean(rows?.some(row => row.id === nativeModeId(model) && row.selected))
       }));
       return false;
     };
@@ -1882,7 +1893,7 @@ var CLF_DOM = (() => {
       return enabled(candidate) && visibleModelSelection()?.model ? candidate : null;
     }, () => initial.ownsDraft() && !generating(), 30_000);
     if (!picker) return refuse('picker-not-ready');
-    let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null, confirmedLabel = null, provedPicker = null;
+    let choiceClicked = false, pickerRebound = false, closingConfirmedId = null, confirmedId = null, confirmedChoice = null, provedPicker = null;
     const surface = { current: () => {
       if (!initial.ownsDraft() || generating()) return false;
       const next = pickerButton();
@@ -1907,9 +1918,10 @@ var CLF_DOM = (() => {
     try {
       const rows = await waitFor(nativeModelMenu, surface.current, 5000);
       const normalizeIdentity = value => compact(value).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}.]/gu, '');
-      const exact = rows?.filter(row => row.id === String(model).toLowerCase()) || [];
+      const exact = rows?.filter(row => row.id === nativeModeId(model)) || [];
       const labelIdentity = normalizeIdentity(modelLabel || model);
-      const byLabel = !exact.length && labelIdentity ? rows?.filter(row => normalizeIdentity(row.label) === labelIdentity) || [] : [];
+      const byLabel = !exact.length && labelIdentity ? rows?.filter(row =>
+        [row.label, ...row.captions].some(name => normalizeIdentity(name) === labelIdentity)) || [] : [];
       const options = !model || model === 'gemini-current' ? rows?.filter(row => row.selected) || [] : exact.length ? exact : byLabel;
       if (options.length !== 1 || !surface.current()) return refuse('choice-unconfirmed', surface);
       const target = options[0];
@@ -1930,13 +1942,13 @@ var CLF_DOM = (() => {
             if (!changed || !await waitFor(() => picker.isConnected && pickerButton() === picker && enabled(picker), surface.current, 5000)) return false;
             if (!nativeModelRows().length) { picker.click(); owned = true; }
             if (!await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
-                modelPickerLaneCurrent(picker, target.label), surface.current, 5000)) return false;
+                modelPickerLaneCurrent(picker, target), surface.current, 5000)) return false;
             trigger = nativeThinkingTrigger();
             if (!trigger) return false;
             if (trigger.getAttribute('aria-expanded') !== 'true') { trigger.click(); thinkingOwned = true; }
           }
           const proven = Boolean(await waitFor(() => nativeThinkingMenu(trigger)?.some(row => row.id === requestedEffort && row.selected) &&
-            nativeModelMenu()?.some(row => row.id === target.id && row.selected) && modelPickerLaneCurrent(picker, target.label), surface.current, 5000));
+            nativeModelMenu()?.some(row => row.id === target.id && row.selected) && modelPickerLaneCurrent(picker, target), surface.current, 5000));
           if (proven) provedPicker = picker;
           return proven;
         } finally {
@@ -1950,9 +1962,9 @@ var CLF_DOM = (() => {
       };
       if (target.selected) {
         const settled = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
-          modelPickerLaneCurrent(picker, target.label), surface.current, 5000);
+          modelPickerLaneCurrent(picker, target), surface.current, 5000);
         if (!settled) return refuse('selected-caption-unconfirmed', surface);
-        confirmedId = target.id; confirmedLabel = target.label;
+        confirmedId = target.id; confirmedChoice = target;
         return await confirmEffort() || refuse('effort-choice-unconfirmed', surface);
       }
       choiceClicked = true; target.node.click();
@@ -1963,14 +1975,14 @@ var CLF_DOM = (() => {
       if (!changed || !surface.current()) return refuse('choice-did-not-change', surface);
       if (!nativeModelRows().length) { picker.click(); owned = true; }
       const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === target.id && row.selected) &&
-        modelPickerLaneCurrent(picker, target.label), surface.current, 5000);
-      if (selected) { confirmedId = target.id; confirmedLabel = target.label; }
+        modelPickerLaneCurrent(picker, target), surface.current, 5000);
+      if (selected) { confirmedId = target.id; confirmedChoice = target; }
       return !selected ? refuse('selected-choice-unconfirmed', surface) : await confirmEffort() || refuse('effort-choice-unconfirmed', surface);
     } finally {
       const closeUntil = Date.now() + 3000;
       closingConfirmedId = confirmedId;
       const pickerSettled = () => picker.isConnected && pickerButton() === picker &&
-        (!confirmedId || modelPickerLaneCurrent(picker, confirmedLabel));
+        (!confirmedId || modelPickerLaneCurrent(picker, confirmedChoice));
       if (!await closeModelMenu(picker, surface.current, owned, pickerSettled)) return refuse('picker-close-failed', surface);
       // Closing our own menu may also replace the header when no choice click
       // was necessary. Re-prove the exact ID on that one successor before
@@ -1979,7 +1991,7 @@ var CLF_DOM = (() => {
         if (!closingConfirmedId || !surface.current() || !enabled(picker)) return refuse('picker-close-failed', surface);
         picker.click();
         const selected = await waitFor(() => nativeModelMenu()?.some(row => row.id === closingConfirmedId && row.selected &&
-          modelPickerLaneCurrent(picker, row.label)),
+          modelPickerLaneCurrent(picker, row)),
           surface.current, Math.max(0, closeUntil - Date.now()));
         if (!selected) return refuse('selected-choice-unconfirmed', surface);
         if (!await confirmEffort()) return refuse('effort-choice-unconfirmed', surface);

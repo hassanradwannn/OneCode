@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { EFFORT_NAMES, COMPOSER_EFFORTS, resolveChatModel, currentModelChoiceLabel, currentEffortChoiceLabel, nativeReasoningControl, type ChatModelOption, type NativeReasoningControl } from '../shared/chat-models.js';
+import { EFFORT_NAMES, COMPOSER_EFFORTS, resolveChatModel, currentModelChoiceLabel, currentEffortChoiceLabel, nativeReasoningControl, chatModelsNeedRefresh, type ChatModelCatalog, type ChatModelOption, type NativeReasoningControl } from '../shared/chat-models.js';
 import type { ChatProvider } from '../shared/chat-provider.js';
 import type { ReasoningEffort } from '../shared/session.js';
 
@@ -28,8 +28,9 @@ export function NativeReasoningSwitch({ control, effort, disabled = false, choos
     <button type="button" data-effort="" aria-pressed={!effort} disabled={disabled} onClick={() => choose('')}>Use current setting</button>
   </div>;
 }
-export function ModelMenu({ models, model, effort, disabled, provider, unverified = false, choose, refresh, requestEfforts }: {
+export function ModelMenu({ models, catalog, model, effort, disabled, provider, unverified = false, choose, refresh, requestEfforts }: {
   models: ChatModelOption[]; model: string; effort: string; disabled: boolean; provider?: ChatProvider; unverified?: boolean;
+  catalog?: ChatModelCatalog;
   choose(model: string, effort: string): void; refresh(): void; requestEfforts?(model: string): void; loadingEfforts?: boolean;
 }) {
   const selected = resolveChatModel(models, model), root = useRef<HTMLDetailsElement>(null);
@@ -46,7 +47,12 @@ export function ModelMenu({ models, model, effort, disabled, provider, unverifie
     document.addEventListener('pointerdown', close); document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, []);
-  return <details ref={root} className="model-menu" onToggle={() => { if (root.current?.open) setShowModels(unverified || !control && !effortUnavailable); }}>
+  return <details ref={root} className="model-menu" onToggle={() => {
+    if (root.current?.open) {
+      setShowModels(unverified || !control && !effortUnavailable);
+      if (!disabled && (!models.length || chatModelsNeedRefresh(catalog))) refresh();
+    }
+  }}>
     <summary aria-label={control ? `Model and ${control.label}` : 'Model'} aria-disabled={disabled} onClick={event => { if (disabled) event.preventDefault(); }}>
       <span>{unverified ? `${model} · previously observed` : selected?.label ?? (model ? `${model} · unavailable` : currentModelChoiceLabel(provider))}{effort && (provider !== 'claude' || control) ? ` · ${label}` : ''}</span><Icon name="chevron" />
     </summary>
