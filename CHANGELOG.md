@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.3] — 2026-11-13
+
+Fix Gemini model discovery getting stuck in the Thinking level submenu or refusing to restore the original selection. Read the primary native model label separately from combined model/effort captions, verify older captions against observed thinking selections, and confirm submenu closure. See [1.1.3 notes](docs/release-notes/v1.1.3.md).
+
 ## [1.1.2] — 2026-11-13
 
 Read Gemini's native radio model rows, opaque mode IDs and purpose/model captions without a model-name allowlist. Recheck stale model catalogs when the Desktop or Remote picker opens across providers, while preserving selected model intent and native availability checks. See [1.1.2 notes](docs/release-notes/v1.1.2.md).

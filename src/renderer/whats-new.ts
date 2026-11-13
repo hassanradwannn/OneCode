@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.3': {
+    lead: () => t('Finish Gemini model refresh and restore the original selection.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Separate the model from its thinking level'), text: () => t('The native model label is read separately from captions that also include a thinking level. Older layouts require a verified native thinking selection.') },
+      { icon: 'i-retry', title: () => t('Close the thinking submenu'), text: () => t('Refresh closes its own thinking submenu through Escape and verifies that it actually closed before continuing.') },
+      { icon: 'i-check', title: () => t('Preserve your model and thinking level'), text: () => t('Gemini model discovery restores the original native selection and retains both visible model captions across picker layouts.') }
+    ]
+  },
   '1.1.2': {
     lead: () => t('Keep model choices current when providers rename their models.'),
     highlights: [
