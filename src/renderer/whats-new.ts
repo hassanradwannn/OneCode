@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.4': {
+    lead: () => t('Send pasted screenshots in ChatGPT.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Recognize renamed screenshots'), text: () => t('OneCode recognizes the timestamped name ChatGPT gives a pasted screenshot and sends once the attachment is ready.') }
+    ]
+  },
   '1.1.3': {
     lead: () => t('Finish Gemini model refresh and restore the original selection.'),
     highlights: [

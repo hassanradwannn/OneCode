@@ -2908,6 +2908,15 @@ var CLF_DOM = (() => {
     }
   }
 
+  function composerImageFileName(button) {
+    const tile = button.closest('[data-composer-attachments] [role="button"][aria-label]');
+    if (!tile || tile === button) return;
+    const name = tile.getAttribute('aria-label');
+    const actions = [...tile.querySelectorAll('button')];
+    if (name && actions.length === 1 && actions[0] === button &&
+        [...tile.querySelectorAll('img[alt]')].some(image => image.getAttribute('alt') === name)) return name;
+  }
+
   /** Native attachment identity from the composer's exact tile/remove control. */
   function composerFileName(button) {
     // Current shell: a filename-labelled open button and a translated remove button share a
@@ -2926,13 +2935,8 @@ var CLF_DOM = (() => {
             open.closest('[data-composer-attachments]') === attachmentHost) return name;
       }
     }
-    const tile = button.closest('[data-composer-attachments] [role="button"][aria-label]');
-    if (tile && tile !== button) {
-      const name = tile.getAttribute('aria-label');
-      const actions = [...tile.querySelectorAll('button')];
-      if (name && actions.length === 1 && actions[0] === button &&
-          [...tile.querySelectorAll('img[alt]')].some(image => image.getAttribute('alt') === name)) return name;
-    }
+    const image = composerImageFileName(button);
+    if (image) return image;
     const group = button.closest('[role="group"][aria-label]');
     if (group?.querySelector('[data-default-action="true"] button')) {
       const actions = [...group.querySelectorAll('button')].filter(node => !node.closest('[data-default-action="true"]'));
@@ -3081,6 +3085,7 @@ var CLF_DOM = (() => {
     if (!input) return false;
     const priorTiles = new Set((composerBox() || composerActions()?.host)?.querySelectorAll('button[aria-label]') || []);
     const transfer = new DataTransfer();
+    let uploadStartedAt;
     try {
       for (const image of images) {
         if (image instanceof File) { transfer.items.add(image); continue; }
@@ -3090,6 +3095,7 @@ var CLF_DOM = (() => {
         transfer.items.add(new File([bytes], image.name, { type: 'image/webp' }));
       }
       input.files = transfer.files;
+      uploadStartedAt = Math.floor(Date.now() / 1000) * 1000;
       input.dispatchEvent(new Event('change', { bubbles: true }));
     } catch { return false; }
     return new Promise((resolve) => {
@@ -3123,6 +3129,19 @@ var CLF_DOM = (() => {
                 return /^[1-9]\d{0,3}$/.test(name.slice(stem.length + 1, name.length - suffix.length - 1));
               });
               if (candidates.length === 1) index = candidates[0].at;
+            }
+            if (index < 0 && draft && image instanceof File && image.name === 'image.png' && image.type === 'image/png') {
+              // ChatGPT names clipboard PNGs image(YYYYMMDD-HHmmss).png in UTC.
+              // Match only a fresh native image tile from this exact upload window.
+              const candidates = unmatched.filter(button => {
+                const name = composerImageFileName(button);
+                const match = /^image\((\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\)\.png$/.exec(name || '');
+                if (!match || images.some(file => file.name === name)) return false;
+                const [, year, month, day, hour, minute, second] = match;
+                const renamedAt = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+                return renamedAt >= uploadStartedAt && renamedAt <= Math.min(Date.now(), uploadStartedAt + 15000);
+              });
+              if (candidates.length === 1) index = unmatched.indexOf(candidates[0]);
             }
             if (index < 0) return false;
             unmatched.splice(index, 1);
