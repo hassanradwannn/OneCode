@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.4] — 2026-11-19
+
+Fix ChatGPT sends that stall when a pasted PNG appears under a timestamped filename. See [1.1.4 notes](docs/release-notes/v1.1.4.md).
+
 ## [1.1.3] — 2026-11-13
 
 Fix Gemini model discovery getting stuck in the Thinking level submenu or refusing to restore the original selection. Read the primary native model label separately from combined model/effort captions, verify older captions against observed thinking selections, and confirm submenu closure. See [1.1.3 notes](docs/release-notes/v1.1.3.md).
