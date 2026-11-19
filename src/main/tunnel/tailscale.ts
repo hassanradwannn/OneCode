@@ -20,7 +20,7 @@ import { probeFunnelPublic, type FunnelPublicResult } from './tailscale-public.j
 import { withTailscaleMutation } from './tailscale-mutation.js';
 import { TailscaleNotReady, TailscaleSetupRequired, tailscalePrerequisites, readTailscaleDaemon } from './tailscale-prerequisites.js';
 import { requestTailscaleSetup } from './tailscale-setup.js';
-import { restartWindowsTailscale } from './tailscale-repair.js';
+import { canRestartTailscale, restartSystemTailscale } from './tailscale-repair.js';
 
 class FunnelSetupError extends Error {}
 type Row = Record<string, unknown>;
@@ -206,7 +206,7 @@ export async function startTailscale(opts: TunnelStartOptions, overrides: Partia
       // Startup may be waiting for the very daemon this explicit action repairs.
       // Its existing prerequisite watcher owns recovery; do not replay Connect.
       if (active?.repairTailscale) await active.repairTailscale();
-      else await (overrides.repair ?? restartWindowsTailscale)();
+      else await (overrides.repair ?? restartSystemTailscale)();
     }
   };
 }
@@ -215,11 +215,11 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
   const startupTiming = (stage: string) => logInfo(`OneCode Funnel startup stage=${stage} elapsedMs=${Math.round(performance.now() - startedAt)}`);
   const deps: Dependencies = { run: runCli, locate: hint => locateBinary('tailscale', hint), stateDir: app.getPath('userData'), relay: createTailscaleRelay,
     platform: process.platform, username: () => os.userInfo().username,
-    probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, repair: restartWindowsTailscale, ...overrides };
+    probe: (url, signal) => probeFunnelPublic(url, signal, {}, opts.discoveryHeaders), now: Date.now, retryWindowMs: 10 * 60_000, watchMs: 15_000, repair: restartSystemTailscale, ...overrides };
   let repairing: Promise<void> | null = null, transportEpoch = 0;
   const check: TailscaleStatus = { cli: 'missing', account: 'unknown', funnel: 'unknown', checkedAt: Date.now(), detail: 'Checking system Tailscale…' };
   const report = (state: 'connecting-tunnel' | 'connected' | 'offline' | 'tunnel-unavailable', detail: string, publicUrl: string | null = null) => {
-    check.canRepair = deps.platform === 'win32' && !repairing;
+    check.canRepair = canRestartTailscale(deps.platform) && !repairing;
     check.checkedAt = Date.now(); check.detail = detail;
     opts.report({ state, detail, publicUrl, tailscale: { ...check } });
   };
@@ -464,7 +464,7 @@ async function startTailscaleOwned(opts: TunnelStartOptions, overrides: Partial<
           // The ordinary cycle rechecks exact native custody after the restart.
           started = true; transportEpoch++; clearTimeout(timer);
           check.publicIngress = { state: 'checking', checkedAt: null };
-          report('connecting-tunnel', 'Waiting for Windows administrator consent to restart Tailscale. Saved routes and connector URLs are retained.', publicUrl);
+          report('connecting-tunnel', 'Waiting for system administrator approval to restart Tailscale.', publicUrl);
           await deps.repair();
           if (!stopped) report('connecting-tunnel', 'Tailscale restarted. Verifying the existing connector through public DNS, HTTPS and MCP…', publicUrl);
         }).catch(error => {

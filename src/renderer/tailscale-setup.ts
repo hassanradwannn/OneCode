@@ -20,7 +20,9 @@ export function tailscaleSetupView(next: Pick<AppState, 'config' | 'status' | 'r
   return {
     actionRequired: publicTlsFailed && !tailscalePublicReady(next),
     provisioningHint: check?.waitingForNetwork
-      ? 'Waiting for Tailscale and the network to reconnect. Keep Tailscale running; OneCode checks again automatically. This wait does not indicate a Funnel policy failure.'
+      ? check.canRepair === true
+        ? 'OneCode is waiting for the Tailscale network. If it stays disconnected, use Fix network below.'
+        : 'Waiting for Tailscale and the network to reconnect. Keep Tailscale running while OneCode checks again.'
       : publicTlsFailed
       ? check.canRepair === true
         ? 'Public DNS is available, but the public HTTPS handshake failed. Use Fix network below. OneCode keeps checking automatically.'

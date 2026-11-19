@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.5': {
+    lead: () => t('Recover a stalled Tailscale connection on Linux.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Fix network on Linux'), text: () => t('Open the connection menu and choose Fix network to restart Tailscale with administrator approval. OneCode then checks the connector again.') }
+    ]
+  },
   '1.1.4': {
     lead: () => t('Send pasted screenshots in ChatGPT.'),
     highlights: [

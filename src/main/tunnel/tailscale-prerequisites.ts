@@ -27,6 +27,9 @@ export function tailscalePrerequisites(status: Record<string, unknown>, funnel: 
   const self = row(status.Self), tailnet = row(status.CurrentTailnet);
   if (status.BackendState === 'NeedsMachineAuth')
     throw new TailscaleNotReady('Approve this device in the Tailscale admin console. OneCode will detect approval automatically.', 'approval');
+  if (status.BackendState === 'Running' && !status.AuthURL && self.Online === false && Array.isArray(status.Health) &&
+      status.Health.some(message => typeof message === 'string' && /coordination server|received a network map/i.test(message)))
+    throw new TailscaleNotReady('Tailscale is running but cannot synchronize with its coordination server. OneCode will retry automatically.');
   if (!status.AuthURL && (['NoState', 'Starting', 'Stopped'].includes(String(status.BackendState)) ||
       (status.BackendState === 'Running' && self.Online === false)))
     throw new TailscaleNotReady('Waiting for Tailscale to connect. Keep Tailscale running and connected; OneCode will check again automatically.');

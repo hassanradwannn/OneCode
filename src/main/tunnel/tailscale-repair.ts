@@ -23,13 +23,22 @@ export function tailscaleRepairCommand(windows: string): { file: string; args: s
   return { file, args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(launch, 'utf16le').toString('base64')] };
 }
 
+export const canRestartTailscale = (platform = process.platform): boolean => platform === 'win32' || platform === 'linux';
+
 let pending: Promise<void> | null = null;
-export function restartWindowsTailscale(): Promise<void> {
+export function restartSystemTailscale(platform = process.platform): Promise<void> {
   if (pending) return pending;
-  if (process.platform !== 'win32' || !process.env.SystemRoot) return Promise.reject(new Error('Restart Tailscale through its system service, then return to OneCode.'));
-  const { file, args } = tailscaleRepairCommand(process.env.SystemRoot);
+  if (!canRestartTailscale(platform) || platform === 'win32' && !process.env.SystemRoot)
+    return Promise.reject(new Error('Restart Tailscale through its system service, then return to OneCode.'));
+  const { file, args } = platform === 'linux'
+    ? { file: '/usr/bin/pkexec', args: ['/usr/bin/systemctl', 'restart', 'tailscaled.service'] }
+    : tailscaleRepairCommand(process.env.SystemRoot!);
   pending = run(file, args, { windowsHide: true, timeout: 180_000, maxBuffer: 64 * 1024, env: childEnv() })
-    .then(() => undefined, () => { throw new Error('Tailscale restart was cancelled or could not be confirmed. Check Tailscale before trying Fix network again.'); })
+    .then(() => undefined, (error: NodeJS.ErrnoException) => {
+      if (platform === 'linux' && error.code === 'ENOENT')
+        throw new Error('System authorization is unavailable. Run sudo systemctl restart tailscaled.service in a local Ubuntu terminal, then return to OneCode.');
+      throw new Error('Tailscale restart was cancelled or could not be confirmed. Check Tailscale before trying Fix network again.');
+    })
     .finally(() => { pending = null; });
   return pending;
 }

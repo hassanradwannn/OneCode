@@ -26,7 +26,7 @@ import { pluginManager } from './plugins/manager.js';
 import { startProviderMcpServers, type ProviderEndpoints } from './mcp/provider-servers.js';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, type ChatProvider } from '../shared/chat-provider.js';
 import { inFlightToolCalls } from './mcp/call-context.js';
-import { restartWindowsTailscale } from './tunnel/tailscale-repair.js';
+import { canRestartTailscale, restartSystemTailscale } from './tunnel/tailscale-repair.js';
 
 let endpoint: ProviderEndpoints | null = null;
 /** Retain custody while draining so final shutdown can bound that same stop. */
@@ -747,13 +747,13 @@ let pendingTailscaleRepair: Promise<void> | null = null;
 export function repairTailscaleConnection(): Promise<void> {
   if (pendingTailscaleRepair) return pendingTailscaleRepair;
   pendingTailscaleRepair = (async () => {
-    if (process.platform !== 'win32' || shutdownRequested || pendingDisconnect || getConfig().tunnel.kind !== 'tailscale' ||
+    if (!canRestartTailscale() || shutdownRequested || pendingDisconnect || getConfig().tunnel.kind !== 'tailscale' ||
         (activeCoreTransport && (activeCoreTransport.kind !== 'tailscale' || !sameCoreTransport(activeCoreTransport, coreTransport(getConfig().tunnel))))) {
-      throw new Error('Repair is available only for the current Tailscale connection on Windows.');
+      throw new Error('Repair is available only for the current Tailscale connection on Windows or Linux.');
     }
     if (inFlightToolCalls() > 0) throw new Error('Wait for running tools to finish before restarting Tailscale.');
     if (tunnel?.repairTailscale) await tunnel.repairTailscale();
-    else await restartWindowsTailscale();
+    else await restartSystemTailscale();
   })().finally(() => { pendingTailscaleRepair = null; });
   return pendingTailscaleRepair;
 }

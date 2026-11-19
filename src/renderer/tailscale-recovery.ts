@@ -6,7 +6,7 @@ let repairing = false;
 function disableRepairButtons(disabled: boolean): void {
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-tailscale-repair]')) button.disabled = disabled;
 }
-const repairHint = 'Fix network restarts the system Tailscale service and briefly interrupts Tailscale connections. Windows may ask for administrator approval. Saved URLs and settings are retained.';
+const repairHint = 'Fix network restarts the system Tailscale service and briefly interrupts Tailscale connections. Your system may ask for administrator approval.';
 
 /** Settings and the connection popover share one explicit repair flight. */
 export function paintTailscaleRepairButton(repair: HTMLButtonElement): void {
