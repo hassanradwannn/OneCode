@@ -8,6 +8,9 @@ import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { recordedProviderFileLink } from '../provider-file-links.js';
+import { readWorkspaceDocument } from '../workspace-links.js';
+import { readTurnChanges } from '../session/turn-changes.js';
+import { effectiveCapabilities, getConfig } from '../config.js';
 import { recordedReplyImage } from '../provider-reply-images.js';
 import { RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
@@ -23,7 +26,7 @@ import { listInputs } from '../session/input.js';
 import { remoteRead } from './views.js';
 import { getSecret, setSecret } from '../secrets.js';
 import { readArtifact } from '../artifacts/service.js';
-import { getSession, readAsset, readEvents } from '../session/store.js';
+import { getSession, readAsset, readEvents, readToolEditReview } from '../session/store.js';
 import { PreviewDocuments, ARTIFACT_DOCUMENT_CSP } from '../artifacts/preview-documents.js';
 import { previewInputAttachment, stageInputAttachment } from '../session/input-attachments.js';
 import { listManagedSkills } from '../skills.js';
@@ -134,6 +137,32 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const recorded = await recordedProviderFileLink(request.sessionId, request.messageId, request.href);
       await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
       json(res, 200, { url: recorded.url }); return;
+    }
+    if (req.method === 'POST' && route.pathname === '/api/workspace-document') {
+      const { sessionId, messageId, href } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+        messageId: z.string().min(1).max(512), href: z.string().max(2100) }).strict().parse(await body(req));
+      const document = await readWorkspaceDocument(sessionId, messageId, href)
+        .catch(() => { throw new RequestError(404, 'workspace_document_unavailable'); });
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
+      json(res, 200, document); return;
+    }
+    if (req.method === 'POST' && route.pathname === '/api/tool-edit-review') {
+      const { sessionId, callId, changeIndex } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+        callId: z.string().uuid(), changeIndex: z.number().int().min(0).max(63) }).strict().parse(await body(req));
+      if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
+      const review = await readToolEditReview(sessionId, callId, changeIndex);
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
+      json(res, 200, review); return;
+    }
+    if (req.method === 'POST' && route.pathname === '/api/turn-changes') {
+      const { sessionId, turnId } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+        turnId: z.string().min(1).max(512) }).strict().parse(await body(req));
+      const changes = await readTurnChanges(sessionId, turnId)
+        .catch(() => { throw new RequestError(404, 'turn_changes_unavailable'); });
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      json(res, 200, changes); return;
     }
     if (req.method === 'POST' && route.pathname === '/api/video/prepare') {
       const sessionId = z.string().regex(/^[0-9a-z-]{8,64}$/);

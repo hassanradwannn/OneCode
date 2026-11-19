@@ -88,7 +88,7 @@ export function registerArtifactTool(reg: SurfaceRegistrar): void {
   if (!exposedCaps.read && !exposedCaps.metadata && !exposedCaps.create && !exposedCaps.edit) return;
   reg.register('artifact', toolDeclaration('artifact', () => ({
     title: 'Interactive canvas and artifacts',
-    description: ARTIFACT_IMPORT_INSTRUCTIONS + ' ' +
+    description: 'For a copyable Markdown file, create an ordinary .md file with apply_patch and link it as [label](onecode-file:/approved-root/file.md). ' + ARTIFACT_IMPORT_INSTRUCTIONS + ' ' +
       'Create interactive canvas mockups, HTML prototypes, charts and presentations inline in OneCode. Create, read, patch, list, or open OneCode-owned interactive artifacts in this durable session lineage. Compact & Resume replacement chats inherit the session artifacts; unrelated sessions cannot access them. ' +
       'Artifact identity is stable even when titles match. After creation, every patch must include expected_revision from the latest read/create result; stale revisions are rejected instead of overwriting newer human edits. ' +
       'For new HTML you are authoring directly in the tool, begin with title and kind="web", then create with its presentation_id, kind="web", entrypoint="index.html", files:[{path:"index.html",text:"complete HTML/CSS/JavaScript"}]. Legacy html means web. For locally generated photos or videos, begin with kind="image" or "video", then use that action, exact presentation_id and approved local path (PNG/JPEG/WebP; MP4/WebM up to 128 MiB). Media appears inline with playback in desktop and Remote. ' +

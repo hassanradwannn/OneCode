@@ -5,6 +5,8 @@ description: Use OneCode's connected local workspace, tools, workers and interac
 
 # OneCode
 
+For a copyable Markdown file, save a regular `.md` file with Core apply_patch and link the actual approved path as `[Guide](onecode-file:/project/docs/guide.md)`. The OneCode sidebar can copy raw Markdown. Use labeled Markdown links for web URLs and link key files in the final outcome and verification summary.
+
 Use the current OneCode Core connector and its live schemas. Connector names may include a device suffix; never substitute another computer or copy a namespace from an earlier chat. A browser connection or this skill alone does not grant local access.
 
 Every outer Core exec starts with the exact fresh `// onecode-session: ...` line from this task, followed by JavaScript. Direct calls use the same value in `onecode_session_key`. Child calls inside exec inherit the validated caller and omit routing fields. Never print or transfer credentials. Missing or rejected authorization means no tool may run until OneCode supplies a fresh task binding. A validation refusal explicitly saying nothing ran allows correction; an uncertain action must not be replayed.

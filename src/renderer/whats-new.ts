@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.6': {
+    lead: () => t('Open linked files and review edits from chat.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Open and copy Markdown'), text: () => t('Linked workspace files open in the sidebar. Copy Markdown copies the original file text.') },
+      { icon: 'i-git-diff', title: () => t('Review a completed turn'), text: () => t('The final reply shows recorded file changes. Open a file to inspect its saved diff.') }
+    ]
+  },
   '1.1.5': {
     lead: () => t('Recover a stalled Tailscale connection on Linux.'),
     highlights: [

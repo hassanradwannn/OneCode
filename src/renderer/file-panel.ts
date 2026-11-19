@@ -795,7 +795,14 @@ export function createFilePanel(options: FilePanelOptions) {
     const copy = actionButton(() => t('Copy path'), 'i-copy', async () => {
       if (await run(window.api.writeClipboard(value.path))) toast(t('Path copied'));
     });
-    actions.append(attach, copy, previewCloseButton());
+    actions.append(attach);
+    if (/\.(md|markdown)$/i.test(value.name) && value.text !== null && !value.truncated) {
+      const markdown = value.text;
+      actions.append(actionButton(() => t('Copy Markdown'), 'i-copy', async () => {
+        if (await run(window.api.writeClipboard(markdown))) toast(t('Copied'));
+      }));
+    }
+    actions.append(copy, previewCloseButton());
     head.append(nameWrap, actions);
     return head;
   }

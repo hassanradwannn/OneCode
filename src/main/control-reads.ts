@@ -372,7 +372,9 @@ export function projectEvent(event: SessionEvent, includeNativeMarkup = false): 
           changes: (call.changes ?? []).slice(0, CHANGES_CAP).map((change) => ({
             path: line(change.path, CHANGE_PATH_CAP),
             added: change.added,
-            removed: change.removed
+            removed: change.removed,
+            ...(change.approximate ? { approximate: true } : {}),
+            ...(change.reviewAssetId ? { reviewable: true } : {})
           }))
         }
       };

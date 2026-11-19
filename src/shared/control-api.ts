@@ -297,7 +297,7 @@ export type ControlApiEvent = {
     summary: { title: string; detail?: string; metric?: string; tone: string; kind: string };
     args: ControlApiText;
     result: ControlApiText;
-    changes: Array<{ path: string; added: number; removed: number }>;
+    changes: Array<{ path: string; added: number; removed: number; approximate?: boolean; reviewable?: boolean }>;
   };
   /** `agent_message`. */
   from?: string;

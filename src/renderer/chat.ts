@@ -49,6 +49,10 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
+import { workspaceLinkPath } from '../shared/workspace-link.js';
+import { summarizeTurnChanges, type RecordedChangeCall } from '../shared/turn-changes.js';
+import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
+import './workspace-deliverables.css';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES, automaticInput, inputNoticeVisible, AUTOMATIC_INPUT_NOTICE_MS } from '../shared/input.js';
 import type { InputArgs, InputEntry } from '../main/session/input.js';
@@ -310,6 +314,23 @@ export function revealUpdateTerminals(): void {
 let artifactPanel: ReturnType<typeof createArtifactPanel> | null = null;
 let workbenchBrowserPanel: ReturnType<typeof createWorkbenchBrowserPanel> | null = null;
 let mediaPanel: ReturnType<typeof createMediaPanel> | null = null;
+let deliverableRequest = 0;
+
+function showDeliverable(id: 'linked-file' | 'turn-changes', title: string, pane: HTMLElement, current: () => boolean): void {
+  const docks = workspaceDocks;
+  if (!docks || !current()) return;
+  docks.unregisterSurface(id);
+  docks.registerSurface({ id, kind: id === 'linked-file' ? 'document' : 'review', title,
+    icon: id === 'linked-file' ? 'i-file-text' : 'i-git-diff', closable: true },
+  parent => { if (current() && pane.parentElement !== parent) parent.append(pane); }, () => pane.remove(), current);
+  docks.activateSurface(id);
+}
+
+function closeDeliverables(): void {
+  deliverableRequest++;
+  workspaceDocks?.unregisterSurface('linked-file');
+  workspaceDocks?.unregisterSurface('turn-changes');
+}
 
 function selectedLocalProject(): LocalProject | null {
   if (selectedId) {
@@ -2426,7 +2447,7 @@ function userMessageTextBlock(className: string, value: string, truncated: boole
 function safeRenderedHref(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.startsWith('#')) return trimmed;
-  return safeExternalLink(trimmed) || safeProviderFileLink(trimmed) ? trimmed : null;
+  return safeExternalLink(trimmed) || safeProviderFileLink(trimmed) || workspaceLinkPath(trimmed) ? trimmed : null;
 }
 
 const PROVIDER_CITATION = /^\uE200(?:cite|filecite)\uE202[^\uE200\uE201]*\uE201/;
@@ -2991,6 +3012,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   // Only reapply our own presentation class, after the capture's untrusted classes are gone.
   for (const prompt of prompts) prompt.card.classList.add('native-prompt-readonly');
   box.append(template.content);
+  if (nativeCapture && fileLink) restoreWorkspaceLinks(box, safeFallback);
   const openLink = (event: MouseEvent): void => {
     if (event.type === 'auxclick' && event.button !== 1) return;
     const anchor = (event.target as Element | null)?.closest?.('a[href]');
@@ -2998,7 +3020,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
     const href = safeRenderedHref(anchor.getAttribute('href') ?? '');
     event.preventDefault();
     if (!href) return;
-    if (safeProviderFileLink(href)) { fileLink?.(href); return; }
+    if (safeProviderFileLink(href) || workspaceLinkPath(href)) { fileLink?.(href); return; }
     if (href.startsWith('#')) { document.getElementById(href.slice(1))?.scrollIntoView(); return; }
     // Electron deliberately denies arbitrary renderer navigation/window.open. A user
     // activation crosses the existing, independently validated main-process link API.
@@ -3784,7 +3806,18 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       const history = context?.history ?? events;
       const inline = inlineArtifactsForMessage(event, history);
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references, href => {
-        if (owner && event.messageId) void run(api.openSessionFileLink(owner, event.messageId, href));
+        if (!owner || !event.messageId) return;
+        if (!workspaceLinkPath(href)) { void run(api.openSessionFileLink(owner, event.messageId, href)); return; }
+        const request = ++deliverableRequest;
+        const generation = selectionGeneration;
+        const current = () => generation === selectionGeneration && (context ? context.current() : selectedId === owner);
+        if (!current()) return;
+        void run(api.getWorkspaceDocument(owner, event.messageId, href)).then(file => {
+          if (!file || !current() || request !== deliverableRequest) return;
+          const pane = renderWorkspaceDocument(file, { label: t, copy: async text => !!await run(api.writeClipboard(text)),
+            openExternal: url => { void run(api.openLink(url)); } });
+          showDeliverable('linked-file', file.name, pane, current);
+        });
       }, {
         messageId: event.final ? event.providerMessageId ?? event.messageId : undefined,
         actions: {
@@ -4930,6 +4963,13 @@ function paintDetail(followBottom = historyBefore === null): void {
   const duplicateErrors = duplicateChatErrors(events);
   // Completed turns and the answer message that carries their copy/export actions.
   const anchors = answerAnchors(events);
+  const editCalls = new Map<string, RecordedChangeCall[]>();
+  for (const row of events) {
+    if (row.kind !== 'tool_call' || !row.turnId || !row.call.changes?.length || !anchors.has(row.turnId)) continue;
+    const list = editCalls.get(row.turnId) ?? [];
+    if (!editCalls.has(row.turnId)) editCalls.set(row.turnId, list);
+    list.push(row.call);
+  }
   const workedSeconds = exchangeDurations(events);
   const workers = sessions.filter(entry => entry.origin?.kind === 'worker' && entry.origin.fromSessionId === selectedId && selectedId !== null);
   const items = timelineItems(shown);
@@ -4947,10 +4987,12 @@ function paintDetail(followBottom = historyBefore === null): void {
     const key = itemKey(item);
     const answerTurn = item.kind === 'event' && item.event.kind === 'assistant_message' && item.event.turnId &&
       anchors.get(item.event.turnId) === item.event.seq ? item.event.turnId : null;
+    const changes = answerTurn ? summarizeTurnChanges(editCalls.get(answerTurn) ?? []) : [];
     const sig = itemSignature(item) + (item.kind === 'event' && item.event.kind === 'assistant_message'
       ? JSON.stringify([...inlineArtifactsForMessage(item.event, events).values()]) : '') + (item.kind === 'event' && item.event.kind === 'chat_error'
       ? JSON.stringify(chatErrorPresentation(item.event, events)) : '') + (answerTurn ? '\u0000answer' : '') +
       (item.kind === 'event' && stoppedTurnEnd(item.event, events) ? '\u0000stopped' : '') +
+      (changes.length ? JSON.stringify(changes) : '') +
       (item.kind === 'compaction' && item !== latestCompaction ? '\u0000superseded' : '') +
       (item.kind === 'event' && item.event.kind === 'progress' && item.event.presentation && item.event.turnId &&
         events.some(event => event.kind === 'turn_end' && event.turnId === item.event.turnId) ? '\u0000ended' : '');
@@ -4969,6 +5011,21 @@ function paintDetail(followBottom = historyBefore === null): void {
       continue;
     }
     const row = item.kind === 'compaction' ? compactionRow(item.block, cached?.row, item === latestCompaction) : eventRow(item.event);
+    const reportOwner = selectedId, reportGeneration = selectionGeneration;
+    if (answerTurn && reportOwner && changes.length) {
+      const current = () => selectedId === reportOwner && selectionGeneration === reportGeneration;
+      row.querySelector('.said')?.append(renderTurnChangeSummary(changes, t, index => {
+        if (!current()) return;
+        const request = ++deliverableRequest;
+        void run(api.getTurnChanges(reportOwner, answerTurn)).then(files => {
+          if (!files?.length || !current() || request !== deliverableRequest) return;
+          const at = index === undefined ? -1 : files.findIndex(file => file.path === changes[index]?.path);
+          const pane = renderTurnReview(files, at < 0 ? undefined : at, t, async change =>
+            await run(api.getToolEditReview(reportOwner, change.callId, change.changeIndex)) ?? null, current);
+          showDeliverable('turn-changes', t('Turn changes'), pane, current);
+        });
+      }));
+    }
     if (answerTurn) row.querySelector('.said')?.append(answerActions(answerTurn));
     row.dataset.timelineKey = key;
     row.dataset.workerSessions = workerIds;
@@ -7271,6 +7328,7 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
   const ownerChanged = id !== selectedId;
   rememberDraft();
   selectionGeneration++; chatFind?.selectionChanged(); replaceComposerDraft();
+  closeDeliverables();
   inputQueueGeneration++;
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
   newChatSelected = false;
@@ -7320,6 +7378,7 @@ function selectSession(id: string, openingModel?: Pick<InputEntry, 'model' | 're
 function selectNewChat(projectId: string | null = null): void {
   clearSelectedProviderReadiness();
   rememberDraft(); selectionGeneration++; chatFind?.selectionChanged(); replaceComposerDraft(); pendingNewInput = null;
+  closeDeliverables();
   inputQueueGeneration++;
   $('finishQueue').replaceChildren(); $('finishQueue').hidden = true;
   newChatSelected = true; selectedId = null; selectedProjectId = projectId; detailFor = null; detailCursor = null;

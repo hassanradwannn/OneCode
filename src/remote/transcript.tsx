@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
@@ -19,6 +19,13 @@ import { Icon } from './composer-controls.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { MAX_INPUT_IMAGES } from '../shared/input.js';
 import { request } from './api.js';
+import { workspaceLinkPath, type WorkspaceDocument } from '../shared/workspace-link.js';
+import { summarizeTurnChanges, type RecordedChangeCall, type TurnFileChange } from '../shared/turn-changes.js';
+import type { ToolEditReview } from '../shared/session.js';
+import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDocument, restoreWorkspaceLinks, type DeliverableLabel } from '../renderer/workspace-deliverables.js';
+import '../renderer/workspace-deliverables.css';
+
+const label: DeliverableLabel = (message, args) => message.replace(/\{(\d+)\}/g, (whole, index) => String(args?.[Number(index)] ?? whole));
 
 async function copyText(value: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(value); return true; } catch { return false; }
@@ -56,9 +63,10 @@ function UserImages({ sessionId, event }: { sessionId: string; event: ControlApi
   if (!assets.length) return <div className="user-images"><span className="user-image-unavailable" role="status">Image unavailable</span></div>;
   return <div className="user-images">{assets.map((asset, index) => <UserImage key={asset.id} sessionId={sessionId} assetId={asset.id} index={index} onOpen={src => setPreview({ src, index })} />)}{preview && <div className="attachment-preview-backdrop" role="presentation" onClick={() => setPreview(null)}><section className="attachment-preview" role="dialog" aria-modal="true" aria-label={`Preview image ${preview.index + 1}`} onClick={event => event.stopPropagation()}><header><strong>{`Image ${preview.index + 1}`}</strong><button type="button" aria-label="Close image preview" onClick={() => setPreview(null)} autoFocus>×</button></header><img src={preview.src} alt="User attachment" /></section></div>}</div>;
 }
-export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl, inlineEvents, openRequestId, ended }: { text: string; sessionId?: string | null;
+export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl, inlineEvents, openRequestId, ended, openWorkspace }: { text: string; sessionId?: string | null;
   messageId?: string; nativeMarkup?: ControlApiEvent['nativeMarkup']; originalUrl?: string;
-  inlineEvents?: ControlApiEvent[]; openRequestId?: string | null; ended?: boolean }) {
+  inlineEvents?: ControlApiEvent[]; openRequestId?: string | null; ended?: boolean;
+  openWorkspace?: (messageId: string, href: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [mounts, setMounts] = useState<Array<{ host: HTMLElement; event: ControlApiEvent }>>([]);
   const inlineKey = JSON.stringify(inlineEvents?.map(row => [row.presentation, row.position]));
@@ -99,9 +107,11 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
       if (language) languages.set(code, language.toLowerCase());
     }
     sanitizeHtmlTree(template.content, { allowedTags: MESSAGE_TAGS, dropTags: MESSAGE_DROP_TAGS, preserveDirection: true,
-      safeHref: value => { const href = value.trim(); return href.startsWith('#') || safeExternalLink(href) || safeProviderFileLink(href) ? href : null; } });
+      safeHref: value => { const href = value.trim(); return href.startsWith('#') || safeExternalLink(href) || safeProviderFileLink(href) ||
+        (openWorkspace && messageId && workspaceLinkPath(href)) ? href : null; } });
     mountNative();
     box.replaceChildren(template.content);
+    if (native !== null && openWorkspace && messageId) restoreWorkspaceLinks(box, source);
     setMounts(nextMounts);
     if (!box.textContent?.trim() && source && native === null) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
@@ -109,6 +119,15 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     for (const link of box.querySelectorAll<HTMLAnchorElement>('a[href]')) {
       const href = link.getAttribute('href')!;
       if (safeExternalLink(href)) { link.target = '_blank'; link.rel = 'noopener noreferrer'; continue; }
+      if (workspaceLinkPath(href)) {
+        const open = (event: MouseEvent) => {
+          event.preventDefault();
+          if (!disposed && messageId && (event.type !== 'auxclick' || event.button === 1)) openWorkspace?.(messageId, href);
+        };
+        link.addEventListener('click', open);
+        link.addEventListener('auxclick', open);
+        continue;
+      }
       if (!safeProviderFileLink(href)) continue;
       // A private sandbox address cannot be navigated by Safari. Resolve only a
       // recorded assistant link and open its actual provider chat on this device.
@@ -134,7 +153,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
       if (!sessionId || !messageId) { link.setAttribute('aria-disabled', 'true'); notice.textContent = 'This file’s recorded source is unavailable.'; }
     }
     return () => { disposed = true; abort.abort(); };
-  }, [text, sessionId, messageId, nativeMarkup?.messageId, nativeMarkup?.capture.text,
+  }, [text, sessionId, messageId, nativeMarkup?.messageId, nativeMarkup?.capture.text, openWorkspace,
     nativeMarkup?.capture.truncated, originalUrl, inlineKey]);
   return <><div ref={host} className="msg rich" dir="auto" />{sessionId && mounts.map(item => createPortal(
     <RichPresentation event={item.event} sessionId={sessionId} openRequestId={openRequestId ?? null} ended={ended} />,
@@ -165,12 +184,48 @@ function ToolGroup({ events }: { events: ControlApiEvent[] }) {
     </details>)}</div>
   </details>;
 }
+function MountedDeliverable({ node }: { node: HTMLElement }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.append(node);
+    return () => { node.remove(); };
+  }, [node]);
+  return <div ref={ref} className="deliverable-pane" />;
+}
 export function Transcript({ events, sessionId, conversationId, openRequestId }: { events: ControlApiEvent[]; sessionId: string;
   conversationId?: string | null; openRequestId: string | null }) {
+  const [pane, setPane] = useState<{ node: HTMLElement; sessionId: string; title: string } | null>(null);
+  const [fileError, setFileError] = useState('');
+  const currentSession = useRef(sessionId); currentSession.current = sessionId;
+  const generation = useRef(0);
+  useEffect(() => { setPane(null); setFileError(''); return () => { generation.current++; }; }, [sessionId]);
+  const close = useCallback(() => { generation.current++; setPane(null); }, []);
+  const openWorkspace = useCallback((messageId: string, href: string) => {
+    const requestId = ++generation.current;
+    setFileError('');
+    const current = () => generation.current === requestId && currentSession.current === sessionId;
+    void request<WorkspaceDocument>('workspace-document', { sessionId, messageId, href }).then(file => {
+      if (!current()) return;
+      setPane({ sessionId, title: file.name, node: renderWorkspaceDocument(file, { label, copy: copyText,
+        openExternal: url => { window.open(url, '_blank', 'noopener,noreferrer'); } }) });
+    }).catch(() => { if (current()) setFileError('Could not open this workspace file.'); });
+  }, [sessionId]);
   const provider = chatProviderForStoredConversation(conversationId);
   const originalUrl = provider && isBrowserChatProvider(provider) && isChatProviderConversationId(conversationId, provider)
     ? chatProviderConversationUrl(provider, conversationId) : undefined;
   const ordered = chronological(events.map(event => ({ ...event, origin: event.position })));
+  const completed = new Set<string>(), lastFinal = new Map<string, number>(), changeCalls = new Map<string, RecordedChangeCall[]>();
+  for (const row of ordered) {
+    if (!row.turnId) continue;
+    if (row.kind === 'turn_end') {
+      if (row.outcome === 'completed') completed.add(row.turnId); else completed.delete(row.turnId);
+    } else if (row.kind === 'assistant_message' && row.final) lastFinal.set(row.turnId, row.position);
+    else if (row.kind === 'tool_call' && row.tool?.changes?.length) {
+      const list = changeCalls.get(row.turnId) ?? [];
+      if (!changeCalls.has(row.turnId)) changeCalls.set(row.turnId, list);
+      list.push(row.tool);
+    }
+  }
   const presentations = ordered.flatMap(row => row.presentation ? [row.presentation] : []);
   const inlineIds = new Set(ordered.flatMap(row => row.kind === 'assistant_message' && row.final
     ? [...hiddenNativePresentations(row.nativeMarkup?.capture, row.nativeMarkup?.messageId, presentations)] : []));
@@ -192,6 +247,8 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
       ? nativeArtifactBindings(row.nativeMarkup?.capture, row.nativeMarkup?.messageId, presentations) : new Map();
     const inlineEvents = row.kind === 'assistant_message' ? ordered.filter(event => event.presentation &&
       [...inline.values()].some(item => item.id === event.presentation?.id)) : undefined;
+    const changes = row.turnId && completed.has(row.turnId) && lastFinal.get(row.turnId) === row.position
+      ? summarizeTurnChanges(changeCalls.get(row.turnId) ?? []) : [];
     if (row.kind === 'assistant_message' && !text.trim() && !row.nativeMarkup) return null;
     if (!row.presentation && ['progress', 'page_tool'].includes(row.kind)) return <div className="activity-row" key={row.position}><Icon name="check-circle" /><span>{text || row.label || 'Working'}</span></div>;
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
@@ -202,7 +259,24 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
           <Markdown text={text} sessionId={sessionId} messageId={row.kind === 'assistant_message' ? row.messageId : undefined}
             nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} openRequestId={openRequestId}
             ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)}
-            inlineEvents={inlineEvents} />{row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
+            inlineEvents={inlineEvents} openWorkspace={openWorkspace} />
+          {changes.length > 0 && <MountedDeliverable node={renderTurnChangeSummary(changes, label, index => {
+            const id = ++generation.current; setFileError('');
+            const current = () => generation.current === id && currentSession.current === sessionId;
+            void request<TurnFileChange[]>('turn-changes', { sessionId, turnId: row.turnId }).then(files => {
+              if (!current() || !files.length) return;
+              const at = index === undefined ? -1 : files.findIndex(file => file.path === changes[index]?.path);
+              setPane({ sessionId, title: 'Turn changes', node: renderTurnReview(files, at < 0 ? undefined : at, label, change =>
+                request<ToolEditReview | null>('tool-edit-review', { sessionId, callId: change.callId, changeIndex: change.changeIndex }), current) });
+            }).catch(() => { if (current()) setFileError('Could not open the recorded changes.'); });
+          })} />}
+          {row.kind === 'assistant_message' && row.final && <AnswerActions text={text} />}</>}
     </article>;
-  })}</>;
+  })}{fileError && <p role="status">{fileError}</p>}
+    {pane?.sessionId === sessionId && createPortal(<aside className="remote-deliverable" aria-label={pane.title}
+      onKeyDown={event => { if (event.key === 'Escape') close(); }}>
+      <button type="button" className="deliverable-action" onClick={close}>Close sidebar</button>
+      <MountedDeliverable node={pane.node} />
+    </aside>, document.body)}
+  </>;
 }

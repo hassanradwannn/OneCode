@@ -45,6 +45,8 @@ import { validateInputImages } from './session/input-images.js';
 import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { approveFolder, applyWrittenFolderApproval } from './root-approval.js';
 import { recordedProviderFileLink } from './provider-file-links.js';
+import { readWorkspaceDocument } from './workspace-links.js';
+import { readTurnChanges } from './session/turn-changes.js';
 import { recordedReplyImage } from './provider-reply-images.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM, titleBarOverlayForTheme, windowBackgroundForTheme } from './window-layout.js';
@@ -1228,6 +1230,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       changeIndex: z.number().int().min(0).max(63)
     }).strict().parse(payload);
     return readToolEditReview(sessionId, callId, changeIndex);
+  });
+  handle('sessions:workspaceDocument', async payload => {
+    const { sessionId, messageId, href } = z.object({
+      sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i), messageId: z.string().min(1).max(512), href: z.string().max(2100)
+    }).strict().parse(payload);
+    return readWorkspaceDocument(sessionId, messageId, href);
+  });
+  handle('sessions:turnChanges', async payload => {
+    const { sessionId, turnId } = z.object({
+      sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i), turnId: z.string().min(1).max(512)
+    }).strict().parse(payload);
+    return readTurnChanges(sessionId, turnId);
   });
   handle('projectFiles:preview', async payload => {
     const { projectId, path } = z.object({ projectId: projectFileId, path: projectRelativePath.min(1) }).strict().parse(payload);

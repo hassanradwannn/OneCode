@@ -14,6 +14,7 @@ import { canAddCodeMode, CODE_MODE_INSTRUCTIONS } from './code-mode-tool.js';
 import { pluginManager } from '../plugins/manager.js';
 import { pluginDiscoveryInstructions } from './plugin-discovery.js';
 import { artifactDiscoveryInstructions } from './artifact-discovery.js';
+import { WORKSPACE_OUTPUT_INSTRUCTIONS } from '../../shared/workspace-link.js';
 import { mcpProvider } from './provider-context.js';
 import { effectiveCapabilities, getConfig, MAX_MCP_INSTRUCTIONS_CHARS } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
@@ -98,6 +99,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
   ].join(' ');
   const lines = [
     CODING_INSTRUCTIONS,
+    WORKSPACE_OUTPUT_INSTRUCTIONS,
     CHAT_SCHEDULE_INSTRUCTIONS,
     skills,
     ...(caps.read ? [SKILL_DISCOVERY_INSTRUCTIONS, SESSION_HISTORY_INSTRUCTIONS] : []),

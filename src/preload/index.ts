@@ -25,6 +25,8 @@ import type { WorkbenchBrowserBounds, WorkbenchBrowserState } from '../shared/wo
 import type { PetLibraryState, PetOverlayControlState, PetRuntimeAsset } from '../shared/pets.js';
 import type { SkillSummary, ManagedSkill, GitHubSkillUpdateCheck, SkillLibrary, SkillsDraftScope } from '../shared/skills.js';
 import type { RunningToolActivity, SessionChange, SessionSearchReply, SessionSearchLocation, ToolEditReview } from '../shared/session.js';
+import type { WorkspaceDocument } from '../shared/workspace-link.js';
+import type { TurnFileChange } from '../shared/turn-changes.js';
 import type { TurnTrace } from '../shared/turn-trace.js';
 import type { RunningExecProcess } from '../shared/background-exec.js';
 import type { PluginSnapshot, PluginInstallRequest, PluginConfigPatch } from '../shared/plugins.js';
@@ -376,6 +378,10 @@ const api = {
   }),
   getToolEditReview: (sessionId: string, callId: string, changeIndex: number) =>
     call<ToolEditReview | null>('sessions:toolEditReview', { sessionId, callId, changeIndex }),
+  getWorkspaceDocument: (sessionId: string, messageId: string, href: string) =>
+    call<WorkspaceDocument>('sessions:workspaceDocument', { sessionId, messageId, href }),
+  getTurnChanges: (sessionId: string, turnId: string) =>
+    call<TurnFileChange[]>('sessions:turnChanges', { sessionId, turnId }),
   onProjectGitChanged: (listener: (event: ProjectGitChanged) => void): (() => void) => {
     const wrapped = (_event: unknown, change: ProjectGitChanged): void => listener(change);
     ipcRenderer.on('projectGit:changed', wrapped);

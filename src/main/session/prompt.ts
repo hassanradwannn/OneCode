@@ -16,6 +16,7 @@ import { pluginManager } from '../plugins/manager.js';
 import { pluginDiscoveryInstructions } from '../mcp/plugin-discovery.js';
 import { configuredConnectorName } from '../mcp/surfaces.js';
 import { ARTIFACT_FLOW_REMINDER } from '../mcp/artifact-discovery.js';
+import { WORKSPACE_OUTPUT_INSTRUCTIONS } from '../../shared/workspace-link.js';
 import type { RoutedSkillSelection } from '../../shared/skill-routing.js';
 
 type PromptScope = { chatProvider?: ChatProvider; routingInstructions?: string; sessionId?: string | null; projectId?: string | null; autoSkills?: readonly RoutedSkillSelection[];
@@ -201,7 +202,7 @@ export async function prepareSessionPrompt(text: string, scope: PromptScope = {}
   // selections still resolve through the same scoped library and revision checks.
   const library = compact ? undefined : await listSkillLibrary(scope.autoSkills !== undefined ? { ...skillScope, managedFromCatalog: true } : skillScope);
   const core = [compact ? (provider === 'claude' ? claudeOpeningInstructions() : provider === 'openrouter' ? openRouterOpeningInstructions() : chatgptSkill ? chatgptSkillInstructions() : geminiOpeningInstructions()) : await withMcpProvider(provider, () => currentCoreInstructions(library)),
-    ...(compact ? [FIRST_TURN_TOOLS] : []),
+    ...(compact ? [FIRST_TURN_TOOLS, WORKSPACE_OUTPUT_INSTRUCTIONS] : []),
     scope.routingInstructions].filter(Boolean).join('\n\n');
   const skills = await selectedSkillInstructions(authored, skillScope, library, scope.autoSkills);
   fitSessionPrompt(text, core, null, budget, [], scope.workingDirectory, compact); // Only Core/task overflow is mandatory.
@@ -220,6 +221,7 @@ export async function prepareSkillFollowup(text: string, authored: string, budge
   const compactSkill = provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true || provider === 'claude' || provider === 'openrouter';
   const discovery = [
     ...(scope.routingInstructions ? [scope.routingInstructions] : []),
+    WORKSPACE_OUTPUT_INSTRUCTIONS,
     ...((provider === 'gemini' || provider === 'claude' || provider === 'openrouter') && effectiveCapabilities(getConfig()).create ? [ARTIFACT_FLOW_REMINDER] : []),
     ...(effectiveCapabilities(getConfig()).read ? compactSkill
       ? [`${provider === 'chatgpt' ? 'Use the installed onecode-chatgpt skill. ' : ''}Live references: /skills/.catalog.json and /sessions/.catalog.json; read only relevant entries.`]
