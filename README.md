@@ -2,13 +2,13 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest Stable update [OneCode 1.1.4](https://github.com/hassanradwannn/OneCode/releases/tag/v1.1.4)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Latest Stable update [OneCode 1.1.5](https://github.com/hassanradwannn/OneCode/releases/tag/v1.1.5)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.3/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
 
-**1.1.4** fixes messages with pasted screenshots stalling when ChatGPT renames the uploaded image. [Release notes](docs/release-notes/v1.1.4.md) · [Acceptance record](docs/release-acceptance/v1.1.4.md)
+**1.1.5** adds Fix network for stalled Tailscale connections on Linux. [Release notes](docs/release-notes/v1.1.5.md) · [Acceptance record](docs/release-acceptance/v1.1.5.md)
 
 Model discovery reads native choices without a model-name allowlist. Desktop and Remote recheck lists older than fifteen minutes when opened for ChatGPT, Gemini, Claude and OpenRouter, preserving exact model intent and availability checks. This cumulative release includes the browser import repairs from 1.1.1. Windows capsules retain the compatible 0.5.9 base; Linux capsules retain 1.0.7. Stable and Beta keep separate profiles and update channels.
 
-For a fresh installation, use the complete 1.1.3 packages linked above, then check for updates in OneCode. Compatible Stable installations can apply the verified 1.1.4 application update while keeping their native base.
+For a fresh installation, use the complete 1.1.3 packages linked above, then check for updates in OneCode. Compatible Stable installations can apply the verified 1.1.5 application update while keeping their native base.
 
 Native imports preserve supported Markdown, media, generated files and offline artifacts through each provider's adapter. Standard HTML controls and bundled React/diagram runtimes run locally. Controls backed only by a provider's private runtime or services require the original chat; universal visual and behavior parity is not claimed.
 
@@ -335,7 +335,7 @@ Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses t
 
 OneCode's local session, each queued input and the provider's native conversation have separate identities. New chats do not borrow another task's UUID or tool authority, and parallel chats retain separate claims, documents and turns. Compact & Resume keeps the task family and saved results while binding its successor through a fresh exact receipt. See [browser conversations and local sessions](docs/PROVIDER-SESSIONS.md).
 
-Developers can follow the [1.1.4 release notes](docs/release-notes/v1.1.4.md), [acceptance record](docs/release-acceptance/v1.1.4.md), [changelog](CHANGELOG.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
+Developers can follow the [1.1.5 release notes](docs/release-notes/v1.1.5.md), [acceptance record](docs/release-acceptance/v1.1.5.md), [changelog](CHANGELOG.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.5] — 2026-11-19
+
+Add **Fix network** on Linux for stalled Tailscale connections. See [1.1.5 notes](docs/release-notes/v1.1.5.md).
+
 ## [1.1.4] — 2026-11-19
 
 Fix ChatGPT sends that stall when a pasted PNG appears under a timestamped filename. See [1.1.4 notes](docs/release-notes/v1.1.4.md).
