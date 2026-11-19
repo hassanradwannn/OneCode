@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.6] — 2026-11-19
+
+Open linked workspace files in the sidebar, copy the original Markdown, and review recorded edits from completed replies. See [1.1.6 notes](docs/release-notes/v1.1.6.md).
+
 ## [1.1.5] — 2026-11-19
 
 Add **Fix network** on Linux for stalled Tailscale connections. See [1.1.5 notes](docs/release-notes/v1.1.5.md).
