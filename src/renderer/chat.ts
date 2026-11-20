@@ -54,7 +54,7 @@ import { summarizeTurnChanges, type RecordedChangeCall } from '../shared/turn-ch
 import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
 import './workspace-deliverables.css';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
-import { injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES, automaticInput, inputNoticeVisible, AUTOMATIC_INPUT_NOTICE_MS } from '../shared/input.js';
+import { canSendQueuedNow, injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES, automaticInput, inputNoticeVisible, AUTOMATIC_INPUT_NOTICE_MS } from '../shared/input.js';
 import type { InputArgs, InputEntry } from '../main/session/input.js';
 import type { DictationEvent } from '../shared/dictation.js';
 import { PROJECT_COLORS, type LocalProject, type ProjectColor } from '../shared/projects.js';
@@ -738,6 +738,24 @@ function attachmentCard(file: InputAttachment, inComposer = false): HTMLElement 
   const details = el('div', 'attachment-details');
   details.append(el('div', 'attachment-name', file.name), el('div', 'attachment-kind', () => file.mimeType.startsWith('image/') ? t("Image") : t("File")));
   tile.append(glyph, details); return tile;
+}
+
+function inputAttachmentPreviews(entry: Pick<InputEntry, 'attachments' | 'images'>): HTMLElement | null {
+  if (!entry.attachments?.length && !entry.images?.length) return null;
+  const files = el('div', 'message-attachments');
+  for (const file of entry.attachments ?? []) {
+    const tile = attachmentCard(file);
+    if (file.mimeType.startsWith('image/')) makePreviewable(tile, file, file.name);
+    files.append(tile);
+  }
+  for (const image of entry.images ?? []) {
+    const thumbnail = document.createElement('img');
+    thumbnail.src = image.dataUrl;
+    thumbnail.alt = image.name;
+    makePreviewable(thumbnail, image, image.name);
+    files.append(thumbnail);
+  }
+  return files;
 }
 
 let events: SessionEvent[] = [];
@@ -1777,21 +1795,51 @@ function pendingComposerInput(): InputEntry | undefined {
       pendingNewInput?.generation === selectionGeneration && pendingNewInput.id === entry.id));
 }
 let durationTimer: number | undefined;
+const queueSends = new Set<string>();
 /** Presentation follows the same exact-turn or canonically idle outbox admission. */
-function queuedNowDelivery(entry?: InputEntry): 'tool' | 'direct' | 'idle' | null {
-  if (selectedId === null || controlledSessionId !== selectedId || controlledSelection !== selectionGeneration || controlledStopPending) return null;
-  if (!controlledTurnId) return controlledCanSendQueuedWhenIdle ? 'idle' : null;
+function queuedNowDelivery(entry?: InputEntry): import('../shared/input.js').QueuedInputNowIntent | null {
+  if (!entry || !canSendQueuedNow(entry) || selectedId === null || controlledSessionId !== selectedId || controlledSelection !== selectionGeneration) return null;
   const conversationId = sessions.find(session => session.id === selectedId)?.conversationId;
-  return entry?.queuedTurn?.turnId === controlledTurnId && entry.queuedTurn.conversationId === conversationId ? 'direct' : null;
+  if (entry.sessionId !== selectedId || !conversationId || entry.conversationId !== conversationId) return null;
+  const turnId = controlledUnfinishedTurnId ?? controlledTurnId;
+  return turnId ? { delivery: 'direct', turnId } : controlledCanSendQueuedWhenIdle ? { delivery: 'idle', turnId: null } : null;
 }
 function paintQueuedNow(button: HTMLButtonElement, entry?: InputEntry): void {
-  const kind = queuedNowDelivery(entry);
+  const kind = queuedNowDelivery(entry)?.delivery ?? null;
   button.hidden = kind === null;
+  button.disabled = !!entry && queueSends.has(entry.id);
   const label = () => kind === 'idle' ? t('Send now') : t('Steer');
   ui(button, 'aria-label', label);
-  ui(button, 'title', () => kind === 'idle' ? t('Send as a new message') : t('Stop the current response and send your new direction'));
+  ui(button, 'title', () => kind === 'idle' ? t('Send as a new message') : t('Send your new direction into the current turn'));
   const caption = button.querySelector<HTMLElement>('.queue-send-caption');
   if (caption) ui(caption, 'textContent', label);
+}
+
+function queueSendAction(entry: InputEntry, selection: number): HTMLButtonElement {
+  const button = dockAction(() => t('Steer'), 'i-arrow-up', () => {});
+  button.classList.add('queue-send-now');
+  button.append(el('span', 'queue-send-caption'));
+  paintQueuedNow(button, entry);
+  button.onclick = async () => {
+    if (button.disabled || !button.isConnected || selection !== selectionGeneration || queueSends.has(entry.id)) return;
+    const intent = queuedNowDelivery(entry);
+    if (!intent) return;
+    const steerBefore = intent.delivery === 'direct' ? userMessageKeys() : null;
+    const steerSession = selectedId;
+    queueSends.add(entry.id);
+    paintQueuedNow(button, entry);
+    try {
+      const sent = await run(api.sendQueuedInputNow(entry.id, intent));
+      if (selection !== selectionGeneration) return;
+      if (sent === false) toast(t('The queued message or current turn changed. Check its delivery status.'));
+      if (sent === true && steerBefore && steerSession)
+        armSteerAnchor(entry.id, steerSession, selection, steerBefore, entry.messageId);
+    } finally {
+      queueSends.delete(entry.id);
+      if (selection === selectionGeneration) void refreshInputQueue();
+    }
+  };
+  return button;
 }
 /** The running turn whose delivery choice was last set to the Follow-up default. */
 let followUpTurn: string | null = null;
@@ -1802,7 +1850,7 @@ function followUpQueues(): boolean {
 function paintDeliveryControls(): void {
   $<HTMLSelectElement>('newChatProvider').hidden = newChatProviderLocked();
   paintGoalProgress();
-  for (const button of document.querySelectorAll<HTMLButtonElement>('#finishQueue .queue-send-now'))
+  for (const button of document.querySelectorAll<HTMLButtonElement>(':is(#finishQueue, #inputQueue) .queue-send-now'))
     paintQueuedNow(button, pendingComposerInputs.find(entry => entry.id === button.closest<HTMLElement>('[data-input-id]')?.dataset.inputId));
   const working = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledTurnId !== null;
   const stoppable = selectedId !== null && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledUnfinishedTurnId !== null;
@@ -1819,7 +1867,7 @@ function paintDeliveryControls(): void {
   generate.hidden = !working || !controlledFinishWaiting || queued || controlledStopPending || !!finishGoalDraftView;
   generate.disabled = generate.dataset.busy === `${selectedId}:${controlledTurnId}`;
   const sendOption = $<HTMLSelectElement>('sendMode').querySelector('option[value="auto"]');
-  const immediateLabel = () => t("Send");
+  const immediateLabel = () => stoppable ? t("Steer") : t("Send");
   if (sendOption) ui(sendOption, 'textContent', immediateLabel);
   ui($('immediateDeliveryLabel'), 'textContent', immediateLabel);
   const immediateAction = $('sendOptions').querySelector<HTMLElement>('[data-delivery="auto"]');
@@ -1831,23 +1879,25 @@ function paintDeliveryControls(): void {
     (canSendDirectly && files.length > 0 && injectableAttachments(files));
   if (injectionAction) injectionAction.hidden = !explicitInjection;
   // Each running turn starts from the Follow-up default; a choice made in the menu lasts for that turn.
-  const turnKey = working ? `${selectedId}:${controlledTurnId}` : null;
+  const turnKey = stoppable ? `${selectedId}:${controlledUnfinishedTurnId}` : null;
   if (turnKey !== followUpTurn) {
     followUpTurn = turnKey;
     if (turnKey) $<HTMLSelectElement>('sendMode').value = followUpQueues() ? 'after-turn' : 'auto';
   }
   if ($<HTMLSelectElement>('sendMode').value === 'tool' && !explicitInjection) $<HTMLSelectElement>('sendMode').value = 'auto';
-  if (!working) $<HTMLSelectElement>('sendMode').value = 'auto';
+  if (!stoppable) $<HTMLSelectElement>('sendMode').value = 'auto';
   const pending = pendingComposerInput();
   const stop = (stoppable || !!pending) && !currentPreparedPlan() && !authoredComposerText().trim() && !(imageDrafts.get(draftKey())?.length);
   // Hover selects delivery for the next message. Clicking the empty-composer
   // Stop still acts immediately; there is no second Stop action in the menu.
-  $('sendOptions').hidden = !working;
+  $('sendOptions').hidden = !stoppable;
   const send = $<HTMLButtonElement>('chatSend');
   const planMode = taskPlans.has(draftKey()), preparedPlan = currentPreparedPlan();
   send.disabled = !!preparedPlan && (preparedPlan.sending || preparedPlan.stages.some(stage => !stage.trim()));
   send.dataset.action = stop ? 'stop' : 'send';
-  ui(send, 'aria-label', () => stop ? (controlledStopPending ? t("Stop requested") : t("Stop turn")) : t("Send message"));
+  const delivery = $<HTMLSelectElement>('sendMode').value;
+  ui(send, 'aria-label', () => stop ? (controlledStopPending ? t("Stop requested") : t("Stop turn")) :
+    delivery === 'after-turn' ? t("After this turn") : delivery === 'tool' ? t("Inject now") : stoppable ? t("Steer") : t("Send message"));
   if (stop && !working && pending) ui(send, 'aria-label', () => t("Cancel delivery"));
   const planAction = selectedId && !chatKnownIdle(selectedId) ? t("Queue plan at Session finish") : t("Start full plan");
   if (preparedPlan && !stop) send.setAttribute('aria-label', planAction);
@@ -1856,7 +1906,7 @@ function paintDeliveryControls(): void {
   ui(send, 'title', () => stop && !working && pending ? t("Cancel delivery") : preparedPlan && !stop ? planAction : planMode && !stop ? t("Click to generate plan") : '');
   send.classList.toggle('is-stop', stop);
   for (const button of $('sendOptions').querySelectorAll<HTMLElement>('[data-delivery]')) {
-    button.setAttribute('aria-checked', String(button.dataset.delivery === (nativeFiles && working && $<HTMLSelectElement>('sendMode').value !== 'tool' ? 'after-turn' : $<HTMLSelectElement>('sendMode').value)));
+    button.setAttribute('aria-checked', String(button.dataset.delivery === delivery));
   }
 }
 function dockAction(label: string | (() => string), symbol: string, click: (event: MouseEvent) => void): HTMLButtonElement {
@@ -6703,14 +6753,8 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
   visibleInputIds.add(entry.id);
   if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
   const status = () => entry.error ? t(entry.error) : apiStatus ?? (held ? t("Sending in a moment…") : waiting === 'extension' ? t("Waiting for the browser extension to connect") : waiting === 'tool-call' ? t("Waiting for the running tool call to finish") : waiting === 'chatgpt-project' ? providerText("Creating this project in Gemini…") : waiting === 'chatgpt-project-failed' ? providerText("This project's Gemini Project isn't available. Retry it from the project's menu.") : (entry.state === 'failed' ? t("Delivery not confirmed") : entry.state === 'decision' ? t("Preparing follow-up") : entry.state === 'browser' ? t("Delivery confirmation pending") : entry.state === 'tool' ? t("Sent to the active turn · awaiting receipt") : entry.dueAt > Date.now() ? t("Scheduled {0}", [new Date(entry.dueAt).toLocaleString(currentLanguage())]) : entry.delivery === 'tool' ? t("Waiting for the next tool call") : t("Queued")));
-  const files = el('div', 'message-attachments');
-  if (entry.attachments?.length) files.append(...entry.attachments.map(file => {
-    const node = attachmentCard(file);
-    if (file.mimeType.startsWith('image/')) makePreviewable(node, file, file.name);
-    return node;
-  }));
-  for (const image of entry.images ?? []) { const thumbnail = document.createElement('img'); thumbnail.src = image.dataUrl; thumbnail.alt = image.name; makePreviewable(thumbnail, image, image.name); files.append(thumbnail); }
-  if (files.childElementCount) row.append(files);
+  const files = inputAttachmentPreviews(entry);
+  if (files) row.append(files);
   if (entry.text) {
     const text = el('div', 'pending-message-text');
     text.setAttribute('dir', 'auto');
@@ -6754,6 +6798,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
     row.append(retry);
   }
   if (['queued', 'browser'].includes(entry.state)) {
+    if (canSendQueuedNow(entry)) row.append(queueSendAction(entry, selectionGeneration));
     const cancel = dockAction(() => t("Cancel delivery"), 'i-x', () => {});
     cancel.onclick = async () => {
       cancel.disabled = true;
@@ -6828,7 +6873,7 @@ function paintPendingInputs(): void {
   const host = $('inputQueue');
   const previous = new Map([...host.querySelectorAll<HTMLElement>(':scope > .pending-message')].map(row => [row.dataset.inputId, row]));
   const next = rows.filter(entry => !historicalAutomaticInput(entry)).map(entry => {
-    const sig = JSON.stringify([entry.text, entry.state, entry.error, entry.apiRecovery, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
+    const sig = JSON.stringify([entry.text, entry.state, canSendQueuedNow(entry), entry.error, entry.apiRecovery, entry.dueAt, notice(entry), routeHeld(entry), queuedWaitReason(entry), apiPendingInputStatus(entry), entry.stagesApplied,
       entry.stages, entry.attachments?.map(file => file.id), entry.images?.map(image => [image.name, image.dataUrl.length]),
       hasLaterModelActivity(entry.deliveredAt ?? entry.offeredAt ?? entry.createdAt)]);
     const old = previous.get(entry.id);
@@ -6866,7 +6911,7 @@ async function refreshInputQueue(): Promise<void> {
   const projectedIds = new Set<string>();
   for (const entry of staged) for (const [index, text] of (entry.stages ?? []).entries()) {
     const id = `${entry.id}:stage:${index}`; projectedIds.add(id);
-    queuedTasks.push({ ...entry, id, text, mode: 'finish', state: 'browser', stages: undefined });
+    queuedTasks.push({ ...entry, id, text, mode: 'finish', state: 'browser', stages: undefined, attachments: undefined, images: undefined });
   }
   const queueSession = selectedId;
   const reorder = async (from: string, to: string, after: boolean) => {
@@ -6894,7 +6939,10 @@ async function refreshInputQueue(): Promise<void> {
       ? providerText('Resumes without a final answer. If Gemini is still generating, the silent turn is stopped before Continue is sent.')
       : entry.state === 'queued' ? (entry.mode === 'after-turn' ? t("After the next completed answer") : t("At Session finish or after a completed answer")) : t("Awaiting receipt")} · ${entry.text}`);
     label.dir = 'auto';
-    card.append(icon(entry.recovery ? 'i-pulse' : 'i-clock'), label);
+    const content = el('div', 'queue-content'); content.append(label);
+    const attachments = inputAttachmentPreviews(entry);
+    if (attachments) content.append(attachments);
+    card.append(icon(entry.recovery ? 'i-pulse' : 'i-clock'), content);
     if (entry.state === 'queued') {
       const retireCard = () => { card.remove(); taskList.hidden = taskList.childElementCount === 0; };
       const cancel = dockAction(() => entry.recovery ? t('Cancel automatic Continue') : t("Remove queued task"), 'i-trash', () => {});
@@ -6912,31 +6960,7 @@ async function refreshInputQueue(): Promise<void> {
       };
       if (entry.recovery) { card.append(cancel); return card; }
       // Like Codex's Steer: send a message that waits for the end of the turn into the turn now.
-      if (entry.mode === 'after-turn' && !entry.attachments?.length && !entry.images?.length && !entry.stages?.length) {
-        const now = dockAction(() => t("Steer"), 'i-arrow-up', () => {});
-        now.classList.add('queue-send-now');
-        now.append(el('span', 'queue-send-caption'));
-        paintQueuedNow(now, entry);
-        now.onclick = async () => {
-          if (now.disabled || !card.isConnected || selection !== selectionGeneration) return;
-          const delivery = queuedNowDelivery(entry);
-          if (!delivery) return;
-          const intent = { delivery, turnId: delivery === 'idle' ? null : controlledTurnId };
-          const steerBefore = delivery === 'direct' ? userMessageKeys() : null;
-          const steerSession = selectedId;
-          const steerSelection = selectionGeneration;
-          now.disabled = true;
-          const sent = await run(api.sendQueuedInputNow(entry.id, intent));
-          if (!card.isConnected || selection !== selectionGeneration) return;
-          if (sent === false) toast(t("The turn ended before this message could join it. It stays queued."));
-          if (sent === true && delivery === 'direct' && steerBefore && steerSession)
-            armSteerAnchor(entry.id, steerSession, steerSelection, steerBefore, entry.messageId);
-          if (sent !== true) now.disabled = false;
-          inputQueueGeneration++;
-          void refreshInputQueue();
-        };
-        card.append(now);
-      }
+      if (canSendQueuedNow(entry)) card.append(queueSendAction(entry, selection));
       const queueSessionSummary = sessions.find(row => row.id === selectedId);
       const modelSelection = queueSessionSummary?.selectedModel;
       if (entry.mode === 'finish' && modelSelection?.conversationId === queueSessionSummary?.conversationId && isAstraModel(modelSelection?.model, modelSelection?.reasoningEffort)) {
@@ -7010,7 +7034,10 @@ async function refreshInputQueue(): Promise<void> {
           } catch (error) { toast(error instanceof Error ? error.message : t("Could not save this task.")); }
           finally { save.disabled = false; cancel.disabled = false; ui(save, 'textContent', () => t("Save")); field.readOnly = false; }
         };
-        card.classList.add('is-editing'); card.replaceChildren(field, save, cancel); field.focus();
+        const previews = inputAttachmentPreviews(entry);
+        card.classList.add('is-editing'); card.replaceChildren(field, save, cancel);
+        if (previews) card.append(previews);
+        field.focus();
       };
       card.append(edit, cancel);
     }
@@ -7130,27 +7157,27 @@ async function sendComposer(delivery?: 'finish' | 'auto' | 'after-turn', plan?: 
     }
     return;
   }
+  const sessionId = selectedId, generation = selectionGeneration;
+  const chosenMode = delivery ?? $<HTMLSelectElement>('sendMode').value;
+  const ownsControls = controlledSessionId === sessionId && controlledSelection === generation;
+  const nativeFiles = images.some(file => 'id' in file) && !(controlledCanInject && injectableAttachments(images));
+  const mode = chosenMode === 'tool' ? 'auto' : chosenMode === 'after-turn' && ownsControls && controlledQueueAtFinish && !nativeFiles ? 'finish' : chosenMode;
+  // Freeze the chosen delivery and its unfinished turn at submit. Model discovery
+  // and live control updates may repaint a different turn while the draft waits.
+  const steerTurnId = ownsControls ? controlledUnfinishedTurnId ?? controlledTurnId : null;
   const discoveryGeneration = ++composerDiscoveryGeneration;
-  const discoverySelection = selectionGeneration, discoverySession = selectedId, discoveryDraft = authoredComposerText();
+  const discoveryDraft = authoredComposerText();
   const sendProvider = selectedChatProvider();
   const modelSettings = composerSendModel() ?? await ensureComposerModel();
   // Discovery can outlive navigation or draft edits. Only the latest unchanged
   // authored send may continue; a second click must never send the same text twice.
-  if (discoveryGeneration !== composerDiscoveryGeneration || discoverySelection !== selectionGeneration || discoverySession !== selectedId || sendProvider !== selectedChatProvider() ||
+  if (discoveryGeneration !== composerDiscoveryGeneration || generation !== selectionGeneration || sessionId !== selectedId || sendProvider !== selectedChatProvider() ||
       authoredComposerText() !== discoveryDraft || (imageDrafts.get(key) ?? []).some((image, index) => image !== images[index]) ||
       (imageDrafts.get(key)?.length ?? 0) !== images.length) return false;
   if (!modelSettings) { toast(t("Model discovery could not confirm your selection. Choose an available model and thinking effort, then send again.")); return false; }
-  const sessionId = selectedId;
-  const generation = selectionGeneration;
-  const chosenMode = delivery ?? $<HTMLSelectElement>('sendMode').value;
-  const mode = chosenMode === 'tool' ? 'auto' : chosenMode === 'after-turn' && controlledSessionId === selectedId && controlledSelection === selectionGeneration && controlledQueueAtFinish ? 'finish' : chosenMode;
   const dueAt = Date.now();
   const id = crypto.randomUUID();
   const authoredDraft = authoredComposerText();
-  // Activity expiry hides Working/Stop, but does not prove the native turn ended.
-  // An explicit immediate follow-up must still stop that exact unresolved turn.
-  // Admission rechecks this durable ID; a newer question cannot inherit the request.
-  const steerTurnId = controlledSessionId === sessionId && controlledSelection === generation ? controlledUnfinishedTurnId : null;
   const isSteer = mode === 'auto' && chosenMode !== 'tool' && !plan && !!sessionId && !!steerTurnId;
   const sentBefore = mode !== 'finish' ? userMessageKeys() : new Set<string>();
   const acceptedViewport = (entry: InputEntry): void => {

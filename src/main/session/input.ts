@@ -5,7 +5,7 @@ import { REASONING_EFFORTS, workSequence } from '../../shared/session.js';
  * Tool delivery repeats under a stable message id until a later request proves receipt.
  */
 import { z } from 'zod';
-import { browserInputModel, manualInput, queuedFollowup, MAX_INPUT_IMAGES, INPUT_RECEIPT_WAIT_MS, type InputImage, type QueuedInputNowIntent } from '../../shared/input.js';
+import { browserInputModel, canSendQueuedNow, manualInput, queuedFollowup, MAX_INPUT_IMAGES, INPUT_RECEIPT_WAIT_MS, type InputImage, type QueuedInputNowIntent } from '../../shared/input.js';
 import type { SessionSummary } from '../../shared/session.js';
 import { getConfig } from '../config.js';
 import { geminiBindingsEnabled, type GeminiBindingInput, type GeminiInputTurn } from '../gemini/bindings.js';
@@ -1385,24 +1385,27 @@ export function editQueuedInput(id: string, text: string, afterTurn?: boolean): 
 export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): Promise<boolean> {
   return serial(async () => {
     const current = await load();
-    const row = current.find(entry => entry.id === id && entry.state === 'queued' && entry.mode === 'after-turn' && queuedFollowup(entry) &&
-      !entry.recovery && !entry.finishOwner && !entry.attachments?.length && !entry.images?.length && !entry.stages?.length &&
-      entry.owner === null && entry.offeredAt === undefined && entry.sendAuthorizedAt === undefined && !!entry.sessionId);
-    if (!row) return false;
-    const policy = await sessionInputPolicy(row.sessionId!);
-    const session = await getSession(row.sessionId!);
-    if (!session?.conversationId || session.conversationId !== row.conversationId || isChatBlocked(session.conversationId)) return false;
+    const row = current.find(entry => entry.id === id && canSendQueuedNow(entry));
+    if (!row?.sessionId) return false;
+    const policy = await sessionInputPolicy(row.sessionId);
+    const session = await getSession(row.sessionId);
+    if (!session?.conversationId || session.conversationId !== row.conversationId || isChatBlocked(session.conversationId) ||
+        await conversationWasSuperseded(session.conversationId)) return false;
     const turnId = session.activeTurnId;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
     if (!turnId && !idle) return false;
-    if (turnId && (row.queuedTurn?.turnId !== turnId || row.queuedTurn.conversationId !== session.conversationId)) return false;
     if (intent && (intent.delivery === 'idle' ? !idle || intent.turnId !== null : !turnId || intent.turnId !== turnId)) return false;
-    const source = turnId ? await steeringSource(row.sessionId!, session.conversationId, turnId) : null;
+    // The UI names the turn the person just chose to join. Legacy callers can
+    // still promote only against the original queue boundary.
+    if (turnId && intent?.delivery !== 'direct' &&
+        (row.queuedTurn?.turnId !== turnId || row.queuedTurn.conversationId !== session.conversationId)) return false;
+    const source = turnId ? await steeringSource(row.sessionId, session.conversationId, turnId) : null;
     if (turnId && !source) return false;
     // The person chose immediate delivery for this message; it is no longer an after-turn request.
     const { requestedMode: _requested, silenceBoundary: _silence, directTurn: _direct, delivery: _delivery, toolSteer: _toolSteer, toolTurnId: _toolTurn, ...rest } = row;
     await commit(current.map(entry => entry === row ? { ...rest, mode: 'auto' as const,
-      ...(turnId ? { steerTurnId: turnId, steerReady: true as const, directTurn: source! } : {}), transportIntent: 'browser' as const,
+      ...(source ? { steerTurnId: source.id, steerReady: true as const, directTurn: source,
+        queuedTurn: { conversationId: session.conversationId!, turnId: source.id } } : {}), transportIntent: 'browser' as const,
       dueAt: Math.min(row.dueAt, Date.now()) } : entry));
     return true;
   });

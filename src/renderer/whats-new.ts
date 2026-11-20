@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.8': {
+    lead: () => t('Finish ChatGPT handoffs and steer with queued attachments.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Collect completed handoffs'), text: () => t('Compact & Resume checks the exact native response for completion when the reply display is slow to catch up.') },
+      { icon: 'i-file', title: () => t('Steer from the queue'), text: () => t('Choose Steer on an eligible queued message. Its images stay attached and can be previewed from the queue.') }
+    ]
+  },
   '1.1.7': {
     lead: () => t('Copy ChatGPT Writing cards and send batches of screenshots.'),
     highlights: [

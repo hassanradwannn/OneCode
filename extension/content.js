@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 150;
+  const RECORDER_VERSION = 151;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4141,7 +4141,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 43;
+  const FIBER_VERSION = 44;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -11439,6 +11439,13 @@
     // A repair claimed before dispatch can arrive after the checkpoint advanced. The
     // still-running owner must finish its native click/receipt, not be reloaded mid-Send.
     if (nativeBusy && !currentAssistantError()) return true;
+    // A sent handoff can be a long native answer. A deadline alone must not reload
+    // a healthy stream. Let this document take another read of the existing response.
+    // A broken stream or an idle page with no captured final keeps the reload path.
+    if (source.state === 'sent' && CLF_DOM.provider === 'chatgpt' && CLF_DOM.generating() && !currentAssistantError()) {
+      observe();
+      return true;
+    }
     if (
         (source.state !== 'not-attempted' && source.state !== 'attempted-unresolved')) return false;
     // A source answer ChatGPT broke off ("Connection interrupted. Waiting for the complete
@@ -12083,8 +12090,13 @@
     const terminalId = answer.endMessageId;
     const unambiguousAssistant = assistants.length === 1 && String(assistants[0]?.rawText || '').trim().length > 0
       ? assistants[0] : null;
+    // The local open-turn flag may be waiting for the very terminal id this
+    // provider frame lacks. A completed, idle native reply with an exact question
+    // relation can break that dependency. An idle composer by itself cannot.
     const completedWithoutTerminal = !terminalId && answer.terminalState === 'complete' &&
-      !CLF_DOM.generating() && !generating && !!unambiguousAssistant;
+      !CLF_DOM.generating() && !CLF_DOM.stopButton() && !!unambiguousAssistant &&
+      (!generating || (!answer.conversationConflict && answer.conversationId === conversationId &&
+        unambiguousAssistant.responseToQuestionId === marked.messageId && openedUserMessageId === marked.messageId));
     if ((!terminalId && !completedWithoutTerminal) ||
         (answer.calls || []).some((call) => !call || call.answered !== true)) return false;
     const terminal = terminalId

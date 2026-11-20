@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.8] — 2026-11-20
+
+Collect ChatGPT handoffs when the native reply’s completion flag lags, keep healthy handoff streams running, and steer with attachments from the Desktop queue. See [1.1.8 notes](docs/release-notes/v1.1.8.md).
+
 ## [1.1.7] — 2026-11-20
 
 Copy the Markdown from ChatGPT Writing cards, send batches of renamed screenshots, and verify the exact model and effort during Compact & Resume. See [1.1.7 notes](docs/release-notes/v1.1.7.md).

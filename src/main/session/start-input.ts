@@ -134,10 +134,11 @@ export async function resumePendingSteeringInputs(): Promise<void> {
 }
 /** Explicit queue steering uses ordinary startup and the exact native composer claim. */
 export async function sendQueuedDesktopInputNow(id: string, intent?: QueuedInputNowIntent): Promise<boolean> {
-  if (stopped || starting.has(id) || !await sendQueuedInputNow(id, intent)) return false;
+  if (stopped || !await sendQueuedInputNow(id, intent)) return false;
   const entry = (await listInputs()).find(row => row.id === id);
-  if (!entry) return false;
+  if (!entry || stopped) return false;
   if (entry.chatProvider && apiProvider(entry.chatProvider)) { await steerApiInput(entry); return true; }
+  if (starting.has(id)) return true;
   const controller = new AbortController(); starting.set(id, controller);
   void startAcceptedInput(entry, controller).catch(() => undefined);
   return true;

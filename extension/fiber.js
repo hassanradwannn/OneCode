@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 43;
+  const VERSION = 44;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -2402,7 +2402,7 @@
     const anchorId = str(anchor?.messageId) || str(anchor?.serverMessageId);
     const mapping = graph.mapping, seen = new Set(), assistantIds = [];
     const typed = new Set(shell.messages.filter(message => message.author?.role === 'assistant').map(message => message.id));
-    let id = graph.current_node, user = null, anchored = false;
+    let id = graph.current_node, user = null, latestAnswer = null, anchored = false;
     for (let at = 0; at < MAX_ROWS && typeof id === 'string' && id.length <= MAX_TEXT && !seen.has(id); at++) {
       const node = Object.getOwnPropertyDescriptor(mapping, id)?.value, message = node?.message;
       if (node?.id !== id || message?.id !== id) return null;
@@ -2411,16 +2411,31 @@
         if (hiddenMessage(message) || analysisMessage(message)) return null;
         if (!user) user = message;
         if (id === anchorId) { anchored = true; break; }
-      } else if (!user && typed.has(id) && message.author?.role === 'assistant' &&
+      } else if (!user && message.author?.role === 'assistant' &&
           !requestOf(message) && !resultOf(message) && !thoughtMessage(message) && !hiddenMessage(message) &&
-          !analysisMessage(message) && (!message.recipient || message.recipient === 'all') && message.content?.content_type === 'text') assistantIds.push(id);
+          !analysisMessage(message) && (!message.recipient || message.recipient === 'all') && message.content?.content_type === 'text') {
+        if (typed.has(id)) assistantIds.push(id);
+        if (!latestAnswer && !neverTerminalChannel(message)) latestAnswer = message;
+      }
       id = node.parent;
     }
     if (!anchored || !user) return null;
     const text = withoutAppMentions(authoredText(user));
     if (!text || text.length > Math.min(MAX_RENDERED_TEXT, budget.remaining)) return null;
     budget.remaining -= text.length;
-    return { user: { messageId: user.id, rawText: text }, assistantIds: assistantIds.reverse() };
+    // The live graph can finish an exact final before the shell item's completed
+    // flag catches up. Prove the latest public answer on this selected branch
+    // and the complete authored text before promoting the existing typed row.
+    let terminalId = null;
+    if (latestAnswer?.status === 'finished_successfully' && assistantIds.includes(latestAnswer.id) &&
+        !['cancelled', 'canceled', 'stopped'].includes(shell.entry.turn.status)) {
+      const projected = shell.messages.find(message => message.id === latestAnswer.id);
+      const body = authoredText(latestAnswer);
+      if (projected?.channel === 'final' && body?.trim() && body.length < MAX_RENDERED_TEXT && authoredText(projected) === body &&
+          (latestAnswer.end_turn === true ||
+            latestAnswer.end_turn == null && shell.entry.turn.status === 'complete' && channelOf(latestAnswer) === 'final')) terminalId = latestAnswer.id;
+    }
+    return { branch: { user: { messageId: user.id, rawText: text }, assistantIds: assistantIds.reverse() }, terminalId };
   }
   /** #318 identified the history cache. Both sources project only explicitly named
    * messages. Typed public items own presentation; cache text cannot supply a final. */
@@ -2986,7 +3001,8 @@
         const turnBudget = { remaining: Math.min(MAX_TURN_TEXT, responseBudget.remaining) };
         const before = turnBudget.remaining;
         const renderedMessages = renderedMessagesOf(group.sections, messages, turnBudget, exactAnchors, conversation.conversationId);
-        const currentBranch = shell ? shellCurrentBranch(fiber, shell, conversation, turnBudget) : null;
+        const branchProof = shell ? shellCurrentBranch(fiber, shell, conversation, turnBudget) : null;
+        const currentBranch = branchProof?.branch ?? null;
         const nativeActivities = shell ? shellPublicActivity(shell, metadata, renderedMessages, turnBudget, section, exactAnchors) : nativeActivitiesOf(group.sections, messages, exactThoughtRows);
         // Typed assistant-message rows can retain earlier public prose just as
         // reasoning preambles do. Their presentation channel is not a question
@@ -3009,7 +3025,7 @@
         const providerArtifacts = providerArtifactsOf(messages);
         providerArtifacts.push(...dilArtifactsOf(renderedMessages, exactAnchors));
         const activities = nativeActivities.events;
-        const nativeEndMessageId = shell ? shell.endMessageId : turnEndMessageId(messages);
+        const nativeEndMessageId = shell ? branchProof?.terminalId || shell.endMessageId : turnEndMessageId(messages);
         const endMessageId = currentBranch ? currentBranch.assistantIds.includes(nativeEndMessageId) ? nativeEndMessageId : null : nativeEndMessageId;
         const nativeTurn = shell?.entry.turn || viewTurn;
         const terminalState = nativeTurn && ['complete', 'cancelled', 'canceled', 'stopped'].includes(nativeTurn.status)

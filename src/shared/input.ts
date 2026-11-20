@@ -28,6 +28,19 @@ export function queuedFollowup(row: InputIntent): boolean {
     (row.mode === 'finish' || (row.mode === 'after-turn' && !!row.sessionId && row.purpose !== 'decision'));
 }
 
+/** An authored queue row can change delivery only before any provider owns it. */
+export function canSendQueuedNow(row: InputIntent & {
+  state: string; owner: string | null; offeredAt?: number; sendAuthorizedAt?: number; recovery?: unknown;
+  nativeRecovery?: unknown; stages?: string[]; authoredSource?: string; delivery?: string;
+}): boolean {
+  return row.state === 'queued' && !!row.sessionId && !row.opening && !row.scheduleId &&
+    (row.mode === 'after-turn' || row.mode === 'finish' && row.authoredSource === 'text') &&
+    (!row.purpose || row.purpose === 'user') && row.authoredSource !== 'none' &&
+    !row.finishOwner && !row.recovery && !row.nativeRecovery && !row.stages?.length &&
+    row.delivery !== 'tool' && row.attachmentDelivery !== 'tool' &&
+    row.owner === null && row.offeredAt === undefined && row.sendAuthorizedAt === undefined;
+}
+
 /** Finish tasks continue the chat; their old enqueue-time picker is not a new
  * model choice. Apply this projection to legacy queues too, preserving authored
  * fields for idempotent retries and keeping delivery/history on the same rule. */
