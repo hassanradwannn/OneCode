@@ -3207,7 +3207,7 @@ const browserRepairActions = new Set();
 const steersWaitingForRepair = new Set();
 let steeringChats = new Set();
 function repairYieldsToSteer(reason) {
-  return reason !== 'no-tab' && reason !== 'stalled' && reason !== 'compaction';
+  return reason !== 'no-tab' && reason !== 'stalled';
 }
 let browserRepairCursor = 0;
 let wakeSocket = null;
@@ -3957,7 +3957,7 @@ async function maintainOnce() {
     if (!browserRepairActions.has(conversation)) return true;
     steersWaitingForRepair.add(conversation);
     return false;
-  });
+  }).sort((a, b) => Number(Boolean(isSteer(b))) - Number(Boolean(isSteer(a))));
   phase('input-delivery');
   await deliverDesktopInputs(inputs, reply.data.background === true,
     Array.isArray(reply.data.reusableConversations) ? reply.data.reusableConversations.filter(id => !repairConversations.has(id)) : [],
@@ -6406,7 +6406,7 @@ chrome.tabs.onUpdated.addListener((id, changeInfo, tab) => {
  * receive both its static manifest injection and this recovery injection.
  */
 const CHATGPT_TAB_URLS = ['https://gemini.google.com/*', 'https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*'];
-const PAGE_RECORDER_VERSION = 151;
+const PAGE_RECORDER_VERSION = 152;
 
 let deferredRecoveryWork = null;
 

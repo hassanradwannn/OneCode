@@ -425,6 +425,7 @@ async function perform(entry: InputEntry): Promise<void> {
       let requestMessages: ApiMessage[] = [{ role: "system", content: system }, ...(!accepted ? messages : thread.messages)];
       if(active.compactionRequested || getConfig().compaction.auto && apiContextNeedsCompaction(model,requestMessages,declarations)){
         await compactContext();
+        if (accepted && await yieldToDirection()) return;
         requestMessages=[{role:'system',content:system},...(!accepted?messages:thread.messages)];
       }
       assertApiInputSupported(model, requestMessages);

@@ -1747,11 +1747,12 @@ function noteAbandoned(entry: Continuation, reason: string): void {
 }
 
 /** Durable abort for user-visible cancellation paths. */
-export async function abortContinuationNow(token: string, reason: string): Promise<boolean> {
+export async function abortContinuationNow(token: string, reason: string, { beforeDestinationSend = false } = {}): Promise<boolean> {
   return withCheckpointLock(token, async () => {
     const entry = byToken.get(token);
     if (!entry || entry.state === 'committing') return false;
     if (entry.state === 'committed' || entry.state === 'aborted') return false;
+    if (beforeDestinationSend && (entry.state === 'awaiting-summary' || !sendUnattempted(entry.destinationSend))) return false;
     if (entry.automatic) {
       const source = await getSession(entry.sessionId);
       // The dispatched handoff may already be a new turn. Refuse that current

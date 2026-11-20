@@ -2724,6 +2724,7 @@ async function fileCompactionTicket(sessionId: string, id: string, automatic = f
   if (await controlledConversation(sessionId) !== id) throw new Error('conversation_changed');
   if (goalWorkerChat(id)) throw new Error('worker_compaction_disabled');
   if (isChatBlocked(id)) throw new Error('chat_blocked');
+  if (await hasPendingBrowserSteer(id)) throw new Error('steer_pending');
   if (automatic && !automaticCompactionAllowed(await getSession(sessionId))) throw new Error('automatic_compaction_disabled');
   const existing = continuationForSession(sessionId);
   const opened = existing ?? await openContinuationNow(sessionId, id, automatic);
@@ -2759,7 +2760,8 @@ export async function compactSession(sessionId: string): Promise<SessionControls
 }
 /** Compact & Resume again from the summary an abandoned run already captured (#1215). */
 export async function resumeFromSavedSummary(sessionId: string, handoffId: string): Promise<SessionControlsView> {
-  await controlledConversation(sessionId);
+  const conversation = await controlledConversation(sessionId);
+  if (await hasPendingBrowserSteer(conversation)) throw new Error('Your Steer takes priority over Compact & Resume.');
   const opened = await reopenWithHandoffNow(sessionId, handoffId);
   if (!opened) throw new Error('This summary can no longer be used. Start Compact & Resume again.');
   queueResumeCommand(sessionId, opened.token);
@@ -3411,6 +3413,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const pendingIds = new Set(pendingInputs.map(input => input.id));
     const steeringChats = new Set(pendingInputs.flatMap(input =>
       input.conversationId && input.steerTurnId && input.directTurn?.questionId ? [input.conversationId] : []));
+    for (const id of steeringChats) {
+      const entry = pendingContinuations().find(row => row.from === id);
+      if (entry) await yieldUnsentCompactionToSteer(entry);
+    }
     for (const id of openingCustody.keys()) if (!pendingIds.has(id)) openingCustody.delete(id);
     return json(
       res,
@@ -4558,6 +4564,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
             (destinationCommand.warmupRecovery && (destinationCommand.warmupRecovery.successorOwner !== body['client'] ||
               Date.now() >= destinationCommand.warmupRecovery.expiresAt)) ||
             !continuationClaimedBy(checkpointToken, destinationCommand.id)) return false;
+        if ((body['destinationAttempt'] === true || body['destinationDispatch'] === true) && checkpoint &&
+            await yieldUnsentCompactionToSteer(checkpoint)) return false;
         return transition();
       });
     };
@@ -4654,6 +4662,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body['sourceDispatch'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (await yieldUnsentCompactionToSteer(entry))
+        return json(res, 409, { error: 'steer_pending', job: resumeJobFor(entry.sessionId) }, origin);
       if (!ownsSourceCustody) return json(res, 409, { error: 'source_document_changed' }, origin);
       const before = typeof body['before'] === 'string' ? body['before'] : null;
       const armed = await dispatchContinuationSourceSendNow(checkpointToken, before);
@@ -4675,6 +4685,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body['sourceAttempt'] === true) {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
+      if (await yieldUnsentCompactionToSteer(entry))
+        return json(res, 409, { error: 'steer_pending', job: resumeJobFor(entry.sessionId) }, origin);
       if (sourceDocument?.provider === 'gemini' && !sourceCustody) return json(res, 409, { error: 'source_browser_required' }, origin);
       const result = await beginContinuationSourceSendNow(checkpointToken,
         Object.hasOwn(body, 'project') ? normalizeProjectId(body['project']) : undefined, sourceCustody);
@@ -4825,6 +4837,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       try {
         ticket = await fileCompactionTicket(sessionId, id, body['automatic'] === true);
       } catch (err) {
+        if (err instanceof Error && err.message === 'steer_pending')
+          return json(res, 409, { error: 'steer_pending', message: 'Your Steer takes priority over Compact & Resume.' }, origin);
         logWarn(`bridge: could not durably file Compact & Resume for ${sessionId} — ${err instanceof Error ? err.message : String(err)}`);
         return json(res, 503, { error: 'continuation_not_durable', retryable: true, sessionId }, origin);
       }
@@ -4900,6 +4914,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       );
     }
 
+    if (await hasPendingBrowserSteer(id)) return json(res, 409, { error: 'steer_pending' }, origin);
     let opened;
     try {
       opened = await openContinuationNow(sessionId, id, false);
@@ -7445,6 +7460,25 @@ async function cancelAutomaticResumesNow(sessionId?: string): Promise<number> {
   return cancelled;
 }
 
+/** An accepted user Steer can withdraw the current pre-Send step of a handoff. */
+async function yieldUnsentCompactionToSteer(entry: ContinuationView): Promise<boolean> {
+  const source = entry.state === 'awaiting-summary';
+  const destination = entry.state === 'awaiting-chat' || entry.state === 'claimed';
+  if ((!source && !destination) || !sendUnattempted(source ? entry.sourceSend : entry.destinationSend) ||
+      !await hasPendingBrowserSteer(entry.from)) return false;
+  const reason = 'Compact & Resume yielded to your Steer.';
+  const retired = source ? await abortContinuationSourceBeforeSendNow(entry.token, reason)
+    : await abortContinuationNow(entry.token, reason, { beforeDestinationSend: true });
+  if (!retired) return false;
+  const command = commands.find(item => item.spec.type === 'resume' && item.spec.token === entry.token);
+  if (command) { geminiCommandCustody.delete(command.id); retire(command, reason); }
+  if (compactionWatch.get(entry.from)?.token === entry.token) compactionWatch.delete(entry.from);
+  const repair = repairsInFlight.get(entry.from);
+  if (repair?.reason === 'compaction' && repair.episode.startsWith(`compaction:${entry.token}:`)) repairsInFlight.delete(entry.from);
+  changed();
+  return true;
+}
+
 /**
  * Queues the bootstrap for a worker chat.
  *
@@ -8358,6 +8392,7 @@ async function considerAutomaticCompaction(conversationId: string, sessionId: st
     if (failedTurn && !await failedCompactionTurnCurrent(conversationId, sessionId, failedTurn)) return;
     if ((!failedTurn && !hasCurrentWork()) || continuationForSession(sessionId) || goalFencedChat(conversationId) ||
         stopRequestedFor(conversationId) || !getConfig().compaction.auto || !automaticCompactionAllowed(current)) return;
+    if (await hasPendingBrowserSteer(conversationId)) return;
     const opened = await openContinuationNow(sessionId, conversationId, true);
     rememberToken(sessionId, opened.token);
     changed();

@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 151;
+  const RECORDER_VERSION = 152;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -8459,7 +8459,7 @@
       }
       const nextSince = Number(data.nextSince);
       if (Number.isFinite(nextSince) && nextSince > since) since = nextSince;
-      job = data.job || null;
+      updateCompactionJob(data.job || null);
       operationProgress = data.progress || null;
       pendingTools = Number.isFinite(Number(data.pendingTools)) ? Number(data.pendingTools) : 0;
       pendingInputTools = Number.isFinite(Number(data.pendingInputTools)) ? Number(data.pendingInputTools) : pendingTools;
@@ -11044,11 +11044,28 @@
     return { questionId, turnId, final, nodes, marks: nodes.map(sectionMark) };
   }
 
+  function updateCompactionJob(next) {
+    if (job?.busy && next?.token === job.token && next.stage === 'failed' &&
+        next.error === 'Compact & Resume yielded to your Steer.') {
+      const prompt = ['not-attempted', 'attempted-unresolved'].includes(next.sourceSend?.state)
+        ? next.sourceSend?.preparation?.prompt : null;
+      // The main process retired this exact pre-Send ticket. Withdraw its
+      // local work and clear only the frozen handoff draft, if still present.
+      nativeRun++;
+      nativeBusy = false;
+      nativePhase = '';
+      pressedAt = 0;
+      localError = '';
+      if (prompt && !CLF_DOM.hasComposerAttachments()) CLF_DOM.clearPromptExact(prompt);
+    }
+    job = next;
+  }
+
   async function startCompact(automatic = false) {
     const forId = conversationId;
     const forEpoch = epoch;
     // A refused duplicate must not revoke the run already awaiting an app reply.
-    if (nativeBusy || !forId || !alive || CLF_DOM.conversationId() !== forId) return;
+    if (nativeBusy || desktopInputBusy || !forId || !alive || CLF_DOM.conversationId() !== forId) return;
     const forRun = ++nativeRun;
     const current = () =>
       alive &&
@@ -12659,7 +12676,7 @@
     const target = conversationId, forEpoch = epoch;
     const workRevision = turnProgressRevision;
     const onDocument = () => alive && epoch === forEpoch && conversationId === target && CLF_DOM.conversationId() === target;
-    if (goalBusy) return;
+    if (goalBusy || desktopInputBusy) return;
     if (goalWasSpent(conversationId, draft.token)) {
       // The message already crossed the browser's irreversible boundary. A lost ACK may make
       // the app re-offer it, including after a content-script reload; only retry the receipt.
@@ -14947,6 +14964,13 @@
       goalBusy: !!goalBusy, compactionBusy: !!job?.busy };
     observed.inputIntake = intake;
     const intakeStage = stage => { if (observed.inputIntake === intake) { intake.stage = stage; intake.at = Date.now(); } };
+    if (message.steerTurnId && message.directTurn?.id === message.steerTurnId &&
+        message.directTurn.questionId && (nativeBusy || job?.busy) && conversationId === message.conversationId) {
+      const sourceEpoch = epoch, source = conversationId;
+      const policy = await ask({ type: 'activity', conversationId: source, since });
+      if (!alive || epoch !== sourceEpoch || conversationId !== source || CLF_DOM.conversationId() !== source) return false;
+      if (policy?.ok === true && policy.data?.job && policy.data.job.token === job?.token) updateCompactionJob(policy.data.job);
+    }
     if (CLF_DOM.provider === 'gemini') intakeStage('warmup-state');
     const warmupRecovery = CLF_DOM.provider === 'gemini' ? await retainedWarmupRecovery('input', message.id) : null;
     const silencePickup = typeof message.silenceTurnId === 'string';
@@ -14956,7 +14980,7 @@
     // eligible user message. Native generation and draft custody still fence Send.
     const busy = desktopInputBusy ? 'desktop-busy' : modelCatalogBusy ? 'model-busy' : nativeFilePreviewBusy ? 'native-preview-busy'
       : !alive ? 'page-closed' : generating && !warmupRecovery && !message.directTurn && !silencePickup ? 'generation-busy'
-      : goalBusy ? 'goal-busy' : job?.busy ? 'compaction-busy' : null;
+      : goalBusy ? 'goal-busy' : job?.busy || nativeBusy ? 'compaction-busy' : null;
     if (busy) { intakeStage(busy); return false; }
     const target = message.conversationId || (warmupRecovery ? CLF_DOM.conversationId() : null) || null;
     const forEpoch = epoch;

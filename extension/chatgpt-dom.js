@@ -3298,6 +3298,17 @@ var CLF_DOM = (() => {
       return shown(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null;
     }, 15000);
     const key = (node, value) => { if (!node || !stillCurrent()) return false; node.focus(); node.dispatchEvent(new KeyboardEvent('keydown', { key: value, code: value, bubbles: true, cancelable: true })); return true; };
+    const activate = button => {
+      if (!shown(button) || button.disabled || button.getAttribute('aria-disabled') === 'true' || !stillCurrent()) return false;
+      const activation = button.getAttribute('data-clf-picker-activation');
+      if (activation === 'keydown') return key(button, 'Enter');
+      if (!['pointerdown', 'mousedown', 'click'].includes(activation)) return false;
+      button.focus();
+      if (activation === 'pointerdown') button.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, bubbles: true, cancelable: true }));
+      else if (activation === 'mousedown') button.dispatchEvent(new MouseEvent('mousedown', { button: 0, buttons: 1, bubbles: true, cancelable: true }));
+      else button.click();
+      return true;
+    };
     return {
       state,
       async open() {
@@ -3319,18 +3330,9 @@ var CLF_DOM = (() => {
           // Synthetic Enter does not produce a button's browser-default click.
           // Activate the native trigger's observed handler once, then require its
           // owned panel. No second activation retry.
-          if (!button || !shown(button) || button.disabled || button.getAttribute('aria-disabled') === 'true' || !stillCurrent()) {
-            failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null;
-          }
-          const activation = button.getAttribute('data-clf-picker-activation');
-          if (!['pointerdown','mousedown','click','keydown'].includes(activation)) { failure('picker-activation-unconfirmed'); return null; }
           // The current Radix trigger can open on pointerdown rather than click.
           // MAIN reports only which native handler exists; activate that one once.
-          button.focus();
-          if (activation === 'pointerdown') button.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, bubbles: true, cancelable: true }));
-          else if (activation === 'mousedown') button.dispatchEvent(new MouseEvent('mousedown', { button: 0, buttons: 1, bubbles: true, cancelable: true }));
-          else if (activation === 'keydown') key(button, 'Enter');
-          else button.click();
+          if (!activate(button)) { failure(stillCurrent() ? 'picker-open-unavailable' : 'page-changed'); return null; }
           if (!await wait(openPicker)) { failure(stillCurrent() ? 'picker-open-unconfirmed' : 'page-changed'); return null; }
         }
         const observed = await state();
@@ -3338,7 +3340,7 @@ var CLF_DOM = (() => {
         if (!observed) failure(stillCurrent() ? 'picker-state-unconfirmed' : 'page-changed');
         return observed;
       },
-      async close() {
+      async close(keepSelection = false) {
         try {
         if (!stillCurrent()) return false;
         if (!picker()) return true;
@@ -3346,10 +3348,24 @@ var CLF_DOM = (() => {
         const panel = ownMotion(picker());
         const dialog = panel.closest('[role="dialog"]'), active = document.activeElement;
         if (!shown(panel) && !shown(dialog)) return true;
+        const isClosed = () => !openPicker() && (!dialog?.isConnected || !shown(dialog));
+        const button = trigger();
+        // Escape can cancel the chat picker's highlighted effort. Close the
+        // exact expanded native toggle as the user would after picking a lane.
+        // A different picker or a remounted composer cannot inherit the action.
+        if (keepSelection && button?.getAttribute('aria-expanded') === 'true' &&
+            button.getAttribute('data-clf-picker-route') === location.pathname &&
+            composer()?.closest('form')?.isConnected &&
+            (button.getAttribute('aria-controls') || '').split(/\s+/).some(id =>
+              id && (document.getElementById(id) === panel || document.getElementById(id) === dialog)) &&
+            activate(button)) {
+          if (await wait(isClosed, 1000)) return stillCurrent();
+          if (!stillCurrent() || openPicker() !== panel || trigger() !== button) return false;
+        }
         // Escape belongs inside the picker focus trap, not to its outside trigger.
         // A dispatched key is only an attempt: native unmount/animation owns closure.
         if (!key(panel.contains(active) || dialog?.contains(active) ? active : panel, 'Escape')) return false;
-        const closed = Boolean(await wait(() => !shown(picker()) && (!dialog?.isConnected || !shown(dialog))));
+        const closed = Boolean(await wait(isClosed));
         // Rebind passive selection proof to the closed trigger, not the removed
         // menu node. Reading metadata never reopens or changes the picker.
         if (closed && stillCurrent()) await readPickerState();
@@ -3570,7 +3586,7 @@ var CLF_DOM = (() => {
     const already = observed?.choices.find(choice => choice.bucket === observed.currentBucket);
     if (stillCurrent() && (!modelSurface || !observed?.nativeSurface || observed.nativeSurface === modelSurface) &&
         already?.available && (already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
-      if (!await ui.close() || !stillCurrent()) return refused('picker-close-unconfirmed');
+      if (!await ui.close(exactEffort) || !stillCurrent()) return refused('picker-close-unconfirmed');
       return confirmClosed(already);
     }
     const original = await ui.open();
@@ -3581,7 +3597,7 @@ var CLF_DOM = (() => {
     const current = original.choices.find(choice => choice.bucket === original.currentBucket);
     if (current?.available && (current.id === model || current.familyId === model) &&
         (!effort || current.effort === effort)) {
-      const closed = await ui.close();
+      const closed = await ui.close(exactEffort);
       if (!closed || !stillCurrent()) return refused('picker-close-unconfirmed');
       return confirmClosed(current);
     }
@@ -3649,7 +3665,7 @@ var CLF_DOM = (() => {
       if (stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort) selected = confirmed;
     } finally {
       if (!selected && stillCurrent() && await ui.version(original.version)) await ui.bucket(original.currentBucket);
-      closed = await ui.close();
+      closed = await ui.close(exactEffort && !!selected);
     }
     if (!selected || !closed || !stillCurrent()) return refused(!selected ? 'selection-unconfirmed' : 'picker-close-unconfirmed');
     return confirmClosed(selected);

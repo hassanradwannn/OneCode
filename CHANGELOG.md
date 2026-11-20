@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.2.0] — 2026-11-20
+
+Keep the selected ChatGPT effort through Compact & Resume and give Steer priority over unsent handoffs. See [1.2.0 notes](docs/release-notes/v1.2.0.md).
+
 ## [1.1.9] — 2026-11-20
 
 Give explicit Steer priority over pending browser recovery while workers continue running. See [1.1.9 notes](docs/release-notes/v1.1.9.md).
