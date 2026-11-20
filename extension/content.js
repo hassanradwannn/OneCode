@@ -43,7 +43,7 @@
   // before touching the shared DOM. Otherwise old and new composer observers can continually
   // remove and reinsert each other's controls, starving transport/timers and freezing the tab.
   // A healthy incumbent in this context still wins the static/recovery injection race.
-  const RECORDER_VERSION = 148;
+  const RECORDER_VERSION = 150;
   // Presentation belongs to this extension installation, even when Stable and
   // Beta share a native browser profile. Keep the shared styling/exclusion classes,
   // but never expose the legacy cleanup markers: older healthy worlds remove every
@@ -4141,7 +4141,7 @@
   // 24: adds typed ChatGPT Canvas artifact revisions and generated-video descriptors.
   // 35: adds a bounded mounted-history cursor so repeated scans backfill older native public
   //     thoughts/activity instead of permanently rereading only the newest six turn groups.
-  const FIBER_VERSION = 42;
+  const FIBER_VERSION = 43;
   const FIBER_TIMEOUT_MS = 1500;
   const FIBER_MAX_ROWS = 400;
   /** Assistant turns whose per-call evidence is accepted from one scan. */
@@ -13742,9 +13742,13 @@
     }
 
     if (boot.model || boot.reasoningEffort) step('model');
+    const strictResume = CLF_DOM.provider === 'chatgpt' && boot.type === 'resume' && Boolean(boot.model || boot.reasoningEffort);
+    let resumeSelection = null;
+    const resumeModelOptions = strictResume ? { exactEffort: true, onConfirmed: selection => { resumeSelection = selection; } } : undefined;
     let bootstrapModelFailure = '';
     if ((boot.model || boot.reasoningEffort) && !(await CLF_DOM.selectModelSettings(boot.model, boot.reasoningEffort, stillOnTarget,
-      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; }, boot.modelSurface, boot.modelLabel))) {
+      reason => { if (typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason)) bootstrapModelFailure = reason; },
+      boot.modelSurface, boot.modelLabel, resumeModelOptions))) {
       return void (await fail(t(
         'content_bootstrap_model_unavailable',
         "The requested model or reasoning is unavailable or could not be confirmed in the provider"
@@ -13765,13 +13769,54 @@
     }
     const selectionConfirmedAt = Date.now();
     const selectionSurface = CLF_DOM.visibleModelSelection?.()?.modelSurface;
-    const publishBootstrapSelection = async (id) => {
+    const matchesResumeSelection = selection => Boolean(resumeSelection && selection &&
+      selection.model === resumeSelection.model && selection.reasoningEffort === resumeSelection.reasoningEffort &&
+      (!resumeSelection.modelSurface || selection.modelSurface === resumeSelection.modelSurface));
+    const restoreIdleResumeSelection = async (id, questionId, routeEpoch) => {
+      let touched = false;
+      const stopWaiting = event => { if (event.isTrusted) touched = true; };
+      const editEvents = ['pointerdown', 'keydown', 'beforeinput', 'paste', 'drop'];
+      const current = () => !touched && !attempt?.cancelled && commandAlive() && alive && epoch === routeEpoch &&
+        !desktopInputBusy && !modelCatalogBusy && conversationId === id && CLF_DOM.conversationId() === id;
+      const stillIdle = () => current() && !generating && !pendingTools && !CLF_DOM.generating() && !CLF_DOM.stopButton() &&
+        openedUserMessageId === questionId && fiberSettled?.localTurnId === turnId && CLF_DOM.composerWritable() &&
+        !CLF_DOM.composerAuthoredText().trim() && !CLF_DOM.hasComposerAttachments() &&
+        CLF_DOM.messages().findLast(message => message.role === 'user')?.id === questionId;
+      for (const event of editEvents) document.addEventListener(event, stopWaiting, true);
+      try {
+        const ready = await waitPageView(stillIdle, current, Math.min(10 * 60_000, commandWaitMs(10 * 60_000)), 500);
+        if (!ready || !stillIdle()) return;
+        const selected = await CLF_DOM.confirmModelSelection(stillIdle);
+        if (!stillIdle() || matchesResumeSelection(selected)) return;
+        bootstrapModelRestoreBusy = true;
+        try {
+          await CLF_DOM.selectModelSettings(resumeSelection.model, resumeSelection.reasoningEffort, stillIdle,
+            undefined, resumeSelection.modelSurface, undefined, { exactEffort: true });
+        } finally {
+          bootstrapModelRestoreBusy = false;
+          if (current()) observe();
+        }
+      } finally {
+        for (const event of editEvents) document.removeEventListener(event, stopWaiting, true);
+      }
+    };
+    const publishBootstrapSelection = async (id, acceptedQuestion) => {
       if (CLF_DOM.conversationId() !== id) return;
+      if (strictResume) {
+        observe();
+        // Route creation can reset the composer even after an accepted native Send.
+        // Repair the next-turn setting only after the submitted question's generation goes idle.
+        // The receipt, journal release, and first turn must never wait for a picker operation.
+        if (acceptedQuestion?.conversationId === id && acceptedQuestion.epoch === epoch && resumeSelection) {
+          void restoreIdleResumeSelection(id, acceptedQuestion.messageId, epoch).catch(() => {});
+        }
+        return;
+      }
       if (boot.type === 'resume' && boot.model) {
         // The New Chat picker proves the model used to submit the first resume turn, but route
         // creation can immediately remount the composer with the account default. Never turn the
         // frozen source intent into false destination evidence. Re-prove the exact /c route and,
-        // when ChatGPT reset it, restore the requested pair once for the next turn before
+        // when the provider reset it, restore the requested pair once for the next turn before
         // journaling. This best-effort repair cannot replay or alter the already-submitted user
         // message; failure simply leaves destination selection unknown instead of lying about it.
         bootstrapModelRestoreBusy = true;
@@ -13978,6 +14023,14 @@
         const permit = await destinationCheckpoint('destinationAttempt');
         if (await rejectChangedBootstrap() || !sendCurrent()) return false;
         if (permit?.ok !== true || permit.data?.allowed !== true) { await bootstrapDraft.clear(); return false; }
+        if (strictResume) {
+          const selected = await CLF_DOM.confirmModelSelection(stillOnTarget);
+          if (await rejectChangedBootstrap() || !sendCurrent()) return false;
+          if (!matchesResumeSelection(selected)) {
+            bootstrapAuthorizationFailure = 'bootstrap-model-changed';
+            return false;
+          }
+        }
         // Only the real task is being dispatched. The preceding tool-free
         // Gemini warm-up has obtained an ID but has armed no Resume Send.
         // The reply can disappear after the app arms dispatch. Retain custody
@@ -14066,7 +14119,7 @@
     // the loop below because ChatGPT has not assigned their new conversation id yet.
     if (target) {
       const acknowledged = await acknowledgeBootstrap(target);
-      await publishBootstrapSelection(target);
+      await publishBootstrapSelection(target, acceptedBootstrap);
       await clearAcknowledgedBootstrap(acknowledged);
       return;
     }
@@ -14081,7 +14134,7 @@
     if (!found || !sendingBootstrap()) return;
     if (boot.type === 'resume') rememberResumeGoalPending(found, boot.id);
     const acknowledged = await acknowledgeBootstrap(found);
-    await publishBootstrapSelection(found);
+    await publishBootstrapSelection(found, acceptedBootstrap);
     await clearAcknowledgedBootstrap(acknowledged);
     } finally {
       bootstrapDraft.dispose();
@@ -15272,7 +15325,7 @@
         if (transferFailure) return fail(transferFailure);
         // Keep the exact staged text beside any native file or upload error
         // so the user can inspect the draft after attachment staging fails.
-        if (CLF_DOM.provider === 'claude' || CLF_DOM.provider === 'gemini') preserveAttachmentDraft = true;
+        preserveAttachmentDraft = true;
         return fail(t(
           'content_delivery_attachment_upload_unconfirmed',
           "Attachment upload was not confirmed. Check the unsent draft and any file error in the provider before trying again."

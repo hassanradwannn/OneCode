@@ -41,7 +41,7 @@
   'use strict';
 
   /** Bumped when the descriptor shape changes, so a stale pair cannot half-understand. */
-  const VERSION = 42;
+  const VERSION = 43;
   // The MAIN world survives an extension reload because the ChatGPT document survives it.
   // Recovery may therefore execute this file again in a page that still has an older helper
   // listener. Retire it across versions too: picker/plugin replies use their own v1
@@ -3363,7 +3363,8 @@
       if (!value) node?.removeAttribute(attribute);
       else if (node.getAttribute(attribute) !== value) node.setAttribute(attribute, value);
     }
-    return state;
+    return { picker: state, selection: selected ? { model: selected.id, reasoningEffort: selected.effort,
+      ...(nativeSurface ? { modelSurface: nativeSurface } : {}) } : null };
   }
   /** Shell execution ids are provider identities, not localized presentation. */
   function shellProExecutionModel(value) {
@@ -3664,9 +3665,9 @@
       return;
     }
     if (data.source === 'clf-picker-ask') {
-      let picker = null;
-      try { picker = pickerSnapshot(); } catch { /* Unknown provider shape fails closed. */ }
-      post({ source: 'clf-picker-reply', nonce, v: 1, picker }, location.origin);
+      let snapshot = null;
+      try { snapshot = pickerSnapshot(); } catch { /* Unknown provider shape fails closed. */ }
+      post({ source: 'clf-picker-reply', nonce, v: 1, picker: snapshot?.picker ?? null, selection: snapshot?.selection ?? null }, location.origin);
       return;
     }
     try {

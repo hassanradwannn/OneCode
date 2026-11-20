@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.7': {
+    lead: () => t('Copy ChatGPT Writing cards and send batches of screenshots.'),
+    highlights: [
+      { icon: 'i-file', title: () => t('Copy a Writing card'), text: () => t('Copy takes the card’s original Markdown, including headings, links, and code.') },
+      { icon: 'i-check', title: () => t('Send multiple screenshots together'), text: () => t('OneCode checks the full batch when ChatGPT renames screenshots with the same filename.') },
+      { icon: 'i-retry', title: () => t('Keep the selected effort when resuming'), text: () => t('Compact & Resume verifies the exact model and effort before sending the handoff.') }
+    ]
+  },
   '1.1.6': {
     lead: () => t('Open linked files and review edits from chat.'),
     highlights: [

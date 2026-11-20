@@ -294,6 +294,7 @@ function imageGrid(items: NonNullable<ReturnType<typeof replyImage>>[], options:
 /** Extract typed values from inert markup. Mount only app-owned DOM after the caller sanitizes. */
 export function stageNativeMessageContent(fragment: DocumentFragment, options: NativeMessageActions, nativeCapture = false): () => void {
   const cards: Array<{ slot: Element; view: HTMLElement; load?: () => void }> = [];
+  const writingCards: Array<{ body: HTMLElement; markdown: string }> = [];
   const stage = (source: Element, view: HTMLElement, load?: () => void) => {
     const slot = document.createElement('div');
     source.replaceWith(slot);
@@ -302,6 +303,22 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
   const responses = nativeCapture ? [...fragment.querySelectorAll('[data-dil-response], [data-onecode-rich-message]')] : [];
   const visible = (node: Element) => !node.closest('[hidden], [aria-hidden="true"], script, style, pre, code, svg, template');
   for (const response of responses) {
+    for (const widget of response.querySelectorAll('[data-client-defined-widget="writing_block"]')) {
+      if (!visible(widget) || !fragment.contains(widget)) continue;
+      const surfaces = [...widget.querySelectorAll('[data-oai-writing-block-surface][data-markdown-copy="rich-block"]')]
+        .filter(surface => surface.closest('[data-client-defined-widget="writing_block"]') === widget);
+      if (surfaces.length !== 1 || !visible(surfaces[0]!)) continue;
+      const surface = surfaces[0]!;
+      const markdown = surface.getAttribute('data-markdown-copy-text');
+      const contents = surface.querySelectorAll('[data-markdown-copy-content="true"]');
+      if (!markdown?.trim() || markdown.length > MAX_MESSAGE_MARKUP || contents.length !== 1 || !visible(contents[0]!)) continue;
+      const body = document.createElement('div');
+      // Keep the actual body in the caller's sanitizer and link, math and code passes.
+      // Only the scoped native Copy payload crosses into the app-owned control.
+      body.append(...contents[0]!.childNodes);
+      widget.replaceWith(body);
+      writingCards.push({ body, markdown });
+    }
     for (const node of [...response.querySelectorAll('[data-onecode-native-surface]')]) {
       if (!visible(node) || !fragment.contains(node) || node.parentElement?.closest('[data-onecode-native-surface]')) continue;
       const view = options.artifact?.(node.getAttribute('data-onecode-native-surface') || '');
@@ -419,5 +436,15 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
       stage(button, view);
     }
   }
-  return () => { for (const { slot, view, load } of cards) { slot.replaceWith(view); load?.(); } };
+  return () => {
+    for (const { slot, view, load } of cards) { slot.replaceWith(view); load?.(); }
+    for (const { body, markdown } of writingCards) {
+      const card = panel(), header = document.createElement('header'), title = document.createElement('span');
+      card.classList.add('native-writing-card');
+      title.textContent = 'Writing';
+      header.append(title, copyButton('Copy', () => markdown, options.copy));
+      body.replaceWith(card);
+      card.append(header, body);
+    }
+  };
 }

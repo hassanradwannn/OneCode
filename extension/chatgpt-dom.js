@@ -3072,6 +3072,45 @@ var CLF_DOM = (() => {
   function pluginManagementIdle() {
     return safe(() => ![...document.querySelectorAll('textarea,input:not([type="hidden"]),[contenteditable="true"]')].some(node => node.getClientRects().length > 0 && String(node.value || node.textContent || '').trim()), false);
   }
+  function matchesUploadBatch(images, tiles, allowRenames, uploadStartedAt) {
+    const pending = new Map();
+    for (const image of images) {
+      const group = pending.get(image.name) || { remaining: 0, clipboardPngs: 0 };
+      group.remaining++;
+      if (image.name === 'image.png' && image instanceof File && image.type === 'image/png') group.clipboardPngs++;
+      pending.set(image.name, group);
+    }
+    // Reserve exact filenames first. For repeated originals, each new tile spends one
+    // place in the batch, even when the provider gives two tiles the same display name.
+    const renamed = [];
+    for (const button of tiles) {
+      const name = composerFileName(button);
+      const group = pending.get(name);
+      if (group?.remaining) group.remaining--;
+      else if (allowRenames) renamed.push({ name, button });
+      else return false;
+    }
+    for (const { name, button } of renamed) {
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const counter = /\([1-9]\d{0,3}\)$/.exec(stem);
+      const numeric = counter?.index ? pending.get(stem.slice(0, counter.index) + name.slice(stem.length)) : null;
+      if (numeric?.remaining) {
+        numeric.remaining--;
+        continue;
+      }
+      // ChatGPT also assigns clipboard PNG names from the current UTC upload window.
+      const clipboard = pending.get('image.png');
+      const timestamp = /^image\((\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\)\.png$/.exec(name);
+      if (!clipboard?.remaining || !clipboard.clipboardPngs || !timestamp || pending.has(name) || composerImageFileName(button) !== name) return false;
+      const [, year, month, day, hour, minute, second] = timestamp;
+      const renamedAt = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+      if (!(renamedAt >= uploadStartedAt && renamedAt <= Math.min(Date.now(), uploadStartedAt + 15000))) return false;
+      clipboard.remaining--;
+      clipboard.clipboardPngs--;
+    }
+    return [...pending.values()].every(group => group.remaining === 0);
+  }
   async function uploadImages(images, stillCurrent = () => true, draft = null, files = [], { whileGenerating = false } = {}) {
     if (files.length) images = [...(images || []), ...files];
     if (!images?.length) return true;
@@ -3112,42 +3151,7 @@ var CLF_DOM = (() => {
         // Every attached file must belong to this input. A newly added user attachment
         // cannot be silently included just because the requested subset finished uploading.
         if (tiles.length > images.length) return finish(false);
-        if (!ownedTiles) {
-          const unmatched = [...tiles];
-          if (images.every((image) => {
-            let index = unmatched.findIndex((button) => composerFileName(button) === image.name);
-            if (index < 0 && draft) {
-              // ChatGPT can collision-rename before the first DOM observation,
-              // e.g. report.txt -> report(1).txt. Only a unique NEW remove control
-              // in this exclusive upload, with the unchanged trusted draft, may
-              // acquire that spelling; another basename/extension stays refused.
-              const dot = image.name.lastIndexOf('.');
-              const stem = dot > 0 ? image.name.slice(0, dot) : image.name;
-              const suffix = dot > 0 ? image.name.slice(dot) : '';
-              const candidates = unmatched.map((button, at) => ({ name: composerFileName(button), at })).filter(({ name }) => {
-                if (!name?.startsWith(stem + '(') || !name.endsWith(')' + suffix)) return false;
-                return /^[1-9]\d{0,3}$/.test(name.slice(stem.length + 1, name.length - suffix.length - 1));
-              });
-              if (candidates.length === 1) index = candidates[0].at;
-            }
-            if (index < 0 && draft && image instanceof File && image.name === 'image.png' && image.type === 'image/png') {
-              // ChatGPT names clipboard PNGs image(YYYYMMDD-HHmmss).png in UTC.
-              // Match only a fresh native image tile from this exact upload window.
-              const candidates = unmatched.filter(button => {
-                const name = composerImageFileName(button);
-                const match = /^image\((\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\)\.png$/.exec(name || '');
-                if (!match || images.some(file => file.name === name)) return false;
-                const [, year, month, day, hour, minute, second] = match;
-                const renamedAt = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
-                return renamedAt >= uploadStartedAt && renamedAt <= Math.min(Date.now(), uploadStartedAt + 15000);
-              });
-              if (candidates.length === 1) index = unmatched.indexOf(candidates[0]);
-            }
-            if (index < 0) return false;
-            unmatched.splice(index, 1);
-            return true;
-          })) ownedTiles = tiles;
-        }
+        if (!ownedTiles && tiles.length === images.length && matchesUploadBatch(images, tiles, Boolean(draft), uploadStartedAt)) ownedTiles = tiles;
         if (!ownedTiles) return;
         // The provider can rename report.md to report(1).md during processing.
         // Bind once by exact original names, then retain those exact remove controls.
@@ -3166,23 +3170,32 @@ var CLF_DOM = (() => {
 
   const normalizeModelLabel = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}.]/gu, '');
   /** One bounded read through the existing MAIN-world helper; no provider API or setters. */
-  function readPickerState() {
+  const validModelId = value => typeof value === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(value);
+  const validModelEffort = value => ['none','minimal','low','medium','high','xhigh','max','ultra','pro'].includes(value);
+  const validModelSurface = value => value === undefined || value === 'chat' || value === 'work';
+  function readPickerState(selectionOnly = false) {
     return new Promise(resolve => {
       const nonce = crypto.randomUUID();
       const finish = value => { clearTimeout(timer); window.removeEventListener('message', receive); resolve(value); };
       const receive = event => {
         const data = event.data;
         if (event.source !== window || event.origin !== location.origin || data?.source !== 'clf-picker-reply' || data.nonce !== nonce || data.v !== 1) return;
+        if (selectionOnly) {
+          const selection = data.selection;
+          finish(selection && validModelId(selection.model) && validModelEffort(selection.reasoningEffort) &&
+            validModelSurface(selection.modelSurface) ? selection : null);
+          return;
+        }
         const state = data.picker;
         const groupId = value => typeof value === 'string' && value.length <= 80 && /^[\p{L}\p{N}._ -]+$/u.test(value) && value.trim() === value && value.trim();
         const valid = state && typeof state.version === 'string' && Number.isInteger(state.currentBucket) &&
-          (state.nativeSurface === undefined || state.nativeSurface === 'chat' || state.nativeSurface === 'work') &&
+          validModelSurface(state.nativeSurface) &&
           Array.isArray(state.versions) && state.versions.length > 0 && state.versions.length <= 20 &&
           state.versions.every(v => groupId(v.id) && typeof v.label === 'string' && v.label.length > 0 && v.label.length <= 80) &&
           Array.isArray(state.choices) && state.choices.length > 0 && state.choices.length <= 12 &&
-          state.choices.every(c => Number.isInteger(c.bucket) && typeof c.id === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(c.id) && typeof c.label === 'string' && c.label.length > 0 && c.label.length <= 80 &&
+          state.choices.every(c => Number.isInteger(c.bucket) && validModelId(c.id) && typeof c.label === 'string' && c.label.length > 0 && c.label.length <= 80 &&
             groupId(c.familyId) && typeof c.familyLabel === 'string' && c.familyLabel.length > 0 && c.familyLabel.length <= 80 &&
-            ['none','minimal','low','medium','high','xhigh','max','ultra','pro'].includes(c.effort) && typeof c.available === 'boolean') &&
+            validModelEffort(c.effort) && typeof c.available === 'boolean') &&
           new Set(state.versions.map(v => v.id)).size === state.versions.length && new Set(state.choices.map(c => c.bucket)).size === state.choices.length &&
           state.versions.some(v => v.id === state.version) && state.choices.some(c => c.bucket === state.currentBucket);
         finish(valid ? state : null);
@@ -3400,8 +3413,15 @@ var CLF_DOM = (() => {
     if (node?.getAttribute('data-clf-selected-route') !== location.pathname) return null;
     const model = node?.getAttribute('data-clf-selected-model'), reasoningEffort = node?.getAttribute('data-clf-selected-effort');
     const modelSurface = node?.getAttribute('data-clf-selected-surface');
-    return model && /^[a-zA-Z0-9._-]{1,80}$/.test(model) && ['none','minimal','low','medium','high','xhigh','max','ultra','pro'].includes(reasoningEffort)
+    return validModelId(model) && validModelEffort(reasoningEffort)
       ? { model, reasoningEffort, ...(modelSurface === 'chat' || modelSurface === 'work' ? { modelSurface } : {}) } : null;
+  }
+
+  async function confirmModelSelection(stillCurrent = () => true) {
+    const route = location.pathname;
+    if (!stillCurrent()) return null;
+    const selection = await readPickerState(true);
+    return stillCurrent() && location.pathname === route ? selection : null;
   }
   /**
    * Whether a borrowed chat can serve account model discovery. A chat still set to a model the
@@ -3525,7 +3545,8 @@ var CLF_DOM = (() => {
     if (!closed) failure('picker_close_failed');
     return restored && closed && stillCurrent() && result.size ? [...result.values()] : null;
   }
-  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}, modelSurface, modelLabel) {
+  async function selectModelSettings(model, effort, stillCurrent = () => true, failure = () => {}, modelSurface, modelLabel,
+    { exactEffort = false, onConfirmed } = {}) {
     if (!model && !effort) return true;
     let reported = false;
     // Fixed diagnostic stages only. A caller's diagnostic callback cannot change
@@ -3533,6 +3554,14 @@ var CLF_DOM = (() => {
     const report = reason => { if (!reported) { reported = true; try { failure(reason); } catch {} } };
     const refused = reason => { report(stillCurrent() ? reason : 'page-changed'); return false; };
     const ui = modelPickerAccess(stillCurrent, report, modelSurface);
+    const confirmClosed = async choice => {
+      if (!exactEffort) return stillCurrent();
+      const live = await confirmModelSelection(stillCurrent);
+      if (!live || live.model !== choice.id || live.reasoningEffort !== choice.effort ||
+          (modelSurface && live.modelSurface && live.modelSurface !== modelSurface)) return refused('selection-changed-after-close');
+      onConfirmed?.(live);
+      return true;
+    };
     // A reloaded native composer can expose its complete evaluated selection while
     // its popup is not yet interactive. An exact available pair needs no menu
     // mutation. Caption-only passive selection is deliberately insufficient here.
@@ -3541,7 +3570,8 @@ var CLF_DOM = (() => {
     const already = observed?.choices.find(choice => choice.bucket === observed.currentBucket);
     if (stillCurrent() && (!modelSurface || !observed?.nativeSurface || observed.nativeSurface === modelSurface) &&
         already?.available && (already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
-      return await ui.close() && stillCurrent() || refused('picker-close-unconfirmed');
+      if (!await ui.close() || !stillCurrent()) return refused('picker-close-unconfirmed');
+      return confirmClosed(already);
     }
     const original = await ui.open();
     if (!original) { await ui.close(); return refused('picker-unavailable'); }
@@ -3552,9 +3582,10 @@ var CLF_DOM = (() => {
     if (current?.available && (current.id === model || current.familyId === model) &&
         (!effort || current.effort === effort)) {
       const closed = await ui.close();
-      return closed && stillCurrent() || refused('picker-close-unconfirmed');
+      if (!closed || !stillCurrent()) return refused('picker-close-unconfirmed');
+      return confirmClosed(current);
     }
-    let selected = false, closed = false;
+    let selected = null, closed = false;
     try {
       // Exact provider slug is preferred. Existing saved display slugs may resolve
       // only to an actually observed, available pair; never to an account default.
@@ -3588,7 +3619,7 @@ var CLF_DOM = (() => {
        * rounding decision.
        */
       let wantedEffort = effort;
-      if (effort && offered.length && !offered.some(entry => entry.choice.effort === effort)) {
+      if (!exactEffort && effort && offered.length && !offered.some(entry => entry.choice.effort === effort)) {
         const ladder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
         const target = ladder.indexOf(effort);
         const efforts = [...new Set(offered.map(entry => entry.choice.effort))].filter(value => ladder.includes(value));
@@ -3615,12 +3646,13 @@ var CLF_DOM = (() => {
       if (!state?.choices.some(next => next.bucket === choice.bucket && next.available && next.id === choice.id && next.effort === choice.effort)) return refused('selection-unavailable');
       const after = await ui.bucket(choice.bucket);
       const confirmed = after?.choices.find(c => c.bucket === after.currentBucket);
-      selected = stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort;
+      if (stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort) selected = confirmed;
     } finally {
       if (!selected && stillCurrent() && await ui.version(original.version)) await ui.bucket(original.currentBucket);
       closed = await ui.close();
     }
-    return selected && closed && stillCurrent() || refused(!selected ? 'selection-unconfirmed' : 'picker-close-unconfirmed');
+    if (!selected || !closed || !stillCurrent()) return refused(!selected ? 'selection-unconfirmed' : 'picker-close-unconfirmed');
+    return confirmClosed(selected);
   }
 
   function projectHomeId(pathname = location.pathname) {
@@ -3923,6 +3955,7 @@ var CLF_DOM = (() => {
     pluginInstalledButtons,
     pluginManagementIdle,
     selectModelSettings,
+    confirmModelSelection,
     temporaryChatReady: () => safe(() => {
       // The page's own state, where a mounted turn has published it. The glyph below is the only
       // evidence an empty document has, and a layout that stops drawing it stops proving the

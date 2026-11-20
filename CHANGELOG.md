@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.7] — 2026-11-20
+
+Copy the Markdown from ChatGPT Writing cards, send batches of renamed screenshots, and verify the exact model and effort during Compact & Resume. See [1.1.7 notes](docs/release-notes/v1.1.7.md).
+
 ## [1.1.6] — 2026-11-19
 
 Open linked workspace files in the sidebar, copy the original Markdown, and review recorded edits from completed replies. See [1.1.6 notes](docs/release-notes/v1.1.6.md).

@@ -336,7 +336,7 @@
 .msg.rich .native-reply-images figcaption { padding-top: 5px; }
 .msg.rich .native-reply-images figcaption p { margin: 0.2em 0 0; }
 
-.msg.rich .native-copy-prompt > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.msg.rich :is(.native-copy-prompt, .native-writing-card) > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .msg.rich .native-copy-prompt > p { margin: 0; }
 .msg.rich .native-copy-prompt > .native-copy-prompt-body { max-height: 360px; overflow: auto; overflow-wrap: anywhere; }
 
