@@ -41,7 +41,9 @@ const INIT_RETRY_INTERVAL_MS = 1_000;
 // briefly without admitting a tool, retiring the grant or replaying the task.
 const ATTACHMENT_RECHECK_MS = 2_000;
 const digest = (key: string) => createHash('sha256').update(key).digest('hex');
-const PREFIX = /^\/\/ onecode-session: (sk-onecode-session-[A-Za-z0-9_-]{43})\r?\n/;
+const PREFIX_MARKER = /^\/\/[ \t]*onecode-session[ \t]*:/;
+const PREFIX = /^\/\/[ \t]*onecode-session[ \t]*:[ \t]*(sk-onecode-session-[A-Za-z0-9_-]{43})[ \t]*\r?\n/;
+const KEY = /^sk-onecode-session-[A-Za-z0-9_-]{43}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_GRANTS = 20_000;
 type AdmissionReason = 'proof-unavailable' | 'provider-mismatch' | 'credential-shape' | 'credential-unknown' |
@@ -181,7 +183,7 @@ function createLocalBindingOwner(provider: LocalCapabilityProvider) {
   }
 
   /** Called only inside the paired outbox/command claim owner, never by an MCP tool. */
-  async function instructions(proof: LocalBindingProof): Promise<string> {
+  async function instructions(proof: LocalBindingProof, steering = false): Promise<string> {
     if (!ready) await init();
     const key = `sk-onecode-session-${randomBytes(32).toString('base64url')}`;
     const grant = { id: randomUUID(), digest: digest(key), proof: structuredClone(proof), issuedAt: Date.now() };
@@ -191,7 +193,10 @@ function createLocalBindingOwner(provider: LocalCapabilityProvider) {
       // Retire proved lifecycle changes incrementally. Neither age nor cache pressure
       // can remove a valid or pending task, and a failed proof read preserves it.
       const candidates = [...grants.values()];
-      const count = Math.min(32, candidates.length);
+      // The prime must be able to steer while other tasks are writing history.
+      // Grant validation still checks every call. Routine retirement can wait
+      // for another enrollment unless the ledger actually needs room.
+      const count = steering && next.size < MAX_GRANTS ? 0 : Math.min(32, candidates.length);
       for (let index = 0; index < count; index++) {
         const candidate = candidates[(retirementCursor + index) % candidates.length]!;
         try {
@@ -206,8 +211,8 @@ function createLocalBindingOwner(provider: LocalCapabilityProvider) {
     });
     if (provider === 'chatgpt' && getConfig().mcp.useChatgptWebSkill === true) return `Use the installed onecode-${provider} skill with ${configuredConnectorName('core')}. For this exact app-authored task, use that Core connector's exec tool for ordinary OneCode local tools, including plugins, plans and agents; nested tools inside exec inherit this local session authorization. Fresh authorization for this exact task: start every outer exec code with this first line:
 // onecode-session: ${key}
-Then JavaScript. Do not make a direct OneCode tool call unless its current schema accepts onecode_session_key; without the fresh key it is Unattributed. Direct native calls that require it, including session_finish, use onecode_session_key="${key}". This replaces older credentials. Never print or copy the key. If authorization is rejected, stop and let OneCode reconcile this exact task and receipt; do not infer a new task or replay an uncertain mutation.`;
-    return `For this exact app-authored task, use ${configuredConnectorName('core')}'s exec tool for local tools, including plugins and agents. Start every outer exec code with this exact first line:\n// onecode-session: ${key}\nThen put the requested JavaScript on the next line. Before an unfamiliar tool call, inspect ALL_TOOLS.find(tool => tool.name === "the_tool").inputSchema and use its declared arguments. Nested tools inherit this local session authorization. Workers may finish with await tools.agents({action:"finish",result:"your verified report"}) as their last nested call, after awaiting all earlier tools. For a direct native call (required for session_finish), supply onecode_session_key="${key}" instead. This replaces older task credentials; never print it, copy it to another chat, or invent conversation/request IDs. If this session authorization is missing, revoked or rejected, stop and let OneCode reconcile this exact task and receipt. An argument or path validation error that explicitly says nothing ran is different: inspect the schema and correct that rejected input before execution. Shell commands cannot use app virtual paths: use workdir with relative filenames or an approved native path. Never replay a mutation whose execution is uncertain.`;
+Then JavaScript. Do not make a direct OneCode tool call unless its current schema accepts onecode_session_key; without the fresh key it is Unattributed. Direct native calls that require it, including session_finish, use onecode_session_key="${key}". This replaces older credentials. Never print or copy the key. If OneCode explicitly rejects a malformed credential before execution, copy the exact current credential from this message and correct the rejected call. If the receipt is pending, let OneCode reconcile it. Never reuse authorization from another chat or replay an uncertain mutation.`;
+    return `For this exact app-authored task, use ${configuredConnectorName('core')}'s exec tool for local tools, including plugins and agents. Start every outer exec code with this exact first line:\n// onecode-session: ${key}\nThen put the requested JavaScript on the next line. Before an unfamiliar tool call, inspect ALL_TOOLS.find(tool => tool.name === "the_tool").inputSchema and use its declared arguments. Nested tools inherit this local session authorization. Workers may finish with await tools.agents({action:"finish",result:"your verified report"}) as their last nested call, after awaiting all earlier tools. For a direct native call (required for session_finish), supply onecode_session_key="${key}" instead. This replaces older task credentials; never print it, copy it to another chat, or invent conversation/request IDs. If OneCode explicitly rejects a malformed credential before execution, copy the exact current credential from this message and correct the rejected call. If the receipt is pending, let OneCode reconcile it. For rejected arguments or paths, inspect the schema and correct the input. Shell commands cannot use app virtual paths: use workdir with relative filenames or an approved native path. Never replay a mutation whose execution is uncertain.`;
   }
   async function status(grant: Grant): Promise<LocalBindingStatus> {
     if (!ready || grants.get(grant.digest)?.id !== grant.id) return { state: 'invalid' };
@@ -273,19 +278,20 @@ Then JavaScript. Do not make a direct OneCode tool call unless its current schem
     const input = args as Record<string, unknown>;
     // Leading blanks/BOM cannot turn an exact key into an unattributed caller.
     // Never scan later statements or other comments for a credential.
-    const code = typeof input.code === 'string' ? input.code.replace(/^[\uFEFF\s]*(?=\/\/ onecode-session:)/, '') : '';
+    const code = typeof input.code === 'string' ? input.code.trimStart() : '';
     const hasKey = Object.prototype.hasOwnProperty.call(input, 'onecode_session_key');
-    if (!hasKey && !code.startsWith('// onecode-session:')) {
+    const hasPrefix = PREFIX_MARKER.test(code);
+    if (!hasKey && !hasPrefix) {
       if (provider === 'claude') fail('credential-unknown');
       return { args };
     }
     if (!ready) await init();
     if (mcpProvider() !== provider) fail('provider-mismatch');
-    const match = code.startsWith('// onecode-session:') ? PREFIX.exec(code) : null;
-    if ((code.startsWith('// onecode-session:') && (name !== 'exec' || !match)) ||
-        (hasKey && (typeof input.onecode_session_key !== 'string' || !/^sk-onecode-session-[A-Za-z0-9_-]{43}$/.test(input.onecode_session_key))) ||
-        (match && hasKey && match[1] !== input.onecode_session_key)) fail('credential-shape');
-    const grant = grants.get(digest((hasKey ? input.onecode_session_key : match![1]) as string));
+    const match = hasPrefix ? PREFIX.exec(code) : null;
+    const key = hasKey && typeof input.onecode_session_key === 'string' ? input.onecode_session_key.trim() : '';
+    if ((hasPrefix && (name !== 'exec' || !match)) || (hasKey && !KEY.test(key)) ||
+        (match && hasKey && match[1] !== key)) fail('credential-shape');
+    const grant = grants.get(digest(hasKey ? key : match![1]!));
     if (!grant) fail('credential-unknown');
     const deadline = performance.now() + INPUT_RECEIPT_WAIT_MS;
     const attachmentDeadline = performance.now() + ATTACHMENT_RECHECK_MS;
@@ -328,7 +334,9 @@ const owners = { chatgpt: createLocalBindingOwner('chatgpt'), claude: createLoca
 const evidenceOwner = (evidence: BrowserBindingEvidence) => owners[evidence.attribution === 'claude_session_capability' ? 'claude' : 'chatgpt'];
 /** Preserve the legacy default; startup independently initializes every capability provider. */
 export function initLocalBindings(provider: LocalCapabilityProvider = 'chatgpt'): Promise<void> { return owners[provider].init(); }
-export function localBindingInstructions(provider: LocalCapabilityProvider, proof: LocalBindingProof): Promise<string> { return owners[provider].instructions(proof); }
+export function localBindingInstructions(provider: LocalCapabilityProvider, proof: LocalBindingProof, { steering = false } = {}): Promise<string> {
+  return owners[provider].instructions(proof, steering);
+}
 export function hasCurrentLocalBinding(provider: LocalCapabilityProvider, text: string, proof: LocalBindingProof): boolean { return owners[provider].hasCurrent(text, proof); }
 export function authenticateLocalExec(provider: LocalCapabilityProvider, name: unknown, args: unknown): Promise<{ args: unknown; evidence?: BrowserBindingEvidence }> { return owners[provider].authenticate(name, args); }
 export function chatgptBindingInstructions(proof: ChatgptBindingProof): Promise<string> { return localBindingInstructions('chatgpt', proof); }

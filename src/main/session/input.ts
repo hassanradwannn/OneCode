@@ -850,7 +850,8 @@ async function prepare(entry: InputEntry, suffix = '', nativeMedia = false): Pro
   // key only when its exact outbox claim remains current; authorized/ambiguous
   // sends cannot enter this preparation path at all.
   const frozen = entry.deliveryText && (!proof || capabilityProvider && hasCurrentLocalBinding(capabilityProvider, entry.deliveryText, proof)) ? entry.deliveryText : undefined;
-  const routing = !frozen && proof && capabilityProvider ? await localBindingInstructions(capabilityProvider, proof) : '';
+  const routing = !frozen && proof && capabilityProvider
+    ? await localBindingInstructions(capabilityProvider, proof, { steering: Boolean(entry.steerTurnId) }) : '';
   const guidance = !frozen && proof ? await optionalNativeSkillGuidance(provider) : null;
   const budget = {
     maxChars: MAX_BROWSER_MESSAGE_CHARS, maxBytes: TOOL_INPUT_TEXT_BYTES - Buffer.byteLength(mandatoryOverhead)

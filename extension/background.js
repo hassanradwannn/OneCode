@@ -2527,7 +2527,7 @@ function desktopInputReuseCandidate(tab) {
   } catch { return false; }
 }
 
-async function deliverDesktopInputs(inputs, background, reusableConversations = [], activeIds, refreshRendering = async () => {}) {
+async function deliverDesktopInputs(inputs, background, reusableConversations = [], activeIds, refreshRendering = async () => {}, existingTabs) {
   if (!Array.isArray(inputs)) return;
   // A stale app offer must not route an API/unknown transport through Gemini's
   // native fallback. Reject it before querying, electing, reusing or opening tabs.
@@ -2546,7 +2546,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
     await persistLive();
   }
   if (!inputs.length) return;
-  let tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+  let tabs = existingTabs ?? await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
   const elections = inputOpenings;
   const elect = async (id, record) => {
     elections[id] = record;
@@ -2603,6 +2603,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       }
     }
     if (elected?.tab != null) tab = candidates.find(candidate => candidate.id === elected.tab);
+    if (existingTabs && !tab) continue;
     // The tab opened on this linked Project's page for this new chat finished on ChatGPT's home,
     // its marker gone: ChatGPT sends a deleted or unavailable Project there (measured 2026-10-10).
     // Say so instead of leaving the message waiting with nothing on screen.
@@ -3897,13 +3898,6 @@ async function maintainOnce() {
     }
     await Promise.all(releases);
   };
-  // Reuse the app's current work policy. Old history, pins and tab presence do not qualify.
-  phase('render-policy');
-  await refreshRendering(observedTabs);
-  // Diagnostic page reads share one bounded flight and never delay recovery or input.
-  publishCompanionDiagnostics();
-  connectWakeSocket();
-  void pumpBrowserControl().catch(() => undefined);
   // Quoted back exactly as they arrived. A token names the handout being answered, so that a
   // receipt this pass sends late cannot close a repair the app has since raised for a different
   // turn. An entry missing either half is not actionable and is dropped rather than guessed at.
@@ -3922,6 +3916,24 @@ async function maintainOnce() {
   // Fulfilling a due repair must not wait behind window layout, input preparation
   // or serial idle-tab probes. Keep the same single maintenance owner and receipt.
   dispatchBrowserRepairs(repairs, reply.data);
+  // An open prime needs only its own document and rendering lease. A group-wide
+  // layout or rendering pass can still be servicing workers in other tabs.
+  const steerTabs = observedTabs.filter(tab => !tab.pendingUrl && !tab.frozen && !tab.discarded &&
+    steeringChats.has(conversationForTab(tab)));
+  const earlySteers = offeredInputs.filter(input => isSteer(input) &&
+    !browserRepairActions.has(cleanConversationId(input.conversationId)) &&
+    steerTabs.some(tab => conversationForTab(tab) === cleanConversationId(input.conversationId)));
+  if (earlySteers.length) {
+    phase('input-delivery');
+    await deliverDesktopInputs(earlySteers, reply.data.background === true, [], undefined, undefined, steerTabs);
+  }
+  const earlyIds = new Set(earlySteers.map(input => input.id));
+  // Reuse the app's current work policy. Old history, pins and tab presence do not qualify.
+  phase('render-policy');
+  await refreshRendering(observedTabs);
+  publishCompanionDiagnostics();
+  connectWakeSocket();
+  void pumpBrowserControl().catch(() => undefined);
   // Reuse this maintenance scan/cadence; recorder repair must never delay owed actions.
   void restoreSilentRecorders(observedTabs, intent).catch(() => undefined);
   phase('browser-preferences');
@@ -3952,6 +3964,7 @@ async function maintainOnce() {
   // A repair's read-only page probe must yield to Steer. Once the repair
   // requests the action lease, let it settle before offering that same chat.
   const inputs = offeredInputs.filter(input => {
+    if (earlyIds.has(input?.id)) return false;
     const conversation = cleanConversationId(input?.conversationId);
     if (!isSteer(input)) return !repairConversations.has(conversation);
     if (!browserRepairActions.has(conversation)) return true;

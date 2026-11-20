@@ -549,7 +549,7 @@ export async function startMcpServer(getContext: () => ToolContext, kept: Partia
             // unobserved native ACK. Never disclose credentials or task identity.
             const reason = error instanceof LocalBindingError ? error.admissionReason : null;
             const explanation = reason === 'credential-unknown' || reason === 'credential-shape'
-              ? 'The task credential is missing, stale or malformed. Use the exact fresh credential from the latest OneCode-authored message; Setup permission is not task identity.'
+              ? 'This call was refused before execution. Copy the exact fresh credential from the latest OneCode-authored message and correct the rejected call. This refusal does not revoke the task grant or change Setup permissions.'
               : reason === 'proof-invalid' || reason === 'activation-changed' || reason === 'provider-mismatch'
               ? 'This task or native turn was superseded or changed. A new OneCode-authored task needs its own credential; an older credential cannot be reused.'
               : reason === 'blocked' ? 'This chat is explicitly blocked and cannot execute tools.'
