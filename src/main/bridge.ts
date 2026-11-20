@@ -38,7 +38,7 @@ import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
-import { noteBrowserInputRouting } from './session/input.js';
+import { hasPendingBrowserSteer, noteBrowserInputRouting } from './session/input.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 import { browserWindowBounds, currentBrowserWorkArea } from './browser-window-layout.js';
 export { setBrowserWorkArea } from './browser-window-layout.js';
@@ -3409,6 +3409,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (req.method === 'POST' && imageExportRequested) imageExportBrowsers.set(browser ?? '', Date.now());
     const pendingInputs = await pendingBrowserInputs();
     const pendingIds = new Set(pendingInputs.map(input => input.id));
+    const steeringChats = new Set(pendingInputs.flatMap(input =>
+      input.conversationId && input.steerTurnId && input.directTurn?.questionId ? [input.conversationId] : []));
     for (const id of openingCustody.keys()) if (!pendingIds.has(id)) openingCustody.delete(id);
     return json(
       res,
@@ -3459,7 +3461,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         ...(req.method === 'POST' && videoExportRequested ? { videoExports: pendingVideoExports() } : {}),
         // A failure report closes this request. Reissuing the repair in the same response would
         // replace the visible failure with "Trying" before a renderer could ever observe it.
-        repairs: repairFailed || repairHeld ? [] : await takePendingRepairs(Date.now(), browser),
+        repairs: repairFailed || repairHeld ? [] : await takePendingRepairs(Date.now(), browser, steeringChats),
         ...tabPolicy,
         recoveryMonitoring: browserRecoveryMonitoring(),
         // A newer extension build ships with this app. The extension reloads into it on its own
@@ -3719,7 +3721,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       !(repair.reason !== 'compaction' && !session.activeTurnId && session.lastTurnOutcome === 'stopped') && !isChatBlocked(conversationId) &&
       !stopRequestedFor(conversationId) && await attributionRepairAllowed(repair, session) &&
       await assistantRepairCurrent(conversationId, repair) && await silenceRepairCurrent(conversationId, repair) &&
-      compactionRepairCurrent(conversationId, repair);
+      compactionRepairCurrent(conversationId, repair) &&
+      (!repairYieldsToSteer(repair.reason) || !await hasPendingBrowserSteer(conversationId));
     // An observation still publishing can revoke this handout. Refuse this
     // claim transiently; the same unclaimed token remains eligible to be checked.
     let allowed = current && observationWritesInFlight === 0 && repairsInFlight.get(conversationId) === repair && repair.state === 'handed' && !repair.claimed &&
@@ -9017,6 +9020,12 @@ function repairNeedsClaim(repair: Repair): boolean {
   return ['unattributed', 'assistant-error', 'silence', 'no-tab', 'stalled', 'goal', 'compaction'].includes(repair.reason);
 }
 
+function repairYieldsToSteer(reason: Repair['reason']): boolean {
+  // Steer still needs an available document. Keep the existing custody for
+  // restoring missing/suspended tabs and for explicit Compact & Resume.
+  return reason !== 'no-tab' && reason !== 'stalled' && reason !== 'compaction';
+}
+
 /** The queued phase belongs to one live ticket, never to an earlier failed attempt
  * or to a prompt which has since crossed Send and started writing its brief. */
 function compactionRepairCurrent(conversationId: string, repair: Repair): boolean {
@@ -11018,8 +11027,9 @@ async function tickUnattributedIncident(): Promise<void> {
  * artefact rather than anything this app decided.
  */
 async function takePendingRepairs(
-  now = Date.now(),
-  browser: string | null = null
+  now: number,
+  browser: string | null,
+  steeringChats: ReadonlySet<string>
 ): Promise<Array<{ conversationId: string; token: string; reason: Repair['reason']; focus: boolean }>> {
   retireSpentRepairs();
   const pickupFloor = pickupWatchFloor;
@@ -11095,6 +11105,12 @@ async function takePendingRepairs(
     const unclaimed = repair.reason !== 'unattributed' && repairNeedsClaim(repair) && repair.state === 'handed' && !repair.claimed;
     if (repair.reconcileOnly || (repair.state !== 'queued' && !unclaimed)) continue;
     if (now < repair.notBefore) continue;
+    // Keep the repair's existing budget while an exact user Steer owns the chat.
+    // A started repair still settles through its original receipt.
+    if (repairYieldsToSteer(repair.reason) && (steeringChats.has(conversationId) ||
+        await hasPendingBrowserSteer(conversationId))) continue;
+    if (repairsInFlight.get(conversationId) !== repair ||
+        (unclaimed ? repair.state !== 'handed' || repair.claimed : repair.state !== 'queued')) continue;
     if (unclaimed) {
       repair.offers = (repair.offers ?? 1) + 1;
       if (repair.offers > UNCLAIMED_REPAIR_OFFERS) {

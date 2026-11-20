@@ -3203,6 +3203,12 @@ function maintenanceSnapshot() {
 // In-flight scheduling only. Main's repair token and native document checks
 // remain the authority; a slow chat cannot own the shared outbox scan.
 const browserRepairFlights = new Map();
+const browserRepairActions = new Set();
+const steersWaitingForRepair = new Set();
+let steeringChats = new Set();
+function repairYieldsToSteer(reason) {
+  return reason !== 'no-tab' && reason !== 'stalled' && reason !== 'compaction';
+}
 let browserRepairCursor = 0;
 let wakeSocket = null;
 // MV3 service workers require static imports; import() rejects before registration.
@@ -3813,6 +3819,10 @@ async function maintainOnce() {
     ...(extensionUpdateHold ? { updateHold: extensionUpdateHold } : {}) }) });
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { phase('render-release'); await activeTabs?.revoke(); return; }
+  const offeredInputs = Array.isArray(reply.data.inputs) ? reply.data.inputs : [];
+  const isSteer = input => input?.steerTurnId && input.directTurn?.questionId &&
+    input.steerTurnId === input.directTurn.id;
+  steeringChats = new Set(offeredInputs.filter(isSteer).map(input => cleanConversationId(input.conversationId)).filter(Boolean));
   const nextProvider = ['chatgpt', 'gemini', 'claude'].includes(reply.data.provider) ? reply.data.provider : 'gemini';
   if (nextProvider !== selectedProvider) {
     selectedProvider = nextProvider;
@@ -3907,7 +3917,8 @@ async function maintainOnce() {
       suspended: entry?.reason === 'stalled',
       focus: Boolean(entry && entry.focus === true)
     }))
-    .filter((entry) => entry.conversationId && entry.token);
+    .filter((entry) => entry.conversationId && entry.token &&
+      (!repairYieldsToSteer(entry.reason) || !steeringChats.has(entry.conversationId)));
   // Fulfilling a due repair must not wait behind window layout, input preparation
   // or serial idle-tab probes. Keep the same single maintenance owner and receipt.
   dispatchBrowserRepairs(repairs, reply.data);
@@ -3938,11 +3949,15 @@ async function maintainOnce() {
   inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
   void inspectProjectCreates(reply.data.projectCreateRequests);
   const repairConversations = new Set([...repairs.map(entry => entry.conversationId), ...browserRepairFlights.keys()]);
-  // Reloading the same document races its final input offer. Repair it now; the
-  // still-durable app row is offered on the next status pass after the reload.
-  const inputs = Array.isArray(reply.data.inputs)
-    ? reply.data.inputs.filter(input => !repairConversations.has(cleanConversationId(input?.conversationId)))
-    : reply.data.inputs;
+  // A repair's read-only page probe must yield to Steer. Once the repair
+  // requests the action lease, let it settle before offering that same chat.
+  const inputs = offeredInputs.filter(input => {
+    const conversation = cleanConversationId(input?.conversationId);
+    if (!isSteer(input)) return !repairConversations.has(conversation);
+    if (!browserRepairActions.has(conversation)) return true;
+    steersWaitingForRepair.add(conversation);
+    return false;
+  });
   phase('input-delivery');
   await deliverDesktopInputs(inputs, reply.data.background === true,
     Array.isArray(reply.data.reusableConversations) ? reply.data.reusableConversations.filter(id => !repairConversations.has(id)) : [],
@@ -4185,10 +4200,19 @@ function dispatchBrowserRepairs(repairs, policy) {
     if (browserRepairFlights.size >= 4) break;
     browserRepairCursor = (index + 1) % repairs.length;
     let advanced = false;
-    const work = performBrowserRepairs([repair], policy, current)
+    const canYield = repairYieldsToSteer(repair.reason);
+    const beginAction = () => {
+      if (!current() || (canYield && steeringChats.has(repair.conversationId))) return false;
+      browserRepairActions.add(repair.conversationId);
+      return true;
+    };
+    if (!canYield && !beginAction()) continue;
+    const work = performBrowserRepairs([repair], policy, current, beginAction)
       .then(result => { advanced = result === true; }).catch(() => undefined).finally(() => {
         if (browserRepairFlights.get(repair.conversationId) === work) browserRepairFlights.delete(repair.conversationId);
-        if (token !== null && !disconnected && advanced) {
+        browserRepairActions.delete(repair.conversationId);
+        const steerWaiting = steersWaitingForRepair.delete(repair.conversationId);
+        if (current() && (advanced || steerWaiting)) {
           void maintain(true).catch(() => undefined);
         }
       });
@@ -4196,7 +4220,7 @@ function dispatchBrowserRepairs(repairs, policy) {
   }
 }
 
-async function performBrowserRepairs(repairs, policy, current = () => true) {
+async function performBrowserRepairs(repairs, policy, current = () => true, beginAction = current) {
   let advanced = false;
   const acknowledge = async (route, expectedToken) => {
     const receipt = await call(route);
@@ -4262,6 +4286,7 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
           await call(`/status?repairHeld=${encodeURIComponent(token)}&why=${encodeURIComponent(check.why || 'unknown')}`);
           continue;
         }
+        if (!beginAction()) continue;
         const claim = await call('/repairs/claim', { method: 'POST', body: JSON.stringify({ token }) });
         if (!claim.ok || claim.data?.allowed !== true) continue;
         if (target && !suspended) {
@@ -4284,7 +4309,7 @@ async function performBrowserRepairs(repairs, policy, current = () => true) {
             continue;
           }
         }
-      }
+      } else if (!beginAction()) continue;
       if (target && suspended && requiresClaim) {
         const tab = await chrome.tabs.get(target.id);
         const changed = tab.pendingUrl ? 'navigating' : conversationForTab(tab) !== conversationId ? 'other-chat'

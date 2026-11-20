@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.1.9] — 2026-11-20
+
+Give explicit Steer priority over pending browser recovery while workers continue running. See [1.1.9 notes](docs/release-notes/v1.1.9.md).
+
 ## [1.1.8] — 2026-11-20
 
 Collect ChatGPT handoffs when the native reply’s completion flag lags, keep healthy handoff streams running, and steer with attachments from the Desktop queue. See [1.1.8 notes](docs/release-notes/v1.1.8.md).

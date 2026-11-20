@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.1.9': {
+    lead: () => t('Steer a chat while its workers keep running.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Give your message priority'), text: () => t('Automatic browser recovery waits while OneCode sends your Steer to the active chat.') }
+    ]
+  },
   '1.1.8': {
     lead: () => t('Finish ChatGPT handoffs and steer with queued attachments.'),
     highlights: [

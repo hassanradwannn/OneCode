@@ -2049,6 +2049,18 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return turnId;
 }
+/** Automatic recovery must yield while the exact authored Steer owns delivery. */
+export function hasPendingBrowserSteer(conversationId: string): Promise<boolean> {
+  return serial(async () => {
+    for (const entry of await load()) {
+      if (entry.conversationId === conversationId && entry.steerTurnId && entry.directTurn?.questionId &&
+          (entry.state === 'queued' || entry.state === 'browser') && entry.dueAt <= Date.now() &&
+          !entry.cancelledByUser && await browserInputAllowed(entry)) return true;
+    }
+    return false;
+  });
+}
+
 export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
     const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
