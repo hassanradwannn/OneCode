@@ -3331,14 +3331,14 @@
     const triggers = [...new Set([...(form?.querySelectorAll('button[aria-haspopup="menu"]') || []), ...document.querySelectorAll(reported)])]
       .filter(node => node.matches('button,[role="button"]') && !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[contenteditable],[hidden],[aria-hidden="true"],[inert]`) && node.getClientRects().length > 0 &&
         node.id !== 'composer-plus-btn' && node.getAttribute('data-testid') !== 'composer-plus-btn');
+    const activePanel = node => node && node.getClientRects().length > 0 &&
+      !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert],:is([role="menu"],[role="listbox"],[role="dialog"])[data-state="closed"]`);
     const candidates = [];
     if (triggers.length <= 8) for (const trigger of triggers) {
       try {
         const ids = (trigger.getAttribute('aria-controls') || '').trim().split(/\s+/).filter(Boolean);
-        const panels = ids.length <= 4 ? [...new Set(ids.map(id => document.getElementById(id)))].filter(node => node &&
-          node.matches('[role="menu"],[role="listbox"],[role="dialog"]') &&
-          node.getClientRects().length > 0 && node.getAttribute('data-state') !== 'closed' &&
-          !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`)) : [];
+        const panels = ids.length <= 4 ? [...new Set(ids.map(id => document.getElementById(id)))].filter(node =>
+          activePanel(node) && node.matches('[role="menu"],[role="listbox"],[role="dialog"]')) : [];
         // The merged native picker can keep its evaluated owner only on the portal.
         // Read that exact controlled panel; a free-floating menu supplies no proof.
         const panel = panels.length === 1 ? panels[0] : null;
@@ -3351,7 +3351,10 @@
     const identified = specific.length === 1 ? specific[0] : candidates.length === 1 ? candidates[0] : null;
     const native = triggers.filter(trigger => trigger.matches(reported));
     const fallback = native.length === 1 ? native[0] : triggers.length === 1 ? triggers[0] : null;
-    const node = identified?.panel || document.querySelector('[data-testid="composer-intelligence-picker-content"], [data-model-picker-view]') || identified?.node || fallback;
+    const legacy = [...document.querySelectorAll('[data-testid="composer-intelligence-picker-content"], [data-model-picker-view]')].filter(activePanel);
+    // A closed portal can survive the native exit transition. Its old selection
+    // must never shadow the live composer once the picker has closed.
+    const node = identified?.panel || (legacy.length === 1 ? legacy[0] : null) || identified?.node || fallback;
     let state = null;
     try { state = identified?.picker || readPickerSnapshot(node) || readShellPickerSnapshot(node); } catch { /* Unknown state invalidates prior proof. */ }
     const modes = [...document.querySelectorAll('[role="radio"][data-tpp-toggle-value]')].filter(item => item.getClientRects().length > 0 &&

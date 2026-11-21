@@ -14061,7 +14061,8 @@
         if (await rejectChangedBootstrap() || !sendCurrent()) return false;
         if (permit?.ok !== true || permit.data?.allowed !== true) { await bootstrapDraft.clear(); return false; }
         if (strictResume) {
-          const selected = await CLF_DOM.confirmModelSelection(stillOnTarget);
+          const selected = await CLF_DOM.confirmModelSelection(() => sendCurrent() && stillOnTarget() &&
+            exactBootstrapDraft() && bootstrapDraft.current(), resumeSelection);
           if (await rejectChangedBootstrap() || !sendCurrent()) return false;
           if (!matchesResumeSelection(selected)) {
             bootstrapAuthorizationFailure = 'bootstrap-model-changed';

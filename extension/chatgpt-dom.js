@@ -3229,6 +3229,11 @@ var CLF_DOM = (() => {
     const legacy = [...document.querySelectorAll(PICKER)].filter(valid);
     return legacy.length === 1 ? legacy[0] : null;
   }
+  function activeModelPickerPanel() {
+    const panel = modelPickerPanel();
+    return panel?.getClientRects().length &&
+      !panel.closest(':is([role="menu"],[role="listbox"],[role="dialog"])[data-state="closed"]') ? panel : null;
+  }
   /** Match the row's leading name, excluding secondary captions and decorations. */
   function pickerVersionNamed(row, expected) {
     const text = node => String(node.textContent || '').replace(/\s+/g, ' ').trim();
@@ -3261,10 +3266,7 @@ var CLF_DOM = (() => {
         '[role="menu"]:has(> [data-testid="composer-intelligence-picker-content"]),[role="dialog"]:has([data-testid="composer-intelligence-picker-content"]),[role="menu"]:has([data-model-picker-view]),[role="menu"][data-model-picker-view]{animation:none!important}';
       document.head.append(motion);
     };
-    const openPicker = () => {
-      const panel = ownMotion(picker());
-      return panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : null;
-    };
+    const openPicker = () => ownMotion(activeModelPickerPanel());
     const wait = (read, timeout = 3000) => new Promise(resolve => {
       let reading = false, dirty = false, done = false, scheduled = null;
       const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer);
@@ -3350,10 +3352,11 @@ var CLF_DOM = (() => {
         if (!shown(panel) && !shown(dialog)) return true;
         const isClosed = () => !openPicker() && (!dialog?.isConnected || !shown(dialog));
         const button = trigger();
-        // Escape can cancel the chat picker's highlighted effort. Close the
-        // exact expanded native toggle as the user would after picking a lane.
+        const expanded = button?.getAttribute('aria-expanded');
+        // Escape can cancel the highlighted effort. The native toggle can own
+        // a visibly open controlled portal even when aria-expanded is omitted.
         // A different picker or a remounted composer cannot inherit the action.
-        if (keepSelection && button?.getAttribute('aria-expanded') === 'true' &&
+        if (keepSelection && button && (expanded === 'true' || expanded === null) && openPicker() === panel &&
             button.getAttribute('data-clf-picker-route') === location.pathname &&
             composer()?.closest('form')?.isConnected &&
             (button.getAttribute('aria-controls') || '').split(/\s+/).some(id =>
@@ -3424,8 +3427,7 @@ var CLF_DOM = (() => {
   // The current native picker or closed trigger carries the MAIN-world snapshot.
   // The route stamp prevents a retained composer from lending another chat proof.
   function visibleModelSelection() {
-    const panel = modelPickerPanel();
-    const node = panel && panel.closest('[role="menu"],[role="dialog"]')?.getAttribute('data-state') !== 'closed' ? panel : modelPickerTrigger();
+    const node = activeModelPickerPanel() || modelPickerTrigger();
     if (node?.getAttribute('data-clf-selected-route') !== location.pathname) return null;
     const model = node?.getAttribute('data-clf-selected-model'), reasoningEffort = node?.getAttribute('data-clf-selected-effort');
     const modelSurface = node?.getAttribute('data-clf-selected-surface');
@@ -3433,11 +3435,29 @@ var CLF_DOM = (() => {
       ? { model, reasoningEffort, ...(modelSurface === 'chat' || modelSurface === 'work' ? { modelSurface } : {}) } : null;
   }
 
-  async function confirmModelSelection(stillCurrent = () => true) {
+  async function confirmModelSelection(stillCurrent = () => true, expected = null, allowUnifiedSurface = false) {
     const route = location.pathname;
-    if (!stillCurrent()) return null;
-    const selection = await readPickerState(true);
-    return stillCurrent() && location.pathname === route ? selection : null;
+    const current = () => stillCurrent() && location.pathname === route;
+    if (!expected) {
+      if (!current()) return null;
+      const selection = await readPickerState(true);
+      return current() ? selection : null;
+    }
+    // Closing the native menu can briefly leave stale state or no picker owner
+    // while the composer remounts. Wait for the exact pair without reopening it.
+    const closed = () => !activeModelPickerPanel() && modelPickerTrigger()?.getAttribute('aria-expanded') !== 'true';
+    const deadline = performance.now() + 2500;
+    while (current() && performance.now() < deadline) {
+      if (closed()) {
+        const selection = await readPickerState(true);
+        if (!current() || performance.now() >= deadline) return null;
+        if (selection?.model === expected.model && selection.reasoningEffort === expected.reasoningEffort &&
+            (!expected.modelSurface || selection.modelSurface === expected.modelSurface || allowUnifiedSurface && !selection.modelSurface) &&
+            closed()) return selection;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return null;
   }
   /**
    * Whether a borrowed chat can serve account model discovery. A chat still set to a model the
@@ -3572,9 +3592,8 @@ var CLF_DOM = (() => {
     const ui = modelPickerAccess(stillCurrent, report, modelSurface);
     const confirmClosed = async choice => {
       if (!exactEffort) return stillCurrent();
-      const live = await confirmModelSelection(stillCurrent);
-      if (!live || live.model !== choice.id || live.reasoningEffort !== choice.effort ||
-          (modelSurface && live.modelSurface && live.modelSurface !== modelSurface)) return refused('selection-changed-after-close');
+      const live = await confirmModelSelection(stillCurrent, { model: choice.id, reasoningEffort: choice.effort, modelSurface }, true);
+      if (!live) return refused('selection-changed-after-close');
       onConfirmed?.(live);
       return true;
     };
