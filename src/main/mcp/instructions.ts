@@ -30,7 +30,9 @@ export function serverInstructions(
   platform: NodeJS.Platform = process.platform,
   skills = skillCatalogInstructions()
 ): string {
-  const routing = geminiBindingsEnabled() ? `${GEMINI_ROUTING_INSTRUCTIONS}\n\n` : '';
+  const routing = mcpProvider() === 'chatgpt'
+    ? 'For each OneCode-authored task, use the latest task authorization from that message on every outer call. Use Core exec for local work and start its code with the exact supplied `// onecode-session: ...` line. If using a direct native call, including session_finish, supply the same value in its `onecode_session_key` field. If a cached schema omits that field, use Core exec for ordinary tools. A CALLER_IDENTITY_REQUIRED refusal with no local execution can be corrected by supplying the exact current task authorization on the rejected call. Never repeat an operation whose execution is uncertain.\n\n'
+    : geminiBindingsEnabled() ? `${GEMINI_ROUTING_INSTRUCTIONS}\n\n` : '';
   if (surface === 'plugins') return routing + 'External MCP tools enabled by the user in OneCode. Each tool retains its upstream schema and annotations. External servers run with their own operating-system or service permissions; OneCode approved folders do not sandbox them. Use only for the user\'s requested task. A failed or disconnected call may already have taken effect: never automatically retry a mutation after an ambiguous failure. Disabled tools require the user to re-enable them in Settings. Use the OneCode Core connector for all new setup; this endpoint remains compatible with older installations.' + (canAddCodeMode(pluginManager.tools()) ? '\n\n' + CODE_MODE_INSTRUCTIONS : '');
   return routing + (surface === 'desktop' ? [browserInstructions(), ...(platform === 'win32' || platform === 'darwin' ? [desktopInstructions(ctx, platform)] : [`Files, patches and shell commands live in the separate "${surfaceDefinition('core').connectorName}" connector.`, CODE_MODE_INSTRUCTIONS, ...userInstructions()])].join('\n\n') : coreInstructions(ctx, platform, skills));
 }

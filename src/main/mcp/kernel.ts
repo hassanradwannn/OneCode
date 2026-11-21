@@ -275,6 +275,16 @@ export function failIdentity(text: string): ToolResult {
   return result;
 }
 
+export function callerIdentityRequired(reason: string, fallback: string): ToolResult {
+  const chatgpt = mcpProvider() === 'chatgpt';
+  const recovery = chatgpt
+    ? 'For an app-authored task, retry this rejected call with the authorization already in the latest OneCode-authored message in this chat. Prefer the exact Core connector’s exec tool. Copy the `// onecode-session: ...` line from that message as the first line of code, then call the requested tool through `tools`. For a direct call whose current schema offers `onecode_session_key`, supply the same value there. Use the current task’s value without displaying it. If the message has no authorization, ask the user to send the request through OneCode.'
+    : fallback;
+  const result = failIdentity(`CALLER_IDENTITY_REQUIRED: ${reason} No local tool ran. ${recovery}`);
+  if (chatgpt) result.structuredContent = { refusal: 'caller-identity-required', executed: false };
+  return result;
+}
+
 // Advisory, process-local history; never ownership or permission. Exact correlation
 // remains the only join, including when late proof belongs to an earlier request.
 const identityRecovery = new Map<string, { tools: Set<string>; offer?: CallContext['publication'] }>();
@@ -1087,20 +1097,23 @@ async function dispatchTracked(
         ? Promise.resolve(fail(endedWorker))
         : retiredLeaseAmbiguous
         ? Promise.resolve(
-            failIdentity(
-              'CALLER_IDENTITY_REQUIRED: a recently retired worker tab may still be open, and the connector could not prove this call belongs to a different chat. No local tool was run. For a browser chat, restore the companion connection and retry. Scheduled or headless runs may have no browser identity: the user can enable "Allow unattributed calls" in the app settings to permit self-contained calls recorded as Unattributed. Exact retired-worker restrictions still apply.'
+            callerIdentityRequired(
+              'A recently retired worker tab may still be open, and the connector could not prove this call belongs to a different chat.',
+              'For a browser chat, restore the companion connection and retry. Scheduled or headless runs may have no browser identity: the user can enable "Allow unattributed calls" in the app settings to permit self-contained calls recorded as Unattributed. Exact retired-worker restrictions still apply.'
             )
           )
         : dormantLeaseAmbiguous
         ? Promise.resolve(
-            failIdentity(
-              'CALLER_IDENTITY_REQUIRED: a dormant worker chat still belongs to its prime history, and the connector could not prove this call belongs to a different conversation. No local tool was run. For a browser chat, restore the companion connection and retry. Scheduled or headless runs may have no browser identity: the user can enable "Allow unattributed calls" in the app settings to permit self-contained calls recorded as Unattributed. This does not identify the caller or grant access to another chat’s workspace or processes.'
+            callerIdentityRequired(
+              'A dormant worker chat still belongs to its prime history, and the connector could not prove this call belongs to a different conversation.',
+              'For a browser chat, restore the companion connection and retry. Scheduled or headless runs may have no browser identity: the user can enable "Allow unattributed calls" in the app settings to permit self-contained calls recorded as Unattributed. This does not identify the caller or grant access to another chat’s workspace or processes.'
             )
           )
         : !allowUnattributed && swarmRunning() && identitySensitive && !context.caller.conversationId
         ? Promise.resolve(
-            failIdentity(
-              'CALLER_IDENTITY_REQUIRED: this operation needs this chat’s exact workspace, but the connector could not prove which ChatGPT conversation made the call. Retry after the extension reconnects; no file or command was changed.'
+            callerIdentityRequired(
+              'This operation needs the chat’s exact workspace, and the connector could not prove which conversation made the call.',
+              'Retry after the extension reconnects.'
             )
           )
         : nested && surface !== 'plugins' && (name === 'exec' || name === 'session_finish' || name === 'save_handoff' ||

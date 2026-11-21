@@ -1,6 +1,6 @@
 import { currentCall, type CallContext } from './call-context.js';
 import { getConfig } from '../config.js';
-import { guard, failIdentity, type SurfaceRegistrar, type ToolResult } from './kernel.js';
+import { guard, callerIdentityRequired, type SurfaceRegistrar, type ToolResult } from './kernel.js';
 import { codeModeSchema, runCodeMode, CODE_MODE_LIMITS, type CodeModeTool, type CodeModeOptions } from './code-mode-runtime.js';
 import { toolDeclaration } from './tool-declarations.js';
 import { SURFACES, surfaceDefinition, type SurfaceId } from './surfaces.js';
@@ -78,7 +78,8 @@ export function codeModeHandler(
     const apiProof = parent?.localApiTurnId && parent.localApiCurrent && await parent.localApiCurrent();
     if (!parent || ((!localProof && !apiProof && (!parent.caller.requestId || !parent.caller.conversationId || !parent.caller.sessionId)) &&
       !allowUnattributed)) {
-      return failIdentity('CALLER_IDENTITY_REQUIRED: code mode needs exact companion chat/session proof or Allow unattributed calls enabled in app settings. No JavaScript or nested tool ran.');
+      return callerIdentityRequired('Code mode needs exact companion chat or task authorization.',
+        'Restore the Companion connection or enable Allow unattributed calls in OneCode Settings.');
     }
     const tools = getTools().filter(tool => tool.name !== 'exec');
     const result = await runCodeMode(code, tools, (name, args) => invoke(name, args, parent), CODE_MODE_LIMITS, options);
@@ -99,4 +100,4 @@ export const CODE_MODE_INSTRUCTIONS = `Code mode: use exec with JavaScript to co
 const results = await Promise.all(requests.map(({name, args}) => tools[name](args)));
 text(results.map((result, index) => ({index, isError: result.isError ?? false, content: result.content})));
 Keep emitted text within 40,000 UTF-8 bytes total. For large read batches, request smaller max_bytes or line ranges, filter the returned content, or use read directly. Forward individual images with image(...). text(result) also forwards image blocks from a native MCP result as validated images and prints placeholders with its metadata. Do not JSON.stringify screenshots or put base64 into strings; arbitrary strings remain text. An oversized text emission returns an explicitly truncated preview and stops the script; inspect already dispatched calls before retrying.
-Run independent calls in parallel only when they cannot conflict; await mutations before dependent work. Forward native images with image(result.content.find(item => item.type === "image")). Children keep the parent’s exact or permitted request identity, recheck live permissions and record separately. No text/image means no emitted output. New user instructions and worker inbox messages arrive with the outer result, outside filtering. Inspect ALL_TOOLS inputSchema before using an unfamiliar method. Await all previous calls before agents action=finish; it is allowed for the exact authenticated worker as the last nested action. Other lifecycle tools require direct calls. Prefer direct tools for simple calls or native file arguments. No persistent state or wait tool; long-running tools use their usual continuation IDs.`;
+Run independent calls in parallel only when they cannot conflict; await mutations before dependent work. Forward native images with image(result.content.find(item => item.type === "image")). Children keep the parent’s exact or permitted request identity, recheck live permissions and record separately. No text/image means no emitted output. New user instructions and worker inbox messages arrive with the outer result, outside filtering. Inspect ALL_TOOLS inputSchema before using an unfamiliar method. Await all previous calls before agents action=finish; it is allowed for the exact authenticated worker as the last nested action. Other lifecycle tools require direct calls. When an app-authored task provides authorization, follow its routing instructions even for simple calls. No persistent state or wait tool; long-running tools use their usual continuation IDs.`;
