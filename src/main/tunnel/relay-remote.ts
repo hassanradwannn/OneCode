@@ -1,23 +1,29 @@
 import { randomBytes } from 'node:crypto';
 import { RELAY_HEALTH } from '../../shared/relay-protocol.js';
 import { RelayChannel } from './relay-channel.js';
+import { SrvUsChannel, srvUsPrivateKey } from './srv-us.js';
 import { acquireRelayEnrollment } from './relay-enrollment.js';
 import { readPublicJson } from './tailscale-public.js';
 
 export class RelayRemote {
-  private channel: RelayChannel | undefined;
+  private channel: RelayChannel | SrvUsChannel | undefined;
   private release: (() => void) | undefined;
   private abort = new AbortController();
   private readonly probe = randomBytes(32).toString('base64url');
+  constructor(private readonly transport: 'onecode' | 'srv-us' = 'onecode') {}
 
   async start(proxy: string): Promise<string> {
     const target = new URL(proxy);
     if (target.origin !== proxy || target.hostname !== '127.0.0.1' || target.protocol !== 'http:' || !target.port) {
       throw new Error('Remote must use its current loopback listener.');
     }
-    const { credential, release } = await acquireRelayEnrollment();
-    this.release = release;
-    this.channel = new RelayChannel(credential, 'remote', Number(target.port));
+    const port = Number(target.port);
+    if (this.transport === 'srv-us') this.channel = new SrvUsChannel(await srvUsPrivateKey('remote'), 'remote', port);
+    else {
+      const { credential, release } = await acquireRelayEnrollment();
+      this.release = release;
+      this.channel = new RelayChannel(credential, 'remote', port);
+    }
     return this.channel.origin.origin;
   }
 
@@ -33,7 +39,7 @@ export class RelayRemote {
       });
       if (result.status === 200 && (result.json as { ready?: boolean } | null)?.ready === true && channel.online) return;
     } catch { /* only report the fixed error below */ }
-    throw new Error('Waiting for public HTTPS on the OneCode relay.');
+    throw new Error(this.transport === 'srv-us' ? 'Waiting for public HTTPS through srv.us.' : 'Waiting for public HTTPS on the OneCode relay.');
   }
 
   async stop(): Promise<void> {

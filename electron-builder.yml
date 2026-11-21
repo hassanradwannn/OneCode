@@ -38,6 +38,10 @@ files:
   - '!node_modules/node-pty/prebuilds/**/*'
   - '!node_modules/tree-sitter/prebuilds/**/*'
   - '!node_modules/tree-sitter-bash/prebuilds/**/*'
+  # ssh2 falls back to Node crypto. Ship the same JS implementation on all targets.
+  - '!node_modules/cpu-features/**/*'
+  - '!node_modules/ssh2/node_modules/cpu-features/**/*'
+  - '!node_modules/ssh2/lib/protocol/crypto/build/**/*'
   - '!out/**/*.map'
   - '!**/*.private.json'
   - '!**/*.private.txt'

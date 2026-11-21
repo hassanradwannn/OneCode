@@ -315,7 +315,7 @@ const configSchema = z.object({
     profileId: z.string().min(1).max(64).optional(),
     profileName: z.string().trim().min(1).max(80).optional(),
     profileEpoch: z.number().int().nonnegative().optional(),
-    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode']),
+    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode', 'srv-us']),
     tunnelId: z.string().max(128),
     // Optional with an empty default, so a config written before the connector split
     // loads unchanged and simply has no Desktop tunnel yet — which is also the correct
@@ -583,7 +583,7 @@ const configSchema = z.object({
     .optional()
     .default({ ...DEFAULT_AGENT_API })
     .catch({ ...DEFAULT_AGENT_API })
-}).transform(value => value.tunnel.kind === 'tailscale' || value.tunnel.kind === 'onecode'
+}).transform(value => value.tunnel.kind === 'tailscale' || value.tunnel.kind === 'onecode' || value.tunnel.kind === 'srv-us'
   ? { ...value, mcp: { ...value.mcp, persistentUrls: true } }
   : value);
 
@@ -607,11 +607,11 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform, rele
     capabilities: firstLaunchCapabilities(platform, release),
     readOnly: false,
     commandAllowlist: { ...DEFAULT_COMMAND_ALLOWLIST, rules: [] },
-    tunnel: { kind: 'tailscale', tunnelId: '', desktopTunnelId: '', binaryPath: '' },
+    tunnel: { kind: 'srv-us', tunnelId: '', desktopTunnelId: '', binaryPath: '' },
     // Fresh installs refresh changed connector tools on their own: a permission chosen in Setup
     // changes the tool list, and nothing else tells a new user to refresh the plugin in Gemini.
     // Older configs keep the schema default (off).
-    ui: { minimizeToTray: true, autoConnect: false, startAtLogin: false, keepAwake: true, keepScreenAwake: false, cosBrowserMinimize: 'taskbar', turnNotifications: true, rotateTurnMinutes: 0, localAppUsage: true, privacyScreenshots: false, theme: 'dark', autoRefreshPlugins: false, autoRefreshPluginsAsked: true, autoSelectSkills: false, backgroundChats: true, backgroundPlacement: 'window', followUp: 'steer', enterSends: true, browserBridgePort: 'auto', autoContinue: true, followOutput: true, mentionCore: true, chatProvider: 'gemini',
+    ui: { minimizeToTray: true, autoConnect: true, startAtLogin: false, keepAwake: true, keepScreenAwake: false, cosBrowserMinimize: 'taskbar', turnNotifications: true, rotateTurnMinutes: 0, localAppUsage: true, privacyScreenshots: false, theme: 'dark', autoRefreshPlugins: false, autoRefreshPluginsAsked: true, autoSelectSkills: false, backgroundChats: true, backgroundPlacement: 'window', followUp: 'steer', enterSends: true, browserBridgePort: 'auto', autoContinue: true, followOutput: true, mentionCore: true, chatProvider: 'gemini',
       // The built-in browser is opt-in: Chrome with the companion stays the default for new and
       // existing installs alike, and the built-in one runs only once someone chooses it.
       chatBrowser: 'brave' },
@@ -619,7 +619,7 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform, rele
     compaction: { ...DEFAULT_COMPACTION },
     multiAgent: { ...FIRST_LAUNCH_MULTI_AGENT },
     goal: { ...DEFAULT_GOAL },
-    mcp: { ...DEFAULT_MCP },
+    mcp: { ...DEFAULT_MCP, persistentUrls: true },
     controlApi: { ...DEFAULT_CONTROL_API },
     agentApi: { ...DEFAULT_AGENT_API }
   };
@@ -640,7 +640,7 @@ function conservativeRecoveryConfig(): Config {
     readOnly: true,
     multiAgent: { ...DEFAULT_MULTI_AGENT },
     // Damage is not a choice of browser either: keep the one every older config reads as.
-    ui: { ...defaultConfig().ui, autoContinue: false, autoRefreshPlugins: false, chatBrowser: 'chrome' },
+    ui: { ...defaultConfig().ui, autoConnect: false, autoContinue: false, autoRefreshPlugins: false, chatBrowser: 'chrome' },
     // A config file that could not be trusted is not consent to have a second model typing
     // into the user's chat, whatever the unreadable file said.
     goal: { ...DEFAULT_GOAL }

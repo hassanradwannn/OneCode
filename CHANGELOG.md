@@ -2,7 +2,7 @@
 
 ## [1.3.0]
 
-Add OneCode Relay for public HTTPS connections, with one-time Remote browser pairing and Tailscale as an optional transport. Repair ChatGPT Steer authorization and turn synchronization when its native message bubble mounts late. See [1.3.0 notes](docs/release-notes/v1.3.0.md).
+Bundle srv.us for public HTTPS connections, with automatic reconnect, one-time Remote browser pairing, and optional Tailscale or self-hosted Relay. Repair ChatGPT Steer authorization and turn synchronization when its native message bubble mounts late. See [1.3.0 notes](docs/release-notes/v1.3.0.md).
 
 ## [1.2.1] — 2026-11-21
 

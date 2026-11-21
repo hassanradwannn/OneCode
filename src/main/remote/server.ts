@@ -128,7 +128,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     await checkRoute(transport === 'tailscale' && req.method !== 'GET' && req.method !== 'HEAD');
     if (route.pathname === '/api/connect' && req.method === 'POST') {
       const connection = z.object({ key: z.string().min(1).max(128), name: z.string().trim().min(1).max(80) }).strict().parse(await body(req));
-      await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name, transport === 'onecode')); return;
+      await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name, transport !== 'tailscale')); return;
     }
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const device = auth.authenticate(token); if (!device) throw new RequestError(401, 'connection_required');
@@ -277,7 +277,7 @@ async function start(refreshLink = false): Promise<void> {
   if (terminal || listener) return;
   // A missing production bundle must not publish an empty or development service.
   await fs.access(path.join(assetRoot, 'index.html'));
-  const secretSlot = transport === 'onecode' ? 'remoteRelayAuthority' : 'remoteAccessKey';
+  const secretSlot = transport === 'tailscale' ? 'remoteAccessKey' : 'remoteRelayAuthority';
   let rootKey = await getSecret(secretSlot);
   if (!rootKey) { rootKey = randomBytes(32).toString('base64url'); await setSecret(secretSlot, rootKey); }
   if (transport === 'tailscale') { accessKey = rootKey; await auth.activate(accessKey); }
@@ -286,13 +286,13 @@ async function start(refreshLink = false): Promise<void> {
       if (res.headersSent) { res.destroy(); return; }
       json(res, cause instanceof RequestError ? cause.status : cause instanceof PairingRefused ? 401 : cause instanceof z.ZodError ? 400 : 409,
         { error: cause instanceof RequestError ? cause.code : cause instanceof PairingRefused ? cause.message : cause instanceof z.ZodError ? 'Invalid remote request' :
-          transport === 'onecode' ? 'The remote request was refused. Open Settings → Remote on the host to check access.' : (cause as Error).message });
+          transport !== 'tailscale' ? 'The remote request was refused. Open Settings → Remote on the host to check access.' : (cause as Error).message });
     });
   });
   server.headersTimeout = 15_000; server.requestTimeout = 30_000; server.maxHeadersCount = 40;
   server.on('checkContinue', (_req, res) => json(res, 417, { error: 'expect_not_supported' }));
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
-  listener = server; serve = transport === 'onecode' ? new RelayRemote() : new PrivateServe();
+  listener = server; serve = transport === 'tailscale' ? new PrivateServe() : new RelayRemote(transport);
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Remote listener did not start.');
     const proxy = `http://127.0.0.1:${address.port}`;
@@ -321,12 +321,12 @@ async function closeListener(): Promise<void> {
 }
 /** The remote-only link is deliberately exposed only through trusted desktop IPC. */
 export function remoteStatus(): RemoteStatus {
-  const address = transport === 'onecode' ? url : url && accessKey ? `${url}/#${accessKey}` : null;
+  const address = transport !== 'tailscale' ? url : url && accessKey ? `${url}/#${accessKey}` : null;
   return { enabled, ready, url: ready ? address : null, error, devices: auth.list(), transport,
     ...(enabled && !ready && canRefreshLink ? { canRefreshLink: true } : {}), ...(setup ? { setup } : {}) };
 }
 export function issueRemotePairingLink(): string {
-  if (transport !== 'onecode' || !enabled || !ready || !url || terminal) throw new Error('OneCode Relay must be connected before pairing.');
+  if (transport === 'tailscale' || !enabled || !ready || !url || terminal) throw new Error('Connect Remote before pairing a browser.');
   return `${url}/#pair=${auth.issuePairingKey()}`;
 }
 export async function revokeRemoteDevice(id: string): Promise<void> { const owner = z.string().uuid().parse(id); await auth.revoke(owner); await retirePlaybacks(owner); }
@@ -377,8 +377,8 @@ export function refreshRemoteLink(): Promise<RemoteStatus> {
 }
 export async function restoreRemote(): Promise<void> {
   const saved = await readDurable<{ enabled: boolean; transport?: RemoteTransport }>('remote-settings');
-  if (!saved) return;
-  const savedTransport = saved.transport === 'onecode' ? 'onecode' : 'tailscale';
+  if (!saved) { if (!enabled && getConfig().tunnel.kind === 'srv-us') transport = 'srv-us'; return; }
+  const savedTransport = saved.transport === 'onecode' || saved.transport === 'srv-us' ? saved.transport : 'tailscale';
   if (saved.enabled === true) await setRemoteEnabled(true, savedTransport);
   else await setRemoteTransport(savedTransport);
 }

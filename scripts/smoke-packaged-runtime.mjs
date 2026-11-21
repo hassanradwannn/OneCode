@@ -326,8 +326,17 @@ const probe = String.raw`
     '@modelcontextprotocol/core/internal',
     '@modelcontextprotocol/server',
     '@modelcontextprotocol/client',
-    '@modelcontextprotocol/node'
+    '@modelcontextprotocol/node',
+    'ssh2'
   ]) appRequire(dependency);
+  const relayClient = appRequire('ssh2');
+  if (!appRequire.resolve('ssh2').startsWith(base + '/app.asar/') &&
+      !appRequire.resolve('ssh2').replaceAll('\\', '/').includes('/app.asar/node_modules/ssh2/')) {
+    throw new Error('The srv.us SSH client did not resolve from the packaged app');
+  }
+  if (relayClient.utils.generateKeyPairSync('ed25519').public.startsWith('ssh-ed25519 ') !== true) {
+    throw new Error('The bundled SSH client could not generate a srv.us key');
+  }
   const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).png().toBuffer();
   const parser = new Parser();
   parser.setLanguage(Bash);

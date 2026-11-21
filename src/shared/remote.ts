@@ -8,7 +8,7 @@ export const REMOTE_UI_KEYS = ['chatProvider', 'defaultChatModel', 'defaultChatR
   'turnNotifications', 'backgroundChats', 'backgroundPlacement', 'tabsToKeepOpen', 'autoContinue', 'autoSelectSkills', 'rotateTurnMinutes'] as const;
 export type RemotePreferences = Pick<Config['ui'], typeof REMOTE_UI_KEYS[number]>;
 export interface RemoteDevice { id: string; name: string; lastSeenAt: number }
-export type RemoteTransport = 'tailscale' | 'onecode';
+export type RemoteTransport = 'tailscale' | 'onecode' | 'srv-us';
 export interface RemoteStatus { enabled: boolean; ready: boolean; url: string | null; error: string | null; devices: RemoteDevice[]; transport?: RemoteTransport; canRefreshLink?: boolean; setup?: import('./tailscale-setup.js').TailscaleSetupAction }
 export interface RemoteBootstrap {
   host: string;

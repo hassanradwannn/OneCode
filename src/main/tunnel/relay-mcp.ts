@@ -2,19 +2,25 @@ import { relayDigest, relayPublicOrigin, RELAY_MCP_METADATA, RELAY_MCP_PATH } fr
 import { createMcpIngressRelay } from './tailscale-relay.js';
 import { acquireRelayEnrollment } from './relay-enrollment.js';
 import { RelayChannel } from './relay-channel.js';
+import { SrvUsChannel, srvUsOrigin, srvUsPrivateKey } from './srv-us.js';
 import { readPublicJson } from './tailscale-public.js';
 import type { TunnelHandle, TunnelStartOptions } from './index.js';
 
 export async function startRelayMcp(options: TunnelStartOptions): Promise<TunnelHandle> {
   const local = new URL(options.localUrl);
   if (!RELAY_MCP_PATH.test(local.pathname)) throw new Error('The local MCP connector address is invalid.');
-  const enrollment = await acquireRelayEnrollment();
-  const { credential } = enrollment;
-  const publicOrigin = relayPublicOrigin(credential.origin, relayDigest(credential.key), 'mcp');
+  const hosted = options.settings.kind === 'srv-us';
+  const name = hosted ? 'srv.us' : 'OneCode Relay';
+  const enrollment = hosted ? null : await acquireRelayEnrollment();
+  const privateKey = hosted ? await srvUsPrivateKey('mcp') : null;
+  const credential = enrollment?.credential;
+  const publicOrigin = privateKey ? srvUsOrigin(privateKey, 'mcp')
+    : relayPublicOrigin(credential!.origin, relayDigest(credential!.key), 'mcp');
   const endpoint = new URL(local.pathname, publicOrigin);
   try {
     const proxy = await createMcpIngressRelay(local.origin, publicOrigin.host, '', 'Relay');
-    const channel = new RelayChannel(credential, 'mcp', Number(new URL(proxy.origin).port));
+    const port = Number(new URL(proxy.origin).port);
+    const channel = privateKey ? new SrvUsChannel(privateKey, 'mcp', port) : new RelayChannel(credential!, 'mcp', port);
     const controller = new AbortController();
     let previous = '';
     let timer: NodeJS.Timeout | undefined;
@@ -38,7 +44,7 @@ export async function startRelayMcp(options: TunnelStartOptions): Promise<Tunnel
         } catch { /* the next check is read-only */ }
       }
       if (controller.signal.aborted) return;
-      const detail = ready ? 'Connected through OneCode Relay.' : channel.online ? 'Checking public HTTPS and MCP on the OneCode relay.' : channel.detail;
+      const detail = ready ? `Connected through ${name}.` : channel.online ? `Checking public HTTPS and MCP through ${name}…` : channel.detail;
       if (detail !== previous) {
         const state = ready ? 'connected' : previous ? 'offline' : 'connecting-tunnel';
         previous = detail;
@@ -51,11 +57,11 @@ export async function startRelayMcp(options: TunnelStartOptions): Promise<Tunnel
     return {
       async stop() {
         controller.abort(); clearTimeout(timer);
-        try { await channel.stop(); await proxy.stop(); } finally { enrollment.release(); }
+        try { await channel.stop(); await proxy.stop(); } finally { enrollment?.release(); }
       }
     };
   } catch (error) {
-    enrollment.release();
+    enrollment?.release();
     throw error;
   }
 }

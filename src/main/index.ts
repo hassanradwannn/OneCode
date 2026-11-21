@@ -40,6 +40,7 @@ import { flushLogBeforeExit, initLogFile, logError, logInfo, logWarn, snapshotLo
 import { unifiedExecManager } from './codex/manager.js';
 import { workspaceTerminalsExited } from './workspace-terminal.js';
 import { initSecretsPath, keychainReadPending } from './secrets.js';
+import { srvUsMcpEnrolled } from './tunnel/srv-us.js';
 import { mainText, mainTextTranslations, onMainTextsChange, restoreMainTextTranslations } from './main-texts.js';
 import { isMainText } from '../shared/main-texts.js';
 import { executableFingerprint, initKeychainNotice } from './keychain-notice.js';
@@ -766,7 +767,15 @@ void app.whenReady().then(async () => {
     startAgentApi().catch((error: Error) => logWarn(`OneCode API did not start: ${error.message}`));
   }
   void restoreRemote().catch(() => logWarn('Remote access could not start. Open Settings on this PC.'));
-  if (getConfig().ui.autoConnect) void connect();
+  if (getConfig().ui.autoConnect) {
+    if (getConfig().tunnel.kind === 'srv-us') {
+      // The first explicit Connect creates the installation key. Fresh Setup
+      // may prefer srv.us without publishing a connector before that choice.
+      void srvUsMcpEnrolled().then(key => {
+        if (key && getConfig().tunnel.kind === 'srv-us' && getConfig().ui.autoConnect) return connect();
+      }).catch(() => logWarn('srv.us could not restore its saved connector enrollment.'));
+    } else void connect();
+  }
   void resumeUpdateRefresh().catch((error: Error) => logWarn(`update refresh did not resume: ${error.message}`));
 
   // Never awaited: an unreachable GitHub, a slow download or a broken release must not delay a

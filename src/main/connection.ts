@@ -355,7 +355,7 @@ function coreTransport(settings: TunnelSettings): Pick<TunnelSettings, 'kind' | 
     kind: settings.kind,
     profileEpoch: settings.kind === 'openai' ? settings.profileEpoch ?? 0 : 0,
     tunnelId: settings.kind === 'openai' ? settings.tunnelId : '',
-    binaryPath: settings.kind === 'manual' || settings.kind === 'onecode' ? '' : settings.binaryPath
+    binaryPath: settings.kind === 'manual' || settings.kind === 'onecode' || settings.kind === 'srv-us' ? '' : settings.binaryPath
   };
 }
 
@@ -426,7 +426,7 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
     setConnectorPublicRoute(setupProfileId, null);
     setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null, tailscale: null });
     // Opt-in stable URLs for a tunnel of the user's own (#924): the stored tokens, else fresh ones.
-    const persistentTransport = config.tunnel.kind === 'tailscale' || config.tunnel.kind === 'onecode';
+    const persistentTransport = config.tunnel.kind === 'tailscale' || config.tunnel.kind === 'onecode' || config.tunnel.kind === 'srv-us';
     const keepUrls = persistentTransport || getConfig().mcp?.persistentUrls === true;
     const kept = keepUrls ? Object.fromEntries(await Promise.all(CHAT_PROVIDERS.map(async provider =>
       [provider, await loadSurfaceTokens(provider).catch(() => ({}))]))) : {};
@@ -446,7 +446,7 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
         await startedEndpoint.stop();
         throw new TunnelError(config.tunnel.kind === 'tailscale'
           ? 'OneCode Funnel requires securely saved connector URLs. Restore secure storage before connecting. No Funnel route was changed.'
-          : 'OneCode Relay requires securely saved connector URLs. Restore secure storage before connecting.');
+          : 'This connection requires securely saved connector URLs. Restore secure storage before connecting.');
       }
       logWarn('connector URLs: secure storage is unavailable, so they change at the next start');
     }

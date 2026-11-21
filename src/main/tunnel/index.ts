@@ -202,6 +202,7 @@ export async function startTunnel(opts: TunnelStartOptions): Promise<TunnelHandl
     case 'tailscale':
       try { return await startTailscale(opts); }
       catch (error) { throw new TunnelError(error instanceof Error ? error.message : 'OneCode Funnel could not start.'); }
+    case 'srv-us':
     case 'onecode':
       try { return await startRelayMcp(opts); }
       catch (error) { throw new TunnelError(error instanceof Error ? error.message : 'OneCode Relay could not start.'); }

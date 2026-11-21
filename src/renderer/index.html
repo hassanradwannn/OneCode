@@ -243,7 +243,7 @@
             <header class="settings-page-head appearance-page-head"><div><h1 id="remoteTitle">Remote</h1><p>Open your OneCode chats from another device.</p></div></header>
             <section class="appearance-section" id="remoteSettings">
               <div class="settings-surface pane appearance-settings-card">
-                <label class="setting"><span class="setting-text"><b>Connection method</b><em>Turn off Remote to switch methods.</em></span><select id="remoteTransport"><option value="tailscale">Tailscale (private network)</option><option value="onecode">OneCode Relay (internet)</option></select></label>
+                <label class="setting"><span class="setting-text"><b>Connection method</b><em>Turn off Remote to switch methods.</em></span><select id="remoteTransport"><option value="srv-us">srv.us (built in)</option><option value="tailscale">Tailscale (private network)</option><option value="onecode">Self-hosted OneCode Relay</option></select></label>
                 <label class="setting"><span class="setting-text"><b>Remote mode</b><em>Keep OneCode running on this computer to connect.</em></span><input type="checkbox" id="remoteEnable" /></label>
                 <div class="setting"><span class="setting-text"><b>Status</b><em id="remoteStatus" role="status">Off</em></span><button class="btn" type="button" id="remoteRefresh">Refresh</button></div>
                 <div id="remoteSetup" hidden><button class="btn btn-solid" type="button" id="remoteSetupAction">Finish Tailscale setup</button><p class="hint">OneCode will continue automatically after you finish in Tailscale.</p></div>
@@ -837,7 +837,19 @@
                 </div>
                 <div class="step-body">
                   <h3>Connect the tunnel</h3>
-                  <p class="step-lead">Click Connect and wait for Connected. Change the connection method in Advanced below.</p>
+                  <p class="step-lead">Choose a connection method, then click Connect.</p>
+                  <div class="field">
+                    <label for="tunnelKind">Connection method</label>
+                    <select id="tunnelKind">
+                      <option value="srv-us">srv.us — built in</option>
+                      <option value="tailscale">Tailscale Funnel</option>
+                      <option value="onecode">Self-hosted OneCode Relay</option>
+                      <option value="cloudflared">Cloudflare Quick Tunnel</option>
+                      <option value="manual">Local only</option>
+                    </select>
+                    <p class="hint" id="methodHint"></p>
+                    <label class="inline"><input type="checkbox" id="autoConnect" /> Connect when OneCode starts</label>
+                  </div>
                   <section class="field" id="tailscaleSetup" aria-label="Tailscale setup" hidden>
                     <p class="hint">OneCode checks the Tailscale installation on this computer. Choose Install and sign in when setup is required, then complete Tailscale’s first-party installation and sign in with your own account. Keep it running; your tailnet owner may need to allow Funnel.</p>
                     <div class="step-actions">
@@ -1018,18 +1030,7 @@
                 Advanced — connection, program and startup
               </summary>
 
-              <div class="field">
-                <label for="tunnelKind">Connection method</label>
-                <select id="tunnelKind">
-                  <option value="tailscale">Tailscale Funnel — recommended</option>
-                  <option value="onecode">OneCode Relay — stable HTTPS address</option>
-                  <option value="cloudflared">Cloudflare quick tunnel — temporary address</option>
-                  <option value="manual">Local only — I run my own tunnel</option>
-                </select>
-                <p class="hint" id="methodHint"></p>
-              </div>
-
-              <div class="field">
+              <div class="field" id="tunnelProgramField">
                 <label for="binaryPath">Tunnel program</label>
                 <div class="row-inline">
                   <input id="binaryPath" type="text" spellcheck="false" placeholder="Bundled with this app" readonly />
@@ -1040,7 +1041,6 @@
 
               <div class="field">
                 <label class="inline" id="startAtLoginRow" hidden><input type="checkbox" id="startAtLogin" /> Start OneCode when I sign in</label>
-                <label class="inline"><input type="checkbox" id="autoConnect" /> Connect automatically at startup</label>
                 <label class="inline"><input type="checkbox" id="minimizeToTray" /> <span id="minimizeToTrayCopy">Keep running when closed</span></label>
               </div>
             </details>

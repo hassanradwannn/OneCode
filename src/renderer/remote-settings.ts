@@ -12,7 +12,7 @@ export function initRemoteSettings(): void {
   let state: RemoteStatus | null = null, busy = false, generation = 0;
   const paint = (view: RemoteStatus) => {
     state = view; enable.checked = view.enabled;
-    const publicRelay = view.transport === 'onecode';
+    const publicRelay = view.transport === 'onecode' || view.transport === 'srv-us';
     if (transport) { transport.value = view.transport ?? 'tailscale'; transport.disabled = view.enabled; }
     if (pair) pair.hidden = !publicRelay || !view.ready;
     const hint = document.getElementById('remoteBookmarkHint');
@@ -36,14 +36,21 @@ export function initRemoteSettings(): void {
     if (busy) { transport.value = state?.transport ?? 'tailscale'; return; }
     busy = true; generation++; enable.disabled = true; transport.disabled = true;
     try {
-      const view = await run(window.api.remoteTransport(transport.value === 'onecode' ? 'onecode' : 'tailscale'));
+      const choice = transport.value;
+      const view = await run(window.api.remoteTransport(choice === 'onecode' || choice === 'srv-us' ? choice : 'tailscale'));
       if (view && enable.isConnected) paint(view);
       else transport.value = state?.transport ?? 'tailscale';
     } finally { busy = false; enable.disabled = false; transport.disabled = state?.enabled === true; }
   };
   const refresh = async () => { if (busy || !enable.isConnected) return; const token = ++generation;
     const view = await run(window.api.remoteStatus());
-    if (view && token === generation && !busy && enable.isConnected) paint(view);
+    if (!view || token !== generation || busy || !enable.isConnected) return;
+    // lastSeenAt does not change the displayed device rows. Avoid replacing
+    // their buttons while a connected browser polls or a person has focus.
+    const displayed = (value: RemoteStatus | null) => value && {
+      ...value, devices: value.devices.map(({ id, name }) => ({ id, name }))
+    };
+    if (JSON.stringify(displayed(view)) !== JSON.stringify(displayed(state))) paint(view);
   };
   enable.onchange = async () => {
     if (busy) return; busy = true; generation++; enable.disabled = true;
@@ -95,6 +102,8 @@ export function initRemoteSettings(): void {
   }
   document.querySelector<HTMLButtonElement>('[data-tab="remote"]')!.addEventListener('click', () => { void refresh(); });
   void refresh();
-  const timer = window.setInterval(() => { if (state?.enabled && !state.ready && !document.hidden) void refresh(); }, 3_000);
+  const timer = window.setInterval(() => {
+    if (state?.enabled && !document.hidden && (!state.ready || enable.closest('[data-panel="remote"].is-active'))) void refresh();
+  }, 3_000);
   window.addEventListener('unload', () => window.clearInterval(timer), { once: true });
 }

@@ -230,7 +230,7 @@ const settingsPatch = z.object({
     profileId: z.string().max(64).optional(),
     profileEpoch: z.number().int().nonnegative().optional(),
     pluginsTunnelId: z.string().max(128).refine(v => v === '' || TUNNEL_ID_PATTERN.test(v), 'Expected tunnel_ followed by 32 hex characters').optional(),
-    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode']),
+    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode', 'srv-us']),
     tunnelId: z
       .string()
       .max(128)
@@ -745,7 +745,7 @@ export async function openSessionChat(id: string): Promise<void> {
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
   handle('remote:status', async () => remoteStatus(), getWindow);
   handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)), getWindow);
-  handle('remote:transport', async payload => setRemoteTransport(z.enum(['onecode', 'tailscale']).parse(payload)), getWindow);
+  handle('remote:transport', async payload => setRemoteTransport(z.enum(['onecode', 'tailscale', 'srv-us']).parse(payload)), getWindow);
   handle('remote:pair', async () => { clipboard.writeText(issueRemotePairingLink()); return true; }, getWindow);
   handle('relay:configured', async () => relayConfigured(), getWindow);
   handle('relay:enrollment', async payload => {

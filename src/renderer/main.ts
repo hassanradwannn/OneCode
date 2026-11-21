@@ -894,6 +894,8 @@ const STATUS_TEXT: Record<AppState['status']['state'], string> = {
 const METHOD_HINT: Record<string, string> = {
   openai:
     "Choose Tailscale, Cloudflare or a manually hosted HTTPS address for Gemini.",
+  'srv-us':
+    "OneCode uses a built-in SSH client to publish a stable HTTPS address through srv.us. It reconnects automatically after network interruptions.",
   tailscale:
     "Uses your installed Tailscale account and Funnel to publish HTTPS. Keeps this computer's connector paths across restarts; no Tailscale account is bundled.",
   cloudflared:
@@ -960,6 +962,8 @@ function missingStep(
     return { step: 'connect', text: t("cloudflared was not found on this computer.") };
   } else if (config.tunnel.kind === 'tailscale' && next.secureStorage?.available === false) {
     return { step: 'connect', text: next.secureStorage.detail || t("Tailscale requires secure storage to keep this computer's connector URLs.") };
+  } else if (config.tunnel.kind === 'srv-us' && next.secureStorage?.available === false) {
+    return { step: 'connect', text: next.secureStorage.detail || t("srv.us requires secure storage for this computer’s connector key.") };
   }
   return null;
 }
@@ -1870,9 +1874,10 @@ function apply(next: AppState): void {
   ui($('providerAccountHint'), 'textContent', () => 'Use the provider’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
   ui($('providerWorkspaceHelp'), 'textContent', () => 'Your workspace administrator may control custom MCP connections. If adding a server is unavailable, ask the administrator to enable it or create the connection using the exact Core HTTPS URL shown here.');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
-  $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' || config.tunnel.kind === 'onecode' ||
+  const persistentTunnel = ['tailscale', 'onecode', 'srv-us'].includes(config.tunnel.kind);
+  $<HTMLInputElement>('mcpPersistentUrls').disabled = persistentTunnel ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);
-  $('mcpPersistentUrlsRequired').hidden = config.tunnel.kind !== 'tailscale' && config.tunnel.kind !== 'onecode';
+  $('mcpPersistentUrlsRequired').hidden = !persistentTunnel;
   applyChecked($<HTMLInputElement>('controlApiAllowActions'), config.controlApi?.allowActions === true, previousState?.config.controlApi?.allowActions);
   // Actions need the API itself, so the switch stays off and disabled until it is on.
   $<HTMLInputElement>('controlApiAllowActions').disabled = config.controlApi?.enabled !== true;
@@ -2107,7 +2112,8 @@ function apply(next: AppState): void {
   }
   paintReady(shown, done, cosBrowser, allSet, accessLevel(next), !accessWorks(next), apiOnly);
 
-  const needsBinary = config.tunnel.kind !== 'manual';
+  const needsBinary = !['manual', 'onecode', 'srv-us'].includes(config.tunnel.kind);
+  $('tunnelProgramField').hidden = !needsBinary;
   $<HTMLInputElement>('binaryPath').placeholder = config.tunnel.kind === 'tailscale'
     ? t('System Tailscale installation') : t('Bundled with this app');
   ui($('binaryState'), 'textContent', () => !needsBinary
@@ -2949,6 +2955,12 @@ $('agentApiRotateKey').addEventListener('click', async () => {
   if (await run(api.rotateAgentApiKey())) toast(t('OneCode API key rotated'));
 });
 
+$('tunnelKind').addEventListener('change', () => {
+  if ($<HTMLSelectElement>('tunnelKind').value === 'srv-us' && state?.config.tunnel.kind !== 'srv-us')
+    $<HTMLInputElement>('autoConnect').checked = true;
+  void save();
+});
+
 for (const id of [
   'autoConnect',
   'startAtLogin',
@@ -2969,7 +2981,6 @@ for (const id of [
   'mcpPersistentUrls',
   'useGeminiWebSkill', 'useChatgptWebSkill', 'useClaudeWebSkill',
   'privacyScreenshots',
-  'tunnelKind',
   'tunnelId',
   'desktopTunnelId',
   'connectorSuffix', 'chatBrowser', 'cosBrowserMinimize', 'backgroundChats', 'backgroundPlacement',
