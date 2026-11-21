@@ -2,13 +2,15 @@
 
 A desktop workspace for AI providers and local tools on Windows and Linux. Work with files, run commands, use MCP plugins and local skills, and keep chats and projects together.
 
-**Latest Stable release [OneCode 1.1.6](https://github.com/hassanradwannn/OneCode/releases/tag/v1.1.6)** · **[Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Setup-x64.exe)** · **[Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.AppImage)** · **[Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.deb)** · [Windows setup guide](docs/WINDOWS-SETUP.md)
+**Latest Stable [OneCode 1.2.1](https://github.com/hassanradwannn/OneCode/releases/tag/v1.2.1)** · [Release notes](docs/release-notes/v1.2.1.md) · [Verification report](docs/release-acceptance/v1.2.1.md)
 
-**1.1.6** opens linked workspace files in the sidebar, copies raw Markdown, and shows recorded edits under completed replies. [Release notes](docs/release-notes/v1.1.6.md) · [Acceptance record](docs/release-acceptance/v1.1.6.md)
+**Fresh install** · [Windows x64 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Setup-x64.exe) · [Linux x64 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.AppImage) · [Linux x64 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.deb)
 
-Model discovery reads native choices without a model-name allowlist. Desktop and Remote recheck lists older than fifteen minutes when opened for ChatGPT, Gemini, Claude and OpenRouter, preserving exact model intent and availability checks. This cumulative release includes the browser import repairs from 1.1.1. Windows capsules retain the compatible 0.5.9 base; Linux capsules retain 1.0.7. Stable and Beta keep separate profiles and update channels.
+Install a complete 1.1.6 package and then check for updates in OneCode. The 1.2.1 release provides cumulative application updates for compatible Windows and Linux x64 installations. [Windows setup](docs/WINDOWS-SETUP.md) · [Linux setup and updates](linux/README.md)
 
-Fresh installations use the complete 1.1.6 packages linked above. Compatible Stable installations can apply the application update while keeping their native base.
+- **Linux updates** prepare and verify the new application layer before quitting. The 1.2.1 upgrade was verified on Ubuntu through one automatic relaunch and a reconnected Brave Companion.
+- **Steer and Compact & Resume** give a user's Steer priority over handoff steps still preparing to send. Workers retain their assignments. ChatGPT verifies the selected model and reasoning effort before sending the saved handoff.
+- **Markdown and changes** open workspace files in the sidebar, copy the original Markdown, and review recorded edits from a completed reply.
 
 Native imports preserve supported Markdown, media, generated files and offline artifacts through each provider's adapter. Standard HTML controls and bundled React/diagram runtimes run locally. Controls backed only by a provider's private runtime or services require the original chat; universal visual and behavior parity is not claimed.
 
@@ -187,7 +189,7 @@ See the [0.7.0 release notes](docs/release-notes/v0.7.0.md) and [acceptance reco
 
 ## Experimental local OneCode API
 
-OneCode offers an opt-in **Experimental** loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. `/v1/models` advertises `onecode`, `onecode-chatgpt`, `onecode-gemini` and `onecode-claude`. `/new`, `/provider` and `/session` control durable chats, while IDE requests retain their own project/thread sessions and provider affinity. JetBrains retrieval/title helper requests are handled locally so they do not create provider turns or delay the coding request.
+OneCode offers an opt-in **Experimental** loopback OpenAI-compatible API so IDEs and other programs on the same computer can use the OneCode agent. `/v1/models` advertises `onecode`, `onecode-chatgpt`, `onecode-gemini`, `onecode-claude` and `onecode-openrouter`. `/new`, `/provider` and `/session` control durable chats, while IDE requests retain their own project/thread sessions and provider affinity. JetBrains retrieval/title helper requests are handled locally so they do not create provider turns or delay the coding request.
 
 The durable OneCode session owns chat history, so IDE system/current-file context is preserved without replaying earlier assistant/tool transcript into every turn. When an IDE project already matches an approved OneCode project/root, the API binds that session to the normal project owner and OneCode can read, patch and run the project files directly; otherwise it returns the IDE-native edit/snippet format until that folder is approved once.
 
@@ -292,7 +294,7 @@ Component previews support the bundled React, Tailwind, Lucide and Recharts libr
 
 ## Install
 
-1. **Windows x64:** run the [0.8.3 installer](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.3/OneCode-Setup-x64.exe). **Linux x64:** download the [0.8.3 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.3/OneCode-Linux-x64.AppImage) or [0.8.3 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.3/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
+1. **Windows x64:** run the [complete 1.1.6 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Setup-x64.exe). **Linux x64:** download the [complete 1.1.6 AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.AppImage) or [complete 1.1.6 DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.deb). AppImage installations can use OneCode's internal updater; full DEB/native upgrades remain package-manager-owned.
 2. Choose Tailscale or Cloudflare in Setup. For Tailscale, install it from [Tailscale's official download page](https://tailscale.com/download) and sign in with your own account. Linux authorizes the desktop user through the normal polkit/operator flow when OneCode needs to publish its owned route.
 3. Open OneCode → **Settings → Setup** and select the browser where you use the provider. Installations on other drives are detected automatically when registered with Windows, on PATH or running. If a portable or custom installation is missed, choose **Locate browser executable…** and select that browser's `.exe`. Follow the connection checks and wait for **Public HTTPS** to pass before copying this PC's connector URL. Public DNS/TLS propagation varies; OneCode retries readiness checks automatically.
 4. Load the bundled **OneCode Companion** in Chrome, Edge or Brave using Setup's instructions. Firefox detection/staging does not supply a signed package; see its [availability status](docs/WINDOWS-SETUP.md#firefox). The optional OneCode browser uses the same adapters.
@@ -325,17 +327,17 @@ Remote mode uses a separate private Tailscale Serve route and access key. Keep i
 
 ## Updates and longer tasks
 
-Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible Windows and Linux-AppImage application hotfixes use smaller verified bundles while retaining their immutable native base; incompatible native/runtime changes require a complete installer/AppImage. The Windows updater also validates its cached installer and blockmap before attempting a differential download. DEB installations remain package-manager-owned.
+Use **Settings → General → Check for updates**, or let OneCode check in the background. When a verified download is ready, choose **Install when done**. OneCode waits for active work to finish, installs the update and reopens automatically; you can cancel the pending restart. Ordinary Quit leaves the download for later. The matching Companion updates when its chats are idle. Compatible Windows, Linux AppImage and DEB installations can apply a verified application capsule while retaining their native base. A full DEB update goes through the package manager. The Windows updater verifies its cached installer and blockmap before attempting a differential download.
 
 Ask the agent to check a local job at an interval, such as every 60 minutes. It must register the interval and message with Core `automations` and verify the returned schedule ID and next run. OneCode saves the schedule and sends its message into the same chat at each interval until cancelled. Manage or cancel checks in **Settings → Agents & automation → Scheduled checks**, or ask the agent. Keep the PC awake, OneCode running and the provider signed in. A provider-native monitoring card does not register a OneCode check; delivery does not prove a check ran or succeeded.
 
-Updates preserve your profile and saved chats. If an older installation cannot update, run the latest installer once.
+Updates preserve your profile and saved chats. If an older installation cannot update, use the complete package linked in [Install](#install) and then check for updates.
 
 Use **Compact & Resume** to continue a long task in a fresh chat. OneCode uses the active provider's receipt flow, saves and verifies the Markdown handoff, then passes it to a new chat on the same provider. Keep the browser and connection running. The context counter is an estimate for OneCode's compaction settings, not the provider's actual remaining quota.
 
 OneCode's local session, each queued input and the provider's native conversation have separate identities. New chats do not borrow another task's UUID or tool authority, and parallel chats retain separate claims, documents and turns. Compact & Resume keeps the task family and saved results while binding its successor through a fresh exact receipt. See [browser conversations and local sessions](docs/PROVIDER-SESSIONS.md).
 
-Developers can follow the [1.1.6 release notes](docs/release-notes/v1.1.6.md), [acceptance record](docs/release-acceptance/v1.1.6.md), [changelog](CHANGELOG.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md). Historical notes and acceptance records remain available.
+Release details live in the [1.2.1 notes](docs/release-notes/v1.2.1.md), [verification report](docs/release-acceptance/v1.2.1.md) and [changelog](CHANGELOG.md). Maintainers can refer to the [architecture](docs/ARCHITECTURE.md), [current release handoff](docs/NEXT-UPDATE-HANDOFF.md), [API guide](docs/ONECODE-API.md) and [hotfix update guide](docs/HOTFIX-UPDATES.md).
 
 Provider authors should use the [multi-provider compatibility audit](docs/MULTI-PROVIDER-COMPATIBILITY.md) before enabling another browser AI service.
 

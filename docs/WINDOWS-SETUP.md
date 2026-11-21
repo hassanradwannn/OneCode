@@ -1,8 +1,8 @@
 # OneCode — set up on another Windows PC
 
-## Version 0.8.9
+## Install or update Stable
 
-Install the [complete 0.8.9 Windows release](https://github.com/hassanradwannn/OneCode/releases/download/v0.8.9/OneCode-Setup-x64.exe), or use **Settings → General → Check for updates → Install when done** from an existing installation. This release includes a complete installer and a cumulative capsule for compatible existing installations. Provider selection, current/legacy model menus, native thinking controls and optional provider skills are available through Setup. Existing chats keep their original provider. Installer downloads use the selected version's feed; compatible application capsules retain their verified native base.
+For a new Windows x64 installation, run the [complete 1.1.6 installer](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Setup-x64.exe). In OneCode, open **Settings → General → Check for updates → Install when done** to apply the latest Stable application update. The 1.2.1 capsule uses the compatible complete Windows base 0.5.9. [Stable 1.2.1](https://github.com/hassanradwannn/OneCode/releases/tag/v1.2.1) · [Verification report](release-acceptance/v1.2.1.md)
 
 For future hotfixes, a compatible installation downloads the small bundle. If its native base is missing or incompatible, OneCode verifies and downloads the declared full base plus the hotfix, waits for active work, installs both in order and opens the final version once. Do not manually extract a hotfix into the installation. A failed or interrupted update leaves a diagnostic rather than replaying an uncertain installer.
 
@@ -82,7 +82,7 @@ Tailscale is the default only for **new installations**. Upgrades keep their cho
 
 The Cloudflare quick tunnel gets a **new public hostname after restarting the connection**. Replace/reconnect Gemini's custom Core app with the new URL shown in Setup. Keeping secret URL paths does not preserve that hostname. Closing the app window normally keeps it running in the tray, while **Quit** stops it.
 
-OneCode checks this project's GitHub Releases and downloads new versions in the background. When ready, choose **Update and restart**. If a reply, tool, queued message, terminal, worker or automation is active, it waits until that work is finished; **Cancel restart** lets you keep working. Pause Goal/Loop and close terminals when you want to restart. A normal Quit does not install a staged update. Windows uses differential downloads when the previous installer cache is available and a full download otherwise. Updates keep the current installation folder and Windows profile. After an update, reload the unpacked Companion in your browser if OneCode reports a different build.
+OneCode checks this project's GitHub Releases and downloads new versions in the background. When ready, choose **Install when done**. If a reply, tool, queued message, terminal, worker or automation is active, it waits until that work is finished; **Cancel restart** lets you keep working. Pause Goal/Loop and close terminals when you want to restart. A normal Quit does not install a staged update. Windows uses differential downloads when the previous installer cache is available and a full download otherwise. Updates keep the current installation folder and Windows profile. After an update, reload the unpacked Companion in your browser if OneCode reports a different build.
 
 **Upgrading from 0.2.6 or earlier:** download and install the new OneCode installer once to enable the updater. Those older versions cannot turn it on themselves. The installer retains local app data on uninstall; remove it separately only if you intend to erase your settings, plugins and history.
 

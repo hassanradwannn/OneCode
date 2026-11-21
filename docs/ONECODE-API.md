@@ -1,6 +1,6 @@
 # OneCode API (Experimental)
 
-OneCode 0.6.3 can expose the running desktop app as an **Experimental** local OpenAI-compatible API. The API is a façade over OneCode, not a second agent runtime: requests enter the same durable chat/input path used by the desktop, the selected browser provider runs the turn, and that turn keeps OneCode's normal Core tools, permissions, skills, installed MCP plugins, workers and recording rules.
+OneCode can expose the running desktop app as an **Experimental** local OpenAI-compatible API. Requests enter the same durable chat and input path used by the desktop. The selected provider runs the turn with OneCode's shared tool, permission, worker and recording rules.
 
 The feature is **off by default**. While it is off, OneCode does not bind the API port or run API-specific background work.
 
@@ -22,13 +22,13 @@ The listener binds only to `127.0.0.1`. Requests must use its loopback Host, mus
 
 The experimental API supports these client-facing endpoints:
 
-- `GET /v1/models` — advertises `onecode`, `onecode-chatgpt`, `onecode-gemini` and `onecode-claude`.
+- `GET /v1/models` — advertises `onecode`, `onecode-chatgpt`, `onecode-gemini`, `onecode-claude` and `onecode-openrouter`.
 - `POST /v1/chat/completions` — accepts text chat messages and returns an OpenAI-style chat completion. `stream: true` returns SSE after the native OneCode answer is complete.
 - `POST /v1/responses` — accepts text input or message items and returns an OpenAI Responses-style result. `stream: true` emits a completed-response SSE event.
 
-`onecode` uses the API's currently selected provider for a new chat. The provider-specific models explicitly choose that provider for an unbound new chat; the short aliases `chatgpt`, `gemini` and `claude` are also accepted. These are routing choices, not native model IDs or provider API subscriptions. Once bound, a OneCode chat keeps its provider. Select a provider and open a new chat to switch; an explicit conflicting request with prior chat history is refused.
+`onecode` uses the API's currently selected provider for a new chat. The provider-specific models explicitly choose that provider for an unbound new chat; the short aliases `chatgpt`, `gemini`, `claude` and `openrouter` are also accepted. OpenRouter chats require an OpenRouter key configured in OneCode. These are routing choices, not native model IDs or provider API subscriptions. Once bound, a OneCode chat keeps its provider. Select a provider and open a new chat to switch; an explicit conflicting request with prior chat history is refused.
 
-The experimental API is text-in/text-out at the OpenAI HTTP boundary. Files, images and provider-native request features are not claimed as OpenAI API compatibility yet. The OneCode agent inside the selected browser chat can still use all OneCode capabilities that the user has enabled.
+The experimental API is text-in/text-out at the OpenAI HTTP boundary. Files, images and provider-native request features are not claimed as OpenAI API compatibility yet. The OneCode agent inside the selected chat can still use all OneCode capabilities that the user has enabled.
 
 ## IDE integration
 

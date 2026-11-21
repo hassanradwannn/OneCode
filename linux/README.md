@@ -4,6 +4,14 @@ This directory contains Linux-only integration and acceptance assets. The applic
 single cross-platform source tree; Linux-specific runtime owners are wired from `src/main/linux/`
 instead of forking the renderer, bridge, MCP server or provider adapters.
 
+## Install and update
+
+For a new installation, use the complete 1.1.6 [AppImage](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.AppImage) or [DEB](https://github.com/hassanradwannn/OneCode/releases/download/v1.1.6/OneCode-Linux-x64.deb). Launch OneCode and open **Settings → General → Check for updates → Install when done** to apply the latest compatible Stable update.
+
+The 1.2.1 Linux capsule uses the compatible complete base 1.0.7. OneCode verifies and stages the layer before quitting. If preparation fails, the app stays open and shows the error. Full DEB upgrades remain managed by the package manager.
+
+The Ubuntu 22.04 GNOME/X11 check confirmed that 1.2.0 automatically reopened as 1.2.1 with the same AppImage and profile. Brave reconnected with the updated Companion. [Stable 1.2.1](https://github.com/hassanradwannn/OneCode/releases/tag/v1.2.1) · [Verification report](../docs/release-acceptance/v1.2.1.md)
+
 ## Supported test target
 
 - Ubuntu 22.04 LTS x86_64 (GNOME/X11 is the primary acceptance machine)
