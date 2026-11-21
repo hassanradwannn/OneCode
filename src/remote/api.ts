@@ -5,15 +5,17 @@ try { token = localStorage.getItem('onecode-remote-session') ?? sessionStorage.g
 // Fragments never reach HTTP logs or referrers. Keep the installation's link in
 // the address so a normal browser bookmark retains its reconnect capability.
 let linkKey = /^[A-Za-z0-9_-]{43}$/.test(location.hash.slice(1)) ? location.hash.slice(1) : '';
+let pairingKey = /^#pair=([A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1] ?? '';
+if (pairingKey) history.replaceState(null, '', location.pathname + location.search);
 let authorityEpoch = 0, reconnecting: Promise<void> | null = null;
-export function hasRemoteLink(): boolean { return !!linkKey; }
+export function hasRemoteLink(): boolean { return !!(linkKey || pairingKey); }
 export function hasRemoteToken(): boolean { return token.length > 0; }
 export function setRemoteToken(value: string): void {
   token = value;
   try { if (value) localStorage.setItem('onecode-remote-session', value); else localStorage.removeItem('onecode-remote-session'); sessionStorage.removeItem('onecode-remote-session'); } catch { /* memory-only browser */ }
 }
 export function forgetRemoteLink(): void {
-  authorityEpoch++; linkKey = ''; setRemoteToken('');
+  authorityEpoch++; linkKey = ''; pairingKey = ''; setRemoteToken('');
   history.replaceState(null, '', location.pathname + location.search);
 }
 export class RemoteRequestError extends Error { constructor(message: string, public status: number) { super(message); } }
@@ -27,23 +29,35 @@ async function send(route: string, body?: unknown, signal?: AbortSignal): Promis
   return { response, result: await response.json() };
   } catch (error) {
     if (deadline.aborted && !signal?.aborted)
-      throw new RemoteRequestError('Connection timed out. Check Tailscale on both devices and keep the host running, then reconnect. An interrupted action may already have been accepted; it will not be resent automatically.', 503);
+      throw new RemoteRequestError('Connection timed out. Check the host’s connection and keep OneCode running. Check the chat before resending an interrupted action.', 503);
     throw error;
   }
 }
 async function reconnect(): Promise<void> {
   if (reconnecting) return reconnecting;
-  const key = linkKey, epoch = authorityEpoch;
-  if (!key) throw new RemoteRequestError('Open your bookmarked remote link to reconnect.', 401);
+  const key = pairingKey || linkKey, epoch = authorityEpoch;
+  if (!key) throw new RemoteRequestError('Copy a pairing or access link from OneCode Settings → Remote.', 401);
   const run = (async () => {
     const { response, result } = await send('connect', { key, name: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 'Phone browser' : 'Browser' });
     if (!response.ok) throw new RemoteRequestError(result.error ?? 'Remote connection failed', response.status);
-    if (authorityEpoch !== epoch || linkKey !== key) throw new RemoteRequestError('This browser was disconnected.', 401);
+    if (authorityEpoch !== epoch || (pairingKey || linkKey) !== key) throw new RemoteRequestError('This browser was disconnected.', 401);
+    pairingKey = '';
     setRemoteToken(result.token);
   })().finally(() => { if (reconnecting === run) reconnecting = null; });
   reconnecting = run; return run;
 }
 export async function connectRemote(): Promise<RemoteBootstrap | null> {
+  if (pairingKey && hasRemoteToken()) {
+    try {
+      const bootstrap = await request<RemoteBootstrap>('bootstrap');
+      pairingKey = '';
+      return bootstrap;
+    } catch (error) {
+      if (!(error instanceof RemoteRequestError) || error.status !== 401) throw error;
+    }
+    await reconnect();
+    return request<RemoteBootstrap>('bootstrap');
+  }
   if (hasRemoteToken()) {
     try { const bootstrap = await request<RemoteBootstrap>('bootstrap'); setRemoteToken(token); return bootstrap; }
     catch (error) {

@@ -355,7 +355,7 @@ function coreTransport(settings: TunnelSettings): Pick<TunnelSettings, 'kind' | 
     kind: settings.kind,
     profileEpoch: settings.kind === 'openai' ? settings.profileEpoch ?? 0 : 0,
     tunnelId: settings.kind === 'openai' ? settings.tunnelId : '',
-    binaryPath: settings.kind === 'manual' ? '' : settings.binaryPath
+    binaryPath: settings.kind === 'manual' || settings.kind === 'onecode' ? '' : settings.binaryPath
   };
 }
 
@@ -426,7 +426,8 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
     setConnectorPublicRoute(setupProfileId, null);
     setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null, tailscale: null });
     // Opt-in stable URLs for a tunnel of the user's own (#924): the stored tokens, else fresh ones.
-    const keepUrls = config.tunnel.kind === 'tailscale' || getConfig().mcp?.persistentUrls === true;
+    const persistentTransport = config.tunnel.kind === 'tailscale' || config.tunnel.kind === 'onecode';
+    const keepUrls = persistentTransport || getConfig().mcp?.persistentUrls === true;
     const kept = keepUrls ? Object.fromEntries(await Promise.all(CHAT_PROVIDERS.map(async provider =>
       [provider, await loadSurfaceTokens(provider).catch(() => ({}))]))) : {};
     const startedEndpoint = await startProviderMcpServers(() => {
@@ -441,9 +442,11 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
     }, kept, () => getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER);
     if (keepUrls && !(await Promise.all(CHAT_PROVIDERS.map(provider =>
       rememberSurfaceTokens(startedEndpoint.providers[provider].urls, provider)))).every(Boolean)) {
-      if (config.tunnel.kind === 'tailscale') {
+      if (persistentTransport) {
         await startedEndpoint.stop();
-        throw new TunnelError('OneCode Funnel requires securely saved connector URLs. Restore secure storage before connecting. No Funnel route was changed.');
+        throw new TunnelError(config.tunnel.kind === 'tailscale'
+          ? 'OneCode Funnel requires securely saved connector URLs. Restore secure storage before connecting. No Funnel route was changed.'
+          : 'OneCode Relay requires securely saved connector URLs. Restore secure storage before connecting.');
       }
       logWarn('connector URLs: secure storage is unavailable, so they change at the next start');
     }
@@ -480,7 +483,7 @@ async function connectImpl(current: () => boolean = () => true): Promise<void> {
       label: 'core',
       report: (report) => {
         if (generation !== connectionGeneration || !startupCurrent()) return;
-        if (config.tunnel.kind === 'tailscale' && report.publicUrl !== undefined) {
+        if (persistentTransport && report.publicUrl !== undefined) {
           setConnectorPublicRoute(setupProfileId, report.state === 'connected' ? report.publicUrl : null,
             Object.fromEntries(CHAT_PROVIDERS.map(provider => [provider, startedEndpoint.providers[provider].urls])));
         }

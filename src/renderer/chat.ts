@@ -6798,7 +6798,12 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
     row.append(retry);
   }
   if (['queued', 'browser'].includes(entry.state)) {
-    if (canSendQueuedNow(entry)) row.append(queueSendAction(entry, selectionGeneration));
+    let controls = row;
+    if (canSendQueuedNow(entry)) {
+      controls = el('div', 'pending-message-controls');
+      controls.append(receipt, queueSendAction(entry, selectionGeneration));
+      row.append(controls);
+    }
     const cancel = dockAction(() => t("Cancel delivery"), 'i-x', () => {});
     cancel.onclick = async () => {
       cancel.disabled = true;
@@ -6806,7 +6811,7 @@ function inputMessageRow(entry: InputEntry, notice: boolean): HTMLElement {
       if (result) dismissInputNotice(entry.id);
       void refreshInputQueue();
     };
-    row.append(cancel);
+    controls.append(cancel);
   }
   if (entry.state === 'queued' && (entry.error?.startsWith('Message queued. Browser startup failed:') ||
       entry.error?.startsWith('Message queued. Finish Setup to send:') || entry.error?.startsWith('Message queued. Browser routing:') || entry.error?.startsWith('Local chat setup failed:'))) {

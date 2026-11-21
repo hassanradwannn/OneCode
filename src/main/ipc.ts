@@ -12,7 +12,8 @@ import { mainText, setMainTextTranslations } from './main-texts.js';
 import { applyLoginStartup, supportsLoginStartup } from './window-lifecycle.js';
 import { startControlApi, stopControlApi } from './control-api.js';
 import { agentApiBaseUrl, agentApiKeyForClipboard, restartAgentApi, rotateAgentApiKey, startAgentApi, stopAgentApi } from './agent-api.js';
-import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink } from './remote/server.js';
+import { remoteStatus, setRemoteEnabled, revokeRemoteDevice, refreshRemoteLink, setRemoteTransport, issueRemotePairingLink } from './remote/server.js';
+import { relayConfigured, saveRelayEnrollment } from './tunnel/relay-enrollment.js';
 import { TAILSCALE_SETUP_ACTIONS, tailscaleSetupAction, type TailscaleSetupStep } from '../shared/tailscale-setup.js';
 import { retryTailscaleSetup } from './tunnel/tailscale-setup.js';
 import { onRemotePreferencesChange } from './remote/preferences.js';
@@ -229,7 +230,7 @@ const settingsPatch = z.object({
     profileId: z.string().max(64).optional(),
     profileEpoch: z.number().int().nonnegative().optional(),
     pluginsTunnelId: z.string().max(128).refine(v => v === '' || TUNNEL_ID_PATTERN.test(v), 'Expected tunnel_ followed by 32 hex characters').optional(),
-    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual']),
+    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode']),
     tunnelId: z
       .string()
       .max(128)
@@ -742,10 +743,17 @@ export async function openSessionChat(id: string): Promise<void> {
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall: () => void): void {
-  handle('remote:status', async () => remoteStatus());
-  handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)));
-  handle('remote:refresh-link', async () => refreshRemoteLink());
-  handle('remote:revoke', async payload => { await revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); });
+  handle('remote:status', async () => remoteStatus(), getWindow);
+  handle('remote:enabled', async payload => setRemoteEnabled(z.boolean().parse(payload)), getWindow);
+  handle('remote:transport', async payload => setRemoteTransport(z.enum(['onecode', 'tailscale']).parse(payload)), getWindow);
+  handle('remote:pair', async () => { clipboard.writeText(issueRemotePairingLink()); return true; }, getWindow);
+  handle('relay:configured', async () => relayConfigured(), getWindow);
+  handle('relay:enrollment', async payload => {
+    const { origin, key } = z.object({ origin: z.string().max(240), key: z.string().max(128) }).strict().parse(payload);
+    await saveRelayEnrollment(origin, key); return true;
+  }, getWindow);
+  handle('remote:refresh-link', async () => refreshRemoteLink(), getWindow);
+  handle('remote:revoke', async payload => { await revokeRemoteDevice(z.string().uuid().parse(payload)); return remoteStatus(); }, getWindow);
   configureUpdateInstall(quitToInstall, async version => {
     const { requestPluginRefreshes } = await import('./plugin-refresh.js');
     await requestPluginRefreshes(version, ['core']);

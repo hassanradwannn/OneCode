@@ -426,6 +426,6 @@ function App() {
   }, []);
   return connected ? <Workspace initialBootstrap={initialBootstrap} disconnect={() => { forgetRemoteLink(); setInitialBootstrap(null); setConnected(false); }} />
     : <main className="pair"><div className="brand">◈ OneCode <small>Remote</small></div><h1>{connecting ? 'Connecting…' : 'Open your remote link'}</h1>
-      {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Copy the link from OneCode Settings → Remote and open it here.'}</p>{error && hasRemoteLink() && <button onClick={() => void reconnect()}>Reconnect</button>}</>}</main>;
+      {!connecting && <><p role={error ? 'alert' : undefined}>{error || 'Open an access or pairing link from OneCode Settings → Remote.'}</p>{error && hasRemoteLink() && <button onClick={() => void reconnect()}>Reconnect</button>}</>}</main>;
 }
 createRoot(document.getElementById('root')!).render(<App />);

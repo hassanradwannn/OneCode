@@ -227,7 +227,7 @@
               <div class="settings-surface pane appearance-settings-card">
                 <label class="setting"><span class="setting-text"><b>Developer mode</b><em>Show turn boundaries and recovery events in the chat.</em></span><input id="developerMode" type="checkbox" /></label>
                 <label class="setting"><span class="setting-text"><b>Keep plugin URLs across restarts</b><em>Preserves the secret paths Gemini stores. Required for Tailscale Funnel; also useful with your own stable HTTPS tunnel. Anyone with a plugin URL can use it within this app's permissions. Needs secure storage.</em></span><input id="mcpPersistentUrls" type="checkbox" /></label>
-                <p class="hint" id="mcpPersistentUrlsRequired" hidden>Tailscale requires saved connector paths. Choose another connection method before turning this off.</p>
+                <p class="hint" id="mcpPersistentUrlsRequired" hidden>This connection method requires saved connector paths.</p>
                 <label class="setting"><span class="setting-text"><b>Local control API</b><em>Let agents on this computer read app status and chats.</em></span><input id="controlApiEnabled" type="checkbox" /></label>
                 <label class="setting"><span class="setting-text"><b>Allow actions</b><em>Let those agents also send messages, start new chats and cancel messages. Needs the local control API.</em></span><input id="controlApiAllowActions" type="checkbox" disabled /></label>
                 <label class="setting"><span class="setting-text"><b>OneCode API <small class="beta-badge">Experimental</small></b><em>Expose OneCode as a local OpenAI-compatible API for IDEs and other apps. Off means no API listener or background API work.</em></span><input id="agentApiEnabled" type="checkbox" /></label>
@@ -240,16 +240,28 @@
 
         <section class="panel appearance-panel scroll" data-panel="remote" aria-labelledby="remoteTitle">
           <div class="appearance-content settings-page-content">
-            <header class="settings-page-head appearance-page-head"><div><h1 id="remoteTitle">Remote</h1><p>Use OneCode from another device connected to your Tailscale.</p></div></header>
+            <header class="settings-page-head appearance-page-head"><div><h1 id="remoteTitle">Remote</h1><p>Open your OneCode chats from another device.</p></div></header>
             <section class="appearance-section" id="remoteSettings">
               <div class="settings-surface pane appearance-settings-card">
-                <label class="setting"><span class="setting-text"><b>Remote mode</b><em>Open your chats from a browser on your Tailscale.</em></span><input type="checkbox" id="remoteEnable" /></label>
+                <label class="setting"><span class="setting-text"><b>Connection method</b><em>Turn off Remote to switch methods.</em></span><select id="remoteTransport"><option value="tailscale">Tailscale (private network)</option><option value="onecode">OneCode Relay (internet)</option></select></label>
+                <label class="setting"><span class="setting-text"><b>Remote mode</b><em>Keep OneCode running on this computer to connect.</em></span><input type="checkbox" id="remoteEnable" /></label>
                 <div class="setting"><span class="setting-text"><b>Status</b><em id="remoteStatus" role="status">Off</em></span><button class="btn" type="button" id="remoteRefresh">Refresh</button></div>
                 <div id="remoteSetup" hidden><button class="btn btn-solid" type="button" id="remoteSetupAction">Finish Tailscale setup</button><p class="hint">OneCode will continue automatically after you finish in Tailscale.</p></div>
                 <div id="remoteRecovery" hidden></div>
                 <div id="remoteLinkConflict" class="setting" hidden><span class="setting-text"><b>Remote link conflict</b><em>Refresh the link to use a new private port. Copy the replacement link and update your bookmark.</em></span><button class="btn" type="button" id="remoteRefreshLink">Refresh link</button></div>
-                <div id="remoteLink" hidden><div class="remote-link-row"><input type="text" id="remoteAddress" aria-label="Remote link" readonly translate="no" /><button class="btn btn-solid" type="button" id="remoteCopyLink">Copy link</button></div><p class="hint">Bookmark this private link. It stays the same across restarts, updates and turning Remote off and on.</p></div>
+                <div id="remoteLink" hidden><div class="remote-link-row"><input type="text" id="remoteAddress" aria-label="Remote link" readonly translate="no" /><button class="btn btn-solid" type="button" id="remoteCopyLink">Copy link</button></div><p class="hint" id="remoteBookmarkHint">Bookmark this private link. It stays the same across restarts, updates and turning Remote off and on.</p></div>
+                <div id="remotePair" class="setting" hidden><span class="setting-text"><b>Pair a browser</b><em>Open the pairing link on that device within five minutes. Each link works once.</em></span><button class="btn btn-solid" type="button" id="remotePairLink">Copy pairing link</button></div>
               </div>
+            </section>
+            <section class="appearance-section">
+              <details class="settings-surface pane appearance-settings-card">
+                <summary>OneCode Relay enrollment</summary>
+                <p class="hint">Enter the HTTPS address and device key from a relay operator you trust. This enrollment also works for provider connectors.</p>
+                <label class="field" for="relayOrigin">Relay address<input id="relayOrigin" type="url" spellcheck="false" placeholder="https://" /></label>
+                <label class="field" for="relayKey">Device key<input id="relayKey" type="password" autocomplete="off" /></label>
+                <button class="btn" type="button" id="relaySave">Save enrollment</button>
+                <span role="status" class="hint" id="relayEnrollmentStatus"></span>
+              </details>
             </section>
             <section class="appearance-section" id="remoteDevicesSection" hidden>
               <header class="settings-section-head"><div><h2>Connected browsers</h2></div></header>
@@ -1010,6 +1022,7 @@
                 <label for="tunnelKind">Connection method</label>
                 <select id="tunnelKind">
                   <option value="tailscale">Tailscale Funnel — recommended</option>
+                  <option value="onecode">OneCode Relay — stable HTTPS address</option>
                   <option value="cloudflared">Cloudflare quick tunnel — temporary address</option>
                   <option value="manual">Local only — I run my own tunnel</option>
                 </select>

@@ -898,6 +898,8 @@ const METHOD_HINT: Record<string, string> = {
     "Uses your installed Tailscale account and Funnel to publish HTTPS. Keeps this computer's connector paths across restarts; no Tailscale account is bundled.",
   cloudflared:
     "Creates a temporary public https address with Cloudflare. The address changes on every restart.",
+  onecode:
+    "Publishes a stable HTTPS address through OneCode Relay. Add your device enrollment in Settings → Remote.",
   manual: "This app only listens on localhost. You are responsible for exposing it."
 };
 
@@ -1868,9 +1870,9 @@ function apply(next: AppState): void {
   ui($('providerAccountHint'), 'textContent', () => 'Use the provider’s account menu to switch accounts. New chats use the selected account; existing chats retain their original account.');
   ui($('providerWorkspaceHelp'), 'textContent', () => 'Your workspace administrator may control custom MCP connections. If adding a server is unavailable, ask the administrator to enable it or create the connection using the exact Core HTTPS URL shown here.');
   // Stable URLs live only in the OS-backed secret store; without it they keep rotating.
-  $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' ||
+  $<HTMLInputElement>('mcpPersistentUrls').disabled = config.tunnel.kind === 'tailscale' || config.tunnel.kind === 'onecode' ||
     (next.secureStorage?.available === false && config.mcp?.persistentUrls !== true);
-  $('mcpPersistentUrlsRequired').hidden = config.tunnel.kind !== 'tailscale';
+  $('mcpPersistentUrlsRequired').hidden = config.tunnel.kind !== 'tailscale' && config.tunnel.kind !== 'onecode';
   applyChecked($<HTMLInputElement>('controlApiAllowActions'), config.controlApi?.allowActions === true, previousState?.config.controlApi?.allowActions);
   // Actions need the API itself, so the switch stays off and disabled until it is on.
   $<HTMLInputElement>('controlApiAllowActions').disabled = config.controlApi?.enabled !== true;

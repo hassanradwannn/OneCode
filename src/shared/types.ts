@@ -100,7 +100,7 @@ export interface Root {
   kind?: 'file';
 }
 
-export type TunnelKind = 'openai' | 'cloudflared' | 'tailscale' | 'manual';
+export type TunnelKind = 'openai' | 'cloudflared' | 'tailscale' | 'manual' | 'onecode';
 
 export interface TunnelSettings {
   /** Active setup owns these tunnel IDs; inactive setups live in Config.setupProfiles. */

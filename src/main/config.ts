@@ -315,7 +315,7 @@ const configSchema = z.object({
     profileId: z.string().min(1).max(64).optional(),
     profileName: z.string().trim().min(1).max(80).optional(),
     profileEpoch: z.number().int().nonnegative().optional(),
-    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual']),
+    kind: z.enum(['openai', 'cloudflared', 'tailscale', 'manual', 'onecode']),
     tunnelId: z.string().max(128),
     // Optional with an empty default, so a config written before the connector split
     // loads unchanged and simply has no Desktop tunnel yet — which is also the correct
@@ -583,7 +583,7 @@ const configSchema = z.object({
     .optional()
     .default({ ...DEFAULT_AGENT_API })
     .catch({ ...DEFAULT_AGENT_API })
-}).transform(value => value.tunnel.kind === 'tailscale'
+}).transform(value => value.tunnel.kind === 'tailscale' || value.tunnel.kind === 'onecode'
   ? { ...value, mcp: { ...value.mcp, persistentUrls: true } }
   : value);
 

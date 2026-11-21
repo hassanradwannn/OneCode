@@ -25,6 +25,7 @@ import { proxyEnvironment, proxyForLog } from './proxy.js';
 import { noteTunnelClientConnected } from './route-settle.js';
 import { startTailscale } from './tailscale.js';
 import { probeCloudflareMcp } from './cloudflare-public.js';
+import { startRelayMcp } from './relay-mcp.js';
 
 type ProxyResolver = (url: string) => Promise<string>;
 let resolveSystemProxy: ProxyResolver | null = null;
@@ -201,6 +202,9 @@ export async function startTunnel(opts: TunnelStartOptions): Promise<TunnelHandl
     case 'tailscale':
       try { return await startTailscale(opts); }
       catch (error) { throw new TunnelError(error instanceof Error ? error.message : 'OneCode Funnel could not start.'); }
+    case 'onecode':
+      try { return await startRelayMcp(opts); }
+      catch (error) { throw new TunnelError(error instanceof Error ? error.message : 'OneCode Relay could not start.'); }
     case 'manual':
       opts.report({
         state: 'connected',

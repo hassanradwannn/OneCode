@@ -16,6 +16,14 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.0': {
+    lead: () => t('Connect from the internet through OneCode Relay.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Use stable HTTPS addresses'), text: () => t('Enroll your device in a OneCode relay for Remote and provider connectors. Tailscale is also available.') },
+      { icon: 'i-lock', title: () => t('Pair and revoke browsers'), text: () => t('Create a pairing link from Settings → Remote. It works once and expires after five minutes.') },
+      { icon: 'i-chat', title: () => t('Keep ChatGPT Steer in sync'), text: () => t('OneCode follows an accepted Steer even when ChatGPT takes longer to show the message.') }
+    ]
+  },
   '1.2.1': {
     lead: () => t('Prepare Linux updates before restarting OneCode.'),
     highlights: [

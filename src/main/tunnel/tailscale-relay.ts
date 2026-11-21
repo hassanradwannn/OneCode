@@ -14,13 +14,20 @@ function headers(source: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
 }
 
 export async function createTailscaleRelay(origin: string, publicHost: string, publicMount = ''): Promise<TailscaleRelay> {
-  const target = new URL(origin);
-  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port || target.pathname !== '/' || target.username || target.password) {
-    throw new Error('OneCode Funnel relay requires its current loopback MCP origin.');
-  }
   if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net:(?:443|8443|10000)$/.test(publicHost) ||
       (publicMount !== '' && !/^\/onecode-[a-f0-9]{32}$/.test(publicMount))) {
     throw new Error('OneCode Funnel relay requires its validated public hostname and owned mount.');
+  }
+  return createMcpIngressRelay(origin, publicHost, publicMount);
+}
+
+/** Both public transports preserve the MCP server's exact loopback host fence. */
+export async function createMcpIngressRelay(
+  origin: string, publicHost: string, publicMount = '', transport: 'Funnel' | 'Relay' = 'Funnel'
+): Promise<TailscaleRelay> {
+  const target = new URL(origin);
+  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port || target.pathname !== '/' || target.username || target.password || target.search || target.hash) {
+    throw new Error('OneCode requires its current loopback MCP origin.');
   }
   const expectedHosts = new Set([publicHost, publicHost.replace(/:443$/, '')]);
   let diagnosticAt = Date.now(), diagnosticCount = 0, warningCount = 0;
@@ -41,14 +48,14 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
     const incomplete = (): void => {
       if (!incompleteReported) {
         incompleteReported = true;
-        diagnostic(`OneCode Funnel response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
+        diagnostic(`OneCode ${transport} response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
       }
       if (!res.destroyed) res.destroy();
     };
     res.once('finish', () => {
       const method = ['GET', 'POST', 'DELETE', 'OPTIONS', 'HEAD'].includes(req.method ?? '') ? req.method : 'OTHER';
       const status = res.statusCode >= 100 && res.statusCode <= 599 ? String(res.statusCode) : '000';
-      diagnostic(`OneCode Funnel request family=${family} method=${method} status=${status}`);
+      diagnostic(`OneCode ${transport} request family=${family} method=${method} status=${status}`);
     });
     // No arbitrary local-service proxy, redirects, credentials or non-MCP routes.
     if (!expectedHosts.has((req.headers.host ?? '').toLowerCase()) ||
@@ -98,7 +105,7 @@ export async function createTailscaleRelay(origin: string, publicHost: string, p
       if (!res.writableEnded) {
         if (!incompleteReported) {
           incompleteReported = true;
-          diagnostic(`OneCode Funnel response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
+          diagnostic(`OneCode ${transport} response closed before completion surface=${family} elapsedMs=${Date.now() - startedAt}`, true);
         }
         outgoing.destroy();
       }

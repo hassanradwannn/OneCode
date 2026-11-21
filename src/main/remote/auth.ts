@@ -6,6 +6,7 @@ import type { RemoteDevice } from '../../shared/remote.js';
 const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_DEVICES = 16;
+export class PairingRefused extends Error {}
 interface DeviceGrant { id: string; name: string; tokenHash: string; linkHash: string; issuedAt: number; lastSeenAt: number }
 interface RemoteLedger { version: 2; installationId: string; linkHash: string | null; devices: DeviceGrant[] }
 function validDevice(value: unknown): value is DeviceGrant {
@@ -27,6 +28,7 @@ export class RemoteAuth {
   private installationId = '';
   private pendingRevocations = new Set<string>();
   private attempts: number[] = [];
+  private pairing: { digest: Buffer; expires: number } | null = null;
   private ready = false;
   private tail: Promise<unknown> = Promise.resolve();
   constructor(private now: () => number = Date.now) {}
@@ -79,14 +81,29 @@ export class RemoteAuth {
     });
   }
 
-  async connect(key: string, name: string): Promise<{ token: string; device: RemoteDevice }> {
+  issuePairingKey(): string {
+    if (!this.ready || !this.linkHash) throw new Error('Remote access is unavailable.');
+    const key = randomBytes(32).toString('base64url');
+    this.pairing = { digest: digest(key), expires: this.now() + 5 * 60_000 };
+    return key;
+  }
+
+  cancelPairing(): void { this.pairing = null; }
+
+  async connect(key: string, name: string, singleUse = false): Promise<{ token: string; device: RemoteDevice }> {
     if (!this.ready) await this.initialize();
     return this.serialized(async () => {
       const now = this.now(); this.attempts = this.attempts.filter(at => now - at < 60_000);
-      if (this.attempts.length >= 10) throw new Error('Too many connection attempts. Wait one minute.');
-      this.attempts.push(now);
-      if (!this.linkHash || !/^[A-Za-z0-9_-]{43}$/.test(key) || !timingSafeEqual(digest(key), this.linkHash)) throw new Error('This remote link is no longer valid. Copy the current link from OneCode Settings → Remote.');
+      const pairing = this.pairing;
+      const expected = singleUse ? (pairing && pairing.expires > now ? pairing.digest : null) : this.linkHash;
+      if (!singleUse && this.attempts.length >= 10) throw new Error('Too many connection attempts. Wait one minute.');
+      if (!singleUse) this.attempts.push(now);
+      if (!this.linkHash || !expected || !/^[A-Za-z0-9_-]{43}$/.test(key) || !timingSafeEqual(digest(key), expected)) {
+        if (singleUse) throw new PairingRefused('This pairing link is invalid, expired or already used. Copy a new link in OneCode Settings → Remote.');
+        throw new Error('This remote link is no longer valid. Copy the current link from OneCode Settings → Remote.');
+      }
       if (this.devices.size >= MAX_DEVICES) throw new Error('Remove a connected browser in OneCode Settings → Remote before adding another.');
+      if (singleUse) this.cancelPairing();
       const token = randomBytes(32).toString('base64url');
       const row: DeviceGrant = { id: randomUUID(), name: name.trim().slice(0, 80) || 'Remote browser', tokenHash: digest(token).toString('hex'),
         linkHash: this.ledgerLinkHash!, issuedAt: now, lastSeenAt: now };
@@ -128,6 +145,7 @@ export class RemoteAuth {
 
   /** Explicit Remote disable or a deliberately rotated link revokes all browser grants. */
   async clear(): Promise<void> {
+    this.cancelPairing();
     if (!this.ready) await this.initialize();
     for (const id of this.devices.keys()) this.pendingRevocations.add(id);
     await this.serialized(async () => {

@@ -3,7 +3,7 @@ import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { z } from 'zod';
@@ -12,10 +12,12 @@ import { readWorkspaceDocument } from '../workspace-links.js';
 import { readTurnChanges } from '../session/turn-changes.js';
 import { effectiveCapabilities, getConfig } from '../config.js';
 import { recordedReplyImage } from '../provider-reply-images.js';
-import { RemoteAuth } from './auth.js';
+import { PairingRefused, RemoteAuth } from './auth.js';
 import { RemoteOperations } from './operations.js';
 import { remoteAction, remoteActionSchema } from './actions.js';
 import { PrivateServe, RemoteRouteConflict } from '../tunnel/tailscale-serve.js';
+import { RelayRemote } from '../tunnel/relay-remote.js';
+import { RELAY_HEALTH } from '../../shared/relay-protocol.js';
 import { readDurable, writeDurableNow } from '../durable.js';
 import { CHAT_PROVIDERS, chatProviderLabel } from '../../shared/chat-provider.js';
 import { APP_VERSION } from '../version.js';
@@ -31,7 +33,7 @@ import { PreviewDocuments, ARTIFACT_DOCUMENT_CSP } from '../artifacts/preview-do
 import { previewInputAttachment, stageInputAttachment } from '../session/input-attachments.js';
 import { listManagedSkills } from '../skills.js';
 import { prepareNativeVideoPlayback, preparePresentedVideoPlayback, readNativeVideoPlaybackChunk, releaseNativeVideoPlayback } from '../native-media.js';
-import type { RemoteBootstrap, RemoteStatus } from '../../shared/remote.js';
+import type { RemoteBootstrap, RemoteStatus, RemoteTransport } from '../../shared/remote.js';
 import type { TailscaleSetupAction } from '../../shared/tailscale-setup.js';
 import { TailscaleNotReady, TailscaleSetupRequired } from '../tunnel/tailscale-prerequisites.js';
 import { requestTailscaleSetup } from '../tunnel/tailscale-setup.js';
@@ -45,7 +47,8 @@ async function retirePlaybacks(owner?: string): Promise<void> {
     playbacks.delete(token); await releaseNativeVideoPlayback(row.sessionId, token).catch(() => undefined);
   }
 }
-let listener: http.Server | null = null, serve: PrivateServe | null = null, url: string | null = null, ready = false, enabled = false, error: string | null = null;
+let listener: http.Server | null = null, serve: PrivateServe | RelayRemote | null = null, url: string | null = null, ready = false, enabled = false, error: string | null = null;
+let transport: RemoteTransport = 'tailscale';
 let watcher: NodeJS.Timeout | null = null, verifying: Promise<void> | null = null, terminal = false, routeVerifiedAt = 0;
 let accessKey: string | null = null;
 let canRefreshLink = false;
@@ -86,7 +89,7 @@ async function checkRoute(force = false): Promise<void> {
   }).catch(cause => {
     if (serve === owner && listener && enabled && !terminal) {
       routeVerifiedAt = 0; ready = false; error = (cause as Error).message;
-      routeRetry = cause instanceof TailscaleNotReady;
+      routeRetry = owner instanceof RelayRemote || cause instanceof TailscaleNotReady;
       // Route errors suspend admission. They do not revoke the user's saved browser grants.
       canRefreshLink = cause instanceof RemoteRouteConflict;
     }
@@ -103,9 +106,14 @@ async function body(req: http.IncomingMessage, limit = 128_000): Promise<unknown
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-src 'self' blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
-  if (!url || req.headers.host !== new URL(url).host || !enabled || !ready) throw new RequestError(503, 'remote_unavailable');
+  if (!url || req.headers.host !== new URL(url).host || !enabled) throw new RequestError(503, 'remote_unavailable');
   const route = new URL(req.url ?? '/', url);
   if (route.origin !== url || route.search.length > 2048) throw new RequestError(400, 'invalid_route');
+  if (serve instanceof RelayRemote && req.method === 'GET' && route.pathname === RELAY_HEALTH && !route.search) {
+    if (!serve.matchesProbe(req.headers['x-onecode-relay-check'])) throw new RequestError(404, 'not_found');
+    json(res, 200, { ready: true }); return;
+  }
+  if (!ready) throw new RequestError(503, 'remote_unavailable');
   if (req.method === 'GET' && /^\/preview\/[0-9a-f-]{36}$/.test(route.pathname)) {
     await checkRoute(); const row = previews.get(route.pathname.split('/').at(-1)!);
     if (!row || !auth.list().some(device => device.id === row.owner)) throw new RequestError(404, 'preview_expired');
@@ -117,10 +125,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         (req.method === 'POST' && req.headers.origin !== url)) throw new RequestError(403, 'origin_refused');
     // Only safe reads reuse a recent route proof. Explicit mutations still prove
     // route custody before admission, independently of the background watcher.
-    await checkRoute(req.method !== 'GET' && req.method !== 'HEAD');
+    await checkRoute(transport === 'tailscale' && req.method !== 'GET' && req.method !== 'HEAD');
     if (route.pathname === '/api/connect' && req.method === 'POST') {
       const connection = z.object({ key: z.string().min(1).max(128), name: z.string().trim().min(1).max(80) }).strict().parse(await body(req));
-      await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name)); return;
+      await checkRoute(); json(res, 200, await auth.connect(connection.key, connection.name, transport === 'onecode')); return;
     }
     const token = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const device = auth.authenticate(token); if (!device) throw new RequestError(401, 'connection_required');
@@ -244,7 +252,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (req.method === 'POST' && route.pathname === '/api/actions') {
       const request = remoteActionSchema.parse(await body(req, 2 * 1024 * 1024));
       await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
-      json(res, 200, await operations.run(request.id, device.id, request, () => remoteAction(request))); return;
+      const result = await operations.run(request.id, device.id, request, async () => {
+        if (!enabled || !ready || !auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+        return remoteAction(request);
+      });
+      if (!enabled || !ready || !auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      json(res, 200, result); return;
     }
     if (req.method === 'POST' && route.pathname === '/api/disconnect') { await body(req); await auth.revoke(device.id); await retirePlaybacks(device.id); json(res, 200, { disconnected: true }); return; }
     if (req.method === 'GET' && (/^\/api\/sessions(?:\/[0-9a-z-]{8,64}(?:\/events)?)?$/.test(route.pathname) || route.pathname === '/api/inputs')) {
@@ -264,28 +277,42 @@ async function start(refreshLink = false): Promise<void> {
   if (terminal || listener) return;
   // A missing production bundle must not publish an empty or development service.
   await fs.access(path.join(assetRoot, 'index.html'));
-  accessKey = await getSecret('remoteAccessKey');
-  if (!accessKey) { accessKey = randomBytes(32).toString('base64url'); await setSecret('remoteAccessKey', accessKey); }
-  await auth.activate(accessKey);
+  const secretSlot = transport === 'onecode' ? 'remoteRelayAuthority' : 'remoteAccessKey';
+  let rootKey = await getSecret(secretSlot);
+  if (!rootKey) { rootKey = randomBytes(32).toString('base64url'); await setSecret(secretSlot, rootKey); }
+  if (transport === 'tailscale') { accessKey = rootKey; await auth.activate(accessKey); }
   const server = http.createServer((req, res) => {
     void handle(req, res).catch(cause => {
       if (res.headersSent) { res.destroy(); return; }
-      json(res, cause instanceof RequestError ? cause.status : cause instanceof z.ZodError ? 400 : 409,
-        { error: cause instanceof RequestError ? cause.code : cause instanceof z.ZodError ? 'Invalid remote request' : (cause as Error).message });
+      json(res, cause instanceof RequestError ? cause.status : cause instanceof PairingRefused ? 401 : cause instanceof z.ZodError ? 400 : 409,
+        { error: cause instanceof RequestError ? cause.code : cause instanceof PairingRefused ? cause.message : cause instanceof z.ZodError ? 'Invalid remote request' :
+          transport === 'onecode' ? 'The remote request was refused. Open Settings → Remote on the host to check access.' : (cause as Error).message });
     });
   });
   server.headersTimeout = 15_000; server.requestTimeout = 30_000; server.maxHeadersCount = 40;
   server.on('checkContinue', (_req, res) => json(res, 417, { error: 'expect_not_supported' }));
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
-  listener = server; serve = new PrivateServe();
+  listener = server; serve = transport === 'onecode' ? new RelayRemote() : new PrivateServe();
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Remote listener did not start.');
     const proxy = `http://127.0.0.1:${address.port}`;
-    url = await (refreshLink ? serve.refresh(proxy) : serve.start(proxy)); routeVerifiedAt = Date.now(); ready = true; error = null; canRefreshLink = false;
+    url = await (refreshLink && serve instanceof PrivateServe ? serve.refresh(proxy) : serve.start(proxy));
+    error = null; canRefreshLink = false;
+    if (serve instanceof RelayRemote) {
+      await auth.activate(createHmac('sha256', rootKey).update(url).digest('base64url'));
+      routeRetry = true;
+      await checkRoute(true).catch(() => undefined);
+    } else {
+      routeVerifiedAt = Date.now(); ready = true;
+    }
     watcher = setInterval(() => { void checkRoute(true).catch(() => undefined); }, ROUTE_VERIFY_INTERVAL_MS); watcher.unref();
-  } catch (cause) { await closeListener(); throw cause; }
+  } catch (cause) {
+    if (serve instanceof RelayRemote) { await serve.stop(); serve = null; }
+    await closeListener(); throw cause;
+  }
 }
 async function closeListener(): Promise<void> {
+  auth.cancelPairing();
   await retirePlaybacks();
   routeVerifiedAt = 0; ready = false; routeRetry = false; previews.clear(); accessKey = null; if (watcher) clearInterval(watcher); watcher = null;
   const server = listener; listener = null;
@@ -293,14 +320,26 @@ async function closeListener(): Promise<void> {
   url = null;
 }
 /** The remote-only link is deliberately exposed only through trusted desktop IPC. */
-export function remoteStatus(): RemoteStatus { return { enabled, ready, url: ready && url && accessKey ? `${url}/#${accessKey}` : null, error, devices: auth.list(), ...(enabled && !ready && canRefreshLink ? { canRefreshLink: true } : {}), ...(setup ? { setup } : {}) }; }
+export function remoteStatus(): RemoteStatus {
+  const address = transport === 'onecode' ? url : url && accessKey ? `${url}/#${accessKey}` : null;
+  return { enabled, ready, url: ready ? address : null, error, devices: auth.list(), transport,
+    ...(enabled && !ready && canRefreshLink ? { canRefreshLink: true } : {}), ...(setup ? { setup } : {}) };
+}
+export function issueRemotePairingLink(): string {
+  if (transport !== 'onecode' || !enabled || !ready || !url || terminal) throw new Error('OneCode Relay must be connected before pairing.');
+  return `${url}/#pair=${auth.issuePairingKey()}`;
+}
 export async function revokeRemoteDevice(id: string): Promise<void> { const owner = z.string().uuid().parse(id); await auth.revoke(owner); await retirePlaybacks(owner); }
-export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
+export function setRemoteEnabled(value: boolean, savedTransport?: RemoteTransport): Promise<RemoteStatus> {
   const operation = lifecycle.then(async () => {
     clearTimeout(setupRetry); setupRetry = undefined; setup = undefined;
-    enabled = value && !terminal; await writeDurableNow('remote-settings', { enabled });
+    if (savedTransport) transport = savedTransport;
+    enabled = value && !terminal; await writeDurableNow('remote-settings', { enabled, transport });
     if (enabled) {
-      try { if (listener && !ready) await closeListener(); await start(); }
+      try {
+        if (listener && serve instanceof RelayRemote) await checkRoute(true).catch(() => undefined);
+        else { if (listener && !ready) await closeListener(); await start(); }
+      }
       catch (cause) {
         error = (cause as Error).message;
         canRefreshLink = cause instanceof RemoteRouteConflict;
@@ -311,6 +350,15 @@ export function setRemoteEnabled(value: boolean): Promise<RemoteStatus> {
       }
     }
     else { await closeListener(); await auth.clear(); canRefreshLink = false; try { await serve?.stop(); error = null; } catch (cause) { error = (cause as Error).message; } serve = null; }
+    return remoteStatus();
+  });
+  lifecycle = operation.then(() => undefined, () => undefined); return operation;
+}
+export function setRemoteTransport(value: RemoteTransport): Promise<RemoteStatus> {
+  const operation = lifecycle.then(async () => {
+    if (enabled || terminal) throw new Error('Turn off Remote before changing its connection method.');
+    await writeDurableNow('remote-settings', { enabled: false, transport: value });
+    transport = value; error = null;
     return remoteStatus();
   });
   lifecycle = operation.then(() => undefined, () => undefined); return operation;
@@ -327,5 +375,11 @@ export function refreshRemoteLink(): Promise<RemoteStatus> {
   });
   lifecycle = operation.then(() => undefined, () => undefined); return operation;
 }
-export async function restoreRemote(): Promise<void> { if ((await readDurable<{ enabled: boolean }>('remote-settings'))?.enabled === true) await setRemoteEnabled(true); }
+export async function restoreRemote(): Promise<void> {
+  const saved = await readDurable<{ enabled: boolean; transport?: RemoteTransport }>('remote-settings');
+  if (!saved) return;
+  const savedTransport = saved.transport === 'onecode' ? 'onecode' : 'tailscale';
+  if (saved.enabled === true) await setRemoteEnabled(true, savedTransport);
+  else await setRemoteTransport(savedTransport);
+}
 export async function shutdownRemote(): Promise<void> { terminal = true; clearTimeout(setupRetry); setup = undefined; await lifecycle; await closeListener(); try { await serve?.stop(); } catch { /* no unowned route removal */ } serve = null; }
