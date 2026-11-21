@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.2.1': {
+    lead: () => t('Prepare Linux updates before restarting OneCode.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Restart after a Linux update'), text: () => t('OneCode verifies and stages the application files while the current window is open, then starts the verified update.') }
+    ]
+  },
   '1.2.0': {
     lead: () => t('Keep your reasoning effort when resuming a ChatGPT chat.'),
     highlights: [

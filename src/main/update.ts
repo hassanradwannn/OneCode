@@ -53,8 +53,8 @@ import { startWindowsUpdate } from './update-bootstrap.js';
 import { compatibleHotfix, readHotfixManifest, stageHotfix } from './update-hotfix.js';
 import { inspectLocalBetaUpdate, localBetaUpdateConfig, startLocalBetaUpdate, verifyLocalBetaUpdate, type LocalBetaUpdateConfig } from './beta-update.js';
 import { baseRelease, type LinuxBaseRelease } from '../../resources/updater/hotfix-contract.cjs';
-import { activateLinuxHotfix } from './linux-hotfix.js';
-import { startLinuxUpdate, linuxUpdateFailure } from './update-linux.js';
+import { activateLinuxHotfix, stageLinuxHotfix } from './linux-hotfix.js';
+import { startLinuxUpdate, linuxUpdateFailure, verifyLinuxSuccessor } from './update-linux.js';
 import { currentAppImageIdentity, installationKind, type AppImageIdentity } from './installation.js';
 import { explicitBrowserUserData } from './browser.js';
 import { launchBridgePorts } from './bridge-ports.js';
@@ -191,6 +191,8 @@ const CLEAR: UpdateStatus = {
 
 let status: UpdateStatus = CLEAR;
 let staged: { version: string; file: string; kind: 'installer' | 'appimage' | 'hotfix' | 'linux-hotfix' | 'composite' | 'linux-composite'; target: string; digest: string; appImageIdentity?: AppImageIdentity; hotfix?: string; hotfixDigest?: string; baseVersion?: string; base?: LinuxBaseRelease; patchFile?: string; patchDigest?: string } | null = null;
+type PreparedLinuxLayer = { layer: Awaited<ReturnType<typeof stageLinuxHotfix>>; successor: Awaited<ReturnType<typeof verifyLinuxSuccessor>> };
+let preparedLinuxLayer: PreparedLinuxLayer | null = null;
 let betaStaged: { config: LocalBetaUpdateConfig; currentRevision: string; targetRevision: string } | null = null;
 let pass: Promise<void> | null = null;
 /** Armed only after the requested version and canonical work have both been rechecked. */
@@ -833,6 +835,29 @@ function checkInstallIntent(): Promise<void> {
       reasons = await busyProjection().catch((): UpdateBusyReason[] => ['unavailable']);
       if (!current() || deferBusyInstall(reasons, checkInstallIntent)) return;
     }
+    if (ready.kind === 'linux-hotfix') {
+      let layer: PreparedLinuxLayer['layer'] | undefined;
+      try {
+        if (!ready.hotfix) throw new Error('The Linux application layer manifest is missing');
+        if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
+          throw new Error('The mounted AppImage identity changed');
+        const successor = await verifyLinuxSuccessor(ready.appImageIdentity?.target ?? process.execPath);
+        if (!current()) return;
+        layer = await stageLinuxHotfix(ready.hotfix);
+        if (!current()) return;
+        if (mode !== 'now') {
+          reasons = await busyProjection().catch((): UpdateBusyReason[] => ['unavailable']);
+          if (!current() || deferBusyInstall(reasons, checkInstallIntent)) return;
+        }
+        preparedLinuxLayer = { layer, successor };
+        layer = undefined;
+      } catch (error) {
+        if (current()) { cancelUpdateInstall(); set({ stage: 'failed', error: (error as Error).message }); }
+        return;
+      } finally {
+        await layer?.discard().catch(() => undefined);
+      }
+    }
     if (markInstallOnQuit(version!)) {
       if (mode === 'now') logInfo(`update: explicit immediate install of ${version}; stopping app-owned work through shutdown`);
       quitForUpdate!();
@@ -922,7 +947,7 @@ export function setInstallFolderAccessForTests(probe: (folder: string) => Promis
   installFolderAccess = probe;
 }
 
-export const UPDATE_HANDOFF_MS = 30_000;
+export const UPDATE_HANDOFF_MS = process.platform === 'linux' ? 120_000 : 30_000;
 
 export async function applyStagedUpdate(): Promise<void> {
   if (!UPDATES_ENABLED) return;
@@ -943,22 +968,28 @@ export async function applyStagedUpdate(): Promise<void> {
   if (!runAfterInstall || requestedVersion !== staged?.version) return;
   const ready = staged;
   const relaunch = runAfterInstall;
+  const preparedLayer = preparedLinuxLayer;
+  preparedLinuxLayer = null;
   staged = null;
   runAfterInstall = false;
   if (!ready) return;
   try {
-    if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
-    if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('the staged hotfix changed after verification');
-    if (ready.hotfix && await fileDigest(ready.hotfix) !== ready.hotfixDigest) throw new Error('the staged hotfix manifest changed after verification');
     if (ready.kind === 'linux-hotfix') {
-      if (!ready.hotfix) throw new Error('the Linux application layer manifest is missing');
+      if (!preparedLayer) throw new Error('The verified Linux application layer was not prepared');
       if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
         throw new Error('The mounted AppImage identity changed');
       await prepareUpdateHandoff?.(ready.version);
-      await activateLinuxHotfix(ready.hotfix);
-      if (ready.appImageIdentity && !appImageIdentityMatches(ready.appImageIdentity, ready.appImageIdentity.target))
-        throw new Error('The mounted AppImage identity changed');
-    } else if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
+      await preparedLayer.layer.activate(async () => {
+        await startLinuxUpdate({ version: ready.version, executable: preparedLayer.successor.executable,
+          digest: preparedLayer.successor.digest, installation: ready.appImageIdentity ? 'appimage' : 'deb',
+          browserUserData: explicitBrowserUserData(), bridgePorts: launchBridgePorts() }, preparedLayer.successor);
+      });
+      return;
+    }
+    if ((await fileDigest(ready.file)) !== ready.digest) throw new Error('the staged artifact changed after verification');
+    if (ready.patchFile && await fileDigest(ready.patchFile) !== ready.patchDigest) throw new Error('the staged hotfix changed after verification');
+    if (ready.hotfix && await fileDigest(ready.hotfix) !== ready.hotfixDigest) throw new Error('the staged hotfix manifest changed after verification');
+    if (ready.kind === 'installer' || ready.kind === 'hotfix' || ready.kind === 'composite') {
       // `--updated` tells the assisted NSIS installer this is an upgrade of the install it
       // already owns, so it keeps the location and the shortcuts instead of asking about them.
       // This handoff exists only after the user requested installation; normal Quit cannot enter.
@@ -997,12 +1028,11 @@ export async function applyStagedUpdate(): Promise<void> {
         throw error;
       }
     }
-    if (relaunch && ['appimage', 'linux-composite', 'linux-hotfix'].includes(ready.kind)) {
-      const executable = ready.kind === 'linux-hotfix' ? ready.appImageIdentity?.target ?? process.execPath : ready.target;
+    if (relaunch && ['appimage', 'linux-composite'].includes(ready.kind)) {
+      const executable = ready.target;
       if (!executable) throw new Error('The Linux successor installation is missing');
       await startLinuxUpdate({ version: ready.version, executable,
-        digest: ready.kind === 'linux-hotfix' ? await fileDigest(executable) : ready.digest,
-        installation: ready.kind === 'linux-hotfix' && !ready.appImageIdentity ? 'deb' : 'appimage',
+        digest: ready.digest, installation: 'appimage',
         browserUserData: explicitBrowserUserData(), bridgePorts: launchBridgePorts() });
       return;
     }
@@ -1014,11 +1044,12 @@ export async function applyStagedUpdate(): Promise<void> {
   } catch (err) {
     // Nothing is retried and nothing is left half-applied. The next app start checks again.
     logWarn(`could not apply the staged ${ready.version} update: ${(err as Error).message}`);
-  }
+  } finally { await preparedLayer?.layer.discard().catch(() => undefined); }
 }
 
 /** Test seam: forgets the pass, the staged file and everything reported about them. */
 export function resetUpdateForTests(): void {
+  preparedLinuxLayer = null;
   runAfterInstall = false;
   cancelUpdateInstall();
   busyProjection = updateBusyReasons; installTarget = currentWindowsInstallTarget; windowsDownload = downloadWindowsUpdate;

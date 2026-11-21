@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.2.1] — 2026-11-21
+
+Prepare compatible Linux updates before shutdown and preserve the previous application layer if relaunch cannot be armed. See [1.2.1 notes](docs/release-notes/v1.2.1.md).
+
 ## [1.2.0] — 2026-11-20
 
 Keep the selected ChatGPT effort through Compact & Resume and give Steer priority over unsent handoffs. See [1.2.0 notes](docs/release-notes/v1.2.0.md).

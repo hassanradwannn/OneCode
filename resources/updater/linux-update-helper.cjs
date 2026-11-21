@@ -133,7 +133,7 @@ async function run(note, dependencies = {}) {
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
     const childIdentity = Number.isSafeInteger(child.pid) ? identify(child.pid) : null;
-    const deadline = now() + 60000, readyFile = path.join(record.userData, 'updates', 'linux-ready.json');
+    const deadline = now() + 120000, readyFile = path.join(record.userData, 'updates', 'linux-ready.json');
     let stable = null;
     while (true) {
       let ready;

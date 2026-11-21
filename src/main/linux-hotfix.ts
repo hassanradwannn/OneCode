@@ -26,17 +26,13 @@ async function existingActive(file: string): Promise<unknown | null> {
  * The immutable bootstrap validates this same inventory again before executing it, and its
  * launching marker rolls back if the successor dies before a ready main window confirms startup.
  */
-export async function activateLinuxHotfix(manifestFile: string, replacement?: {
-  /** Release-checksummed descriptor of the AppImage being installed in this same handoff. */
-  base: sharedContract.LinuxBaseRelease;
-  replace: () => Promise<void>;
-}): Promise<void> {
+export async function stageLinuxHotfix(manifestFile: string, replacementBase?: sharedContract.LinuxBaseRelease) {
   if (process.platform !== 'linux' || !app.isPackaged) throw new Error('Linux application hotfixes require a packaged Linux build');
   const manifest = contract.manifest(JSON.parse(await readFile(manifestFile, 'utf8')));
   if (manifest.platform !== 'linux') throw new Error('The staged hotfix is not a Linux application layer');
   let runtimeId: string, baseVersion: string;
-  if (replacement) {
-    const base = contract.baseRelease(replacement.base);
+  if (replacementBase) {
+    const base = contract.baseRelease(replacementBase);
     if (base.platform !== 'linux' || base.arch !== process.arch || !manifest.base ||
         (['version', 'platform', 'arch', 'runtime', 'installer', 'size', 'sha256'] as const).some(key => base[key] !== manifest.base![key]))
       throw new Error('The Linux hotfix differs from its verified replacement base');
@@ -58,12 +54,15 @@ export async function activateLinuxHotfix(manifestFile: string, replacement?: {
   await mkdir(layers, { recursive: true });
   contract.noLinks(layers);
   const launching = path.join(layers, 'launching.json');
-  try {
-    const stat = await lstat(launching);
-    if (stat.isFile()) throw new Error('The current Linux application layer has not finished startup');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+  const requireSettledLayer = async () => {
+    try {
+      await lstat(launching);
+      throw new Error('The current Linux application layer has not finished startup');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  };
+  await requireSettledLayer();
 
   const directory = `${manifest.version}-${manifest.runtime.slice(0, 16)}`;
   const final = path.join(layers, directory);
@@ -77,25 +76,47 @@ export async function activateLinuxHotfix(manifestFile: string, replacement?: {
       await copyFile(source, destination);
     }
     await contract.verify(stage, manifest.files);
-    try { contract.noLinks(final); await rm(final, { recursive: true, force: true }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await rename(stage, final);
   } catch (error) {
     await rm(stage, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 
-  const activeFile = path.join(layers, 'active.json'), rollbackFile = path.join(layers, 'rollback.json');
-  contract.noLinks(activeFile); contract.noLinks(rollbackFile);
-  const prior = await existingActive(activeFile), priorRollback = await existingActive(rollbackFile);
-  await atomicJson(rollbackFile, { schema: 1, active: prior });
-  await atomicJson(activeFile, { schema: 2, version: manifest.version, runtime: runtimeId, baseVersion, directory, files: manifest.files });
-  if (replacement) {
-    try { await replacement.replace(); }
-    catch (error) {
-      if (prior === null) await rm(activeFile, { force: true }); else await atomicJson(activeFile, prior);
-      if (priorRollback === null) await rm(rollbackFile, { force: true }); else await atomicJson(rollbackFile, priorRollback);
-      throw error;
-    }
-  }
+  return {
+    async activate(handoff?: () => Promise<void>): Promise<void> {
+      await requireSettledLayer();
+      const activeFile = path.join(layers, 'active.json'), rollbackFile = path.join(layers, 'rollback.json');
+      contract.noLinks(activeFile); contract.noLinks(rollbackFile); contract.noLinks(final); contract.noLinks(stage);
+      const prior = await existingActive(activeFile), priorRollback = await existingActive(rollbackFile);
+      // An earlier successful activation may already select this version on a
+      // still-running predecessor. Preserve its exact snapshot for rollback.
+      if ((prior as { directory?: string } | null)?.directory === directory) {
+        await contract.verify(final, manifest.files);
+        await handoff?.();
+        return;
+      }
+      await rm(final, { recursive: true, force: true });
+      await rename(stage, final);
+      try {
+        await atomicJson(rollbackFile, { schema: 1, active: prior });
+        await atomicJson(activeFile, { schema: 2, version: manifest.version, runtime: runtimeId, baseVersion, directory, files: manifest.files });
+        await handoff?.();
+      } catch (error) {
+        if (prior === null) await rm(activeFile, { force: true }); else await atomicJson(activeFile, prior);
+        if (priorRollback === null) await rm(rollbackFile, { force: true }); else await atomicJson(rollbackFile, priorRollback);
+        throw error;
+      }
+    },
+    async discard(): Promise<void> {
+      contract.noLinks(stage);
+      await rm(stage, { recursive: true, force: true });
+    },
+  };
+}
+
+export async function activateLinuxHotfix(manifestFile: string, replacement?: {
+  base: sharedContract.LinuxBaseRelease; replace: () => Promise<void>;
+}): Promise<void> {
+  const layer = await stageLinuxHotfix(manifestFile, replacement?.base);
+  try { await layer.activate(replacement?.replace); }
+  finally { await layer.discard().catch(() => undefined); }
 }

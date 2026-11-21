@@ -13,6 +13,7 @@ import { logInfo } from './logger.js';
 import { packagedApplicationResource } from './application-resources.js';
 
 const noteFile = () => path.join(app.getPath('userData'), 'updates', 'linux-handoff.json');
+type LinuxSuccessor = { executable: string; digest: string; device: number; inode: number; size: number; changed: number; modified: number };
 async function noLinks(file: string): Promise<void> {
   for (let node = file; ; node = path.dirname(node)) {
     if ((await lstat(node)).isSymbolicLink()) throw new Error('The Linux update handoff path is redirected');
@@ -25,11 +26,28 @@ async function atomic(file: string, value: unknown): Promise<void> {
   await rename(temporary, file);
 }
 
+async function successorIdentity(executable: string): Promise<Omit<LinuxSuccessor, 'digest'>> {
+  await noLinks(executable);
+  const status = await lstat(executable);
+  if (!status.isFile() || await realpath(executable) !== executable)
+    throw new Error('The verified Linux successor path is no longer a regular installation file');
+  return { executable, device: status.dev, inode: status.ino, size: status.size, changed: status.ctimeMs, modified: status.mtimeMs };
+}
+
+/** Do the bulky AppImage read while the predecessor can still show a preparation failure. */
+export async function verifyLinuxSuccessor(executable: string): Promise<LinuxSuccessor> {
+  const before = await successorIdentity(executable);
+  const digest = await hash(executable);
+  const after = await successorIdentity(executable);
+  if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('The Linux successor file changed during verification');
+  return { ...after, digest };
+}
+
 /** Explicit shutdown hands one launch to a runtime that does not live in the disappearing mount. */
 export async function startLinuxUpdate(options: {
   version: string; executable: string; digest: string; installation: 'appimage' | 'deb';
   browserUserData?: string; bridgePorts?: string;
-}): Promise<void> {
+}, verified?: LinuxSuccessor): Promise<void> {
   if (process.platform !== 'linux' || !app.isPackaged) throw new Error('Linux update handoff requires a packaged Linux application');
   const userData = app.getPath('userData'), updates = path.dirname(noteFile());
   await noLinks(userData);
@@ -38,9 +56,15 @@ export async function startLinuxUpdate(options: {
   if (!startTicks) throw new Error('The Linux predecessor process identity is unavailable');
   const record = validate({ schema: 1, channel: BUILD_CHANNEL, ...options, userData,
     nonce: randomBytes(32).toString('hex'), pid: process.pid, startTicks, at: Date.now(), status: 'pending' });
-  await noLinks(record.executable);
-  if (await realpath(record.executable) !== record.executable || await hash(record.executable) !== record.digest)
-    throw new Error('The installed Linux successor changed after verification');
+  if (verified) {
+    const { digest, ...identity } = verified;
+    // The detached observer still hashes the exact file after the predecessor
+    // exits. Here the already verified receipt only saves another large read.
+    if (digest !== record.digest || JSON.stringify(identity) !== JSON.stringify(await successorIdentity(record.executable)))
+      throw new Error('The installed Linux successor identity changed after verification');
+  } else if ((await verifyLinuxSuccessor(record.executable)).digest !== record.digest) {
+    throw new Error('The installed Linux successor checksum changed after verification');
+  }
   const directory = path.join(updates, `linux-${record.nonce}`);
   await mkdir(directory, { mode: 0o700 });
   const runtime = path.join(directory, 'node'), helper = path.join(directory, 'linux-update-helper.cjs');
