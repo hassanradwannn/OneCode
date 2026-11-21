@@ -132,6 +132,9 @@ if (!/^---\r?\nname: onecode\r?\n/.test(readFileSync(required(claudeSkillPath), 
   throw new Error('Packaged provider skill does not use its accepted native name');
 
 if (targetPlatform === 'win32') {
+  if (existsSync(path.join(resourcesDir, 'app.asar.unpacked/node_modules/ssh2/util/pagent.exe'))) {
+    throw new Error('The bundled SSH client must use OneCode’s own key without a native SSH agent helper.');
+  }
   if (process.platform === 'win32') {
     // Installation confirmation reads Windows version resources, not app.asar.
     // Check the executable and any completed installer so stale builder overrides

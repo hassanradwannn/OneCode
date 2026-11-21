@@ -42,6 +42,7 @@ files:
   - '!node_modules/cpu-features/**/*'
   - '!node_modules/ssh2/node_modules/cpu-features/**/*'
   - '!node_modules/ssh2/lib/protocol/crypto/build/**/*'
+  - '!node_modules/ssh2/util/pagent.exe'
   - '!out/**/*.map'
   - '!**/*.private.json'
   - '!**/*.private.txt'
