@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.1': {
+    lead: () => t('Recover ChatGPT tool calls that missed task authorization.'),
+    highlights: [
+      { icon: 'i-lock', title: () => t('Use the current chat’s authorization'), text: () => t('When a tool call is refused before it runs, OneCode tells ChatGPT how to retry with authorization from the current message.') }
+    ]
+  },
   '1.3.0': {
     lead: () => t('Use the built-in srv.us connection for Remote and provider tools.'),
     highlights: [

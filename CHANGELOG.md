@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.1] — 2026-11-21
+
+Help ChatGPT retry tool calls that omitted the current task’s authorization. The refusal confirms that no tool ran and explains how to use the authorization from the same message. See [1.3.1 notes](docs/release-notes/v1.3.1.md).
+
 ## [1.3.0]
 
 Bundle srv.us for public HTTPS connections, with automatic reconnect, one-time Remote browser pairing, and optional Tailscale or self-hosted Relay. Repair ChatGPT Steer authorization and turn synchronization when its native message bubble mounts late. See [1.3.0 notes](docs/release-notes/v1.3.0.md).
