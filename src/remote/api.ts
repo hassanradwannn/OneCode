@@ -20,13 +20,13 @@ export function forgetRemoteLink(): void {
 }
 export class RemoteRequestError extends Error { constructor(message: string, public status: number) { super(message); } }
 export class RemoteActionError extends Error {}
-async function send(route: string, body?: unknown, signal?: AbortSignal): Promise<{ response: Response; result: any }> {
+async function send(route: string, body?: unknown, signal?: AbortSignal, binary = false): Promise<{ response: Response; result: any }> {
   const deadline = AbortSignal.timeout(body === undefined || route === 'connect' ? 30_000 : 120_000);
   try {
   const response = await fetch(`/api/${route}`, { method: body === undefined ? 'GET' : 'POST', credentials: 'omit', cache: 'no-store', signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
     headers: { 'X-OneCode-Remote': '1', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { response, result: await response.json() };
+  return { response, result: binary && response.ok ? await response.blob() : await response.json() };
   } catch (error) {
     if (deadline.aborted && !signal?.aborted)
       throw new RemoteRequestError('Connection timed out. Check the host’s connection and keep OneCode running. Check the chat before resending an interrupted action.', 503);
@@ -75,6 +75,11 @@ export async function request<T>(route: string, body?: unknown, signal?: AbortSi
   const { response, result } = await send(route, body, signal);
   if (!response.ok) throw new RemoteRequestError(response.status === 401 ? 'Open your remote link again to reconnect.' : result.error ?? 'Remote request failed', response.status);
   return result as T;
+}
+export async function downloadWorkspaceArchive(sessionId: string, messageId: string, href: string): Promise<Blob> {
+  const { response, result } = await send('workspace-archive', { sessionId, messageId, href }, undefined, true);
+  if (!response.ok) throw new RemoteRequestError('Could not download this workspace ZIP.', response.status);
+  return result;
 }
 export async function action<T>(body: Record<string, unknown>): Promise<T> {
   const result = await request<{ ok: boolean; data?: T; error?: string }>('actions', body);

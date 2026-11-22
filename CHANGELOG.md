@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.3]
+
+Restore copyable ChatGPT Writing cards from saved Markdown, link verified documents and ZIPs named in the final reply, open the completed handoff in the sidebar, and give Turn changes a full-height diff. See [1.3.3 notes](docs/release-notes/v1.3.3.md).
+
 ## [1.3.2] — 2026-11-22
 
 Let ChatGPT’s composer settle after the model picker closes, then verify the requested model and reasoning effort before either Compact & Resume or a saved-summary retry sends the handoff. See [1.3.2 notes](docs/release-notes/v1.3.2.md).

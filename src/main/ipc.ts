@@ -46,7 +46,7 @@ import { validateInputImages } from './session/input-images.js';
 import { previewInputAttachment, stageInputAttachment, stageInputAttachments, type AttachmentSource } from './session/input-attachments.js';
 import { approveFolder, applyWrittenFolderApproval } from './root-approval.js';
 import { recordedProviderFileLink } from './provider-file-links.js';
-import { readWorkspaceDocument } from './workspace-links.js';
+import { listWorkspaceDeliverables, readWorkspaceArchive, readWorkspaceDocument } from './workspace-links.js';
 import { readTurnChanges } from './session/turn-changes.js';
 import { recordedReplyImage } from './provider-reply-images.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
@@ -1244,6 +1244,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i), messageId: z.string().min(1).max(512), href: z.string().max(2100)
     }).strict().parse(payload);
     return readWorkspaceDocument(sessionId, messageId, href);
+  });
+  handle('sessions:workspaceDeliverables', async payload => {
+    const { sessionId, messageId } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+      messageId: z.string().min(1).max(512) }).strict().parse(payload);
+    return listWorkspaceDeliverables(sessionId, messageId);
+  });
+  handle('sessions:saveWorkspaceArchive', async payload => {
+    const { sessionId, messageId, href } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+      messageId: z.string().min(1).max(512), href: z.string().max(2100) }).strict().parse(payload);
+    const window = getWindow();
+    if (!window || window.isDestroyed()) return false;
+    const file = await readWorkspaceArchive(sessionId, messageId, href);
+    const save = await dialog.showSaveDialog(window, { title: 'Save workspace ZIP', defaultPath: file.name });
+    if (save.canceled || !save.filePath) return false;
+    const current = await readWorkspaceArchive(sessionId, messageId, href);
+    if (!current.buffer.equals(file.buffer)) throw new Error('The linked ZIP changed before saving.');
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(save.filePath, current.buffer, { mode: 0o600 });
+    return true;
   });
   handle('sessions:turnChanges', async payload => {
     const { sessionId, turnId } = z.object({

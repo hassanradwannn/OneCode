@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Marked } from 'marked';
 import type { ControlApiEvent } from '../shared/control-api.js';
@@ -18,11 +18,11 @@ import { RichPresentation } from './presentation.js';
 import { Icon } from './composer-controls.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { MAX_INPUT_IMAGES } from '../shared/input.js';
-import { request } from './api.js';
-import { workspaceLinkPath, type WorkspaceDocument } from '../shared/workspace-link.js';
+import { downloadWorkspaceArchive, request } from './api.js';
+import { isWorkspaceArchive, workspaceDeliverableLinks, workspaceLinkPath, type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall, type TurnFileChange } from '../shared/turn-changes.js';
 import type { ToolEditReview } from '../shared/session.js';
-import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDocument, restoreWorkspaceLinks, type DeliverableLabel } from '../renderer/workspace-deliverables.js';
+import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDeliverables, renderWorkspaceDocument, restoreWorkspaceLinks, type DeliverableLabel } from '../renderer/workspace-deliverables.js';
 import '../renderer/workspace-deliverables.css';
 
 const label: DeliverableLabel = (message, args) => message.replace(/\{(\d+)\}/g, (whole, index) => String(args?.[Number(index)] ?? whole));
@@ -91,6 +91,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
     const mountNative = stageNativeMessageContent(template.content, {
       key: JSON.stringify([sessionId, messageId]),
       copy: copyText,
+      writingSource: source,
       artifact: surface => {
         const presentation = bindings.get(surface);
         const event = presentation && inlineEvents?.find(row => row.presentation?.id === presentation.id);
@@ -192,6 +193,19 @@ function MountedDeliverable({ node }: { node: HTMLElement }) {
   }, [node]);
   return <div ref={ref} className="deliverable-pane" />;
 }
+function WorkspaceFiles({ sessionId, messageId, open }: { sessionId: string; messageId: string; open: (messageId: string, href: string) => void }) {
+  const [deliverables, setDeliverables] = useState<WorkspaceDeliverables | null>(null);
+  useEffect(() => {
+    const abort = new AbortController();
+    setDeliverables(null);
+    void request<WorkspaceDeliverables>('workspace-deliverables', { sessionId, messageId }, abort.signal)
+      .then(result => { if (!abort.signal.aborted) setDeliverables(result); }).catch(() => undefined);
+    return () => abort.abort();
+  }, [sessionId, messageId]);
+  const node = useMemo(() => deliverables?.files.length
+    ? renderWorkspaceDeliverables(deliverables.files, label, href => open(messageId, href)) : null, [deliverables, messageId, open]);
+  return node ? <MountedDeliverable node={node} /> : null;
+}
 export function Transcript({ events, sessionId, conversationId, openRequestId }: { events: ControlApiEvent[]; sessionId: string;
   conversationId?: string | null; openRequestId: string | null }) {
   const [pane, setPane] = useState<{ node: HTMLElement; sessionId: string; title: string } | null>(null);
@@ -204,6 +218,16 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
     const requestId = ++generation.current;
     setFileError('');
     const current = () => generation.current === requestId && currentSession.current === sessionId;
+    if (isWorkspaceArchive(href)) {
+      void downloadWorkspaceArchive(sessionId, messageId, href).then(bytes => {
+        if (!current()) return;
+        const url = URL.createObjectURL(bytes);
+        const link = document.createElement('a');
+        link.href = url; link.download = workspaceLinkPath(href)?.split('/').at(-1) || 'workspace.zip';
+        link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }).catch(() => { if (current()) setFileError('Could not download this workspace ZIP.'); });
+      return;
+    }
     void request<WorkspaceDocument>('workspace-document', { sessionId, messageId, href }).then(file => {
       if (!current()) return;
       setPane({ sessionId, title: file.name, node: renderWorkspaceDocument(file, { label, copy: copyText,
@@ -260,6 +284,8 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
             nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} openRequestId={openRequestId}
             ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)}
             inlineEvents={inlineEvents} openWorkspace={openWorkspace} />
+          {row.kind === 'assistant_message' && row.final && row.messageId && workspaceDeliverableLinks(rawText).size > 0 &&
+            <WorkspaceFiles key={JSON.stringify([sessionId, row.messageId])} sessionId={sessionId} messageId={row.messageId} open={openWorkspace} />}
           {changes.length > 0 && <MountedDeliverable node={renderTurnChangeSummary(changes, label, index => {
             const id = ++generation.current; setFileError('');
             const current = () => generation.current === id && currentSession.current === sessionId;

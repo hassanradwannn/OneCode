@@ -17,6 +17,21 @@ export interface WorkspaceDocument {
   truncated: boolean;
 }
 
+export interface WorkspaceDeliverable {
+  href: string;
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceDeliverables {
+  files: WorkspaceDeliverable[];
+  primary: string | null;
+}
+
+export function isWorkspaceArchive(href: string): boolean {
+  return /\.zip$/i.test(workspaceLinkPath(href) ?? '');
+}
+
 export function workspaceLinksInMarkdown(source: string): Map<string, string> {
   const links = new Map<string, string>();
   if (source.includes('onecode-file:')) marked.walkTokens(marked.lexer(source), token => {
@@ -25,5 +40,21 @@ export function workspaceLinksInMarkdown(source: string): Map<string, string> {
   return links;
 }
 
+/** Infer links only for explicitly named deliverable paths, outside fenced examples. */
+export function workspaceDeliverableLinks(source: string): Map<string, string> {
+  const links = workspaceLinksInMarkdown(source);
+  if (!/\.(?:md|markdown|zip|sha256)`/i.test(source)) return links;
+  marked.walkTokens(marked.lexer(source), token => {
+    if (token.type !== 'codespan' || links.size >= 24) return;
+    const file = token.text.replace(/\\/g, '/');
+    if (!file.includes('/') || /[:<>|\r\n]/.test(file.replace(/^[A-Za-z]:\//, '')) ||
+        !/\.(?:md|markdown|zip|sha256)$/i.test(file)) return;
+    const relative = /^(?:\/|[A-Za-z]:\/|\.\/)/.test(file) ? file : `./${file}`;
+    const href = `onecode-file:${relative.split('/').map(encodeURIComponent).join('/')}`;
+    if (workspaceLinkPath(href)) links.set(href, file.split('/').at(-1)!);
+  });
+  return links;
+}
+
 export const WORKSPACE_OUTPUT_INSTRUCTIONS =
-  'For a copyable Markdown file, save a regular .md with apply_patch. Link its actual approved path as [Guide](onecode-file:/project/docs/guide.md), with spaces encoded as %20, for sidebar preview and source copy. Use [label](https://example.com) for web links. If writing is unavailable, use a fenced Markdown block. Reserve artifacts for interactive output or explicit requests. Finish with the outcome, checks, and key file links.';
+  'For a copyable Markdown deliverable, save a regular .md with apply_patch. Link every delivered file by its actual approved path, for example [Handoff](onecode-file:/project/docs/handoff.md) and [Source ZIP](onecode-file:/project/docs/source.zip). Encode spaces as %20. Put the primary document link in the final reply. OneCode can open the Markdown sidebar and copy its source. Use [label](https://example.com) for web links. If writing is unavailable, use a fenced Markdown block. Reserve artifacts for interactive output or explicit requests.';

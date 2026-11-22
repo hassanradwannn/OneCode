@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.3': {
+    lead: () => t('Copy and open completed handoffs.'),
+    highlights: [
+      { icon: 'i-file-text', title: () => t('Open the files in a reply'), text: () => t('Open verified Markdown files in the sidebar and download linked ZIPs.') },
+      { icon: 'i-git-diff', title: () => t('Review changes in the full sidebar'), text: () => t('The recorded diff fills the available height and scrolls to the last change.') }
+    ]
+  },
   '1.3.2': {
     lead: () => t('Resume ChatGPT with the saved model and reasoning effort.'),
     highlights: [

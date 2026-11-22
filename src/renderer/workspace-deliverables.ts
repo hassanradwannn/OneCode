@@ -2,7 +2,7 @@ import { marked } from 'marked';
 import { safeExternalLink } from '../shared/external-link.js';
 import type { ToolEditReview } from '../shared/session.js';
 import type { RecordedChangeRef, TurnFileChange } from '../shared/turn-changes.js';
-import { workspaceLinksInMarkdown, type WorkspaceDocument } from '../shared/workspace-link.js';
+import { isWorkspaceArchive, workspaceLinksInMarkdown, type WorkspaceDeliverable, type WorkspaceDocument } from '../shared/workspace-link.js';
 import { el, icon } from './dom.js';
 import { MESSAGE_DROP_TAGS, MESSAGE_TAGS } from './message-format.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
@@ -38,6 +38,29 @@ export function restoreWorkspaceLinks(root: ParentNode, source: string): void {
       root.appendChild(line);
     }
   }
+}
+
+export function renderWorkspaceDeliverables(files: readonly WorkspaceDeliverable[], label: DeliverableLabel,
+  open: (href: string) => void): HTMLElement {
+  const card = el('section', 'turn-file-report');
+  const header = el('header', 'turn-file-report-header');
+  header.append(icon('i-file-text'), el('strong', '', label('Workspace files')));
+  const list = el('ul', 'deliverable-file-list');
+  for (const file of files) {
+    const row = el('li', 'deliverable-file-row');
+    const link = el('a', 'deliverable-file-path', file.name) as HTMLAnchorElement;
+    link.href = file.href; link.title = file.path;
+    const activate = (event: MouseEvent) => {
+      if (event.type === 'auxclick' && event.button !== 1) return;
+      event.preventDefault(); open(file.href);
+    };
+    link.addEventListener('click', activate); link.addEventListener('auxclick', activate);
+    row.append(link, button(label(isWorkspaceArchive(file.href) ? 'Download ZIP' : 'Open file'), () => open(file.href),
+      isWorkspaceArchive(file.href) ? 'i-export' : 'i-file-text'));
+    list.append(row);
+  }
+  card.append(header, list);
+  return card;
 }
 
 export function renderWorkspaceDocument(file: WorkspaceDocument, actions: Actions): HTMLElement {

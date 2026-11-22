@@ -15,7 +15,8 @@ import { currentLanguage, ui, t } from './i18n.js';
 import { initSkills } from './skills.js';
 import { imageStorageButton } from './image-storage.js';
 import { applyChatModels, applyComposerSessionModel, acceptedAutomaticModel, initChatModels, confirmedComposerModel, composerSendModel, ensureComposerModel, chatModelName, settingsModelAffinity } from './chat-models.js';
-import { marked, Marked, type TokenizerAndRendererExtension } from 'marked';
+import { marked, Marked } from 'marked';
+import { writingBlock, type WritingSlot } from './writing-block.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { createAgentPanel, workerName } from './agent-panel.js';
@@ -49,9 +50,9 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
-import { workspaceLinkPath } from '../shared/workspace-link.js';
+import { isWorkspaceArchive, workspaceDeliverableLinks, workspaceLinkPath } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall } from '../shared/turn-changes.js';
-import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
+import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDeliverables, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
 import './workspace-deliverables.css';
 import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import { canSendQueuedNow, injectableAttachments, queuedFollowup, MAX_INPUT_IMAGES, automaticInput, inputNoticeVisible, AUTOMATIC_INPUT_NOTICE_MS } from '../shared/input.js';
@@ -315,6 +316,7 @@ let artifactPanel: ReturnType<typeof createArtifactPanel> | null = null;
 let workbenchBrowserPanel: ReturnType<typeof createWorkbenchBrowserPanel> | null = null;
 let mediaPanel: ReturnType<typeof createMediaPanel> | null = null;
 let deliverableRequest = 0;
+let observedDeliverableTurn: string | null = null;
 
 function showDeliverable(id: 'linked-file' | 'turn-changes', title: string, pane: HTMLElement, current: () => boolean): void {
   const docks = workspaceDocks;
@@ -328,8 +330,21 @@ function showDeliverable(id: 'linked-file' | 'turn-changes', title: string, pane
 
 function closeDeliverables(): void {
   deliverableRequest++;
+  observedDeliverableTurn = null;
   workspaceDocks?.unregisterSurface('linked-file');
   workspaceDocks?.unregisterSurface('turn-changes');
+}
+
+function openWorkspaceDeliverable(owner: string, messageId: string, href: string, current: () => boolean): void {
+  if (!current()) return;
+  if (isWorkspaceArchive(href)) { void run(api.saveWorkspaceArchive(owner, messageId, href)); return; }
+  const request = ++deliverableRequest;
+  void run(api.getWorkspaceDocument(owner, messageId, href)).then(file => {
+    if (!file || !current() || request !== deliverableRequest) return;
+    const pane = renderWorkspaceDocument(file, { label: t, copy: async text => !!await run(api.writeClipboard(text)),
+      openExternal: url => { void run(api.openLink(url)); } });
+    showDeliverable('linked-file', file.name, pane, current);
+  });
 }
 
 function selectedLocalProject(): LocalProject | null {
@@ -2805,27 +2820,7 @@ const PILL_PLACEHOLDER = /^\uE000(\d{1,4})\uE001$/;
  */
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
-interface WritingSlot { label: string; source: string }
 const WRITING_MARKER = /^\uE010(\d{1,4})\uE011$/;
-function writingBlock(slots: WritingSlot[]): TokenizerAndRendererExtension {
-  return {
-    name: 'writingBlock', level: 'block',
-    start: value => value.match(/^:::writing\b/m)?.index,
-    tokenizer(value) {
-      // Without its closing `:::` the block runs to the end of the message, as Gemini draws it:
-      // the block is still streaming, or the answer was stopped inside it.
-      const match = value.match(/^:::writing(\{[^}\n]*\})?[ \t]*\n([\s\S]*?)(?:\n:::[ \t]*(?:\n|$)|$)/);
-      if (!match) return undefined;
-      const attribute = (name: string): string => match[1]?.match(new RegExp(`\\b${name}="([^"\\n]*)"`))?.[1] ?? '';
-      const slot = slots.push({ label: attribute('title') || attribute('subject'), source: (match[2] ?? '').trim() }) - 1;
-      return { type: 'writingBlock', raw: match[0], slot, tokens: this.lexer.blockTokens(match[2] ?? '', []) };
-    },
-    renderer(token) {
-      return `<blockquote><p>\uE010${Number(token['slot'])}\uE011</p>${this.parser.parse(token.tokens ?? [])}</blockquote>`;
-    }
-  };
-}
-
 /** Turns each marked writing-block quote into its panel: a header with its name and Copy. */
 function writingPanels(box: HTMLElement, slots: readonly WritingSlot[]): void {
   for (const quote of box.querySelectorAll('blockquote')) {
@@ -3042,7 +3037,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   template.innerHTML = html.text.slice(0, MAX_RENDERED_HTML_CHARS);
   const math: MathSlots = { formulas: [] };
   if (nativeCapture) captureRenderedMath(template.content, math);
-  const mountNative = actions && stageNativeMessageContent(template.content, actions, nativeCapture);
+  const mountNative = actions && stageNativeMessageContent(template.content, { ...actions, writingSource: safeFallback }, nativeCapture);
   const codeLanguages = new WeakMap<Element, string>();
   for (const code of template.content.querySelectorAll('pre > code')) {
     const language = code.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+#.-]{1,24})(?=\s|$)/i)?.[1];
@@ -3858,16 +3853,9 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
       box.append(renderedMarkdown(event.message.text, event.renderedHtml, event.references, href => {
         if (!owner || !event.messageId) return;
         if (!workspaceLinkPath(href)) { void run(api.openSessionFileLink(owner, event.messageId, href)); return; }
-        const request = ++deliverableRequest;
         const generation = selectionGeneration;
         const current = () => generation === selectionGeneration && (context ? context.current() : selectedId === owner);
-        if (!current()) return;
-        void run(api.getWorkspaceDocument(owner, event.messageId, href)).then(file => {
-          if (!file || !current() || request !== deliverableRequest) return;
-          const pane = renderWorkspaceDocument(file, { label: t, copy: async text => !!await run(api.writeClipboard(text)),
-            openExternal: url => { void run(api.openLink(url)); } });
-          showDeliverable('linked-file', file.name, pane, current);
-        });
+        openWorkspaceDeliverable(owner, event.messageId, href, current);
       }, {
         messageId: event.final ? event.providerMessageId ?? event.messageId : undefined,
         actions: {
@@ -5013,6 +5001,8 @@ function paintDetail(followBottom = historyBefore === null): void {
   const duplicateErrors = duplicateChatErrors(events);
   // Completed turns and the answer message that carries their copy/export actions.
   const anchors = answerAnchors(events);
+  const previouslyLive = observedDeliverableTurn;
+  observedDeliverableTurn = openTurnId(events);
   const editCalls = new Map<string, RecordedChangeCall[]>();
   for (const row of events) {
     if (row.kind !== 'tool_call' || !row.turnId || !row.call.changes?.length || !anchors.has(row.turnId)) continue;
@@ -5062,6 +5052,22 @@ function paintDetail(followBottom = historyBefore === null): void {
     }
     const row = item.kind === 'compaction' ? compactionRow(item.block, cached?.row, item === latestCompaction) : eventRow(item.event);
     const reportOwner = selectedId, reportGeneration = selectionGeneration;
+    if (answerTurn && reportOwner && item.kind === 'event' && item.event.kind === 'assistant_message' &&
+        item.event.messageId && workspaceDeliverableLinks(item.event.message.text).size) {
+      const messageId = item.event.messageId;
+      const canAutoOpen = answerTurn === previouslyLive && timelineShown() && !cached?.row.querySelector('.workspace-file-results');
+      const request = deliverableRequest;
+      const current = () => selectedId === reportOwner && selectionGeneration === reportGeneration;
+      const slot = el('div', 'workspace-file-results');
+      row.querySelector('.said')?.append(slot);
+      const open = (href: string) => openWorkspaceDeliverable(reportOwner, messageId, href, current);
+      void api.getWorkspaceDeliverables(reportOwner, messageId).then(reply => {
+        const result = reply.ok ? reply.data : null;
+        if (!result || !current() || rowCache.get(key)?.row !== row || !result.files.length) return;
+        slot.append(renderWorkspaceDeliverables(result.files, t, open));
+        if (canAutoOpen && result.primary && request === deliverableRequest && timelineShown()) open(result.primary);
+      }).catch(() => undefined);
+    }
     if (answerTurn && reportOwner && changes.length) {
       const current = () => selectedId === reportOwner && selectionGeneration === reportGeneration;
       row.querySelector('.said')?.append(renderTurnChangeSummary(changes, t, index => {

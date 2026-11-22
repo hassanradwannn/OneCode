@@ -1,10 +1,12 @@
 import { MAX_MESSAGE_MARKUP, MESSAGE_DROP_TAGS, MESSAGE_TAGS } from './message-format.js';
 import { safeExternalLink, safeProviderFileLink, safeRecordedReplyImage } from '../shared/external-link.js';
 import { sanitizeHtmlTree } from './sanitize-html.js';
+import { marked } from 'marked';
+import { capturedWritingBlocks } from './writing-block.js';
 
 type Capture = { text: string; truncated: boolean };
 export type NativeMessageActions = { key: string; copy(value: string): Promise<boolean>; openOriginal?(): void;
-  loadImage?(url: string): Promise<string | null>; artifact?(surface: string): HTMLElement | null };
+  loadImage?(url: string): Promise<string | null>; artifact?(surface: string): HTMLElement | null; writingSource?: string };
 type Criterion = { label: string; max: number; values: number[] };
 type Scorecard = { names: string[]; labels: string[]; criteria: Criterion[] };
 type ScoreState = { names: string[]; scores: number[][] };
@@ -302,22 +304,33 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
   };
   const responses = nativeCapture ? [...fragment.querySelectorAll('[data-dil-response], [data-onecode-rich-message]')] : [];
   const visible = (node: Element) => !node.closest('[hidden], [aria-hidden="true"], script, style, pre, code, svg, template');
+  const writingWidgets = [...new Set(responses.flatMap(response => [...response.querySelectorAll('[data-client-defined-widget="writing_block"]')]))].filter(visible);
+  const sourceBlocks = capturedWritingBlocks(options.writingSource ?? '');
+  // Provider captures can lose their copy attributes. A single completed
+  // directive in the same canonical message can supply that entire card.
+  const singleWriting = writingWidgets.length === 1 && sourceBlocks.length === 1 ? sourceBlocks[0]!.source : null;
   for (const response of responses) {
     for (const widget of response.querySelectorAll('[data-client-defined-widget="writing_block"]')) {
       if (!visible(widget) || !fragment.contains(widget)) continue;
       const surfaces = [...widget.querySelectorAll('[data-oai-writing-block-surface][data-markdown-copy="rich-block"]')]
         .filter(surface => surface.closest('[data-client-defined-widget="writing_block"]') === widget);
-      if (surfaces.length !== 1 || !visible(surfaces[0]!)) continue;
-      const surface = surfaces[0]!;
-      const markdown = surface.getAttribute('data-markdown-copy-text');
-      const contents = surface.querySelectorAll('[data-markdown-copy-content="true"]');
-      if (!markdown?.trim() || markdown.length > MAX_MESSAGE_MARKUP || contents.length !== 1 || !visible(contents[0]!)) continue;
+      const surface = surfaces.length === 1 && visible(surfaces[0]!) ? surfaces[0] : null;
+      const markdown = surface?.getAttribute('data-markdown-copy-text');
+      const contents = surface?.querySelectorAll('[data-markdown-copy-content="true"]');
+      const hasNativeBody = Boolean(markdown?.trim() && markdown.length <= MAX_MESSAGE_MARKUP && contents?.length === 1 && visible(contents[0]!));
+      const source = hasNativeBody ? markdown! : singleWriting;
+      if (!source || source.length > MAX_MESSAGE_MARKUP) continue;
       const body = document.createElement('div');
       // Keep the actual body in the caller's sanitizer and link, math and code passes.
       // Only the scoped native Copy payload crosses into the app-owned control.
-      body.append(...contents[0]!.childNodes);
+      if (hasNativeBody) body.append(...contents![0]!.childNodes);
+      else {
+        const template = document.createElement('template');
+        template.innerHTML = marked.parse(source, { async: false, gfm: true });
+        body.append(template.content);
+      }
       widget.replaceWith(body);
-      writingCards.push({ body, markdown });
+      writingCards.push({ body, markdown: source });
     }
     for (const node of [...response.querySelectorAll('[data-onecode-native-surface]')]) {
       if (!visible(node) || !fragment.contains(node) || node.parentElement?.closest('[data-onecode-native-surface]')) continue;

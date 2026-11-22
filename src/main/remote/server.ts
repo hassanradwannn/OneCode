@@ -8,7 +8,7 @@ import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { recordedProviderFileLink } from '../provider-file-links.js';
-import { readWorkspaceDocument } from '../workspace-links.js';
+import { listWorkspaceDeliverables, readWorkspaceArchive, readWorkspaceDocument } from '../workspace-links.js';
 import { readTurnChanges } from '../session/turn-changes.js';
 import { effectiveCapabilities, getConfig } from '../config.js';
 import { recordedReplyImage } from '../provider-reply-images.js';
@@ -154,6 +154,26 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
       if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
       json(res, 200, document); return;
+    }
+    if (req.method === 'POST' && route.pathname === '/api/workspace-deliverables') {
+      const { sessionId, messageId } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+        messageId: z.string().min(1).max(512) }).strict().parse(await body(req));
+      const files = await listWorkspaceDeliverables(sessionId, messageId)
+        .catch(() => { throw new RequestError(404, 'workspace_deliverables_unavailable'); });
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
+      json(res, 200, files); return;
+    }
+    if (req.method === 'POST' && route.pathname === '/api/workspace-archive') {
+      const { sessionId, messageId, href } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
+        messageId: z.string().min(1).max(512), href: z.string().max(2100) }).strict().parse(await body(req));
+      const file = await readWorkspaceArchive(sessionId, messageId, href)
+        .catch(() => { throw new RequestError(404, 'workspace_archive_unavailable'); });
+      await checkRoute(); if (!auth.authenticate(token)) throw new RequestError(401, 'connection_required');
+      if (!effectiveCapabilities(getConfig()).read) throw new RequestError(403, 'read_not_allowed');
+      res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': file.buffer.length,
+        'Content-Disposition': 'attachment' });
+      res.end(file.buffer); return;
     }
     if (req.method === 'POST' && route.pathname === '/api/tool-edit-review') {
       const { sessionId, callId, changeIndex } = z.object({ sessionId: z.string().regex(/^[0-9a-z-]{8,64}$/i),
