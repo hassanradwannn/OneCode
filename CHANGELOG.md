@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.8] — 2026-11-23
+
+Keep an explicit ChatGPT Steer ready to send when the turn changes. Join the verified current turn or send as a new message if ChatGPT has finished. See [1.3.8 notes](docs/release-notes/v1.3.8.md).
+
 ## [1.3.7] — 2026-11-22
 
 Deliver explicit ChatGPT Steer when the original question is off-screen and the recorded active turn still matches. See [1.3.7 notes](docs/release-notes/v1.3.7.md).

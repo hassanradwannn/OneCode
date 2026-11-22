@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.8': {
+    lead: () => t('Send a queued ChatGPT Steer when the current turn changes.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Keep Steer ready to send'), text: () => t('A Steer joins the current verified turn or starts a new message if the reply has already finished.') }
+    ]
+  },
   '1.3.7': {
     lead: () => t('Steer ChatGPT while the original question is off-screen.'),
     highlights: [
