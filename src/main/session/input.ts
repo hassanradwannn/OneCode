@@ -117,6 +117,8 @@ const entrySchema = inputArgs.extend({
   apiWorker: z.object({ runId: z.string().uuid(), agentId: z.string().regex(/^worker-\d+$/),
     messageIds: z.array(z.string()).max(1000) }).strict().optional(),
   steerReady: z.literal(true).optional(),
+  /** The person explicitly moved this browser message ahead of the queue. */
+  sendNowAt: z.number().int().nonnegative().optional(),
   steerClosedOnce: z.literal(true).optional(),
   warmupRecovery: warmupRecoverySchema.optional(),
   /** Ordered recovery remains on the original input; navigation never refunds Send. */
@@ -359,6 +361,21 @@ async function steeringSource(sessionId: string, conversationId: string, turnId:
     (question.origin ?? question.seq) <= boundary.seq
     ? { id: turnId, startedAt: boundary.time, questionId: question.messageId } : null;
 }
+/** Resolve a fresh destination only within the chat whose queued message was clicked. */
+async function prioritizeBrowserInput(entry: InputEntry, session: SessionSummary): Promise<InputEntry | null> {
+  if (!session.conversationId || session.conversationId !== entry.conversationId ||
+      isChatBlocked(session.conversationId) || await conversationWasSuperseded(session.conversationId)) return null;
+  const turnId = session.activeTurnId;
+  if (turnId) {
+    const source = await steeringSource(session.id, session.conversationId, turnId);
+    if (!source || session.timelineTurns?.[turnId]?.questionId !== source.questionId) return null;
+    if (entry.directTurn?.id === source.id && entry.directTurn.questionId === source.questionId) return entry;
+    return { ...entry, steerTurnId: source.id, steerReady: true, directTurn: source };
+  }
+  if (!(await sessionInputPolicy(session.id, undefined, entry.sendNowAt)).browserAllowed) return null;
+  return entry.directTurn || entry.steerTurnId
+    ? { ...entry, directTurn: undefined, steerTurnId: undefined, steerReady: undefined } : entry;
+}
 async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
   // API preparation shares the durable outbox, never native composer custody.
   // Exclude it before an opening can be advertised or claimed by a Companion.
@@ -369,6 +386,11 @@ async function browserInputAllowed(entry: InputEntry): Promise<boolean> {
   if (entry.recovery?.phase === 'stopping') return recoveryCurrent(entry);
   if (entry.nativeRecovery && entry.nativeRecovery.phase !== 'ready')
     return entry.nativeRecovery.phase === 'ready-to-refresh' && await inputRefreshCurrent(entry);
+  if (entry.sendNowAt !== undefined && !entry.directTurn && entry.sessionId) {
+    if (entry.error?.startsWith('Local chat setup failed:')) return false;
+    const session = await getSession(entry.sessionId);
+    return !!session && !session.activeTurnId && (await prioritizeBrowserInput(entry, session)) === entry;
+  }
   if (entry.steerTurnId) {
     if (!entry.steerReady || !entry.sessionId) return false;
     const session = await getSession(entry.sessionId);
@@ -446,7 +468,7 @@ export function hasEligibleToolInput(sessionId: string, finishBoundary = false):
     const steerSession = current.some(row => row.sessionId === sessionId && row.toolSteer && row.state === 'queued') ? await getSession(sessionId) : null;
     for (const row of current) {
       if (row.sessionId !== sessionId || row.dueAt > Date.now()) continue;
-      if (row.steerTurnId) continue;
+      if (row.steerTurnId || row.sendNowAt !== undefined) continue;
       if (row.toolSteer && row.state === 'queued' && steerSession?.activeTurnId !== row.toolTurnId) continue;
       if (row.attachments?.length && row.attachmentDelivery !== 'tool' && row.delivery !== 'tool') continue;
       if (row.mode === 'after-turn' || (row.mode === 'finish' && !finishBoundary)) continue;
@@ -491,6 +513,8 @@ const needsHistory = (row: InputEntry): boolean => row.purpose !== 'decision' &&
 const pendingStages = (row: InputEntry): boolean => row.state === 'sent' && !!row.stages?.length && !row.stagesApplied;
 const ordered = (rows: InputEntry[]): InputEntry[] => [...rows].sort((a, b) =>
   (a.queueOrder ?? a.dueAt) - (b.queueOrder ?? b.dueAt) || a.createdAt - b.createdAt);
+const browserOrder = (rows: InputEntry[]): InputEntry[] => ordered(rows).sort((a, b) =>
+  (a.sendNowAt ?? Number.MAX_SAFE_INTEGER) - (b.sendNowAt ?? Number.MAX_SAFE_INTEGER));
 const companionOf = (rows: InputEntry[], row: InputEntry): InputEntry | undefined => rows.find(root => root.companionInputId === row.id);
 const sameDelivery = (root: InputEntry, row: InputEntry): boolean => row.id === root.id || row.id === root.companionInputId;
 function combinedInput(root: InputEntry, companion?: InputEntry): InputEntry {
@@ -692,7 +716,7 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
     // A message the app itself holds ("Message queued. Finish Setup to send: …", or after a failed
     // browser start) was never offered to a browser. It stays queued with its reason and Retry;
     // failing it here lost it and blamed the browser instead.
-    if (row.state === 'queued' && row.mode === 'auto' && !row.steerTurnId && !row.opening && !row.finishOwner && !row.silenceBoundary &&
+    if (row.state === 'queued' && row.mode === 'auto' && row.sendNowAt === undefined && !row.steerTurnId && !row.opening && !row.finishOwner && !row.silenceBoundary &&
         (row.transportIntent === 'browser' || (!row.transportIntent && !row.sessionId)) &&
         !row.preparationWait && !row.error?.startsWith('Message queued. ')) {
       // A message the live owner refuses to offer is still accepted user intent.
@@ -1388,10 +1412,19 @@ export function sendQueuedInputNow(id: string, intent?: QueuedInputNowIntent): P
     const current = await load();
     const row = current.find(entry => entry.id === id && canSendQueuedNow(entry));
     if (!row?.sessionId) return false;
-    const policy = await sessionInputPolicy(row.sessionId);
     const session = await getSession(row.sessionId);
     if (!session?.conversationId || session.conversationId !== row.conversationId || isChatBlocked(session.conversationId) ||
         await conversationWasSuperseded(session.conversationId)) return false;
+    if (chatProviderForConversation(session.conversationId) === 'chatgpt' && intent?.delivery === 'direct' && intent.turnId) {
+      const { requestedMode: _requested, silenceBoundary: _silence, directTurn: _direct, toolSteer: _toolSteer,
+        toolTurnId: _toolTurn, steerTurnId: _steer, steerReady: _ready, ...rest } = row;
+      const now = Date.now();
+      const immediate: InputEntry = { ...rest, mode: 'auto', transportIntent: 'browser', sendNowAt: now, dueAt: now };
+      const destination = await prioritizeBrowserInput(immediate, session);
+      await commit(current.map(entry => entry === row ? destination ?? immediate : entry));
+      return true;
+    }
+    const policy = await sessionInputPolicy(row.sessionId);
     const turnId = session.activeTurnId;
     const idle = !session.activeTurnId && policy.browserAllowed && policy.settled;
     if (!turnId && !idle) return false;
@@ -2084,13 +2117,21 @@ export async function recordedBrowserSteer(session: SessionSummary, browser: str
     ? { sourceTurnId: activeTurnId, sourceQuestionId: source.questionId, questionId: nativeQuestion.messageId } : null;
 }
 
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; steerNow?: true; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
+    const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; steerNow?: true; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];
     const current = await load();
-    for (const entry of ordered(current)) {
+    const updates = new Map<string, InputEntry>();
+    for (let entry of browserOrder(current)) {
       if (companionOf(current, entry)) continue;
       if (!preparable(entry) || entry.dueAt > Date.now()) continue;
+      if (entry.sendNowAt !== undefined && entry.sessionId && entry.state === 'queued') {
+        const session = await getSession(entry.sessionId);
+        const destination = session && await prioritizeBrowserInput(entry, session);
+        if (!destination) continue;
+        if (destination !== entry) updates.set(entry.id, destination);
+        entry = destination;
+      }
       if (queuedFollowup(entry) && entry.recovery?.phase !== 'stopping' && entry.nativeRecovery?.phase !== 'ready-to-refresh' && !(entry.state === 'browser' && entry.completedTurnId) && !(await completedStageBoundary(entry, current))) continue;
       if (!(await browserInputAllowed(entry))) continue;
       try {
@@ -2102,7 +2143,7 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
         const chatgptProject = chatProviderCapabilities(chatProviderForConversation(conversationId, entry.chatProvider ?? getConfig().ui.chatProvider ?? DEFAULT_CHAT_PROVIDER)).nativeProjects && !conversationId && entry.projectId && entry.purpose !== 'decision' && !entry.lifetime
           ? (await getProject(entry.projectId))?.chatgpt : undefined;
         if (chatgptProject && chatgptProject.state !== 'linked') continue;
-        const [end] = !entry.silenceBoundary && manualInput(entry) && entry.sessionId
+        const [end] = entry.sendNowAt === undefined && !entry.silenceBoundary && manualInput(entry) && entry.sessionId
           ? await readRecentEvents(entry.sessionId, 1, { kinds: ['turn_start', 'turn_end'] }) : [];
         const silenceTurnId = entry.silenceBoundary?.turnId ?? (end?.kind === 'turn_end' && end.outcome === 'failed' &&
           end.reason === 'thinking_failed' && end.turnId && await eligibleStageEnd(entry) === end.turnId ? end.turnId : undefined);
@@ -2115,22 +2156,26 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
           ...(entry.directTurn ? { directTurn: entry.directTurn } : {}),
           ...(entry.warmupRecovery ? { warmupRecovery: warmupRecoveryView(entry.warmupRecovery) } : {}),
           ...(entry.steerTurnId ? { steerTurnId: entry.steerTurnId } : {}),
+          ...(entry.sendNowAt !== undefined ? { steerNow: true as const } : {}),
           ...(entry.state === 'queued' && entry.purpose !== 'decision' && entry.sessionId && entry.conversationId && entry.conversationId !== conversationId
             ? { supersededConversationId: entry.conversationId } : {}),
           ...(entry.lifetime ? { lifetime: entry.lifetime } : {}),
           ...(chatgptProject?.state === 'linked' ? { project: chatgptProject.id } : {}) });
       } catch { /* blocked/deleted stays user-visible */ }
     }
+    if (updates.size) await commit(current.map(row => updates.get(row.id) ?? row));
     return result;
   });
 }
 export function claimBrowserInput(id: string, owner: string, conversationId: string | null, requiresAuthorization = false, browser: string | null = null,
-  warmupSource?: WarmupDocument): Promise<InputEntry | null> {
+  warmupSource?: WarmupDocument, offeredTurnId?: string | null): Promise<InputEntry | null> {
   return serial(async () => {
     if (browser && !/^[a-z0-9]{16,64}$/.test(browser)) return null;
     let current = await load();
     let entry = current.find((row) => row.id === id);
     if (!entry || !preparable(entry) || (entry.state === 'browser' && !requiresAuthorization) || entry.dueAt > Date.now() || !owner) return null;
+    if (entry.sendNowAt !== undefined && (!requiresAuthorization ||
+        (offeredTurnId !== undefined && offeredTurnId !== (entry.directTurn?.id ?? null)))) return null;
     if (entry.steerTurnId && entry.directTurn?.questionId && !requiresAuthorization) return null;
     if (entry.warmupRecovery) {
       if (!requiresAuthorization || !owner.startsWith(`${warmupSource?.tab_id}:${warmupSource?.document_id}:`)) return null;
@@ -2156,7 +2201,7 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     if (entry.nativeRecovery?.phase === 'ready' && entry.nativeRecovery.refreshOwner === owner) return null;
     if (companionOf(current, entry)) return null;
     const completedTurnId = entry.state === 'browser' ? entry.completedTurnId : queuedFollowup(entry)
-      ? await completedStageBoundary(entry, current) : manualInput(entry) ? await eligibleStageEnd(entry) : undefined;
+      ? await completedStageBoundary(entry, current) : entry.sendNowAt === undefined && manualInput(entry) ? await eligibleStageEnd(entry) : undefined;
     if (queuedFollowup(entry) && entry.recovery?.phase !== 'stopping' && entry.nativeRecovery?.phase !== 'ready-to-refresh' && !completedTurnId) return null;
     const currentTarget = await target(entry);
     if (currentTarget && !isBrowserChatProvider(chatProviderForConversation(currentTarget))) return null;
@@ -2169,7 +2214,7 @@ export function claimBrowserInput(id: string, owner: string, conversationId: str
     if (entry.projectId) await projectWorkspace(entry.projectId);
     if (entry.sessionId) {
       if (current.some((row) => !sameDelivery(entry, row) && row.sessionId === entry.sessionId && ['browser', 'tool'].includes(row.state))) return null;
-      const first = ordered(current).find((row) => row.sessionId === entry.sessionId && row.state === 'queued' && queuedFollowup(row) === queuedFollowup(entry) && row.dueAt <= Date.now());
+      const first = browserOrder(current).find((row) => row.sessionId === entry.sessionId && row.state === 'queued' && queuedFollowup(row) === queuedFollowup(entry) && row.dueAt <= Date.now());
       // Follow-ups were already elected by completedStageBoundary with live
       // transport eligibility. Direct messages retain their separate FIFO.
       if (entry.state === 'queued' && !queuedFollowup(entry) && first !== entry) return null;
@@ -2699,7 +2744,7 @@ export function offerToolInput(sessionId: string | null | undefined, conversatio
     const observedActivity = deliveryHooks?.activity?.(session);
     const activeToolTurn = session.activeTurnId ?? (observedActivity?.exact ? observedActivity.turnId : undefined);
     const prepareEntry = async (entry: InputEntry): Promise<InputEntry> => {
-      if (entry.steerTurnId) return entry;
+      if (entry.steerTurnId || entry.sendNowAt !== undefined) return entry;
       if (entry.state === 'tool' && !toolInputScopeMatches(entry, binding)) return entry;
       if (entry.toolSteer && entry.state === 'queued' && session.activeTurnId !== entry.toolTurnId) return entry;
       if (entry.sessionId !== sessionId || entry.dueAt > Date.now()) return entry;
@@ -2833,7 +2878,8 @@ export function failBrowserInput(id: string, owner: string, error: string, detai
     if (entry.state !== 'browser') return false;
     // These codes are emitted only by the pre-Send owner. A spent authorization
     // can never use this path to refund its Send authority.
-    const waitingReason = detail === 'turn-progressed' || detail?.startsWith('turn-progressed-') ? 'answer-resumed'
+    const waitingReason = detail === 'turn-progressed' || detail?.startsWith('turn-progressed-') ||
+      (entry.sendNowAt !== undefined && ['turn-changed', 'new-user-message'].includes(detail ?? '')) ? 'answer-resumed'
       : detail === 'editor-unavailable' ? 'editor-unavailable'
       : detail === 'page-closed' || detail === 'left-chat' ? 'document-rebind' : null;
     if (waitingReason && entry.requiresAuthorization === true && entry.sendAuthorizedAt === undefined &&

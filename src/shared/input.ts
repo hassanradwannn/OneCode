@@ -49,7 +49,7 @@ export function browserInputModel(input: { mode: string; model: string | null; r
     ? { model: null, reasoningEffort: null }
     : { model: input.model, reasoningEffort: input.reasoningEffort, ...(input.modelSurface ? { modelSurface: input.modelSurface } : {}) };
 }
-/** The explicit queue action cannot change from Steer to a new turn across a stale UI read. */
+/** The click's observed turn. ChatGPT Steer may continue as an immediate send in the same chat. */
 export interface QueuedInputNowIntent {
   delivery: 'tool' | 'direct' | 'idle';
   turnId: string | null;

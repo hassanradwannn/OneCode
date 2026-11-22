@@ -97,7 +97,7 @@ export async function cancelDesktopInput(id: string): Promise<boolean> {
 async function startAcceptedInput(entry: InputEntry, controller: AbortController): Promise<void> {
   try {
     if (entry.chatProvider && apiProvider(entry.chatProvider)) { await steerApiInput(entry); return; }
-    if (entry.steerTurnId && entry.sessionId) {
+    if (entry.sendNowAt === undefined && entry.steerTurnId && entry.sessionId) {
       // Revalidate every Steer at startup, including ones that were ready when admitted. The
       // durable outbox can safely downgrade a stale target to an after-turn message; throwing here
       // used to leave the user's authored follow-up stranded with a stale-turn error.
@@ -126,7 +126,8 @@ async function startAcceptedInput(entry: InputEntry, controller: AbortController
 export async function resumePendingSteeringInputs(): Promise<void> {
   if (stopped) return;
   for (const row of await listInputs()) {
-    if (!row.steerTurnId || row.steerReady || row.state !== 'queued' || row.owner || row.sendAuthorizedAt !== undefined ||
+    if (row.sendNowAt === undefined && (!row.steerTurnId || row.steerReady) ||
+        row.state !== 'queued' || row.owner || row.sendAuthorizedAt !== undefined ||
         row.cancelledByUser || starting.has(row.id)) continue;
     const controller = new AbortController(); starting.set(row.id, controller);
     void startAcceptedInput(row, controller).catch(() => undefined);

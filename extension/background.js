@@ -2787,7 +2787,7 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       ...(!target && typeof input.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(input.project) ? { project: input.project } : {}),
       ...(input.recovery ? { recovery: input.recovery } : {}),
       ...(input.silenceTurnId ? { silenceTurnId: input.silenceTurnId } : {}),
-      ...(input.steerTurnId ? { steerTurnId: input.steerTurnId } : {}),
+      ...(input.steerTurnId ? { steerTurnId: input.steerTurnId } : {}), ...(input.steerNow ? { steerNow: true } : {}),
       ...(input.directTurn ? { directTurn: input.directTurn } : {}), ...(input.lifetime ? { lifetime: input.lifetime } : {}) });
   }
 }
@@ -3821,7 +3821,7 @@ async function maintainOnce() {
   if (intent !== connectionEpoch || !token || disconnected) return;
   if (!reply.ok || !reply.data) { phase('render-release'); await activeTabs?.revoke(); return; }
   const offeredInputs = Array.isArray(reply.data.inputs) ? reply.data.inputs : [];
-  const isSteer = input => input?.steerTurnId && input.directTurn?.questionId &&
+  const isSteer = input => input?.steerNow === true || input?.steerTurnId && input.directTurn?.questionId &&
     input.steerTurnId === input.directTurn.id;
   steeringChats = new Set(offeredInputs.filter(isSteer).map(input => cleanConversationId(input.conversationId)).filter(Boolean));
   const nextProvider = ['chatgpt', 'gemini', 'claude'].includes(reply.data.provider) ? reply.data.provider : 'gemini';
@@ -5265,6 +5265,7 @@ const HANDLERS = {
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
       method: 'POST', body: JSON.stringify({ id, owner, conversationId, tab_id: source.tab, document_id: source.documentId, recoveryAction: ['stop', 'stopped', 'settled'].includes(message.recoveryAction) ? message.recoveryAction : undefined, silenceBusyTurnId: typeof message.silenceBusyTurnId === 'string' ? message.silenceBusyTurnId : undefined, recoveryVeto: message.recoveryVeto === 'page-final' ? 'page-final' : undefined, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true,
         ...(message.authorize === true && providerForUrl(tab.url) === 'claude' && typeof message.nativeSkillSelected === 'boolean' ? { nativeSkillSelected: message.nativeSkillSelected } : {}),
+        ...(message.offeredTurnId === null || typeof message.offeredTurnId === 'string' ? { offeredTurnId: message.offeredTurnId } : {}),
         partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, detail: typeof message.detail === 'string' && /^[a-z-]{1,40}$/.test(message.detail) ? message.detail : undefined, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined, project: typeof message.project === 'string' && /^g-p-[0-9a-f]{32}$/.test(message.project) ? message.project : undefined })
     });
     const claimed = result.ok && result.data?.input;

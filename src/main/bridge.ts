@@ -3412,7 +3412,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const pendingInputs = await pendingBrowserInputs();
     const pendingIds = new Set(pendingInputs.map(input => input.id));
     const steeringChats = new Set(pendingInputs.flatMap(input =>
-      input.conversationId && input.steerTurnId && input.directTurn?.questionId ? [input.conversationId] : []));
+      input.conversationId && (input.steerNow || input.steerTurnId && input.directTurn?.questionId) ? [input.conversationId] : []));
     for (const id of steeringChats) {
       const entry = pendingContinuations().find(row => row.from === id);
       if (entry) await yieldUnsentCompactionToSteer(entry);
@@ -3707,7 +3707,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const source = typeof body.tab_id === 'number' && Number.isSafeInteger(body.tab_id) && typeof body.document_id === 'string'
       ? { tab_id: body.tab_id, document_id: body.document_id } : undefined;
-    const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req), source);
+    const offeredTurnId = body.offeredTurnId === null || typeof body.offeredTurnId === 'string' && body.offeredTurnId.length <= 256
+      ? body.offeredTurnId : undefined;
+    const input = await claimBrowserInput(body.id, body.owner, target, body.requiresAuthorization === true, browserOf(req), source, offeredTurnId);
     return json(res, 200, { input }, origin);
   }
 

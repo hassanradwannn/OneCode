@@ -15036,8 +15036,8 @@
       goalBusy: !!goalBusy, compactionBusy: !!job?.busy };
     observed.inputIntake = intake;
     const intakeStage = stage => { if (observed.inputIntake === intake) { intake.stage = stage; intake.at = Date.now(); } };
-    if (message.steerTurnId && message.directTurn?.id === message.steerTurnId &&
-        message.directTurn.questionId && (nativeBusy || job?.busy) && conversationId === message.conversationId) {
+    if ((message.steerNow || message.steerTurnId && message.directTurn?.id === message.steerTurnId && message.directTurn.questionId) &&
+        (nativeBusy || job?.busy) && conversationId === message.conversationId) {
       const sourceEpoch = epoch, source = conversationId;
       const policy = await ask({ type: 'activity', conversationId: source, since });
       if (!alive || epoch !== sourceEpoch || conversationId !== source || CLF_DOM.conversationId() !== source) return false;
@@ -15047,11 +15047,14 @@
     const warmupRecovery = CLF_DOM.provider === 'gemini' ? await retainedWarmupRecovery('input', message.id) : null;
     const silencePickup = typeof message.silenceTurnId === 'string';
     let sourceQuiet = silencePickup;
+    // An immediate idle offer comes from the app's settled outbox boundary.
+    // Do not wait for the previous page-local generation timer as well.
+    const waitingOnGeneration = () => message.steerNow && !message.directTurn ? CLF_DOM.generating() : generating;
     // Cached activity is a display projection. The live outbox claim and final
     // authorization own tool/native-turn admission; stale counts cannot veto an
     // eligible user message. Native generation and draft custody still fence Send.
     const busy = desktopInputBusy ? 'desktop-busy' : modelCatalogBusy ? 'model-busy' : nativeFilePreviewBusy ? 'native-preview-busy'
-      : !alive ? 'page-closed' : generating && !warmupRecovery && !message.directTurn && !silencePickup ? 'generation-busy'
+      : !alive ? 'page-closed' : waitingOnGeneration() && !warmupRecovery && !message.directTurn && !silencePickup ? 'generation-busy'
       : goalBusy ? 'goal-busy' : job?.busy || nativeBusy ? 'compaction-busy' : null;
     if (busy) { intakeStage(busy); return false; }
     const target = message.conversationId || (warmupRecovery ? CLF_DOM.conversationId() : null) || null;
@@ -15254,7 +15257,7 @@
       intakeStage('composer');
       const composer = await waitPageView(() => (warmupRecovery || message.directTurn || !CLF_DOM.generating()) &&
         (message.directTurn ? CLF_DOM.composerVisible() && CLF_DOM.composer() : writableComposer()),
-        () => onTarget() && (warmupRecovery || message.directTurn || silencePickup || !generating), 15000);
+        () => onTarget() && (warmupRecovery || message.directTurn || silencePickup || !waitingOnGeneration()), 15000);
       if (!composer && onTarget() && CLF_DOM.generating() && await confirmedProviderTerminal() && onTarget() && CLF_DOM.generating()) {
         // Only after readiness expires, re-prove the exact terminal: a Retry or
         // new user turn must never become authority to reload the page.
@@ -15270,9 +15273,10 @@
         await flush();
         return false; // No claim, insertion or Send: queued input survives recovery.
       }
-      if (!composer || !onTarget() || (!warmupRecovery && !message.directTurn && ((!silencePickup && generating) || CLF_DOM.generating())) || !CLF_DOM.composerVisible()) return false;
+      if (!composer || !onTarget() || (!warmupRecovery && !message.directTurn && ((!silencePickup && waitingOnGeneration()) || CLF_DOM.generating())) || !CLF_DOM.composerVisible()) return false;
       intakeStage('claim');
       const reply = await ask({ type: 'desktop_input', id: message.id, conversationId: target, requiresAuthorization: true,
+        ...(message.steerNow ? { offeredTurnId: message.directTurn?.id ?? null } : {}),
         ...(project ? { project: CLF_DOM.projectHomeId() } : {}) });
       const input = reply?.data?.input;
       if (input?.silenceBoundary || input?.completedTurnId) { claimedSilence = input; sourceQuiet = true; }
@@ -15348,12 +15352,12 @@
             (input.directTurn?.questionId ?? null) !== (message.directTurn.questionId ?? null)) return fail(t(
           'content_delivery_turn_changed',
           'The turn changed before direct delivery.'
-        ));
+        ), 'turn-changed');
         await flush();
         if (!onTarget()) return fail(t(
           'content_delivery_chat_changed',
           'The chat changed before direct delivery.'
-        ));
+        ), offTarget());
       }
       // A message for the running turn keeps that turn's model: the picker belongs to the next turn.
       // The frozen source intent survives Stop -> Send presentation changes.
