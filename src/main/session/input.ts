@@ -2062,6 +2062,28 @@ export function hasPendingBrowserSteer(conversationId: string): Promise<boolean>
   });
 }
 
+/**
+ * A browser can commit a Steer Send and lose the document before publishing the
+ * successor turn. Return its exact receipt to the same browser for native
+ * observation. This conveys no Send permission or tool authorization.
+ */
+export async function recordedBrowserSteer(session: SessionSummary, browser: string | null) {
+  const { conversationId, activeTurnId, nativeQuestion, timelineTurns } = session;
+  if (!browser || !conversationId || !isChatProviderConversationId(conversationId, 'chatgpt') ||
+      !activeTurnId || !nativeQuestion || isChatBlocked(conversationId)) return null;
+  const source = timelineTurns?.[activeTurnId];
+  if (!source?.questionId || source.endOrigin !== undefined || source.origin >= nativeQuestion.origin ||
+      source.questionId === nativeQuestion.messageId ||
+      Object.values(timelineTurns ?? {}).some(turn => turn.questionId === nativeQuestion.messageId)) return null;
+  const accepted = (await load()).filter(row => row.sessionId === session.id && row.conversationId === conversationId &&
+    row.claimedBrowser === browser && row.state === 'sent' && !row.cancelledByUser && row.requiresAuthorization &&
+    row.sendAuthorizedAt !== undefined && row.deliveredAt !== undefined && row.historyAnchored &&
+    row.historySeq === nativeQuestion.origin && row.messageId === nativeQuestion.messageId &&
+    row.steerTurnId === activeTurnId && row.directTurn?.id === activeTurnId && row.directTurn.questionId === source.questionId);
+  return accepted.length === 1
+    ? { sourceTurnId: activeTurnId, sourceQuestionId: source.questionId, questionId: nativeQuestion.messageId } : null;
+}
+
 export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }>> {
   return serial(async () => {
     const result: Array<{ id: string; conversationId: string | null; chatProvider?: ChatProvider; modelSurface?: import('../../shared/chat-models.js').NativeModelSurface; steerTurnId?: string; warmupRecovery?: ReturnType<typeof warmupRecoveryView>; recovery?: { questionId: string; stop: boolean; phase?: NonNullable<InputEntry['recovery']>['phase'] }; silenceTurnId?: string; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; project?: string }> = [];

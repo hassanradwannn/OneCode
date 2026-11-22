@@ -38,7 +38,7 @@ import { tunnelRouteSettling } from './tunnel/route-settle.js';
 import { armProjectCreate, claimProjectCreate, completeProjectCreate, failProjectCreate, getProject, markProjectGone, pendingProjectCreates } from './projects.js';
 import { CHAT_PROVIDERS, DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderCapabilities, chatProviderConversationUrl, chatProviderForConversation, chatProviderHomeUrl, isChatProviderConversationId, type ChatProvider } from '../shared/chat-provider.js';
 import { wakeBrowserUrl } from './browser-startup.js';
-import { hasPendingBrowserSteer, noteBrowserInputRouting } from './session/input.js';
+import { hasPendingBrowserSteer, noteBrowserInputRouting, recordedBrowserSteer } from './session/input.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 import { browserWindowBounds, currentBrowserWorkArea } from './browser-window-layout.js';
 export { setBrowserWorkArea } from './browser-window-layout.js';
@@ -4209,6 +4209,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       sleptWorker.sleptAt !== null && live.activeTurnStartedAt !== null && live.activeTurnStartedAt <= sleptWorker.sleptAt;
     const pendingStop = !superseded && summary?.conversationId === id && summary.activeTurnId === live.activeTurnId && stopRequestedFor(id, live.activeTurnId)
       ? commands.find(command => command.spec.type === 'stop' && command.spec.sessionId === live!.sessionId && command.spec.turnId === live!.activeTurnId) : undefined;
+    const deliveredSteer = !superseded && !sleptOverTurn && !pendingStop && summary?.conversationId === id &&
+      summary.activeTurnId === live.activeTurnId ? await recordedBrowserSteer(summary, browserOf(req)) : null;
     if (!automaticCompactionAllowed(summary)) await cancelAutomaticResumesNow(live.sessionId);
     // Worker chats and user-blocked chats alike: neither may auto-compact — see goalBlockReason.
     const workerBlocked = goalFencedChat(id);
@@ -4472,6 +4474,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // Boot adoption must not mint a replacement turn merely because liveness expired.
         recordedTurnId: sleptOverTurn ? null : live.activeTurnId ?? null,
         recordedQuestionId: live.activeTurnId && !sleptOverTurn ? summary?.timelineTurns?.[live.activeTurnId]?.questionId ?? null : null,
+        ...(deliveredSteer ? { deliveredSteer } : {}),
         // The question whose turn this app has already ended, while nothing is running. See
         // settledQuestionOf(): a reloaded page must not reopen it as a turn nobody recorded.
         settledQuestionId: live.activeTurnId ? null : settledQuestionOf(summary?.timelineTurns),

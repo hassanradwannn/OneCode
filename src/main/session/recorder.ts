@@ -34,7 +34,7 @@ import type {
 } from '../../shared/session.js';
 import { estimateTokens, originTitle, normalizeProviderUsageLimit } from '../../shared/session.js';
 import type { ArtifactKind } from '../../shared/artifact.js';
-import type { ChatProvider } from '../../shared/chat-provider.js';
+import { chatProviderForConversation, type ChatProvider } from '../../shared/chat-provider.js';
 import { chatErrorMessageKey, hasChatErrorEvidence } from '../../shared/chat-error.js';
 import { continuedRequestTurn, overlappingRequestTurns, recordedRequestTurn, responseTurnId, turnOpenAt } from '../../shared/chronology.js';
 import { getConfig } from '../config.js';
@@ -2612,6 +2612,14 @@ async function recordChatObservationsNow(
         // service worker may replay the exact same local lifecycle id. Never turn that transport
         // retry into a second durable boundary or reopen a turn that already ended.
         if (live?.knownTurnStarts.has(item.turnId) || live?.knownTurnEnds.has(item.turnId)) continue;
+        if (item.messageId) {
+          // A recovered Steer names its exact already-journalled question. A
+          // newer user message or another document's start can beat this batch.
+          const summary = await getSession(sessionId);
+          if (chatProviderForConversation(conversationId) !== 'chatgpt' ||
+              summary?.nativeQuestion?.messageId !== item.messageId ||
+              Object.values(summary.timelineTurns ?? {}).some(turn => turn.questionId === item.messageId)) continue;
+        }
         await appendEvent(sessionId, { ...base, kind: 'turn_start' });
         // Commit before publishing the lifecycle projection. If append rejects, the same
         // browser event remains eligible for its normal at-least-once retry.

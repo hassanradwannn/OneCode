@@ -529,6 +529,7 @@
    * it observes anything.
    */
   let appActiveTurnId = null;
+  let deliveredSteer = null;
   /** The question of the app's newest turn once it has ended — see claimUnrecordedGeneration. */
   let appSettledQuestionId = null;
   /**
@@ -2047,6 +2048,7 @@
     streamMessageSeq.clear();
     pendingPresentation = null;
     userAnchorByMessage.clear();
+    deliveredSteer = null;
     openedUserMessageId = null;
     streamEntries = [];
     streamRequestTurnOwners.clear();
@@ -2817,6 +2819,45 @@
     return markup.length <= 120_000 ? markup : '';
   }
 
+  function recoverDeliveredSteer(rendered) {
+    const receipt = deliveredSteer;
+    if (!receipt || CLF_DOM.provider !== 'chatgpt' || !generating || stopRequestedAt ||
+        receipt.sourceTurnId !== turnId || receipt.sourceQuestionId !== openedUserMessageId ||
+        conversationId !== CLF_DOM.conversationId()) return null;
+    const question = receipt.questionId, anchor = userAnchorByMessage.get(question);
+    if (!anchor) return null;
+    const isPrior = id => id === receipt.sourceQuestionId || (userAnchorByMessage.get(id)?.seq ?? Infinity) < anchor.seq;
+    const newest = rendered.findLast(userMessagePresent);
+    if (newest && newest.id !== question && !isPrior(newest.id)) return null;
+    const views = [...fiberTurns.values()].filter(view => view?.conversationId === conversationId);
+    if (views.some(view => view.conversationConflict || (view.messages || []).some(row => {
+      const id = row.rawMessageId || row.messageId;
+      return row.role === 'user' && row.stable === true && id !== question && !isPrior(id);
+    }) || (view.currentBranch && view.currentBranch.user.messageId !== question && !isPrior(view.currentBranch.user.messageId)))) return null;
+    const ownedViews = views.filter(view => (view.question === question || view.question === receipt.sourceQuestionId) &&
+      (view.currentBranch ? view.currentBranch.user.messageId === question :
+        (view.messages || []).some(row => row.role === 'user' && row.stable === true && (row.rawMessageId || row.messageId) === question)));
+    if (ownedViews.length > 1 || (!ownedViews.length && newest?.id !== question)) return null;
+    const native = ownedViews[0];
+    const body = native?.currentBranch?.user.rawText ?? native?.messages.find(row =>
+      row.role === 'user' && row.stable === true && (row.rawMessageId || row.messageId) === question)?.rawText;
+    const sections = native ? [...document.querySelectorAll('[data-clf-fiber-turn]')].filter(node =>
+      node.isConnected && !isStale(node) && sectionOf(node) === node && fiberTurnForNode(node) === native) : [];
+    if (sections.length && typeof body === 'string') {
+      const prior = reportedUserMessages.get(question);
+      reportedUserMessages.set(question, { ...prior, conversationId, receiptAccepted: true, receiptId: question,
+        receiptEpoch: epoch, receiptText: body, receiptSection: new WeakRef(sections[0]),
+        receiptParentQuestion: receipt.sourceQuestionId, receiptPriorIds: [...userAnchorByMessage.keys()].filter(isPrior) });
+    }
+    deliveredSteer = null;
+    userSendReceipt = null;
+    // The receipt already journalled the question. Open only the missing
+    // lifecycle, and let the current native branch claim its own final.
+    const finals = new Set(knownFinals);
+    if (native?.endMessageId) finals.delete(native.endMessageId);
+    return { messageId: question, recoveredSteer: true, baseline: { sections: [], marks: [], finals } };
+  }
+
   function reportMessages(nowGenerating) {
     // See resumeIdentityPending: until the app has said what it already holds for this chat,
     // this transcript is unreadable rather than merely unopenable.
@@ -3048,7 +3089,7 @@
         newUserMessage = { messageId: accepted.messageId, baseline: receipt.baseline, acceptedReceipt: true };
       }
     }
-    return newUserMessage;
+    return newUserMessage || recoverDeliveredSteer(rendered);
   }
 
   /**
@@ -3358,7 +3399,7 @@
     // version that asked only whether *this page load* had journalled the message closed a
     // live turn on every reload, and split every chat's opening turn in two.
     // Stop stayed through the send: the running response took this message (see steeredTurns).
-    const steering = Boolean(generating && newUserMessage && nowGenerating && turnId);
+    const steering = Boolean(generating && newUserMessage && (nowGenerating || submission?.recoveredSteer) && turnId);
     if (steering) {
       steeredTurns.add(turnId);
       if (steeredTurns.size > 32) steeredTurns.delete(steeredTurns.values().next().value);
@@ -3458,7 +3499,7 @@
       // what keeps the app's `turn_start` the only one — repeating it would clear the very
       // state the resume exists to keep, since recorder.ts empties `progress`, `pageTools`
       // and the pending sightings on every turn_start.
-      emit({ kind: 'turn_start', turnId });
+      emit({ kind: 'turn_start', turnId, ...(submission?.recoveredSteer ? { messageId: newUserMessage } : {}) });
       if (submission?.acceptedReceipt === true) {
         try { console.info('[OneCode input lifecycle] ' + JSON.stringify({ stage: 'accepted-turn-published',
           sameQuestion: openedUserMessageId === submission.messageId, turnOpened: generating === true })); }
@@ -5711,6 +5752,15 @@
     // old final look activeNow/Goal-eligible even though no generation is open. Stop after the
     // same route/epoch-validated Fiber snapshot has updated presentation identity.
     if (presentationOnly) return true;
+    if (deliveredSteer && turnId === deliveredSteer.sourceTurnId) {
+      const beforeRecovery = turnId;
+      observe();
+      if (turnId !== beforeRecovery) {
+        exactOwner = currentGenerationOwner();
+        ownedPageNode = exactOwner?.pageTurn || null;
+        ownedPageTurn = stampedFiberTurn(ownedPageNode, answer.turns, answer.scanToken);
+      }
+    }
     // A durable Steer's current native row may arrive after its DOM bubble was
     // replaced. Admit that exact user through the ordinary lifecycle before this
     // same snapshot can file its first final under the preceding generation. Do
@@ -8482,6 +8532,10 @@
       if (generating && turnId && toolTurnId === turnId && pendingTools > 0) noteTurnProgress(turnId, 'local-tool');
       if (!generating && pendingTools > 0 && appActiveTurnId === turnId && fiberSettled?.reason === 'thinking_failed') noteTurnProgress(turnId, 'tool-resumed');
       const recordedQuestionId = typeof data.recordedQuestionId === 'string' ? data.recordedQuestionId : null;
+      const steer = data.deliveredSteer;
+      deliveredSteer = steer && steer.sourceTurnId === data.recordedTurnId &&
+        steer.sourceQuestionId === recordedQuestionId && typeof steer.questionId === 'string' &&
+        steer.questionId !== recordedQuestionId ? steer : null;
       if (resumedStoppedTurn && !generating && appActiveTurnId === turnId) resumeStoppedTurn(recordedQuestionId);
       reconcileReopenedStop(data, recordedQuestionId);
       const lateAdoption = !generating && !turnId && genCount === 0 && !stopRequestedAt && !commandAttempt &&
