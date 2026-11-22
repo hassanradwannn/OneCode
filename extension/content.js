@@ -13812,7 +13812,8 @@
     const selectionConfirmedAt = Date.now();
     const selectionSurface = CLF_DOM.visibleModelSelection?.()?.modelSurface;
     const matchesResumeSelection = selection => Boolean(resumeSelection && selection &&
-      selection.model === resumeSelection.model && selection.reasoningEffort === resumeSelection.reasoningEffort &&
+      (selection.model === resumeSelection.model || selection.model === resumeSelection.familyAlias) &&
+      selection.reasoningEffort === resumeSelection.reasoningEffort &&
       (!resumeSelection.modelSurface || selection.modelSurface === resumeSelection.modelSurface));
     const restoreIdleResumeSelection = async (id, questionId, routeEpoch) => {
       let touched = false;

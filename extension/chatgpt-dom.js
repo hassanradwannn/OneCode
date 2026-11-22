@@ -3433,7 +3433,7 @@ var CLF_DOM = (() => {
       ? { model, reasoningEffort, ...(modelSurface === 'chat' || modelSurface === 'work' ? { modelSurface } : {}) } : null;
   }
 
-  async function confirmModelSelection(stillCurrent = () => true, expected = null, allowUnifiedSurface = false) {
+  async function confirmModelSelection(stillCurrent = () => true, expected = null, allowUnifiedSurface = false, onUnconfirmed) {
     const route = location.pathname;
     const current = () => stillCurrent() && location.pathname === route;
     if (!expected) {
@@ -3445,16 +3445,23 @@ var CLF_DOM = (() => {
     // while the composer remounts. Wait for the exact pair without reopening it.
     const closed = () => !activeModelPickerPanel() && modelPickerTrigger()?.getAttribute('aria-expanded') !== 'true';
     const deadline = performance.now() + 2500;
+    let reason = 'picker-not-closed';
     while (current() && performance.now() < deadline) {
       if (closed()) {
         const selection = await readPickerState(true);
-        if (!current() || performance.now() >= deadline) return null;
-        if (selection?.model === expected.model && selection.reasoningEffort === expected.reasoningEffort &&
-            (!expected.modelSurface || selection.modelSurface === expected.modelSurface || allowUnifiedSurface && !selection.modelSurface) &&
-            closed()) return selection;
+        if (!current()) return null;
+        if (!selection) reason = 'closed-selection-unreadable';
+        else if (selection.model !== expected.model && selection.model !== expected.familyAlias) reason = 'closed-model-mismatch';
+        else if (selection.reasoningEffort !== expected.reasoningEffort) reason = 'closed-effort-mismatch';
+        else if (expected.modelSurface && selection.modelSurface !== expected.modelSurface &&
+            !(allowUnifiedSurface && !selection.modelSurface)) reason = 'closed-surface-mismatch';
+        else if (!closed()) reason = 'picker-not-closed';
+        else if (performance.now() < deadline) return selection;
+        if (performance.now() >= deadline) break;
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+    if (current()) onUnconfirmed?.(reason);
     return null;
   }
   /**
@@ -3588,11 +3595,21 @@ var CLF_DOM = (() => {
     const report = reason => { if (!reported) { reported = true; try { failure(reason); } catch {} } };
     const refused = reason => { report(stillCurrent() ? reason : 'page-changed'); return false; };
     const ui = modelPickerAccess(stillCurrent, report, modelSurface);
-    const confirmClosed = async choice => {
+    const confirmClosed = async (choice, choices) => {
       if (!exactEffort) return stillCurrent();
-      const live = await confirmModelSelection(stillCurrent, { model: choice.id, reasoningEffort: choice.effort, modelSurface }, true);
-      if (!live) return refused('selection-changed-after-close');
-      onConfirmed?.(live);
+      // The native menu can resolve a family to an execution lane while the
+      // closed composer reports the family ID with the same effort. Accept that
+      // ID only when the destination menu proves a single available lane for it.
+      const familyChoices = choices.filter(next => next.available && next.effort === choice.effort &&
+        (next.familyId === choice.familyId || next.id === choice.familyId));
+      const requestedFamily = model === choice.id || model === choice.familyId;
+      const familyAlias = choice.familyId !== choice.id && requestedFamily && familyChoices.every(next => next.id === choice.id)
+        ? choice.familyId : undefined;
+      const proof = { model: choice.id, reasoningEffort: choice.effort, modelSurface, familyAlias };
+      let reason = 'selection-changed-after-close';
+      const live = await confirmModelSelection(stillCurrent, proof, true, observed => { reason = observed; });
+      if (!live) return refused(reason);
+      onConfirmed?.(familyAlias ? { ...live, model: choice.id, familyAlias } : live);
       return true;
     };
     // A reloaded native composer can expose its complete evaluated selection while
@@ -3604,7 +3621,7 @@ var CLF_DOM = (() => {
     if (stillCurrent() && (!modelSurface || !observed?.nativeSurface || observed.nativeSurface === modelSurface) &&
         already?.available && (!model || already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
       if (!await ui.close(exactEffort) || !stillCurrent()) return refused('picker-close-unconfirmed');
-      return confirmClosed(already);
+      return confirmClosed(already, observed.choices);
     }
     const original = await ui.open();
     if (!original) { await ui.close(); return refused('picker-unavailable'); }
@@ -3616,9 +3633,9 @@ var CLF_DOM = (() => {
         (!effort || current.effort === effort)) {
       const closed = await ui.close(exactEffort);
       if (!closed || !stillCurrent()) return refused('picker-close-unconfirmed');
-      return confirmClosed(current);
+      return confirmClosed(current, original.choices);
     }
-    let selected = null, closed = false;
+    let selected = null, selectedChoices = [], closed = false;
     try {
       // Exact provider slug is preferred. Existing saved display slugs may resolve
       // only to an actually observed, available pair; never to an account default.
@@ -3629,7 +3646,10 @@ var CLF_DOM = (() => {
       // Every available choice of the requested model, read once across versions, so the effort
       // can be resolved against what the account actually offers before anything is moved.
       const offered = [];
-      const versions = [original.version, ...(model ? original.versions.filter(v => v.id !== original.version).map(v => v.id) : [])];
+      const exactCurrent = exactEffort && model && effort ? original.choices.filter(choice =>
+        choice.available && choice.effort === effort && (choice.id === model || choice.familyId === model)) : [];
+      const keepVersion = !model || new Set(exactCurrent.map(choice => choice.id)).size === 1;
+      const versions = [original.version, ...(keepVersion ? [] : original.versions.filter(v => v.id !== original.version).map(v => v.id))];
       // An effort-only request inherits the native model group. Crossing into
       // another picker version can replace the empty worker composer needlessly.
       for (const version of versions) {
@@ -3684,13 +3704,15 @@ var CLF_DOM = (() => {
       if (!state?.choices.some(next => next.bucket === choice.bucket && next.available && next.id === choice.id && next.effort === choice.effort)) return refused('selection-unavailable');
       const after = await ui.bucket(choice.bucket);
       const confirmed = after?.choices.find(c => c.bucket === after.currentBucket);
-      if (stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort) selected = confirmed;
+      if (stillCurrent() && confirmed?.available === true && confirmed.id === choice.id && confirmed.effort === choice.effort) {
+        selected = confirmed; selectedChoices = after.choices;
+      }
     } finally {
       if (!selected && stillCurrent() && await ui.version(original.version)) await ui.bucket(original.currentBucket);
       closed = await ui.close(exactEffort && !!selected);
     }
     if (!selected || !closed || !stillCurrent()) return refused(!selected ? 'selection-unconfirmed' : 'picker-close-unconfirmed');
-    return confirmClosed(selected);
+    return confirmClosed(selected, selectedChoices);
   }
 
   function projectHomeId(pathname = location.pathname) {
