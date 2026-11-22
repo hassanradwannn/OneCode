@@ -529,6 +529,7 @@
    * it observes anything.
    */
   let appActiveTurnId = null;
+  let recordedTurnQuestion = null;
   let deliveredSteer = null;
   /** The question of the app's newest turn once it has ended — see claimUnrecordedGeneration. */
   let appSettledQuestionId = null;
@@ -2048,6 +2049,7 @@
     streamMessageSeq.clear();
     pendingPresentation = null;
     userAnchorByMessage.clear();
+    recordedTurnQuestion = null;
     deliveredSteer = null;
     openedUserMessageId = null;
     streamEntries = [];
@@ -8532,6 +8534,8 @@
       if (generating && turnId && toolTurnId === turnId && pendingTools > 0) noteTurnProgress(turnId, 'local-tool');
       if (!generating && pendingTools > 0 && appActiveTurnId === turnId && fiberSettled?.reason === 'thinking_failed') noteTurnProgress(turnId, 'tool-resumed');
       const recordedQuestionId = typeof data.recordedQuestionId === 'string' ? data.recordedQuestionId : null;
+      const recordedTurnId = typeof data.recordedTurnId === 'string' && data.recordedTurnId ? data.recordedTurnId : appActiveTurnId;
+      recordedTurnQuestion = recordedTurnId && recordedQuestionId ? { turnId: recordedTurnId, questionId: recordedQuestionId } : null;
       const steer = data.deliveredSteer;
       deliveredSteer = steer && steer.sourceTurnId === data.recordedTurnId &&
         steer.sourceQuestionId === recordedQuestionId && typeof steer.questionId === 'string' &&
@@ -8544,7 +8548,6 @@
         // Runtime activity can expire while the durable generation still owns
         // this question. Reload must retain that identity without turning the
         // expired activity projection into a new user send.
-        const recordedTurnId = typeof data.recordedTurnId === 'string' && data.recordedTurnId ? data.recordedTurnId : appActiveTurnId;
         // A reopened Stop target must prove the original question before adoption
         // can anchor native messages under its old local turn. Hydration may lag
         // this first response; retain the existing gate until proof or expiry.
@@ -15060,6 +15063,30 @@
     let sourceNativeProof = null;
     let sourceReadinessDraft = null;
     let authorizationJoinWaiting = false;
+    const ownsRecordedSteer = () => {
+      const expected = message.directTurn?.questionId;
+      const anchor = userAnchorByMessage.get(expected);
+      return CLF_DOM.provider === 'chatgpt' && Boolean(expected && anchor && anchor.seq > 0) &&
+        message.steerTurnId === message.directTurn?.id && turnId === message.steerTurnId &&
+        openedUserMessageId === expected && recordedTurnQuestion?.turnId === turnId &&
+        recordedTurnQuestion.questionId === expected && alive && generating && !resumeIdentityPending && !stopRequestedAt &&
+        epoch === forEpoch && conversationId === target && CLF_DOM.conversationId() === target &&
+        ![...userAnchorByMessage.values()].some(row => row.seq > anchor.seq);
+    };
+    const retainedRecordedQuestion = () => {
+      if (!ownsRecordedSteer() || (userSendReceipt !== sourceReceipt && userSendReceipt !== sourcePreparedReceipt) ||
+          (sourceReceipt && !sourceReceipt.accepted && Date.now() - sourceReceipt.at <= USER_SEND_RECEIPT_MS)) return null;
+      const expected = message.directTurn.questionId;
+      const latest = [...fiberTurns.entries()].reduce((current, [index, frame]) =>
+        frame?.conversationId === target && (!current || current[0] < index) ? [index, frame] : current, null)?.[1];
+      const lastUser = orderedNativeUsers(latest)?.at(-1);
+      const nativeUser = latest?.currentBranch?.user.messageId ?? lastUser?.rawMessageId ?? lastUser?.messageId ?? latest?.question;
+      if (latest?.conversationConflict || (nativeUser && nativeUser !== expected &&
+          !(userAnchorByMessage.get(nativeUser)?.seq < userAnchorByMessage.get(expected).seq))) return null;
+      return expected;
+    };
+    const knownSourceQuestion = expected => reportedUserMessages.get(expected)?.conversationId === target ||
+      (expected === message.directTurn?.questionId && ownsRecordedSteer());
     const sourceQuestion = () => {
       const users = CLF_DOM.messages().filter(row => row.role === 'user'), rendered = users.at(-1);
       const expected = message.directTurn?.questionId;
@@ -15084,6 +15111,7 @@
         }
       }
       if (rendered) return rendered.id;
+      if (ownsRecordedSteer()) return retainedRecordedQuestion();
       // Virtualizing a native question cannot revoke the exact recorded turn.
       // Only explicit Steer can retain this already-published same-document
       // anchor. A visible different question, pending adoption, changed turn or
@@ -15470,12 +15498,12 @@
         'content_delivery_draft_preserved',
         'The composer changed; your draft was preserved'
       ));
-      const previousUserId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
+      const previousUserId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? retainedRecordedQuestion();
       const priorUserIdsForNode = CLF_DOM.provider === 'chatgpt' && message.directTurn?.questionId ? node => {
         const expected = message.directTurn.questionId;
         if (sendAttempted || !node?.isConnected || isStale(node) || !onTarget() || epoch !== forEpoch ||
             turnId !== sourceTurn || sourceTurn !== message.directTurn.id || openedUserMessageId !== expected ||
-            sourceUser !== expected || reportedUserMessages.get(expected)?.conversationId !== target) return [];
+            sourceUser !== expected || !knownSourceQuestion(expected)) return [];
         const owner = currentGenerationOwner();
         const ownsNode = owner?.localTurnId === sourceTurn &&
           (owner.pageTurn.nodes || [owner.pageTurn.node]).includes(node);
@@ -15501,7 +15529,7 @@
       let nativeReceiptClickedAt = null, nativeReceiptOwnSend, nativeReceiptPrepared = false;
       const nativeReceiptSourceCurrent = () => sendingTarget() && epoch === forEpoch && turnId === sourceTurn &&
         sourceTurn === message.directTurn?.id && openedUserMessageId === message.directTurn.questionId &&
-        sourceUser === message.directTurn.questionId && reportedUserMessages.get(sourceUser)?.conversationId === target;
+        sourceUser === message.directTurn.questionId && knownSourceQuestion(sourceUser);
       const nativeReceiptDiagnostic = (phase, flags) => {
         try { console.info('[OneCode native receipt] ' + JSON.stringify({ phase, ...flags })); } catch { /* Observational only. */ }
       };
@@ -15667,7 +15695,7 @@
         const expected = message.directTurn.questionId;
         if (!node?.isConnected || isStale(node) || !sendingTarget() || epoch !== forEpoch ||
             turnId !== sourceTurn || sourceTurn !== message.directTurn.id || openedUserMessageId !== expected ||
-            sourceUser !== expected || reportedUserMessages.get(expected)?.conversationId !== target) return [];
+            sourceUser !== expected || !knownSourceQuestion(expected)) return [];
         const native = fiberTurnForNode(node);
         if (!native || native.conversationConflict || native.conversationId !== target) return [];
         const users = (native.messages || []).filter(row => row.role === 'user' && row.stable === true);
