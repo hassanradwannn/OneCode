@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.6': {
+    lead: () => t('Recover a ChatGPT Steer that already reached the browser.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Recover the active turn after Steer'), text: () => t('OneCode uses the saved Send receipt and the current ChatGPT reply to restore the turn and record its completion.') }
+    ]
+  },
   '1.3.5': {
     lead: () => t('Keep ChatGPT Steer in order and resume with the saved model.'),
     highlights: [

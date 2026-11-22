@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.6] — 2026-11-22
+
+Recover an acknowledged ChatGPT Steer when the browser never recorded its successor turn, so its exact task grant and final reply can be reconciled. See [1.3.6 notes](docs/release-notes/v1.3.6.md).
+
 ## [1.3.5] — 2026-11-22
 
 Keep previously visible ChatGPT commentary above a delivered Steer when the provider later attaches it to the new turn. Recognize the saved ChatGPT family and reasoning effort over Compact & Resume and saved-summary retry. See [1.3.5 notes](docs/release-notes/v1.3.5.md).
