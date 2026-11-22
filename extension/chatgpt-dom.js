@@ -1898,16 +1898,14 @@ var CLF_DOM = (() => {
 
   function composer() {
     return safe(() => {
-      const classic = [...document.querySelectorAll('#prompt-textarea')].filter(composerCssVisible);
-      if (classic.length) return classic.length === 1 ? classic[0] : null;
       // The current rich editor can remount before its surrounding form regains
-      // data-chatgpt-composer. Accept that stable editor identity, but only while
-      // the visible candidate remains unique.
+      // data-chatgpt-composer. A parked editor, even with the old canonical id,
+      // must not shadow the current editor or make the composer ambiguous.
       const candidates = [...document.querySelectorAll(
-        'form[data-chatgpt-composer] [contenteditable="true"][role="textbox"], ' +
+        '#prompt-textarea, form[data-chatgpt-composer] [contenteditable="true"][role="textbox"], ' +
         'form [data-composer-markdown][contenteditable="true"][role="textbox"]'
       )]
-        .filter(node => !node.closest(`${OWN_SURFACES},[data-turn-key],.markdown,[hidden],[aria-hidden="true"],[inert]`) &&
+        .filter(node => !node.closest(`${OWN_SURFACES},${TURN},[data-turn-key],[data-message-author-role],.markdown,[hidden],[aria-hidden="true"],[inert]`) &&
           composerCssVisible(node));
       return candidates.length === 1 ? candidates[0] : null;
     }, null);
@@ -1993,8 +1991,8 @@ var CLF_DOM = (() => {
   /** A visible editor can still be read-only while the provider mounts or changes models. */
   function composerWritable() {
     const box = composer();
-    return !!box?.isConnected && box.getAttribute('aria-disabled') !== 'true' &&
-      box.getAttribute('contenteditable') !== 'false';
+    return !!box?.isConnected && !box.closest('[aria-disabled="true"],[aria-readonly="true"]') &&
+      !box.matches(':disabled,[readonly],[contenteditable="false"]');
   }
 
   /** The composer as a whole, used as the root to watch for React replacing it. */
@@ -3604,7 +3602,7 @@ var CLF_DOM = (() => {
     const observed = await readPickerState();
     const already = observed?.choices.find(choice => choice.bucket === observed.currentBucket);
     if (stillCurrent() && (!modelSurface || !observed?.nativeSurface || observed.nativeSurface === modelSurface) &&
-        already?.available && (already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
+        already?.available && (!model || already.id === model || already.familyId === model) && (!effort || already.effort === effort)) {
       if (!await ui.close(exactEffort) || !stillCurrent()) return refused('picker-close-unconfirmed');
       return confirmClosed(already);
     }
@@ -3614,7 +3612,7 @@ var CLF_DOM = (() => {
     // versions can reset it or fail unnecessarily. Captions and denied choices
     // do not qualify, and native closure still has to succeed.
     const current = original.choices.find(choice => choice.bucket === original.currentBucket);
-    if (current?.available && (current.id === model || current.familyId === model) &&
+    if (current?.available && (!model || current.id === model || current.familyId === model) &&
         (!effort || current.effort === effort)) {
       const closed = await ui.close(exactEffort);
       if (!closed || !stillCurrent()) return refused('picker-close-unconfirmed');
@@ -3631,11 +3629,14 @@ var CLF_DOM = (() => {
       // Every available choice of the requested model, read once across versions, so the effort
       // can be resolved against what the account actually offers before anything is moved.
       const offered = [];
-      for (const version of [original.versions.find(v => v.id === original.version), ...original.versions.filter(v => v.id !== original.version)]) {
-        const state = await ui.version(version.id); if (!state) return refused('version-unconfirmed');
+      const versions = [original.version, ...(model ? original.versions.filter(v => v.id !== original.version).map(v => v.id) : [])];
+      // An effort-only request inherits the native model group. Crossing into
+      // another picker version can replace the empty worker composer needlessly.
+      for (const version of versions) {
+        const state = await ui.version(version); if (!state) return refused('version-unconfirmed');
         for (const choice of state.choices) {
           const rank = choice.available ? modelRank(choice) : 0;
-          if (rank) offered.push({ version: version.id, choice, rank });
+          if (rank) offered.push({ version, choice, rank });
         }
       }
       /*
@@ -3671,10 +3672,12 @@ var CLF_DOM = (() => {
       // Captions such as High are effort labels, never model-name aliases. Repeated
       // Latest/version entries may describe the same pair; distinct families may not.
       const rank = Math.max(0, ...candidates.map(candidate => candidate.rank));
-      const matches = candidates.filter(candidate => candidate.rank === rank);
+      const ranked = candidates.filter(candidate => candidate.rank === rank);
+      const currentFamily = model || !current ? [] : ranked.filter(candidate => candidate.choice.familyId === current.familyId);
+      const matches = currentFamily.length ? currentFamily : ranked;
       if (!matches.length) return refused('model-unavailable');
       if ((model && new Set(matches.map(candidate => candidate.choice.familyId)).size !== 1) ||
-          (model && wantedEffort && new Set(matches.map(candidate => `${candidate.choice.id}\u0000${candidate.choice.effort}`)).size !== 1)) return refused('model-ambiguous');
+          (wantedEffort && new Set(matches.map(candidate => `${candidate.choice.id}\u0000${candidate.choice.effort}`)).size !== 1)) return refused('model-ambiguous');
       const wanted = matches.find(candidate => candidate.version === original.version && candidate.choice.bucket === original.currentBucket) || matches[0];
       const state = await ui.version(wanted.version), choice = wanted.choice;
       // Versions can change while traversing the UI. Revalidate before moving its slider.

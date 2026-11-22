@@ -13423,9 +13423,11 @@
     if (current && current.isConnected && CLF_DOM.composerWritable()) return Promise.resolve(current);
     return new Promise((resolve) => {
       let timer = null;
+      let poll = null;
       let observer = null;
       const finish = (value) => {
         if (timer !== null) clearTimeout(timer);
+        if (poll !== null) clearInterval(poll);
         if (observer) observer.disconnect();
         resolve(value);
       };
@@ -13440,12 +13442,15 @@
         subtree: true,
         attributes: true,
         attributeFilter: [
-          'class', 'style', 'hidden', 'aria-hidden', 'inert',
-          'contenteditable', 'aria-disabled', 'role',
-          'data-chatgpt-composer', 'data-composer-markdown'
+          'id', 'class', 'style', 'hidden', 'aria-hidden', 'inert',
+          'contenteditable', 'aria-disabled', 'aria-readonly', 'readonly', 'disabled', 'role',
+          'data-app-shell-page-surface', 'data-chatgpt-composer', 'data-composer-markdown'
         ]
       });
       timer = setTimeout(() => finish(null), timeoutMs);
+      // Stylesheet and page-visibility changes can expose the composer without
+      // any editor mutation. The original route and command deadline still own this wait.
+      poll = setInterval(check, 500);
       // Close the tiny race between the first lookup and installing the observer.
       check();
     });
@@ -13761,14 +13766,14 @@
     // resource finished loading, not whether this editing host is usable, and waiting on it
     // is what turned a fresh resume tab into a blank tab for a minute on a throttled page.
     step('composer');
-    const readyComposer = await waitForComposer();
+    const readyComposer = await waitForComposer(Math.min(12_000, commandWaitMs(12_000, 5_000)), stillOnTarget);
+    if (await failIfRetargeted()) return;
     // `transient`: this page redeemed the command, loaded the chat and typed nothing, so a wake
     // may be tried again without counting against the chat (#1086).
     if (!readyComposer) return void (await fail(t(
       'content_bootstrap_composer_unavailable',
       "The provider never exposed a usable composer for bootstrap"
     ), 'transient'));
-    if (await failIfRetargeted()) return;
 
     if (['chatgpt', 'claude'].includes(CLF_DOM.provider) && !target && !CLF_DOM.conversationId()) {
       step('model-surface');

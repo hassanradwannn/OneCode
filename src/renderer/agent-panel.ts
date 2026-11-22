@@ -20,6 +20,26 @@ export function workerName(id: string, label: string | undefined): string {
   return number ? t('Worker {0}', [number]) : id;
 }
 
+/** Starts without a native conversation are statuses beneath their exact prime, not chat rows. */
+export function workerStartsByParent(sessions: readonly SessionSummary[], workers: readonly AgentInfo[]): Map<string, AgentInfo[]> {
+  const parents = new Map<string, string | null>();
+  for (const session of sessions) {
+    if (session.origin?.kind === 'worker' || !session.conversationId) continue;
+    parents.set(session.conversationId, parents.has(session.conversationId) ? null : session.id);
+  }
+  const starts = new Map<string, AgentInfo[]>();
+  for (const worker of workers) {
+    if (worker.role !== 'worker' || worker.conversationId || !worker.primeConversationId ||
+        (worker.state !== 'invited' && worker.state !== 'failed')) continue;
+    const parent = parents.get(worker.primeConversationId);
+    if (!parent) continue;
+    const rows = starts.get(parent) ?? [];
+    rows.push(worker);
+    starts.set(parent, rows);
+  }
+  return starts;
+}
+
 /** How long a round's workers glow as the panel opens on them (`agent-arrive` in styles.css). */
 const ARRIVAL_MS = 1600;
 

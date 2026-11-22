@@ -2442,6 +2442,11 @@ input[readonly] {
 .settings-heading p { color: var(--faint); margin-bottom: 24px; }
 .eyebrow { color: #9dab81; letter-spacing: .16em; font-size: calc(10px * var(--text-scale, 1)); font-weight: 650; }
 .worker-group { padding-left: 16px; margin: 0 0 6px; }
+.worker-launch-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; color: var(--soft); min-width: 0; }
+.worker-launch-row > .ico { --ico: 12px; flex: none; }
+.worker-launch-row > small { flex: none; }
+.worker-launch-row.is-failed > :is(.ico, small) { color: var(--red); }
+.worker-launch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--text-scale, 1)); }
 .worker-toggle { flex: none; width: 24px; height: 26px; display: grid; place-items: center; color: var(--faint); background: transparent; border: 0; padding: 0; cursor: pointer; border-radius: 5px; }
 .worker-toggle .ico { --ico: 12px; --glyph: 12px; transition: transform 140ms ease; }
 .worker-toggle[aria-expanded="true"] .ico { transform: rotate(90deg); }

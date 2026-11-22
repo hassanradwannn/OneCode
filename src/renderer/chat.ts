@@ -19,7 +19,7 @@ import { marked, Marked } from 'marked';
 import { writingBlock, type WritingSlot } from './writing-block.js';
 import { geminiUserText, geminiVisibleEvents } from './gemini-presentation.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
-import { createAgentPanel, workerName } from './agent-panel.js';
+import { createAgentPanel, workerName, workerStartsByParent } from './agent-panel.js';
 import { createFilePanel } from './file-panel.js';
 import { renderAgentPlan } from './agent-plan.js';
 import { userPromptText } from '../shared/user-prompt.js';
@@ -1472,6 +1472,7 @@ function paintSessions(): void {
     children.set(key, [...(children.get(key) ?? []), entry]);
   }
   const rows: HTMLElement[] = [];
+  const workerStarts = workerStartsByParent(sessions, [...(swarm?.agents ?? []), ...(swarm?.retainedWorkers ?? [])]);
   // A task and its expanded workers are one sidebar item for project pagination.
   // Store lightweight owners until the visible page is known. Creating DOM for
   // hundreds of older, off-page project tasks on every activity push stalls the renderer
@@ -1479,14 +1480,30 @@ function paintSessions(): void {
   const projectRows = new Map<string, Array<{ entry: SessionSummary; workers?: SessionSummary[]; selected: boolean }>>();
   const diagnostics: SessionSummary[] = [];
   const group = (key: string, workers: SessionSummary[], parentRow?: HTMLElement, target = rows): void => {
+    const starts = workerStarts.get(key) ?? [];
+    const total = workers.length + starts.length;
+    const active = workers.filter(sessionWorking).length + starts.filter(worker => worker.state === 'invited').length;
     const button = el('button', 'worker-toggle');
     button.append(disclosureChevron());
-    ui(button, 'title', () => t("{0} sub-agents · {1} active", [workers.length, workers.filter(sessionWorking).length]));
-    ui(button, 'aria-label', () => t("{0} {1} sub-agents", [expandedWorkers.has(key) ? t("Collapse") : t("Expand"), workers.length]));
+    ui(button, 'title', () => t("{0} sub-agents · {1} active", [total, active]));
+    ui(button, 'aria-label', () => t("{0} {1} sub-agents", [expandedWorkers.has(key) ? t("Collapse") : t("Expand"), total]));
     button.setAttribute('type', 'button'); button.setAttribute('aria-expanded', String(expandedWorkers.has(key)));
     button.addEventListener('click', (event) => { event.stopPropagation(); expandedWorkers.has(key) ? expandedWorkers.delete(key) : expandedWorkers.add(key); paintSessions(); });
     if (parentRow) { parentRow.append(button); parentRow.title += ` · ${button.title}`; } else target.push(button);
-    if (expandedWorkers.has(key)) { const box = el('div', 'worker-group'); box.append(...workers.map(sessionRow)); target.push(box); }
+    if (expandedWorkers.has(key)) {
+      const box = el('div', 'worker-group');
+      box.append(...workers.map(sessionRow));
+      for (const worker of starts) {
+        const failed = worker.state === 'failed';
+        const row = el('div', `worker-launch-row${failed ? ' is-failed' : ''}`);
+        const name = workerName(worker.id, worker.label);
+        const status = () => t(failed ? 'Failed to start' : 'Opening');
+        row.append(icon(failed ? 'i-warning' : 'i-clock'), el('span', 'worker-launch-name', name), el('small', '', status));
+        ui(row, 'title', () => [worker.id, name, failed ? worker.result || status() : status()].join(' · '));
+        box.append(row);
+      }
+      target.push(box);
+    }
   };
   // Pinned chats lead their own list (#1133). Resolve project membership once for
   // this paint: scanning all sessions for each project and then searching the project
@@ -1521,7 +1538,7 @@ function paintSessions(): void {
     } else {
       const row = sessionRow(entry); rows.push(row);
       row.dataset.sortScope = pinnedSortScope('', pinnedChat(entry));
-      if (workers) group(entry.id, workers, row, rows);
+      if (workers || workerStarts.has(entry.id)) group(entry.id, workers ?? [], row, rows);
     }
   }
   const otherWorkers = children.get('other-workers') ?? [];
@@ -1588,7 +1605,7 @@ function paintSessions(): void {
       const row = sessionRow(task.entry);
       row.dataset.sortScope = pinnedSortScope(id, pinnedChat(task.entry));
       shownRows.push(row);
-      if (task.workers) group(task.entry.id, task.workers, row, shownRows);
+      if (task.workers || workerStarts.has(task.entry.id)) group(task.entry.id, task.workers ?? [], row, shownRows);
     }
     section.append(...shownRows);
     // The project's own older chats count as "more" too, once it is known to have some (#1190).
