@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.2] — 2026-11-22
+
+Let ChatGPT’s composer settle after the model picker closes, then verify the requested model and reasoning effort before either Compact & Resume or a saved-summary retry sends the handoff. See [1.3.2 notes](docs/release-notes/v1.3.2.md).
+
 ## [1.3.1] — 2026-11-21
 
 Help ChatGPT retry tool calls that omitted the current task’s authorization. The refusal confirms that no tool ran and explains how to use the authorization from the same message. See [1.3.1 notes](docs/release-notes/v1.3.1.md).
