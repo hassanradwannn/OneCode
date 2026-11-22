@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.7] — 2026-11-22
+
+Deliver explicit ChatGPT Steer when the original question is off-screen and the recorded active turn still matches. See [1.3.7 notes](docs/release-notes/v1.3.7.md).
+
 ## [1.3.6] — 2026-11-22
 
 Recover an acknowledged ChatGPT Steer when the browser never recorded its successor turn, so its exact task grant and final reply can be reconciled. See [1.3.6 notes](docs/release-notes/v1.3.6.md).

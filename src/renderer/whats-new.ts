@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.7': {
+    lead: () => t('Steer ChatGPT while the original question is off-screen.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Steer a long-running reply'), text: () => t('OneCode verifies the recorded question and the active turn before sending a Steer.') }
+    ]
+  },
   '1.3.6': {
     lead: () => t('Recover a ChatGPT Steer that already reached the browser.'),
     highlights: [
