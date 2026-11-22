@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.5] — 2026-11-22
+
+Keep previously visible ChatGPT commentary above a delivered Steer when the provider later attaches it to the new turn. Recognize the saved ChatGPT family and reasoning effort over Compact & Resume and saved-summary retry. See [1.3.5 notes](docs/release-notes/v1.3.5.md).
+
 ## [1.3.4] — 2026-11-22
 
 Keep ChatGPT worker startup in the native default model group for reasoning-only requests and wait for the current composer to become writable. Show pending and failed launches beneath their parent chat. See [1.3.4 notes](docs/release-notes/v1.3.4.md).

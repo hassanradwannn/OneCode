@@ -16,6 +16,13 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.5': {
+    lead: () => t('Keep ChatGPT Steer in order and resume with the saved model.'),
+    highlights: [
+      { icon: 'i-chat', title: () => t('Keep earlier replies above Steer'), text: () => t('OneCode preserves the order of messages when ChatGPT updates the conversation.') },
+      { icon: 'i-retry', title: () => t('Resume from a saved summary'), text: () => t('OneCode verifies the saved model and reasoning effort in the new chat before sending the handoff.') }
+    ]
+  },
   '1.3.4': {
     lead: () => t('Start ChatGPT workers with the selected reasoning effort.'),
     highlights: [
