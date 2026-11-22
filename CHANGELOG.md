@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.4] — 2026-11-22
+
+Keep ChatGPT worker startup in the native default model group for reasoning-only requests and wait for the current composer to become writable. Show pending and failed launches beneath their parent chat. See [1.3.4 notes](docs/release-notes/v1.3.4.md).
+
 ## [1.3.3]
 
 Restore copyable ChatGPT Writing cards from saved Markdown, link verified documents and ZIPs named in the final reply, open the completed handoff in the sidebar, and give Turn changes a full-height diff. See [1.3.3 notes](docs/release-notes/v1.3.3.md).

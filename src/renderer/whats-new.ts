@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.4': {
+    lead: () => t('Start ChatGPT workers with the selected reasoning effort.'),
+    highlights: [
+      { icon: 'i-agents', title: () => t('See worker startup in the sidebar'), text: () => t('Expand the parent chat to see workers that are opening, active, or failed to start.') }
+    ]
+  },
   '1.3.3': {
     lead: () => t('Copy and open completed handoffs.'),
     highlights: [
