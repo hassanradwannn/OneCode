@@ -4197,6 +4197,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
     }
     const summary = await getSession(live.sessionId);
+    const pendingCompaction = continuationForSession(live.sessionId);
+    const closedCompaction = pendingCompaction?.from === id && pendingCompaction.state === 'awaiting-summary' &&
+      pendingCompaction.sourceSend.preparationWait?.reason === 'source-loading' && sendUnattempted(pendingCompaction.sourceSend)
+      ? await closedCompactionProof(live.sessionId, id, pendingCompaction.sourceSend.preparation?.questionId) : null;
     const activityExpiry = summary ? sessionActivityExpiresAt(summary) : undefined;
     const hasActivityDeadline = activityExpiry !== undefined;
     const activityCurrent = runningToolProgress(id) !== null || (activityExpiry !== null && activityExpiry !== undefined && activityExpiry > Date.now());
@@ -4448,6 +4452,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // How this chat's own Compact & Resume is going, so the page can say what is
         // happening instead of spinning.
         job: resumeJobFor(live.sessionId),
+        ...(closedCompaction ? { closedCompaction } : {}),
         // An answer to Gemini's approval card the person gave in the app (approval-wait.ts).
         ...approvalReply(),
         // The goal loop: whether it is on, whether it *can* be on, and whatever draft this
@@ -4858,6 +4863,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           token: opened.token,
           sourceSend: opened.sourceSend,
           prompt: null,
+          closedCompaction: await closedCompactionProof(sessionId, id, opened.sourceSend.preparation?.questionId),
           job: resumeJobFor(sessionId)
         },
         origin
@@ -9201,6 +9207,22 @@ function settledQuestionOf(turns: TimelineTurns | undefined): string | null {
   let newest: TimelineTurns[string] | null = null;
   for (const turn of Object.values(turns)) if (!newest || turn.origin > newest.origin) newest = turn;
   return newest && newest.endTime !== undefined && typeof newest.questionId === 'string' ? newest.questionId : null;
+}
+
+/** An idle source can outlive its Companion document. Expose the exact final
+ * identity for native readback. This does not grant Stop or dispatch. */
+async function closedCompactionProof(sessionId: string, conversation: string, questionId: string | null | undefined) {
+  if (!questionId || chatProviderForConversation(conversation) !== 'chatgpt' ||
+      runningToolCalls(conversation) > 0 || isChatBlocked(conversation)) return null;
+  const session = await getSession(sessionId);
+  const question = session?.nativeQuestion;
+  if (!session || session.conversationId !== conversation || session.activeTurnId || question?.messageId !== questionId ||
+      settledQuestionOf(session.timelineTurns) !== questionId) return null;
+  const completed = await readCompletedFinal(sessionId, conversation);
+  if (!completed?.turnId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(completed.messageId) ||
+      session.timelineTurns?.[completed.turnId]?.questionId !== questionId ||
+      runningToolCalls(conversation) > 0 || isChatBlocked(conversation)) return null;
+  return { questionId, questionOrigin: question.origin, turnId: completed.turnId, final: completed.messageId };
 }
 
 async function assistantRepairSource(sessionId: string): Promise<NonNullable<Repair['assistantSource']>> {

@@ -2131,7 +2131,12 @@ export async function readCompletedFinal(sessionId: string, conversationId: stri
     if (event.kind === 'turn_start') return !(nativeReopen && event === last) && !(sameResponse && event.turnId !== final.turnId) &&
       !(event.source !== 'app' && !!final.turnId && event.turnId === final.turnId &&
         entry.summary.timelineTurns?.[final.turnId]?.origin === positionOf(event));
-    if (event.kind === 'user_message') return !correction(event) && !(ownQuestion && event.messageId === ownQuestion);
+    if (event.kind === 'user_message') {
+      // A reload can revise old question text in a new journal sequence. Native
+      // history order and the original row still place it before this answer.
+      if (event.historyBeforeQuestionId && positionOf(event) < positionOf(final)) return false;
+      return !correction(event) && !(ownQuestion && event.messageId === ownQuestion);
+    }
     return event.kind === 'assistant_message' || event.kind === 'page_tool';
   })) return null;
   return { messageId, turnId: final.turnId ?? null, completedAt, contentSeq: seq,

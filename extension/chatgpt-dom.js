@@ -3607,7 +3607,20 @@ var CLF_DOM = (() => {
         ? choice.familyId : undefined;
       const proof = { model: choice.id, reasoningEffort: choice.effort, modelSurface, familyAlias };
       let reason = 'selection-changed-after-close';
-      const live = await confirmModelSelection(stillCurrent, proof, true, observed => { reason = observed; });
+      const confirm = () => confirmModelSelection(stillCurrent, proof, true, observed => { reason = observed; });
+      let live = await confirm();
+      if (!live && reason === 'closed-effort-mismatch' && stillCurrent()) {
+        // An exact available lane can revert when the new composer closes its
+        // first picker. Reapply the same lane once while Send is still unarmed.
+        const reopened = await ui.open();
+        const lanes = reopened?.choices.filter(next => next.available && next.id === choice.id &&
+          next.familyId === choice.familyId && next.effort === choice.effort) || [];
+        const selected = lanes.length === 1 ? await ui.bucket(lanes[0].bucket) : null;
+        const exact = selected?.choices.some(next => next.bucket === selected.currentBucket &&
+          next.available && next.id === choice.id && next.familyId === choice.familyId && next.effort === choice.effort);
+        const closed = await ui.close(true);
+        if (exact && closed && stillCurrent()) live = await confirm();
+      }
       if (!live) return refused(reason);
       onConfirmed?.(familyAlias ? { ...live, model: choice.id, familyAlias } : live);
       return true;

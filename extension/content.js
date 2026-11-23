@@ -530,6 +530,7 @@
    */
   let appActiveTurnId = null;
   let recordedTurnQuestion = null;
+  let settledCompactionSource = null;
   let deliveredSteer = null;
   /** The question of the app's newest turn once it has ended — see claimUnrecordedGeneration. */
   let appSettledQuestionId = null;
@@ -2050,6 +2051,7 @@
     pendingPresentation = null;
     userAnchorByMessage.clear();
     recordedTurnQuestion = null;
+    settledCompactionSource = null;
     deliveredSteer = null;
     openedUserMessageId = null;
     streamEntries = [];
@@ -8520,6 +8522,7 @@
       const nextSince = Number(data.nextSince);
       if (Number.isFinite(nextSince) && nextSince > since) since = nextSince;
       updateCompactionJob(data.job || null);
+      settledCompactionSource = data.closedCompaction || null;
       operationProgress = data.progress || null;
       pendingTools = Number.isFinite(Number(data.pendingTools)) ? Number(data.pendingTools) : 0;
       pendingInputTools = Number.isFinite(Number(data.pendingInputTools)) ? Number(data.pendingInputTools) : pendingTools;
@@ -11109,8 +11112,47 @@
     return { questionId, turnId, final, nodes, marks: nodes.map(sectionMark) };
   }
 
+  /** A replacement document has no local closure receipt. Join the app's
+   * durable final to the exact terminal in the current native page instead. */
+  function restoredClosedCompactionSource(questionId, forId, proof, receipt) {
+    if (!proof || proof.questionId !== questionId || CLF_DOM.provider !== 'chatgpt' ||
+        generating || CLF_DOM.generating() || pendingTools !== 0 || conversationId !== forId ||
+        CLF_DOM.conversationId() !== forId || !Number.isSafeInteger(proof.questionOrigin) ||
+        (receipt && (receipt.accepted?.messageId !== questionId || receipt.accepted.conversationId !== forId ||
+          receipt.accepted.epoch !== epoch))) return null;
+    const earlier = id => {
+      const seq = userAnchorByMessage.get(id)?.seq;
+      return seq > 0 && seq < proof.questionOrigin;
+    };
+    if ([...userAnchorByMessage.values()].some(row => row.seq > proof.questionOrigin) ||
+        CLF_DOM.messages().some(row => row.role === 'user' && row.id !== questionId && !earlier(row.id))) return null;
+    const stamped = document.querySelectorAll('[data-clf-fiber-turn]');
+    if (stamped.length > 512) return null;
+    let native = null;
+    const nodes = [];
+    for (const node of stamped) {
+      if (!node.isConnected || isStale(node) || sectionOf(node) !== node) continue;
+      const frame = fiberTurnForNode(node);
+      if (!frame || frame.conversationId !== forId || frame.conversationConflict) continue;
+      const branch = frame.currentBranch;
+      const newest = orderedNativeUsers(frame)?.at(-1);
+      const user = branch?.user.messageId || newest?.rawMessageId || newest?.messageId || frame.question;
+      if (user && user !== questionId && !earlier(user)) return null;
+      if (frame.endMessageId !== proof.final) continue;
+      if ((frame.terminalState && frame.terminalState !== 'complete') ||
+          (branch && (branch.user.messageId !== questionId || !branch.assistantIds.includes(proof.final))) ||
+          (native && native !== frame) ||
+          (frame.messages || []).filter(row => row.role === 'assistant' && row.stable === true &&
+            (row.rawMessageId || row.messageId) === proof.final).length !== 1) return null;
+      native = frame;
+      nodes.push(node);
+    }
+    return nodes.length > 0 && nodes.length <= 8
+      ? { questionId, turnId: proof.turnId, final: proof.final, nodes, marks: nodes.map(sectionMark) } : null;
+  }
+
   function updateCompactionJob(next) {
-    if (job?.busy && next?.token === job.token && next.stage === 'failed' &&
+    if (job?.busy && next?.stage === 'failed' && next.token === job.token &&
         next.error === 'Compact & Resume yielded to your Steer.') {
       const prompt = ['not-attempted', 'attempted-unresolved'].includes(next.sourceSend?.state)
         ? next.sourceSend?.preparation?.prompt : null;
@@ -11159,12 +11201,14 @@
     let stoppedTurnId = turnId;
     let stoppedQuestionId = CLF_DOM.messages().filter(message => message.role === 'user').at(-1)?.id ?? null;
     const initialSendReceipt = userSendReceipt;
-    let closedSource = null, ownSourceReceipt;
+    let closedSource = null, ownSourceReceipt, restoredSource = null;
     const closedSourceCurrent = () => {
       if (!closedSource || (userSendReceipt !== initialSendReceipt && userSendReceipt !== ownSourceReceipt)) {
         refuseClosedSource('operation-receipt'); return false;
       }
-      const proof = closedCompactionSource(closedSource.questionId, forId, initialSendReceipt);
+      const proof = restoredSource
+        ? restoredClosedCompactionSource(closedSource.questionId, forId, restoredSource, initialSendReceipt)
+        : closedCompactionSource(closedSource.questionId, forId, initialSendReceipt);
       const retained = proof && proof.turnId === closedSource.turnId && proof.final === closedSource.final &&
         proof.nodes.length === closedSource.nodes.length && proof.nodes.every((node, index) =>
           node === closedSource.nodes[index] && proof.marks[index] === closedSource.marks[index]);
@@ -11263,12 +11307,18 @@
         box.getAttribute('aria-disabled') !== 'true' ? box : null;
     };
     const filedQuestionId = filed.data.job?.sourceSend?.preparation?.questionId || policyData.recordedQuestionId || null;
-    if (!automatic && filedQuestionId && stoppedQuestionId !== filedQuestionId && userSendReceipt === initialSendReceipt &&
+    if (filedQuestionId && stoppedQuestionId !== filedQuestionId && userSendReceipt === initialSendReceipt &&
         turnId === stoppedTurnId && policyData.pendingTools === 0) {
       await refreshFiber(null, true);
       if (!current()) return;
-      if (userSendReceipt === initialSendReceipt && turnId === stoppedTurnId)
-        closedSource = closedCompactionSource(filedQuestionId, forId, initialSendReceipt);
+      if (userSendReceipt === initialSendReceipt && turnId === stoppedTurnId) {
+        if (!automatic) closedSource = closedCompactionSource(filedQuestionId, forId, initialSendReceipt);
+        if (!closedSource) {
+          const proof = filed.data.closedCompaction || policyData.closedCompaction;
+          closedSource = restoredClosedCompactionSource(filedQuestionId, forId, proof, initialSendReceipt);
+          if (closedSource) restoredSource = proof;
+        }
+      }
       if (closedSource) stoppedQuestionId = closedSource.questionId;
     }
     const expectedQuestionId = (!automatic && filedQuestionId) || stoppedQuestionId || filedQuestionId ||
@@ -11425,10 +11475,12 @@
           generating || CLF_DOM.generating() || CLF_DOM.hasComposerAttachments()) return;
       const question = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? null;
       if (source.preparation?.questionId && question !== source.preparation.questionId) {
-        if (job.automatic === true) return;
+        if (job.automatic === true && !settledCompactionSource) return;
         await refreshFiber(null, true);
         if (!alive || conversationId !== forId || epoch !== forEpoch || CLF_DOM.conversationId() !== forId ||
-            job?.sourceSend !== source || !closedCompactionSource(source.preparation.questionId, forId)) return;
+            job?.sourceSend !== source ||
+            (!restoredClosedCompactionSource(source.preparation.questionId, forId, settledCompactionSource, userSendReceipt) &&
+              (job.automatic === true || !closedCompactionSource(source.preparation.questionId, forId)))) return;
       }
       const draft = CLF_DOM.composerAuthoredText(), prompt = source.preparation?.prompt;
       if (draft.trim() && (!prompt || sendText(draft) !== sendText(prompt))) return;
