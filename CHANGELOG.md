@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.3.9] — 2026-11-23
+
+Recover a prepared ChatGPT handoff after a page reload and reapply the saved reasoning effort once if the new composer changes it when the model picker closes. See [1.3.9 notes](docs/release-notes/v1.3.9.md).
+
 ## [1.3.8] — 2026-11-23
 
 Keep an explicit ChatGPT Steer ready to send when the turn changes. Join the verified current turn or send as a new message if ChatGPT has finished. See [1.3.8 notes](docs/release-notes/v1.3.8.md).

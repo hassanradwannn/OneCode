@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.3.9': {
+    lead: () => t('Recover Compact & Resume after a ChatGPT page reload.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Continue preparing the handoff'), text: () => t('OneCode can verify the finished reply even when the original question is off-screen.') }
+    ]
+  },
   '1.3.8': {
     lead: () => t('Send a queued ChatGPT Steer when the current turn changes.'),
     highlights: [
