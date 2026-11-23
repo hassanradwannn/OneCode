@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.4.0] — 2026-11-23
+
+Restore ChatGPT worker authorization when OneCode records the worker’s first message but misses the send receipt. See [1.4.0 notes](docs/release-notes/v1.4.0.md).
+
 ## [1.3.9] — 2026-11-23
 
 Recover a prepared ChatGPT handoff after a page reload and reapply the saved reasoning effort once if the new composer changes it when the model picker closes. See [1.3.9 notes](docs/release-notes/v1.3.9.md).

@@ -2,7 +2,7 @@ import { apiTurnStatus, apiActivity, type ApiActivity } from './api/activity.js'
 import { normalizeProviderUsageLimit } from '../shared/session.js';
 import { ensureGeminiBinding, prepareGeminiCommandBinding, prepareGeminiInputBinding, prepareGeminiGoalBinding, prepareGeminiHandoffBinding, validateGeminiBindingEvidence, GeminiBindingError, type GeminiBindingCommand, type GeminiBindingCredential, type GeminiBindingEvidence } from './gemini/bindings.js';
 import { z } from 'zod';
-import { localBindingInstructions, usesLocalTaskCapability, type LocalBindingStatus, type LocalCapabilityProvider } from './session/local-binding.js';
+import { hasCurrentLocalBinding, localBindingInstructions, usesLocalTaskCapability, type LocalBindingStatus, type LocalCapabilityProvider } from './session/local-binding.js';
 import { optionalNativeSkillGuidance, nativeSkillDelivery, type NativeSkillDelivery } from './session/native-skill.js';
 import { continuationReceipt, continuationSourceDocument, isProviderNativeQuestionId } from '../shared/continuation-receipt.js';
 import { handoffContinuationId, handoffMarkdownLimit } from './session/handoff.js';
@@ -845,6 +845,46 @@ function bindLeasedWorkerCommand(agent: string | null, commandId: string | null,
       command.claimedAt !== null
   );
   return pending?.spec.type === 'worker' ? bindConversation(agent, conversation, pending.spec.runId) : false;
+}
+
+/** A paired ChatGPT journal can outlive the page that owed the bootstrap ACK. Reconcile
+ * the exact lease from the recorded native question before retiring that journal batch. */
+async function reconcileChatgptWorkerSend(
+  conversation: string, sessionId: string, browser: string | null, observations: readonly ChatObservation[]
+): Promise<boolean> {
+  if (!browser || !isChatProviderConversationId(conversation, 'chatgpt') || isChatBlocked(conversation)) return true;
+  const question = observations.find(item => item.kind === 'user_message' && !item.historyBeforeQuestionId &&
+    isProviderNativeQuestionId('chatgpt', conversation, item.messageId));
+  if (!question?.text) return true;
+  const worker = agentInfoForOwnedConversation(conversation);
+  if (worker?.role !== 'worker' || worker.state !== 'active' || worker.lastRevivalCommandId) return true;
+  const command = commands.find(entry => entry.spec.type === 'worker' && entry.spec.runId === worker.runId && entry.spec.agent === worker.id);
+  if (!command?.owner || !isLeased(command)) return true;
+  const custody = geminiCommandCustody.get(command.id);
+  if (!custody || custody.browser !== browser || custody.owner !== command.owner ||
+      custody.worker?.runId !== worker.runId || custody.worker?.agent !== worker.id ||
+      (custody.conversation && custody.conversation !== conversation)) return true;
+  const proof = { kind: 'command', id: command.id, owner: custody.owner, lease: custody.lease } as const;
+  const ownsPrompt = (text: string) => hasCurrentLocalBinding('chatgpt', text, proof) ||
+    hasCurrentLocalBinding('chatgpt', unescapeMarkdown(text), proof);
+  if (!ownsPrompt(question.text)) return true;
+  const session = await findSessionByConversation(conversation, { requireUnique: true });
+  if (session?.id !== sessionId || session.origin?.kind !== 'worker' || session.origin.agentId !== worker.id ||
+      Object.values(session.timelineTurns ?? {}).some(turn => turn.questionId && turn.questionId !== question.messageId)) return true;
+  const recorded = await readLatestUserMessage(sessionId);
+  if (!recorded || recorded.messageId !== question.messageId || !ownsPrompt(recorded.message.text)) return true;
+  const stillOwned = () => {
+    const live = agentInfoForOwnedConversation(conversation);
+    return live?.runId === worker.runId && live?.id === worker.id && live.state === 'active' &&
+      !live.lastRevivalCommandId && commands.includes(command) && isLeased(command) &&
+      command.owner === custody.owner && geminiCommandCustody.get(command.id) === custody && !isChatBlocked(conversation);
+  };
+  if (!stillOwned()) return true;
+  if (!await persistCriticalSwarmNow()) return false;
+  const settled = await finalizeCommand(command, { id: command.id, client: custody.owner, conversationId: conversation,
+    outcome: 'committed', committed: true, error: null, completedAt: Date.now() }, stillOwned);
+  if (settled) scheduleDeliver();
+  return settled;
 }
 /**
  * Worker/revival transports already removed from live delivery but still kept in durable
@@ -3872,7 +3912,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         await attachRecordedOpeningInput(id, browserOf(req), observations);
       const result = await recordChatObservations(id, observations, agent);
       const superseded = await conversationWasSuperseded(id);
-      if (!superseded && result.sessionId) await reconcileRecordedBrowserInput(result.sessionId, id, browserOf(req));
+      if (!superseded && result.sessionId) {
+        if (!await reconcileChatgptWorkerSend(id, result.sessionId, browserOf(req), observations))
+          return json(res, 503, { error: 'worker_receipt_not_durable', retryable: true }, origin);
+        await reconcileRecordedBrowserInput(result.sessionId, id, browserOf(req));
+      }
       if (!superseded && !isChatBlocked(id) && result.activity.working && result.activity.at) {
         const woke = result.activity.startedAt !== undefined
           ? noteAgentAlive(id, 'turn', result.activity.startedAt)
@@ -7166,8 +7210,9 @@ function receiptReply(receipt: CommandReceipt): Record<string, unknown> {
   };
 }
 
-async function finalizeCommand(command: Command, receipt: CommandReceipt): Promise<boolean> {
+async function finalizeCommand(command: Command, receipt: CommandReceipt, stillOwned?: () => boolean): Promise<boolean> {
   return writeCommandTransition(command, async () => {
+    if (stillOwned && !stillOwned()) return true; // Late recorder evidence no longer owns a transition.
     if (!commands.includes(command)) return receiptFor(receipt.id) !== null;
     const custody = new Map(geminiCommandCustody);
     if (!receipt.committed) custody.delete(command.id);

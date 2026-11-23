@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.4.0': {
+    lead: () => t('Recover ChatGPT worker authorization after a missed send receipt.'),
+    highlights: [
+      { icon: 'i-retry', title: () => t('Keep ChatGPT workers connected'), text: () => t('OneCode can verify a worker’s first message and restore its access to tools and the prime agent.') }
+    ]
+  },
   '1.3.9': {
     lead: () => t('Recover Compact & Resume after a ChatGPT page reload.'),
     highlights: [
