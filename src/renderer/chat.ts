@@ -50,7 +50,7 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
-import { isWorkspaceArchive, workspaceDeliverableLinks, workspaceLinkPath } from '../shared/workspace-link.js';
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPath } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall } from '../shared/turn-changes.js';
 import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDeliverables, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
 import './workspace-deliverables.css';
@@ -5021,8 +5021,18 @@ function paintDetail(followBottom = historyBefore === null): void {
   const previouslyLive = observedDeliverableTurn;
   observedDeliverableTurn = openTurnId(events);
   const editCalls = new Map<string, RecordedChangeCall[]>();
+  const documentReads = new Map<string, Set<string>>();
   for (const row of events) {
-    if (row.kind !== 'tool_call' || !row.turnId || !row.call.changes?.length || !anchors.has(row.turnId)) continue;
+    if (row.kind !== 'tool_call' || !row.turnId || !anchors.has(row.turnId)) continue;
+    if (row.call.tool === 'read' && row.call.outcome === 'ok') {
+      const file = workspaceReadDocumentPath(row.call.args, row.call.result);
+      if (file) {
+        const found = documentReads.get(row.turnId) ?? new Set<string>();
+        found.add(file);
+        documentReads.set(row.turnId, found);
+      }
+    }
+    if (!row.call.changes?.length) continue;
     const list = editCalls.get(row.turnId) ?? [];
     if (!editCalls.has(row.turnId)) editCalls.set(row.turnId, list);
     list.push(row.call);
@@ -5045,11 +5055,13 @@ function paintDetail(followBottom = historyBefore === null): void {
     const answerTurn = item.kind === 'event' && item.event.kind === 'assistant_message' && item.event.turnId &&
       anchors.get(item.event.turnId) === item.event.seq ? item.event.turnId : null;
     const changes = answerTurn ? summarizeTurnChanges(editCalls.get(answerTurn) ?? []) : [];
+    const readDocuments = answerTurn ? documentReads.get(answerTurn) : undefined;
     const sig = itemSignature(item) + (item.kind === 'event' && item.event.kind === 'assistant_message'
       ? JSON.stringify([...inlineArtifactsForMessage(item.event, events).values()]) : '') + (item.kind === 'event' && item.event.kind === 'chat_error'
       ? JSON.stringify(chatErrorPresentation(item.event, events)) : '') + (answerTurn ? '\u0000answer' : '') +
       (item.kind === 'event' && stoppedTurnEnd(item.event, events) ? '\u0000stopped' : '') +
       (changes.length ? JSON.stringify(changes) : '') +
+      (readDocuments?.size ? JSON.stringify([...readDocuments]) : '') +
       (item.kind === 'compaction' && item !== latestCompaction ? '\u0000superseded' : '') +
       (item.kind === 'event' && item.event.kind === 'progress' && item.event.presentation && item.event.turnId &&
         events.some(event => event.kind === 'turn_end' && event.turnId === item.event.turnId) ? '\u0000ended' : '');
@@ -5070,7 +5082,8 @@ function paintDetail(followBottom = historyBefore === null): void {
     const row = item.kind === 'compaction' ? compactionRow(item.block, cached?.row, item === latestCompaction) : eventRow(item.event);
     const reportOwner = selectedId, reportGeneration = selectionGeneration;
     if (answerTurn && reportOwner && item.kind === 'event' && item.event.kind === 'assistant_message' &&
-        item.event.messageId && workspaceDeliverableLinks(item.event.message.text).size) {
+        item.event.messageId && (workspaceDeliverableLinks(item.event.message.text).size ||
+          changes.some(change => workspaceDeliverableHref(change.path)) || readDocuments?.size === 1)) {
       const messageId = item.event.messageId;
       const canAutoOpen = answerTurn === previouslyLive && timelineShown() && !cached?.row.querySelector('.workspace-file-results');
       const request = deliverableRequest;

@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.4.1': {
+    lead: () => t('Open workspace deliverables even when the reply omits the link.'),
+    highlights: [
+      { icon: 'i-file-text', title: () => t('Open and copy the original Markdown'), text: () => t('Find the verified document under Workspace files in the completed reply.') }
+    ]
+  },
   '1.4.0': {
     lead: () => t('Recover ChatGPT worker authorization after a missed send receipt.'),
     highlights: [

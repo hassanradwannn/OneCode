@@ -32,6 +32,30 @@ export function isWorkspaceArchive(href: string): boolean {
   return /\.zip$/i.test(workspaceLinkPath(href) ?? '');
 }
 
+/** Recorded tools report an absolute virtual path. It still needs to be
+ * resolved through the requesting session's current filesystem permissions. */
+export function workspaceDeliverableHref(path: string): string | null {
+  if (!path.startsWith('/') || !/\.(?:md|markdown|zip|sha256)$/i.test(path)) return null;
+  try {
+    const href = 'onecode-file:' + path.split('/').map(encodeURIComponent).join('/');
+    return workspaceLinkPath(href) ? href : null;
+  } catch { return null; }
+}
+
+/** The Core read tool puts its own resolved path and range on the first line.
+ * File content comes on numbered lines, and metadata and errors have no range. */
+export function workspaceReadDocumentPath(args: { text: string; truncated?: boolean }, result: { text: string }): string | null {
+  if (args.truncated || args.text.length > 4096 || !result.text.startsWith('--- /')) return null;
+  const heading = result.text.slice(0, 2300).split(/\r?\n/, 1)[0]!;
+  const file = /^--- (\/.+?\.(?:md|markdown)) — (?:lines \d+-\d+(?: of \d+)?|no lines in that range(?:; the file has \d+)?), .+ ---$/i.exec(heading)?.[1];
+  if (!file || !workspaceDeliverableHref(file)) return null;
+  try {
+    const paths = JSON.parse(args.text)?.paths;
+    return Array.isArray(paths) && paths.length === 1 && typeof paths[0] === 'string' &&
+      !/[*?]/.test(paths[0]) && paths[0].replace(/:\d+(?:-\d+)?$/, '') === file ? file : null;
+  } catch { return null; }
+}
+
 export function workspaceLinksInMarkdown(source: string): Map<string, string> {
   const links = new Map<string, string>();
   if (source.includes('onecode-file:')) marked.walkTokens(marked.lexer(source), token => {

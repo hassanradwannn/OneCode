@@ -19,7 +19,8 @@ import { Icon } from './composer-controls.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { MAX_INPUT_IMAGES } from '../shared/input.js';
 import { downloadWorkspaceArchive, request } from './api.js';
-import { isWorkspaceArchive, workspaceDeliverableLinks, workspaceLinkPath, type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPath,
+  type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall, type TurnFileChange } from '../shared/turn-changes.js';
 import type { ToolEditReview } from '../shared/session.js';
 import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDeliverables, renderWorkspaceDocument, restoreWorkspaceLinks, type DeliverableLabel } from '../renderer/workspace-deliverables.js';
@@ -239,15 +240,26 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
     ? chatProviderConversationUrl(provider, conversationId) : undefined;
   const ordered = chronological(events.map(event => ({ ...event, origin: event.position })));
   const completed = new Set<string>(), lastFinal = new Map<string, number>(), changeCalls = new Map<string, RecordedChangeCall[]>();
+  const documentReads = new Map<string, Set<string>>();
   for (const row of ordered) {
     if (!row.turnId) continue;
     if (row.kind === 'turn_end') {
       if (row.outcome === 'completed') completed.add(row.turnId); else completed.delete(row.turnId);
     } else if (row.kind === 'assistant_message' && row.final) lastFinal.set(row.turnId, row.position);
-    else if (row.kind === 'tool_call' && row.tool?.changes?.length) {
-      const list = changeCalls.get(row.turnId) ?? [];
-      if (!changeCalls.has(row.turnId)) changeCalls.set(row.turnId, list);
-      list.push(row.tool);
+    else if (row.kind === 'tool_call' && row.tool) {
+      if (row.tool.name === 'read' && row.tool.outcome === 'ok') {
+        const file = workspaceReadDocumentPath(row.tool.args, row.tool.result);
+        if (file) {
+          const found = documentReads.get(row.turnId) ?? new Set<string>();
+          found.add(file);
+          documentReads.set(row.turnId, found);
+        }
+      }
+      if (row.tool.changes?.length) {
+        const list = changeCalls.get(row.turnId) ?? [];
+        if (!changeCalls.has(row.turnId)) changeCalls.set(row.turnId, list);
+        list.push(row.tool);
+      }
     }
   }
   const presentations = ordered.flatMap(row => row.presentation ? [row.presentation] : []);
@@ -271,8 +283,9 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
       ? nativeArtifactBindings(row.nativeMarkup?.capture, row.nativeMarkup?.messageId, presentations) : new Map();
     const inlineEvents = row.kind === 'assistant_message' ? ordered.filter(event => event.presentation &&
       [...inline.values()].some(item => item.id === event.presentation?.id)) : undefined;
-    const changes = row.turnId && completed.has(row.turnId) && lastFinal.get(row.turnId) === row.position
-      ? summarizeTurnChanges(changeCalls.get(row.turnId) ?? []) : [];
+    const answerTurn = row.turnId && completed.has(row.turnId) && lastFinal.get(row.turnId) === row.position ? row.turnId : null;
+    const changes = answerTurn ? summarizeTurnChanges(changeCalls.get(answerTurn) ?? []) : [];
+    const readDocuments = answerTurn ? documentReads.get(answerTurn) : undefined;
     if (row.kind === 'assistant_message' && !text.trim() && !row.nativeMarkup) return null;
     if (!row.presentation && ['progress', 'page_tool'].includes(row.kind)) return <div className="activity-row" key={row.position}><Icon name="check-circle" /><span>{text || row.label || 'Working'}</span></div>;
     return <article key={row.position} className={row.kind === 'user_message' ? 'human' : row.kind === 'chat_error' ? 'chat-error' : 'message'}>
@@ -284,7 +297,8 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
             nativeMarkup={row.nativeMarkup} originalUrl={originalUrl} openRequestId={openRequestId}
             ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)}
             inlineEvents={inlineEvents} openWorkspace={openWorkspace} />
-          {row.kind === 'assistant_message' && row.final && row.messageId && workspaceDeliverableLinks(rawText).size > 0 &&
+          {row.kind === 'assistant_message' && row.final && row.messageId &&
+            (workspaceDeliverableLinks(rawText).size > 0 || changes.some(change => workspaceDeliverableHref(change.path)) || readDocuments?.size === 1) &&
             <WorkspaceFiles key={JSON.stringify([sessionId, row.messageId])} sessionId={sessionId} messageId={row.messageId} open={openWorkspace} />}
           {changes.length > 0 && <MountedDeliverable node={renderTurnChangeSummary(changes, label, index => {
             const id = ++generation.current; setFileError('');

@@ -1,5 +1,9 @@
 # OneCode changelog
 
+## [1.4.1] — 2026-11-23
+
+Recover clickable links to verified workspace deliverables when a completed reply leaves out the file path. See [1.4.1 notes](docs/release-notes/v1.4.1.md).
+
 ## [1.4.0] — 2026-11-23
 
 Restore ChatGPT worker authorization when OneCode records the worker’s first message but misses the send receipt. See [1.4.0 notes](docs/release-notes/v1.4.0.md).

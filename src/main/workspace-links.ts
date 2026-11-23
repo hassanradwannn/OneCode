@@ -1,6 +1,8 @@
 import path from 'node:path';
-import { isWorkspaceArchive, workspaceDeliverableLinks, workspaceLinkPath, workspaceLinksInMarkdown,
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceLinksInMarkdown, workspaceReadDocumentPath,
   type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
+import { positionOf } from '../shared/chronology.js';
+import { answerAnchors, completedTurnIds } from '../shared/markdown-export.js';
 import { effectiveCapabilities, getConfig } from './config.js';
 import { getSessionProject } from './projects.js';
 import { rawPromises as fs } from './rawfs.js';
@@ -16,11 +18,39 @@ async function recordedWorkspaceLinks(sessionId: string, messageId: string) {
   if (!canRead()) throw new Error('This workspace link is unavailable.');
   const session = await getSession(sessionId);
   if (!session) throw new Error('Chat not found.');
-  const event = (await readEvents(sessionId, { kinds: ['assistant_message'] })).findLast(row =>
-    row.kind === 'assistant_message' && row.messageId === messageId);
+  const messages = await readEvents(sessionId, { kinds: ['assistant_message'] });
+  const event = messages.findLast(row => row.kind === 'assistant_message' && row.messageId === messageId);
   if (event?.kind !== 'assistant_message' || !canRead()) throw new Error('This file link is not recorded in the chat.');
-  const links = event.final && !event.message.truncated ? workspaceDeliverableLinks(event.message.text) : workspaceLinksInMarkdown(event.message.text);
-  return { session, event, links };
+  const completeText = event.final && !event.message.truncated;
+  const links = completeText ? workspaceDeliverableLinks(event.message.text) : workspaceLinksInMarkdown(event.message.text);
+  if (links.size || !completeText || !event.turnId) return { session, event, links, mayAutoOpen: true };
+
+  const evidence = await readEvents(sessionId, { kinds: ['tool_call', 'turn_end'] });
+  if (answerAnchors([...messages, ...evidence]).get(event.turnId) !== event.seq) return { session, event, links, mayAutoOpen: false };
+  const calls = evidence.filter(row => row.kind === 'tool_call')
+    .filter(row => row.call.outcome === 'ok' && positionOf(row) < positionOf(event));
+  const sameTurn = calls.filter(row => row.turnId === event.turnId);
+  const changed = new Set(sameTurn.flatMap(row => row.call.changes?.map(change => change.path) ?? []));
+  function offer(file: string) {
+    const href = workspaceDeliverableHref(file);
+    if (href) links.set(href, path.posix.basename(file));
+  }
+  for (const file of changed) offer(file);
+  if (links.size) return { session, event, links, mayAutoOpen: changed.size === 1 };
+
+  // A link-only reply may omit the path again. A successful single-file read
+  // can re-offer an existing deliverable from this chat's own earlier turn.
+  const reads = new Set(sameTurn.flatMap(({ call }) => {
+    const file = call.tool === 'read' ? workspaceReadDocumentPath(call.args, call.result) : null;
+    return file ? [file] : [];
+  }));
+  if (reads.size === 1) {
+    const [file] = reads;
+    const completed = completedTurnIds(evidence.filter(row => positionOf(row) < positionOf(event)));
+    if (file && calls.some(row => row.turnId && row.turnId !== event.turnId && completed.has(row.turnId) &&
+        row.call.changes?.some(change => change.path === file))) offer(file);
+  }
+  return { session, event, links, mayAutoOpen: false };
 }
 
 async function resolveWorkspaceLink(sessionId: string, projectId: string | undefined | null, requested: string) {
@@ -35,7 +65,7 @@ async function resolveWorkspaceLink(sessionId: string, projectId: string | undef
 }
 
 export async function listWorkspaceDeliverables(sessionId: string, messageId: string): Promise<WorkspaceDeliverables> {
-  const { session, event, links } = await recordedWorkspaceLinks(sessionId, messageId);
+  const { session, event, links, mayAutoOpen } = await recordedWorkspaceLinks(sessionId, messageId);
   const entries = await Promise.all([...links.keys()].slice(0, 24).map(async href => {
     try {
       const target = await resolveWorkspaceLink(sessionId, session.projectId, workspaceLinkPath(href)!);
@@ -45,7 +75,7 @@ export async function listWorkspaceDeliverables(sessionId: string, messageId: st
   }));
   const files = [...new Map(entries.flatMap(entry => entry ? [[entry.path, entry] as const] : [])).values()];
   const markdown = files.filter(file => /\.(?:md|markdown)$/i.test(file.name));
-  const changes = event.final && event.turnId && markdown.length === 1 ? await readTurnChanges(sessionId, event.turnId).catch(() => []) : [];
+  const changes = mayAutoOpen && event.final && event.turnId && markdown.length === 1 ? await readTurnChanges(sessionId, event.turnId).catch(() => []) : [];
   const primary = markdown.length === 1 && changes.some(change => change.path === markdown[0]!.path) ? markdown[0]!.href : null;
   if (!canRead() || (await getSession(sessionId))?.projectId !== session.projectId) throw new Error('The chat’s workspace changed.');
   return { files, primary };
