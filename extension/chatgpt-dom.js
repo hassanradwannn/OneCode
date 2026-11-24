@@ -3109,7 +3109,7 @@ var CLF_DOM = (() => {
     }
     return [...pending.values()].every(group => group.remaining === 0);
   }
-  async function uploadImages(images, stillCurrent = () => true, draft = null, files = [], { whileGenerating = false } = {}) {
+  async function uploadImages(images, stillCurrent = () => true, draft = null, files = [], { whileGenerating = false, explain } = {}) {
     if (files.length) images = [...(images || []), ...files];
     if (!images?.length) return true;
     if (!Array.isArray(images) || images.length > 20 || !stillCurrent() || hasComposerAttachments()) return false;
@@ -3136,11 +3136,18 @@ var CLF_DOM = (() => {
       input.dispatchEvent(new Event('change', { bubbles: true }));
     } catch { return false; }
     return new Promise((resolve) => {
-      let observer, timer;
+      // Image tiles can appear while the upload is still pending. Give them the
+      // same bounded wait as files, under the app's 12-minute preparation claim.
+      const timeout = 600000, deadline = Date.now() + timeout;
+      let observer, timer, poll;
       let ownedTiles = null;
-      const finish = (ok) => { observer?.disconnect(); clearTimeout(timer); resolve(ok); };
+      const finish = (ok) => { observer?.disconnect(); clearTimeout(timer); clearInterval(poll); resolve(ok); };
       const check = () => {
         if (!stillCurrent()) return finish(false);
+        if (Date.now() >= deadline) {
+          explain?.('upload-timeout');
+          return finish(false);
+        }
         const host = composerBox() || composerActions()?.host;
         if (!host) return;
         // ChatGPT's remove control names the complete filename. Each requested image
@@ -3161,7 +3168,8 @@ var CLF_DOM = (() => {
       };
       observer = new MutationObserver(check);
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-      timer = setTimeout(() => finish(false), files.length ? 600000 : 60000);
+      timer = setTimeout(check, timeout);
+      poll = setInterval(check, 1000);
       check();
     });
   }

@@ -734,8 +734,11 @@ async function expireQueued(current: InputEntry[]): Promise<InputEntry[]> {
     // the uncertain outcome until receipt or explicit cancellation, regardless of
     // how long Gemini takes to assign its durable conversation identity.
     const companion = current.find(other => other.id === row.companionInputId);
+    const hasFiles = row.attachments?.length || companion?.attachments?.length;
+    const hasImages = row.images?.length || companion?.images?.length;
+    const chatGPTImages = hasImages && chatProviderForConversation(row.conversationId, row.chatProvider) === 'chatgpt';
     const preparationMs = Math.max(row.opening ? FRESH_OPENING_PREPARATION_MS : 0,
-      row.attachments?.length || companion?.attachments?.length ? 720_000 : row.images?.length || companion?.images?.length ? 120_000 : 60_000);
+      hasFiles || chatGPTImages ? 720_000 : hasImages ? 120_000 : 60_000);
     if (row.state === 'browser' && row.sendAuthorizedAt === undefined && row.requiresAuthorization === true &&
         Date.now() >= Math.min((row.offeredAt ?? row.createdAt) + preparationMs, row.warmupRecovery?.expiresAt ?? Infinity)) {
       if (row.warmupRecovery && Date.now() >= row.warmupRecovery.expiresAt)

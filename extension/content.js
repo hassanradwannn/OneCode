@@ -15438,7 +15438,11 @@
         'content_delivery_model_unconfirmed', 'Requested model or reasoning could not be confirmed'), 'surface-unconfirmed');
       let modelFailure = '';
       intakeStage('model');
-      if (!intoRunningTurn() && !(await CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, onTarget, reason => { modelFailure = reason; }, input.modelSurface, input.modelLabel))) return fail(
+      const chatGPTAttachments = CLF_DOM.provider === 'chatgpt' && Boolean(input.images?.length || input.attachments?.length);
+      const selectAfterUpload = chatGPTAttachments && !intoRunningTurn() && Boolean(input.model || input.reasoningEffort);
+      const selectInputModel = (current, options) => CLF_DOM.selectModelSettings(input.model, input.reasoningEffort, current,
+        reason => { modelFailure = reason; }, input.modelSurface, input.modelLabel, options);
+      if (!intoRunningTurn() && !selectAfterUpload && !await selectInputModel(onTarget)) return fail(
         providerLimitation() || t(
           'content_delivery_model_unconfirmed',
           'Requested model or reasoning could not be confirmed'
@@ -15539,11 +15543,13 @@
         });
       } : null;
       if (!deferNativeAttachments) {
+        if (chatGPTAttachments) intakeStage('attachments');
         const files = await readAttachmentFiles(target, onTarget);
         if (!files) return transferFailure ? fail(transferFailure) : false;
         if (!await CLF_DOM.uploadImages(input.images, onTarget, draft, files, {
           whileGenerating: Boolean(message.directTurn), explain: reason => { attachmentFailure = reason; }
         })) return uploadUnconfirmed();
+        if (chatGPTAttachments) preserveAttachmentDraft = true;
       }
       // Stop/picker closure can remount the native editor on its next render.
       // Wait for this same untouched draft; never insert it twice or recapture a
@@ -15554,6 +15560,16 @@
         'content_delivery_draft_preserved',
         'The composer changed; your draft was preserved'
       ));
+      let uploadedModelSelection = null;
+      if (selectAfterUpload) {
+        intakeStage('model-after-upload');
+        // ChatGPT can reset its picker while preparing files. Confirm the requested
+        // pair on the still-owned uploaded draft before arming native Send.
+        const current = () => onTarget() && draft.current();
+        if (!await selectInputModel(current, { exactEffort: true, onConfirmed: selection => { uploadedModelSelection = selection; } }) ||
+            !uploadedModelSelection || !current())
+          return fail(t('content_delivery_model_unconfirmed', 'Requested model or reasoning could not be confirmed'), modelFailure || undefined);
+      }
       const previousUserId = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id ?? retainedRecordedQuestion();
       const priorUserIdsForNode = CLF_DOM.provider === 'chatgpt' && message.directTurn?.questionId ? node => {
         const expected = message.directTurn.questionId;
@@ -15821,6 +15837,13 @@
           sendCurrent: sendCurrent(), sourceCurrent: onTarget(), draftCurrent: draft.current(), joining: sourceProjectionPending() })); } catch { /* Fixed flags only. */ }
         if (authorized?.data?.ok !== true) noteWithdraw('app-refused');
         if (!sendCurrent() || authorized?.data?.ok !== true || !onTarget() || !draft.current()) { noteWithdraw(onTarget() ? 'lease-lost' : offTarget()); return false; }
+        if (uploadedModelSelection) {
+          const current = () => sendCurrent() && onTarget() && draft.current();
+          if (!await CLF_DOM.confirmModelSelection(current, uploadedModelSelection, true, reason => { modelFailure = reason; }) || !current()) {
+            modelFailure ||= 'selection-changed-after-upload';
+            return false;
+          }
+        }
         if (input.recovery && !await recoveryPageUnfinished(() => sendCurrent() && onTarget() && draft.current(), withdrawWhy)) return false;
         intakeStage('sending');
         return true;
@@ -15886,6 +15909,8 @@
           return fail('Gemini stopped before OneCode clicked Send. Review the draft in Gemini.', 'send-withdrawn-before-click');
         }
         if (!authorizing && !sendAttempted && !receipt && nativeSendRefusal === 'attachment-upload-unconfirmed') return uploadUnconfirmed();
+        if (!sendAttempted && uploadedModelSelection && modelFailure)
+          return fail(t('content_delivery_model_unconfirmed', 'Requested model or reasoning could not be confirmed'), modelFailure);
         if (CLF_DOM.provider === 'claude' && !authorizing && !sendAttempted && !receipt && nativeSendRefusal && onTarget()) {
           preserveAttachmentDraft = Boolean(input.images?.length || input.attachments?.length);
           return fail('Claude could not send the prepared message. Nothing was submitted by OneCode.', nativeSendRefusal);
