@@ -3138,16 +3138,17 @@ var CLF_DOM = (() => {
     return new Promise((resolve) => {
       // Image tiles can appear while the upload is still pending. Give them the
       // same bounded wait as files, under the app's 12-minute preparation claim.
-      const timeout = 600000, deadline = Date.now() + timeout;
+      const timeout = 10 * 60_000, deadline = performance.now() + timeout;
       let observer, timer, poll;
       let ownedTiles = null;
       const finish = (ok) => { observer?.disconnect(); clearTimeout(timer); clearInterval(poll); resolve(ok); };
+      const expired = () => {
+        if (stillCurrent()) explain?.('upload-timeout');
+        finish(false);
+      };
       const check = () => {
         if (!stillCurrent()) return finish(false);
-        if (Date.now() >= deadline) {
-          explain?.('upload-timeout');
-          return finish(false);
-        }
+        if (performance.now() >= deadline) return expired();
         const host = composerBox() || composerActions()?.host;
         if (!host) return;
         // ChatGPT's remove control names the complete filename. Each requested image
@@ -3168,7 +3169,7 @@ var CLF_DOM = (() => {
       };
       observer = new MutationObserver(check);
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-      timer = setTimeout(check, timeout);
+      timer = setTimeout(expired, timeout);
       poll = setInterval(check, 1000);
       check();
     });

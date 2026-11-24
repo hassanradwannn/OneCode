@@ -16,7 +16,7 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
-  '1.4.2': {
+  '1.4.3': {
     lead: () => t('Keep ChatGPT messages ready through slow uploads.'),
     highlights: [
       { icon: 'i-chat', title: () => t('Send with the selected reasoning effort'), text: () => t('OneCode waits for attachments to finish and checks the ChatGPT model and effort before sending.') }
