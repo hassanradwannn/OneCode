@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.4.4': {
+    lead: () => t('Copy commands, paths and arguments directly from ChatGPT replies.'),
+    highlights: [
+      { icon: 'i-copy', title: () => t('Use inline copy cards'), text: () => t('OneCode preserves the exact text even when a long command or path wraps.') }
+    ]
+  },
   '1.4.3': {
     lead: () => t('Keep ChatGPT messages ready through slow uploads.'),
     highlights: [

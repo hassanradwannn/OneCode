@@ -339,6 +339,9 @@
 .msg.rich :is(.native-copy-prompt, .native-writing-card) > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .msg.rich .native-copy-prompt > p { margin: 0; }
 .msg.rich .native-copy-prompt > .native-copy-prompt-body { max-height: 360px; overflow: auto; overflow-wrap: anywhere; }
+.msg.rich .native-copy-value-card > strong { font-size: 0.9em; }
+.msg.rich .native-copy-value-card > p { margin: 6px 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.rich .native-copy-value-card > footer { display: flex; justify-content: end; }
 
 .composer-image-preview-dialog { width: min(92vw, 1100px); max-width: 1100px; max-height: 92vh; margin: auto; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--page, Canvas); color: var(--ink, CanvasText); box-shadow: 0 24px 80px #0008; }
 .composer-image-preview-dialog::backdrop { background: #000b; }

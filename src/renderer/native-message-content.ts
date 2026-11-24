@@ -15,6 +15,9 @@ const scoreStates = new Map<string, ScoreState>();
 const label = (node?: Element | null) => node?.textContent?.trim().slice(0, 240) ?? '';
 const number = (value: string | null | undefined) => value && /^\d{1,4}$/.test(value) ? Number(value) : null;
 const SLIDER = '[role="slider"], input[type="range"]';
+const MAX_NATIVE_COPY_TEXT = 64_000;
+const COPY_ACTION = /^copy(?:\s|$)/i;
+const UNAVAILABLE_COPY_CONTENT = '[hidden], [aria-hidden="true"], [data-markdown-copy="exclude"], script, style, template';
 
 /** The canonical message's observed public UI, before the transcript sanitizer runs. */
 export function nativeMessageMarkup(capture: Capture | null | undefined, messageId: string | undefined): string | null {
@@ -93,6 +96,52 @@ function copyButton(title: string, value: () => string, copy: NativeMessageActio
       () => { button.textContent = 'Could not copy'; });
   });
   return button;
+}
+
+/** A native copy card owns one visible text value and a dedicated Copy action. */
+function copyValueCardView(button: Element, title: string, options: NativeMessageActions) {
+  if (!COPY_ACTION.test(title) || !label(button) || !button.matches('[data-d-component="button"]') ||
+      !button.closest('[data-dil-response]')) return null;
+  const row = button.parentElement, card = row?.parentElement;
+  if (!row?.matches('[data-d-component="row"]') || row.children.length !== 1 ||
+      !card?.matches('[data-d-component="box"]') || card.lastElementChild !== row ||
+      (card.children.length !== 2 && card.children.length !== 3)) return null;
+  // Never replace a box that also carries content outside its structured fields.
+  if ([...card.childNodes, ...row.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())) return null;
+  const heading = card.children.length === 3 ? card.firstElementChild : null;
+  const body = row.previousElementSibling;
+  const field = 'p[data-d-component="text"]';
+  if (heading && (!heading.matches(field) || heading.querySelector(UNAVAILABLE_COPY_CONTENT) || !label(heading))) return null;
+  if (!body?.matches(field + ', pre, code') || body.matches(UNAVAILABLE_COPY_CONTENT)) return null;
+  // Paths and command arguments can be rendered as one inline code node.
+  // Whitespace outside that node is layout. Preserve the actual value verbatim.
+  const inline = body.firstElementChild;
+  const onlyInlineCode = inline?.matches('code') && [...body.childNodes].every(node =>
+    node === inline || node.nodeType === Node.TEXT_NODE && !node.textContent?.trim());
+  const code = body.matches('code') ? body : onlyInlineCode ? inline : null;
+  const valueNode = code ?? body;
+  if (valueNode.matches(UNAVAILABLE_COPY_CONTENT) || ![...valueNode.childNodes].every(node => node.nodeType === Node.TEXT_NODE)) return null;
+  const value = valueNode.textContent;
+  const payload = button.getAttribute('data-copy-text');
+  if (!value?.trim() || value.length > MAX_NATIVE_COPY_TEXT || payload !== null && payload !== value) return null;
+
+  const view = panel(), text = document.createElement('p'), actions = document.createElement('footer');
+  view.classList.add('native-copy-value-card');
+  if (heading && !heading.matches(UNAVAILABLE_COPY_CONTENT)) {
+    const caption = document.createElement('strong');
+    caption.textContent = label(heading);
+    view.append(caption);
+  }
+  if (code || body.matches('pre')) {
+    const monospace = document.createElement('code');
+    monospace.textContent = value;
+    text.append(monospace);
+  } else {
+    text.textContent = value;
+  }
+  actions.append(copyButton(title, () => value, options.copy));
+  view.append(text, actions);
+  return { card, view };
 }
 
 export function openImagePreview(src: string, title: string, closeLabel = 'Close preview'): void {
@@ -402,8 +451,13 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
     }
   }
   for (const button of fragment.querySelectorAll(nativeCapture ? 'button[data-copy-text], [data-dil-response] button' : 'button[data-copy-text]')) {
-    if (!visible(button) || button.closest('[data-code-block-controls], [data-markdown-copy="exclude"]')) continue;
+    if (!fragment.contains(button) || !visible(button) || button.closest('[data-code-block-controls], [data-markdown-copy="exclude"]')) continue;
     const title = label(button) || 'Copy';
+    const copyCard = nativeCapture ? copyValueCardView(button, title, options) : null;
+    if (copyCard) {
+      stage(copyCard.card, copyCard.view);
+      continue;
+    }
     const payload = button.getAttribute('data-copy-text');
     const row = button.parentElement, card = row?.parentElement;
     const promptCard = /^copy prompt$/i.test(title) && button.closest('[data-dil-response]') &&
@@ -412,8 +466,8 @@ export function stageNativeMessageContent(fragment: DocumentFragment, options: N
     const promptBody = promptCard && card?.children.length === 3 && card.children[2]?.matches('[data-d-component="box"][data-d-scrollable]') &&
       visible(card.children[2]) ? card.children[2] : null;
     const bodyText = promptBody ? visiblePromptText(promptBody) : '';
-    const copyText = payload?.trim() && payload.length <= 64_000 ? payload
-      : bodyText && bodyText.length <= 64_000 ? bodyText : null;
+    const copyText = payload?.trim() && payload.length <= MAX_NATIVE_COPY_TEXT ? payload
+      : bodyText && bodyText.length <= MAX_NATIVE_COPY_TEXT ? bodyText : null;
     let view: HTMLElement;
     if (copyText) {
       view = copyButton(title, () => copyText, options.copy);
