@@ -23,19 +23,35 @@ function button(label: string, fn: () => void, glyph?: string): HTMLButtonElemen
   return node;
 }
 
-/** Native providers can drop custom hrefs while retaining the label and other native content. */
+/** Restore only destinations present in the recorded Markdown, using the internal file route. */
 export function restoreWorkspaceLinks(root: ParentNode, source: string): void {
-  for (const [href, label] of workspaceLinksInMarkdown(source)) {
+  const links = workspaceLinksInMarkdown(source);
+  const labelCounts = new Map<string, number>();
+  for (const label of links.values()) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  for (const [href, label] of links) {
     const anchors = [...root.querySelectorAll('a')].filter(anchor => !anchor.closest('pre, code'));
     if (anchors.some(anchor => anchor.getAttribute('href') === href)) continue;
-    const match = anchors.filter(anchor => !anchor.hasAttribute('href') && anchor.textContent?.trim() === label);
+    const unique = labelCounts.get(label) === 1;
+    const match = unique ? anchors.filter(anchor => !anchor.hasAttribute('href') && anchor.textContent?.trim() === label) : [];
     const anchor = match.length === 1 ? match[0]! : document.createElement('a');
     anchor.setAttribute('href', href);
     if (!anchor.parentNode) {
-      anchor.textContent = label;
-      const line = document.createElement('p');
-      line.append(anchor);
-      root.appendChild(line);
+      // Native renderers may have turned the label into ordinary bold text.
+      // Use a single complete label, never a substring or a competing link.
+      const matching = unique && !match.length ? [...root.querySelectorAll('strong, b, em, span, p, li')]
+        .filter(node => node.textContent?.trim() === label &&
+          !node.closest('a, pre, code, button, [hidden], [aria-hidden="true"]') && !node.querySelector('a, button')) : [];
+      const leaves = matching.filter(node => !matching.some(other => other !== node && node.contains(other)));
+      if (leaves.length === 1) {
+        const leaf = leaves[0]!;
+        anchor.append(...leaf.childNodes);
+        leaf.append(anchor);
+      } else {
+        anchor.textContent = label;
+        const line = document.createElement('p');
+        line.append(anchor);
+        root.appendChild(line);
+      }
     }
   }
 }

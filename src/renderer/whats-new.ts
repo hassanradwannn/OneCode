@@ -16,6 +16,12 @@ interface Highlight { icon: string; title: () => string; text: () => string }
 interface Release { lead: () => string; highlights: Highlight[] }
 
 const RELEASES: Readonly<Record<string, Release>> = {
+  '1.4.5': {
+    lead: () => t('Open reports, data and launcher source from chat.'),
+    highlights: [
+      { icon: 'i-file-text', title: () => t('Restore workspace file links'), text: () => t('OneCode can recover local file links and verify multiple delivered files from recorded reads.') }
+    ]
+  },
   '1.4.4': {
     lead: () => t('Copy commands, paths and arguments directly from ChatGPT replies.'),
     highlights: [

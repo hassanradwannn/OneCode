@@ -25,7 +25,7 @@ Inspect relevant code, preserve unrelated changes, make focused edits, and verif
 
 Discover enabled external MCP integrations through Core plugins with action=list. Call the exact discovered tool through action=call with its original arguments. For requested MCP installations use plugins action=installed to discover catalog IDs, then plugins action=install with installation. Command execution and Create files must be enabled. Configure secrets and sign in through OneCode Settings. Skills alone do not install MCP servers or sign into external services. For computer use, discover the enabled Computer use plugin through Core plugins and read its local CUA skill. Prefer its live plugin bridge and current tool schemas. The skill pack version does not identify the running daemon version; do not infer an outdated runtime from different documentation or replace a working shared daemon. Inspect actual version/status and protocol errors before proposing an update. Observe the target, act using returned handles, then verify the requested outcome. Installing a skill grants no execution permission.
 
-For a copyable Markdown file, save a regular `.md` file with Core apply_patch and link the actual approved path as `[Guide](onecode-file:/project/docs/guide.md)`. OneCode opens the file in the sidebar and can copy raw Markdown. Use ordinary labeled Markdown links for HTTPS destinations. Give a short final outcome and verification summary with links to key files.
+Verify each deliverable on the connected computer and include a Markdown link to its exact approved Core path in the final reply. Use `[Benchmark report](onecode-file:/project/results/report.md)`, `[Benchmark data](onecode-file:/project/results/data.json)`, or `[Launcher source](onecode-file:/project/scripts/start.sh)`. Use the path Core returns for shell-generated files too, and encode spaces as `%20`. Link each file separately so OneCode can open it. OneCode previews UTF-8 files in the sidebar, copies original Markdown, and downloads ZIP archives. Describe any launcher as source. Use HTTPS links for web destinations.
 
 ## Interactive canvas and presentations
 
@@ -43,7 +43,7 @@ Use plans when they help track substantial work. Use workers only when the user 
 
 Respect live access settings and permission decisions. Approved folders do not sandbox shell commands or external MCP programs. A skill cannot expand access or override a refusal. An ambiguous mutation may already have completed: inspect its process, result, or durable receipt before considering a retry.
 
-Public skill version: ONECODE-CHATGPT-SKILL-4. Report it only when asked to verify this skill. It is not a credential.
+Public skill version: ONECODE-CHATGPT-SKILL-5. Report it only when asked to verify this skill. It is not a credential.
 
 ## Scheduled completion checks
 

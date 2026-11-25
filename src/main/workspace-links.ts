@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceLinksInMarkdown, workspaceReadDocumentPath,
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceLinksInMarkdown, workspaceReadDocumentPaths,
   type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
 import { positionOf } from '../shared/chronology.js';
 import { answerAnchors, completedTurnIds } from '../shared/markdown-export.js';
@@ -36,21 +36,20 @@ async function recordedWorkspaceLinks(sessionId: string, messageId: string) {
     if (href) links.set(href, path.posix.basename(file));
   }
   for (const file of changed) offer(file);
-  if (links.size) return { session, event, links, mayAutoOpen: changed.size === 1 };
-
-  // A link-only reply may omit the path again. A successful single-file read
-  // can re-offer an existing deliverable from this chat's own earlier turn.
+  // Re-offer reads only if this chat recorded the path changing in a completed
+  // earlier turn. A batch still needs an exact requested path and read header
+  // for each file, and prior changes alone are insufficient.
   const reads = new Set(sameTurn.flatMap(({ call }) => {
-    const file = call.tool === 'read' ? workspaceReadDocumentPath(call.args, call.result) : null;
-    return file ? [file] : [];
+    return call.tool === 'read' ? workspaceReadDocumentPaths(call.args, call.result) : [];
   }));
-  if (reads.size === 1) {
-    const [file] = reads;
+  if (reads.size) {
     const completed = completedTurnIds(evidence.filter(row => positionOf(row) < positionOf(event)));
-    if (file && calls.some(row => row.turnId && row.turnId !== event.turnId && completed.has(row.turnId) &&
-        row.call.changes?.some(change => change.path === file))) offer(file);
+    for (const row of calls) {
+      if (!row.turnId || row.turnId === event.turnId || !completed.has(row.turnId)) continue;
+      for (const change of row.call.changes ?? []) if (reads.has(change.path)) offer(change.path);
+    }
   }
-  return { session, event, links, mayAutoOpen: false };
+  return { session, event, links, mayAutoOpen: changed.size > 0 };
 }
 
 async function resolveWorkspaceLink(sessionId: string, projectId: string | undefined | null, requested: string) {

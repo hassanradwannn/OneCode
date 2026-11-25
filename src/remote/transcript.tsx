@@ -19,7 +19,7 @@ import { Icon } from './composer-controls.js';
 import { authoredUrlSegments, safeExternalLink, safeProviderFileLink } from '../shared/external-link.js';
 import { MAX_INPUT_IMAGES } from '../shared/input.js';
 import { downloadWorkspaceArchive, request } from './api.js';
-import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPath,
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPaths,
   type WorkspaceDeliverables, type WorkspaceDocument } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall, type TurnFileChange } from '../shared/turn-changes.js';
 import type { ToolEditReview } from '../shared/session.js';
@@ -113,7 +113,7 @@ export function Markdown({ text, sessionId, messageId, nativeMarkup, originalUrl
         (openWorkspace && messageId && workspaceLinkPath(href)) ? href : null; } });
     mountNative();
     box.replaceChildren(template.content);
-    if (native !== null && openWorkspace && messageId) restoreWorkspaceLinks(box, source);
+    if (openWorkspace && messageId) restoreWorkspaceLinks(box, source);
     setMounts(nextMounts);
     if (!box.textContent?.trim() && source && native === null) box.textContent = source;
     formatMessageContent(box, { languages, copy: copyText }); drawMath(box, math);
@@ -248,10 +248,10 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
     } else if (row.kind === 'assistant_message' && row.final) lastFinal.set(row.turnId, row.position);
     else if (row.kind === 'tool_call' && row.tool) {
       if (row.tool.name === 'read' && row.tool.outcome === 'ok') {
-        const file = workspaceReadDocumentPath(row.tool.args, row.tool.result);
-        if (file) {
+        const files = workspaceReadDocumentPaths(row.tool.args, row.tool.result);
+        if (files.length) {
           const found = documentReads.get(row.turnId) ?? new Set<string>();
-          found.add(file);
+          for (const file of files) found.add(file);
           documentReads.set(row.turnId, found);
         }
       }
@@ -298,7 +298,7 @@ export function Transcript({ events, sessionId, conversationId, openRequestId }:
             ended={!!row.turnId && events.some(event => event.kind === 'turn_end' && event.turnId === row.turnId)}
             inlineEvents={inlineEvents} openWorkspace={openWorkspace} />
           {row.kind === 'assistant_message' && row.final && row.messageId &&
-            (workspaceDeliverableLinks(rawText).size > 0 || changes.some(change => workspaceDeliverableHref(change.path)) || readDocuments?.size === 1) &&
+            (workspaceDeliverableLinks(rawText).size > 0 || changes.some(change => workspaceDeliverableHref(change.path)) || Boolean(readDocuments?.size)) &&
             <WorkspaceFiles key={JSON.stringify([sessionId, row.messageId])} sessionId={sessionId} messageId={row.messageId} open={openWorkspace} />}
           {changes.length > 0 && <MountedDeliverable node={renderTurnChangeSummary(changes, label, index => {
             const id = ++generation.current; setFileError('');

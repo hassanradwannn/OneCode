@@ -50,7 +50,7 @@ import { supportsFinishAutomation } from '../shared/finish.js';
 import { DEFAULT_CHAT_PROVIDER, isBrowserChatProvider, chatProviderConversationUrl, chatProviderForConversation, providerTrustValidationEnabled, type ChatProvider } from '../shared/chat-provider.js';
 import { populateProviderPicker } from './provider-settings.js';
 import { answerAnchors } from '../shared/markdown-export.js';
-import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPath } from '../shared/workspace-link.js';
+import { isWorkspaceArchive, workspaceDeliverableHref, workspaceDeliverableLinks, workspaceLinkPath, workspaceReadDocumentPaths } from '../shared/workspace-link.js';
 import { summarizeTurnChanges, type RecordedChangeCall } from '../shared/turn-changes.js';
 import { renderTurnChangeSummary, renderTurnReview, renderWorkspaceDeliverables, renderWorkspaceDocument, restoreWorkspaceLinks } from './workspace-deliverables.js';
 import './workspace-deliverables.css';
@@ -3074,7 +3074,7 @@ export function renderedMessage(html: StoredText | null | undefined, fallback: s
   // Only reapply our own presentation class, after the capture's untrusted classes are gone.
   for (const prompt of prompts) prompt.card.classList.add('native-prompt-readonly');
   box.append(template.content);
-  if (nativeCapture && fileLink) restoreWorkspaceLinks(box, safeFallback);
+  if (fileLink) restoreWorkspaceLinks(box, safeFallback);
   const openLink = (event: MouseEvent): void => {
     if (event.type === 'auxclick' && event.button !== 1) return;
     const anchor = (event.target as Element | null)?.closest?.('a[href]');
@@ -5025,10 +5025,10 @@ function paintDetail(followBottom = historyBefore === null): void {
   for (const row of events) {
     if (row.kind !== 'tool_call' || !row.turnId || !anchors.has(row.turnId)) continue;
     if (row.call.tool === 'read' && row.call.outcome === 'ok') {
-      const file = workspaceReadDocumentPath(row.call.args, row.call.result);
-      if (file) {
+      const files = workspaceReadDocumentPaths(row.call.args, row.call.result);
+      if (files.length) {
         const found = documentReads.get(row.turnId) ?? new Set<string>();
-        found.add(file);
+        for (const file of files) found.add(file);
         documentReads.set(row.turnId, found);
       }
     }
@@ -5083,7 +5083,7 @@ function paintDetail(followBottom = historyBefore === null): void {
     const reportOwner = selectedId, reportGeneration = selectionGeneration;
     if (answerTurn && reportOwner && item.kind === 'event' && item.event.kind === 'assistant_message' &&
         item.event.messageId && (workspaceDeliverableLinks(item.event.message.text).size ||
-          changes.some(change => workspaceDeliverableHref(change.path)) || readDocuments?.size === 1)) {
+          changes.some(change => workspaceDeliverableHref(change.path)) || readDocuments?.size)) {
       const messageId = item.event.messageId;
       const canAutoOpen = answerTurn === previouslyLive && timelineShown() && !cached?.row.querySelector('.workspace-file-results');
       const request = deliverableRequest;
